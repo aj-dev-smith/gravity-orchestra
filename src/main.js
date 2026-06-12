@@ -6,6 +6,7 @@ import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } 
 import { encodeSong, decodeSong } from './share.js';
 import { parseMidi } from './midi/parse.js';
 import { convertToSong } from './midi/convert.js';
+import { recSupported, startRecording } from './record.js';
 /* ============================================================
    CASCADE — melody-driven marble run, now multi-track.
    A song is one or more tracks of [note, beats-until-next-hit].
@@ -22,6 +23,8 @@ let autoWant = 'all', lastCut = 0;
 let muted = false;                                      // sound toggle (mute button)
 let songTime = 0, prevT = 0;                            // the timeline; clock only supplies deltas
 let playRate = 1, skipStrikes = false, dbg = null;      // ?debug scrub: rate + jump suppression
+let recState = 'idle', recorder = null;                 // idle | armed | rec — transitions at the seam
+const recEl = document.getElementById('rec');
 const CAMCOLORS = {auto:'#ffe9c9', all:'#cfd6e6', lead:'#ffaa55', alto:'#c08bff', bass:'#66aaff'};
 const camsEl = document.getElementById('cams');
 function renderCamButtons(){
@@ -208,6 +211,7 @@ function buildTrack(melody, zBase, role, rig, delayBeats = 0, deep = false){
 }
 
 function buildWorld(keyName){
+  if (recState !== 'idle') abortRec();                  // a rebuilt world invalidates the take
   const S = SONGS[keyName];
   BEAT = 60 / S.bpm; SCALE = S.scale;
   document.getElementById('songsub').textContent = S.sub + ' — falling';
@@ -275,6 +279,9 @@ Object.entries(SONGS).forEach(([k, s]) => {
   sel.appendChild(o);
 });
 buildWorld(sel.value);
+/* the machine runs from first paint — only AUDIO waits for a gesture.
+   (reduced-motion users keep the old behavior: stillness until they opt in) */
+if (!reduceMotion){ clock.start(); started = true; }
 const startPos = tracks[0].rail.getPointAt(0).add(UP);
 const camTarget = startPos.clone();
 const camPos = startPos.clone().add(new THREE.Vector3(4.5, 2.6, 9.5));
@@ -313,9 +320,17 @@ function animate(){
   const dt = Math.min(clock.getDelta(), .05);
   songTime += dt * playRate;
   const T = started ? songTime % (ROLL_T + LOOP_T) : 0;
-  if (started && T < prevT) tracks.forEach(tr => { tr.lastIdx = -1; tr.splashed = false; });   // loop wrap / backward scrub
+  if (started && T < prevT){                            // loop wrap / backward scrub
+    tracks.forEach(tr => { tr.lastIdx = -1; tr.splashed = false; });
+    if (recState === 'armed') beginRec();               // seam-to-seam: end state = start state,
+    else if (recState === 'rec') finishRec();           // so the video loops seamlessly
+  }
   prevT = T;
   if (dbg && started) dbg.update(T);
+  if (recState === 'armed')
+    recEl.textContent = `● IN ${(ROLL_T + LOOP_T - T).toFixed(1)}S${muted ? ' · SILENT' : ''}`;
+  else if (recState === 'rec')
+    recEl.textContent = `● ${T.toFixed(1)}/${(ROLL_T + LOOP_T).toFixed(0)}S`;
 
   let leadPos = null;
   const marblePts = [];
@@ -428,12 +443,60 @@ function animate(){
 animate();
 
 /* ---------------- controls ---------------- */
-document.getElementById('play').addEventListener('click', () => {
-  document.getElementById('overlay').classList.add('gone');
-  clock.start(); started = true;                        // visuals never wait on audio
+const overlay = document.getElementById('overlay');
+function enterSound(){
+  if (overlay.classList.contains('gone')) return;
+  overlay.classList.add('gone');
+  if (!started){ clock.start(); started = true; }       // reduced-motion path starts here
   try { audio.initAudio(); } catch(e){ audio.setStatus('audio: failed'); }
+  if (recSupported(renderer.domElement)) recEl.hidden = false;
   keepAwake();
+}
+overlay.addEventListener('click', enterSound);          // the whole veil is the button
+
+/* ---------------- record one perfect loop ---------------- */
+recEl.addEventListener('click', () => {
+  if (recState === 'idle'){ recState = 'armed'; recEl.classList.add('live'); }
+  else if (recState === 'armed') abortRec();            // second tap cancels
+  else finishRec();                                     // early stop: partial loop, still delivered
 });
+function beginRec(){
+  recorder = startRecording(renderer.domElement, muted ? null : audio.captureStream());
+  recState = 'rec';
+}
+function finishRec(){
+  const r = recorder; recorder = null;
+  resetRecUI();
+  r.stop().then(showRecCard);
+}
+function abortRec(){
+  if (recorder){ recorder.stop(); recorder = null; }    // stop and discard
+  resetRecUI();
+}
+function resetRecUI(){
+  recState = 'idle';
+  recEl.textContent = '● REC';
+  recEl.classList.remove('live');
+}
+function showRecCard(blob){
+  const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
+  const file = new File([blob], `cascade-${sel.value}.${ext}`, {type: blob.type});
+  const url = URL.createObjectURL(blob);
+  const card = document.createElement('div'); card.id = 'reccard';
+  const vid = document.createElement('video');
+  Object.assign(vid, {src: url, controls: true, loop: true, muted: true, autoplay: true, playsInline: true});
+  const cap = document.createElement('span');
+  cap.textContent = `ONE LOOP · ${ext.toUpperCase()} · ${(blob.size/1e6).toFixed(1)} MB`;
+  const row = document.createElement('div'); row.className = 'row';
+  const mk = (txt, fn) => { const b = document.createElement('button');
+    b.className = 'camb'; b.textContent = txt; b.addEventListener('click', fn); row.appendChild(b); };
+  mk('DOWNLOAD', () => { const a = document.createElement('a'); a.href = url; a.download = file.name; a.click(); });
+  if (navigator.canShare?.({files: [file]}))
+    mk('SHARE', () => navigator.share({files: [file]}).catch(() => {}));
+  mk('CLOSE', () => { URL.revokeObjectURL(url); card.remove(); });
+  card.append(vid, cap, row);
+  document.body.appendChild(card);
+}
 /* every tap: prime samples, retry/rebuild the context (gesture context!) */
 ['touchend','pointerdown'].forEach(ev => addEventListener(ev, () => {
   if (!started) return;
@@ -494,6 +557,7 @@ addEventListener('drop', async e => {
   try {
     const parsed = parseMidi(new Uint8Array(await file.arrayBuffer()));
     const { song, warnings } = convertToSong(parsed, {label: file.name.replace(/\.midi?$/i, '')});
+    enterSound();                                       // a drop is a gesture: veil off, audio up
     registerSong('imported', song);
     audio.primeSamples();                               // drop is a gesture: unlock the new bank
     audio.showState();

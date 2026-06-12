@@ -23,9 +23,10 @@
   #share:hover{color:var(--amber);border-color:rgba(255,183,100,.5)}
   #note{position:fixed;bottom:20px;left:20px;color:var(--dim);font-size:11px;letter-spacing:.2em;min-height:14px;max-width:38vw;overflow:hidden;white-space:nowrap}
   #note b{color:var(--amber);font-weight:600}
-  #overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
-    background:radial-gradient(ellipse at center,rgba(7,6,14,.35),rgba(7,6,14,.92));z-index:10;
-    transition:opacity .8s ease}
+  #overlay{position:fixed;inset:0;display:flex;flex-direction:column;gap:18px;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at center,rgba(7,6,14,.08),rgba(7,6,14,.5));z-index:10;
+    cursor:pointer;transition:opacity .8s ease}
+  #overlay p{font-size:10px;color:var(--ink);letter-spacing:.18em;opacity:.8}
   #overlay.gone{opacity:0;pointer-events:none}
   #play{pointer-events:auto;cursor:pointer;background:none;border:1px solid rgba(255,183,100,.5);
     color:var(--amber);font:inherit;font-size:12px;letter-spacing:.4em;text-transform:uppercase;
@@ -34,6 +35,14 @@
   #mute{position:fixed;top:18px;right:20px;background:none;border:none;cursor:pointer;
     color:var(--dim);font:inherit;font-size:11px;letter-spacing:.2em;padding:6px}
   #mute:hover{color:var(--ink)}
+  #rec{position:fixed;top:46px;right:20px;background:none;border:none;cursor:pointer;
+    color:var(--dim);font:inherit;font-size:11px;letter-spacing:.2em;padding:6px}
+  #rec:hover,#rec.live{color:#ff7a6b}
+  #reccard{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:14px;background:rgba(7,6,14,.9);z-index:20;color:var(--dim);
+    font-size:11px;letter-spacing:.18em}
+  #reccard video{max-width:min(86vw,900px);max-height:62vh;border:1px solid rgba(90,97,120,.45);border-radius:12px}
+  #reccard .row{display:flex;gap:10px}
   #astate{position:fixed;bottom:20px;right:20px;color:var(--dim);font-size:10px;letter-spacing:.12em;opacity:.75;text-align:right;max-width:55vw}
   #cams{position:fixed;bottom:46px;left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:5}
   .camb{background:rgba(7,6,14,.55);border:1px solid rgba(90,97,120,.45);color:var(--dim);
@@ -53,8 +62,12 @@
 <div id="note"></div>
 <div id="cams"></div>
 <button id="mute" aria-label="mute">SOUND&nbsp;ON</button>
+<button id="rec" aria-label="record one loop" hidden>●&nbsp;REC</button>
 <div id="astate"></div>
-<div id="overlay"><button id="play">Drop the marble</button></div>
+<div id="overlay">
+  <button id="play">Tap for sound</button>
+  <p>drop any .mid on the page — the solver does the rest</p>
+</div>
 
 <script type="module" src="/src/main.js"></script>
 </body>

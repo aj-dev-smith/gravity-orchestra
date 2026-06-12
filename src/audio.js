@@ -13,6 +13,7 @@ import { noteHz } from './engine.js';
 let audioReady = false;
 let ctx = null, master = null, rebuilds = 0;
 let eDL = null, eDR = null;
+let busOut = null, recDest = null;                     // recording tap (additive seam, not war logic)
 let beat = .7;                                         // fed by setBeat() on every song build
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -52,6 +53,7 @@ function buildAudio(){                                 // MUST be called from a 
   master.connect(eDL); eDL.connect(eDR); eDR.connect(fb); fb.connect(eDL);
   eDL.connect(wet); eDR.connect(wet); wet.connect(out);
   out.connect(ctx.destination);
+  busOut = out; recDest = null;                        // rebuilt context → old recording tap is dead
   if (isIOS){                                          // also feed a real media element
     const msd = ctx.createMediaStreamDestination();
     out.connect(msd);
@@ -200,5 +202,11 @@ function pluck(note, bass){
 
 /* --- small API for the controls/mute handler --- */
 export const isReady = () => audioReady;
+/* lazy tap on the post-echo mix for MediaRecorder; null if no live context */
+export function captureStream(){
+  if (!ctx || !busOut || ctx.state !== 'running') return null;
+  if (!recDest){ recDest = ctx.createMediaStreamDestination(); busOut.connect(recDest); }
+  return recDest.stream;
+}
 export function resumeOrBuild(){ if (!ctx) buildAudio(); else ctx.resume().catch(()=>{}); }
 export function setStatus(text){ stateEl.textContent = text; }

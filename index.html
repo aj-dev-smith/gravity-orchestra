@@ -18,6 +18,9 @@
     font:inherit;font-size:11px;letter-spacing:.12em;padding:6px 10px;cursor:pointer}
   #song:focus-visible{outline:none;border-color:var(--amber)}
   #songsub{font-size:10px;color:var(--dim);margin-top:6px;letter-spacing:.08em}
+  #share{pointer-events:auto;display:block;margin-top:8px;background:none;border:1px solid rgba(90,97,120,.45);
+    color:var(--dim);font:inherit;font-size:10px;letter-spacing:.18em;padding:5px 12px;border-radius:999px;cursor:pointer}
+  #share:hover{color:var(--amber);border-color:rgba(255,183,100,.5)}
   #note{position:fixed;bottom:20px;left:20px;color:var(--dim);font-size:11px;letter-spacing:.2em;min-height:14px;max-width:38vw;overflow:hidden;white-space:nowrap}
   #note b{color:var(--amber);font-weight:600}
   #overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
@@ -45,6 +48,7 @@
   <h1>Cascade</h1>
   <select id="song" aria-label="choose melody"></select>
   <p id="songsub"></p>
+  <button id="share" hidden>SHARE&nbsp;LINK</button>
 </div>
 <div id="note"></div>
 <div id="cams"></div>

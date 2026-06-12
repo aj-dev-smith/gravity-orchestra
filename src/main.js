@@ -3,6 +3,9 @@ import { SONGS } from './songs/index.js';
 import { G, UP, UPY, ROLL_T, solveLaunch, arcPos, arcVel, padOffset } from './engine.js';
 import * as audio from './audio.js';
 import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } from './juice.js';
+import { encodeSong, decodeSong } from './share.js';
+import { parseMidi } from './midi/parse.js';
+import { convertToSong } from './midi/convert.js';
 /* ============================================================
    CASCADE — melody-driven marble run, now multi-track.
    A song is one or more tracks of [note, beats-until-next-hit].
@@ -17,6 +20,8 @@ let tracks = [], LOOP_T = 0, world = null;
 let camMode = 'auto';
 let autoWant = 'all', lastCut = 0;
 let muted = false;                                      // sound toggle (mute button)
+let songTime = 0, prevT = 0;                            // the timeline; clock only supplies deltas
+let playRate = 1, skipStrikes = false, dbg = null;      // ?debug scrub: rate + jump suppression
 const CAMCOLORS = {auto:'#ffe9c9', all:'#cfd6e6', lead:'#ffaa55', alto:'#c08bff', bass:'#66aaff'};
 const camsEl = document.getElementById('cams');
 function renderCamButtons(){
@@ -232,6 +237,7 @@ function buildWorld(keyName){
   if (camMode !== 'all' && camMode !== 'auto' && !tracks.some(t => t.role === camMode)) camMode = 'auto';
   renderCamButtons();
   audio.rebuildBank(tracks);
+  songTime = 0; prevT = 0;
   if (started) clock.start();                           // restart from the rails
 }
 
@@ -292,7 +298,7 @@ function trackPos(tr, T){
     return {pos: arcPos(a.pos, lastArc, t2), vel: arcVel(lastArc, t2),
             plunge:true, nextIdx:-1, prog:0, curDt:9, nextDt:9};
   }
-  if (i !== tr.lastIdx){ tr.lastIdx = i; strike(tr, i); }
+  if (i !== tr.lastIdx){ tr.lastIdx = i; if (!skipStrikes) strike(tr, i); }
   return {pos: arcPos(tr.pads[i].pos, tr.arcs[i], at).add(UP),
           vel: arcVel(tr.arcs[i], at),
           plunge:false,
@@ -305,8 +311,11 @@ function trackPos(tr, T){
 function animate(){
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), .05);
-  const T = started ? clock.elapsedTime % (ROLL_T + LOOP_T) : 0;
-  if (started && T < dt) tracks.forEach(tr => { tr.lastIdx = -1; tr.splashed = false; });   // loop reset
+  songTime += dt * playRate;
+  const T = started ? songTime % (ROLL_T + LOOP_T) : 0;
+  if (started && T < prevT) tracks.forEach(tr => { tr.lastIdx = -1; tr.splashed = false; });   // loop wrap / backward scrub
+  prevT = T;
+  if (dbg && started) dbg.update(T);
 
   let leadPos = null;
   const marblePts = [];
@@ -349,7 +358,7 @@ function animate(){
     const sxz = (1/Math.sqrt(stretch))*(1-sq) + 1.3*sq;
     rig.deform.scale.set(sxz, sy, sxz);
 
-    if (started && visible && trailTick > .022)
+    if (started && visible && trailTick > .022 && playRate)
       spawnTrail(r.pos, rig.glow, tr.isBass);
     tr.padObjs.forEach((po, idx) => {
       po.flash *= (1 - dt*4);
@@ -363,6 +372,7 @@ function animate(){
   });
   if (trailTick > .022) trailTick = 0;
   trailTick += dt;
+  skipStrikes = false;                                  // scrub jumps suppress strikes for one frame only
   updateJuice(dt);
 
   // exposure pop
@@ -440,6 +450,60 @@ sel.addEventListener('change', () => {
   buildWorld(sel.value);
   audio.primeSamples();                                 // change event is a gesture: unlock new bank
   audio.showState();
+  shareEl.hidden = !DYNAMIC.has(sel.value);
+  if (!DYNAMIC.has(sel.value)) history.replaceState(null, '', location.pathname + location.search);
+});
+
+/* ---------------- dynamic songs (MIDI import / share links) ---------------- */
+const DYNAMIC = new Set(['imported', 'shared']);
+const shareEl = document.getElementById('share');
+function registerSong(key, song){
+  SONGS[key] = song;
+  let o = [...sel.options].find(x => x.value === key);
+  if (!o){ o = document.createElement('option'); o.value = key; sel.appendChild(o); }
+  o.textContent = song.label;
+  sel.value = key;
+  buildWorld(key);
+  shareEl.hidden = false;
+}
+shareEl.addEventListener('click', async () => {
+  const url = `${location.origin}${location.pathname}#s=${await encodeSong(SONGS[sel.value])}`;
+  history.replaceState(null, '', url);
+  try { await navigator.clipboard.writeText(url); shareEl.textContent = 'COPIED'; }
+  catch(e){ shareEl.textContent = 'LINK IN URL BAR'; }
+  setTimeout(() => { shareEl.textContent = 'SHARE LINK'; }, 1600);
+});
+(async () => {                                          // boot: a share link IS the song
+  const m = location.hash.match(/^#s=(.+)$/);
+  if (!m) return;
+  try { registerSong('shared', await decodeSong(m[1])); }
+  catch(e){ console.warn('cascade: ignoring bad share link —', e.message); }
+})();
+
+/* ---------------- MIDI import: drop a .mid anywhere ---------------- */
+const subEl = document.getElementById('songsub');
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('dragenter', () => { subEl.textContent = 'drop a .mid — the solver does the rest'; });
+addEventListener('dragleave', e => {
+  if (!e.relatedTarget) subEl.textContent = SONGS[sel.value].sub + ' — falling';
+});
+addEventListener('drop', async e => {
+  e.preventDefault();
+  const file = [...(e.dataTransfer?.files || [])].find(f => /\.midi?$/i.test(f.name));
+  if (!file){ subEl.textContent = SONGS[sel.value].sub + ' — falling'; return; }
+  try {
+    const parsed = parseMidi(new Uint8Array(await file.arrayBuffer()));
+    const { song, warnings } = convertToSong(parsed, {label: file.name.replace(/\.midi?$/i, '')});
+    registerSong('imported', song);
+    audio.primeSamples();                               // drop is a gesture: unlock the new bank
+    audio.showState();
+    if (warnings.length){
+      console.warn('cascade midi import:\n  ' + warnings.join('\n  '));
+      subEl.textContent = `${song.sub} · ${warnings.length} import note(s) in console — falling`;
+    }
+  } catch(err){
+    subEl.textContent = `couldn't read ${file.name}: ${err.message}`;
+  }
 });
 document.getElementById('mute').addEventListener('click', e => {
   muted = !muted;
@@ -456,3 +520,40 @@ addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
+
+/* ---------------- ?debug scrub bar (dev tooling, not a feature) ----------------
+   Time is the only state, so scrubbing is just assigning songTime.
+   skipStrikes keeps a jump from machine-gunning every note it crosses. */
+if (new URLSearchParams(location.search).has('debug')){
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;bottom:84px;left:50%;transform:translateX(-50%);' +
+    'display:flex;gap:10px;align-items:center;z-index:6;color:#5a6178;font-size:10px;' +
+    'letter-spacing:.12em;background:rgba(7,6,14,.55);border:1px solid rgba(90,97,120,.45);' +
+    'border-radius:999px;padding:6px 14px';
+  const bar = document.createElement('input');
+  bar.type = 'range'; bar.min = 0; bar.max = 1000; bar.value = 0;
+  bar.style.width = '34vw';
+  let held = false;
+  bar.addEventListener('pointerdown', () => held = true);
+  addEventListener('pointerup', () => held = false);
+  bar.addEventListener('input', () => {
+    songTime = (bar.value/1000) * (ROLL_T + LOOP_T);
+    skipStrikes = true;
+  });
+  const time = document.createElement('span');
+  time.style.cssText = 'min-width:11ch;text-align:right';
+  const rates = document.createElement('span');
+  [['⏸',0],['¼',.25],['1×',1]].forEach(([txt, r]) => {
+    const b = document.createElement('button');
+    b.textContent = txt;
+    b.style.cssText = 'background:none;border:none;color:inherit;font:inherit;cursor:pointer;padding:2px 6px';
+    b.addEventListener('click', () => { playRate = r; });
+    rates.appendChild(b);
+  });
+  box.append(bar, time, rates);
+  document.body.appendChild(box);
+  dbg = { update(T){
+    if (!held) bar.value = Math.round(T / (ROLL_T + LOOP_T) * 1000);
+    time.textContent = `T ${T.toFixed(2)} ×${playRate}`;
+  }};
+}

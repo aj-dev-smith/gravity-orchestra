@@ -4,9 +4,34 @@
 This project began as "a shiny track, a glowing marble, surfaces to bounce off" in
 a Claude.ai chat artifact and grew into a multi-track ballistic music engine.
 It went mildly viral after the three.js account reposted it (~30k views).
-Everything lives in one file: `marble-cascade.html` (three.js r128 + zero other deps).
+It is now a Vite + ES-module repo (`src/`) bundling three.js r128. The single
+self-contained `marble-cascade.html` still exists as the shareable "viral unit"
+— but it is now a BUILD ARTIFACT (`npm run build:single`), not the source of
+truth. Live at https://cascade.ajsmithhq.com.
 This document is the scar tissue: what the architecture means, what must never
 break, and what we already know we want next.
+
+---
+
+## 0. Repo layout, build & deploy (added when we repo-ified)
+
+    src/engine.js   pure physics/music — solver, arcPos/arcVel, padOffset, noteHz (unit-tested)
+    src/audio.js    dual-path Web Audio + iOS sample fallback — ported VERBATIM (see §3)
+    src/juice.js    trail / ripple / spark / dust pools, spawnBurst, glowTex
+    src/songs/*.js  one module per song (the comments are sacred), aggregated by index.js
+    src/main.js     scene, rigs, buildWorld, trackPos, animate(), controls — the orchestrator
+    test/           Vitest: song lock-rule + engine ballistics
+
+    npm run dev            # vite dev server (add --host to reach a phone on the LAN)
+    npm test               # vitest — run after ANY song or engine edit
+    npm run build          # → dist/  (hashed assets; what deploy.sh ships)
+    npm run build:single   # → marble-cascade.html  (self-contained viral artifact)
+    npm run deploy         # build + ./deploy.sh → S3 sync + CloudFront invalidation
+
+Deploy: private S3 bucket `cascade.ajsmithhq.com` (CloudFront OAC) → CloudFront
+`E1U4B3EV2WPMZS` → ACM cert + Route53 alias. three.js is r128 pinned in
+package.json. The module seams are deliberately thin: audio takes `setBeat(beat)`
++ `rebuildBank(tracks)`; juice takes `initJuice(scene)` then `spawn*`/`updateJuice`.
 
 ---
 
@@ -172,10 +197,9 @@ Dies Irae (deep canon echo, delay 5).
 
 ## 7. Roadmap (discussed and wanted, in rough priority)
 
-1. **Repo-ify**: Vite + ES modules. Split: `engine/` (solver, trackPos,
-   padOffset), `audio/` (dual-path system — port VERBATIM, it is battle-
-   tested), `juice/`, `songs/*.json`, `verify` as a test. Keep the
-   single-file build as a distributable artifact (it's the viral unit).
+1. **Repo-ify** ✅ DONE — Vite + ES modules (engine/audio/juice/songs split,
+   `verify` is now a Vitest suite, single-file build via vite-plugin-singlefile).
+   Songs are `.js` not `.json` to preserve their commentary. See §0.
 2. **Recording/share**: canvas `captureStream()` + MediaRecorder; mix audio
    in via the webaudio path's MediaStreamDestination. This is why the dual
    output bus already exists — recording was anticipated.

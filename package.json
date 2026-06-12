@@ -1,0 +1,23 @@
+{
+  "name": "cascade",
+  "version": "1.0.0",
+  "description": "Cascade — melody-driven marble run. The melody is authored first; the physics is solved backward from it.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:single": "vite build --mode single && cp dist-single/index.html marble-cascade.html",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "deploy": "npm run build && ./deploy.sh"
+  },
+  "dependencies": {
+    "three": "0.128.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0",
+    "vite-plugin-singlefile": "^2.1.0",
+    "vitest": "^2.1.0"
+  }
+}

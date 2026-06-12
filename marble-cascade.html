@@ -1,0 +1,1057 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cascade — marble melodies</title>
+<style>
+  :root{
+    --ink:#cfd6e6; --dim:#5a6178; --amber:#ffb764;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;background:#07060e;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace}
+  canvas{display:block}
+  #hud{position:fixed;top:18px;left:20px;color:var(--ink);pointer-events:none;user-select:none}
+  #hud h1{font-size:13px;font-weight:600;letter-spacing:.35em;text-transform:uppercase}
+  #song{pointer-events:auto;display:block;margin-top:10px;background:rgba(7,6,14,.6);
+    color:var(--amber);border:1px solid rgba(255,183,100,.35);border-radius:8px;
+    font:inherit;font-size:11px;letter-spacing:.12em;padding:6px 10px;cursor:pointer}
+  #song:focus-visible{outline:none;border-color:var(--amber)}
+  #songsub{font-size:10px;color:var(--dim);margin-top:6px;letter-spacing:.08em}
+  #note{position:fixed;bottom:20px;left:20px;color:var(--dim);font-size:11px;letter-spacing:.2em;min-height:14px;max-width:38vw;overflow:hidden;white-space:nowrap}
+  #note b{color:var(--amber);font-weight:600}
+  #overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at center,rgba(7,6,14,.35),rgba(7,6,14,.92));z-index:10;
+    transition:opacity .8s ease}
+  #overlay.gone{opacity:0;pointer-events:none}
+  #play{pointer-events:auto;cursor:pointer;background:none;border:1px solid rgba(255,183,100,.5);
+    color:var(--amber);font:inherit;font-size:12px;letter-spacing:.4em;text-transform:uppercase;
+    padding:16px 34px 16px 38px;border-radius:999px;transition:all .25s ease}
+  #play:hover,#play:focus-visible{background:rgba(255,183,100,.12);border-color:var(--amber);box-shadow:0 0 40px rgba(255,183,100,.25);outline:none}
+  #mute{position:fixed;top:18px;right:20px;background:none;border:none;cursor:pointer;
+    color:var(--dim);font:inherit;font-size:11px;letter-spacing:.2em;padding:6px}
+  #mute:hover{color:var(--ink)}
+  #astate{position:fixed;bottom:20px;right:20px;color:var(--dim);font-size:10px;letter-spacing:.12em;opacity:.75;text-align:right;max-width:55vw}
+  #cams{position:fixed;bottom:46px;left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:5}
+  .camb{background:rgba(7,6,14,.55);border:1px solid rgba(90,97,120,.45);color:var(--dim);
+    font:inherit;font-size:10px;letter-spacing:.18em;padding:6px 13px;border-radius:999px;cursor:pointer;
+    transition:all .2s ease}
+  .camb.on{border-color:currentColor;background:rgba(7,6,14,.8)}
+  .camb:focus-visible{outline:none;border-color:var(--ink)}
+</style>
+</head>
+<body>
+<div id="hud">
+  <h1>Cascade</h1>
+  <select id="song" aria-label="choose melody"></select>
+  <p id="songsub"></p>
+</div>
+<div id="note"></div>
+<div id="cams"></div>
+<button id="mute" aria-label="mute">SOUND&nbsp;ON</button>
+<div id="astate"></div>
+<div id="overlay"><button id="play">Drop the marble</button></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ============================================================
+   CASCADE — melody-driven marble run, now multi-track.
+   A song is one or more tracks of [note, beats-until-next-hit].
+   Every track gets its own solved pad chain, rail, and marble;
+   they share the clock, so harmony is geometry.
+   ============================================================ */
+
+const G = new THREE.Vector3(0, -14.5, 0);
+const UP = new THREE.Vector3(0, .26, 0);
+const UPY = new THREE.Vector3(0, 1, 0);
+
+const SONGS = {
+  'fur-elise': {
+    label: 'Für Elise', sub: 'Beethoven · A minor · two marbles', bpm: 84,
+    scale: ['A','B','C','D','D#','E','G#'],
+    melody: [
+      ['E5', .5], ['D#5', .5], ['E5', .5], ['D#5', .5],
+      ['E5', .5], ['B4', .5], ['D5', .5], ['C5', .5],
+      ['A4', 1.0], ['C4', .5], ['E4', .5], ['A4', .5],
+      ['B4', 1.0], ['E4', .5], ['G#4', .5], ['B4', .5],
+      ['C5', 1.0], ['E4', .5],
+      ['E5', .5], ['D#5', .5], ['E5', .5], ['D#5', .5],
+      ['E5', .5], ['B4', .5], ['D5', .5], ['C5', .5],
+      ['A4', 1.0], ['C4', .5], ['E4', .5], ['A4', .5],
+      ['B4', 1.0], ['E4', .5], ['C5', .5], ['B4', .5],
+      ['A4', 2.0],
+    ],
+    bass: {
+      delay: 4,            // rests through the opening trill-run, like the score
+      notes: [
+        // rolling left-hand arpeggios: A–E–A under the home phrases,
+        // E–E–G# under the dominant, one huge lob vaulting trill-run 2
+        ['A3', .5], ['E4', .5], ['A4', 1.5],
+        ['E3', .5], ['E4', .5], ['G#4', 1.5],
+        ['A3', .5], ['E4', .5], ['A4', 4.5],
+        ['A3', .5], ['E4', .5], ['A4', 1.5],
+        ['E3', .5], ['E4', .5], ['G#4', 1.5],
+        ['A3', .5], ['E4', .5], ['A4', 1],
+      ],
+    },
+  },
+  'ode-to-joy': {
+    label: 'Ode to Joy', sub: 'Beethoven · D major · three marbles', bpm: 100,
+    scale: ['C#','D','E','F#','G','A','B'],
+    melody: [
+      ['F#5', 1], ['F#5', 1], ['G5', 1], ['A5', 1],
+      ['A5', 1], ['G5', 1], ['F#5', 1], ['E5', 1],
+      ['D5', 1], ['D5', 1], ['E5', 1], ['F#5', 1],
+      ['F#5', 1.5], ['E5', .5], ['E5', 2],
+      ['F#5', 1], ['F#5', 1], ['G5', 1], ['A5', 1],
+      ['A5', 1], ['G5', 1], ['F#5', 1], ['E5', 1],
+      ['D5', 1], ['D5', 1], ['E5', 1], ['F#5', 1],
+      ['E5', 1.5], ['D5', .5], ['D5', 2],
+    ],
+    alto: [
+      // diatonic thirds below the melody, 32 beats
+      ['D4', 1], ['D4', 1], ['E4', 1], ['F#4', 1],
+      ['F#4', 1], ['E4', 1], ['D4', 1], ['C#4', 1],
+      ['B3', 1], ['B3', 1], ['C#4', 1], ['D4', 1],
+      ['D4', 1.5], ['C#4', .5], ['C#4', 2],
+      ['D4', 1], ['D4', 1], ['E4', 1], ['F#4', 1],
+      ['F#4', 1], ['E4', 1], ['D4', 1], ['C#4', 1],
+      ['B3', 1], ['B3', 1], ['C#4', 1], ['D4', 1],
+      ['C#4', 1.5], ['D4', .5], ['F#4', 2],
+    ],
+    bass: [
+      // half-note root motion, 32 beats — octave 3/4 so phone speakers carry it
+      ['D4', 2], ['A3', 2], ['D4', 2], ['A3', 2],
+      ['B3', 2], ['A3', 2], ['D4', 2], ['A3', 2],
+      ['D4', 2], ['A3', 2], ['D4', 2], ['A3', 2],
+      ['G3', 2], ['A3', 2], ['A3', 2], ['D4', 2],
+    ],
+  },
+  'canon-in-d': {
+    label: 'Canon in D', sub: 'Pachelbel · the real thing · three marbles', bpm: 112,
+    scale: ['C#','D','E','F#','G','A','B'],
+    melody: [
+      // cycle 1 — the theme, one note per chord
+      ['F#5', 2], ['E5', 2], ['D5', 2], ['C#5', 2],
+      ['B4', 2], ['A4', 2], ['B4', 2], ['C#5', 2],
+      // cycle 2 — quarter-note figuration
+      ['F#5', 1], ['G5', 1], ['E5', 1], ['F#5', 1],
+      ['D5', 1], ['E5', 1], ['C#5', 1], ['D5', 1],
+      ['B4', 1], ['C#5', 1], ['A4', 1], ['B4', 1],
+      ['D5', 1], ['B4', 1], ['C#5', 1], ['E5', 1],
+      // cycle 3 — THE passage: the figure, then the rising run
+      ['A5', 1], ['F#5', .5], ['G5', .5], ['A5', 1], ['F#5', .5], ['G5', .5],
+      ['A5', .5], ['A4', .5], ['B4', .5], ['C#5', .5], ['D5', .5], ['E5', .5], ['F#5', .5], ['G5', .5],
+      ['F#5', 1], ['D5', .5], ['E5', .5], ['F#5', 1], ['F#4', .5], ['G4', .5],
+      ['A4', .5], ['B4', .5], ['A4', .5], ['G4', .5], ['A4', .5], ['F#4', .5], ['G4', .5], ['A4', .5],
+      // cycle 4 — the answer, climbing home to relaunch the theme
+      ['G4', 1], ['B4', .5], ['A4', .5], ['G4', 1], ['F#4', .5], ['E4', .5],
+      ['F#4', .5], ['E4', .5], ['D4', .5], ['E4', .5], ['F#4', .5], ['G4', .5], ['A4', .5], ['B4', .5],
+      ['G4', 1], ['B4', .5], ['A4', .5], ['B4', 1], ['C#5', .5], ['D5', .5],
+      ['A4', .5], ['B4', .5], ['C#5', .5], ['D5', .5], ['E5', .5], ['F#5', .5], ['G5', .5], ['A5', .5],
+    ],
+    alto: {
+      delay: 16,           // authentic: the second voice enters one full ground later
+      notes: [
+        // cycles 1–3 of the lead, an octave below
+        ['F#4', 2], ['E4', 2], ['D4', 2], ['C#4', 2],
+        ['B3', 2], ['A3', 2], ['B3', 2], ['C#4', 2],
+        ['F#4', 1], ['G4', 1], ['E4', 1], ['F#4', 1],
+        ['D4', 1], ['E4', 1], ['C#4', 1], ['D4', 1],
+        ['B3', 1], ['C#4', 1], ['A3', 1], ['B3', 1],
+        ['D4', 1], ['B3', 1], ['C#4', 1], ['E4', 1],
+        ['A4', 1], ['F#4', .5], ['G4', .5], ['A4', 1], ['F#4', .5], ['G4', .5],
+        ['A4', .5], ['A3', .5], ['B3', .5], ['C#4', .5], ['D4', .5], ['E4', .5], ['F#4', .5], ['G4', .5],
+        ['F#4', 1], ['D4', .5], ['E4', .5], ['F#4', 1], ['F#3', .5], ['G3', .5],
+        ['A3', .5], ['B3', .5], ['A3', .5], ['G3', .5], ['A3', .5], ['F#3', .5], ['G3', .5], ['A3', .5],
+      ],
+    },
+    bass: [
+      // the famous ground, four times through — 64 beats
+      ['D4', 2], ['A3', 2], ['B3', 2], ['F#3', 2],
+      ['G3', 2], ['D3', 2], ['G3', 2], ['A3', 2],
+      ['D4', 2], ['A3', 2], ['B3', 2], ['F#3', 2],
+      ['G3', 2], ['D3', 2], ['G3', 2], ['A3', 2],
+      ['D4', 2], ['A3', 2], ['B3', 2], ['F#3', 2],
+      ['G3', 2], ['D3', 2], ['G3', 2], ['A3', 2],
+      ['D4', 2], ['A3', 2], ['B3', 2], ['F#3', 2],
+      ['G3', 2], ['D3', 2], ['G3', 2], ['A3', 2],
+    ],
+  },
+  'greensleeves': {
+    label: 'Greensleeves', sub: 'Traditional · A minor · two marbles', bpm: 116,
+    scale: ['A','B','C','D','E','F#','G','G#'],
+    melody: [
+      // 6/8 lilt: long-short hop pairs — 48 eighth-beats
+      ['A4', 1],
+      ['C5', 2], ['D5', 1], ['E5', 1.5], ['F#5', .5], ['E5', 1],
+      ['D5', 2], ['B4', 1], ['G4', 1.5], ['A4', .5], ['B4', 1],
+      ['C5', 2], ['A4', 1], ['A4', 1.5], ['G#4', .5], ['A4', 1],
+      ['B4', 2], ['G#4', 1], ['E4', 3],
+      ['A4', 1],
+      ['C5', 2], ['D5', 1], ['E5', 1.5], ['F#5', .5], ['E5', 1],
+      ['D5', 2], ['B4', 1], ['G4', 1.5], ['A4', .5], ['B4', 1],
+      ['C5', 1.5], ['B4', .5], ['A4', 1], ['G#4', 1.5], ['F#4', .5], ['G#4', 1],
+      ['A4', 4],
+    ],
+    bass: {
+      delay: 1,            // the pickup note sings alone
+      notes: [
+        // root–fifth in dotted-quarter strides, V–i cadence to close
+        ['A3', 3], ['E4', 3], ['G3', 3], ['D4', 3],
+        ['A3', 3], ['E4', 3], ['E3', 3], ['B3', 3],
+        ['A3', 3], ['E4', 3], ['G3', 3], ['D4', 3],
+        ['A3', 3], ['E4', 3],
+        ['E3', 2], ['A3', 3],
+      ],
+    },
+  },
+  'gymnopedie': {
+    label: 'Gymnopédie No. 1', sub: 'Satie · floating · two marbles', bpm: 66,
+    scale: ['A','B','C#','D','F#','G'],
+    melody: [
+      // the theme, stated twice — every hop hangs nearly a second
+      ['F#5', 1], ['A5', 1], ['G5', 1],
+      ['F#5', 1], ['C#5', 1], ['B4', 1],
+      ['C#5', 1], ['D5', 1], ['A4', 1],
+      ['F#4', 6],
+      ['F#5', 1], ['A5', 1], ['G5', 1],
+      ['F#5', 1], ['C#5', 1], ['B4', 1],
+      ['C#5', 1], ['D5', 1], ['A4', 1],
+      ['F#4', 6],
+    ],
+    bass: [
+      // the slow oom: one root per bar, maj7 colors against the melody
+      ['G3', 3], ['D4', 3], ['A3', 3], ['D3', 3], ['G3', 3],
+      ['G3', 3], ['D4', 3], ['A3', 3], ['D3', 3], ['G3', 3],
+    ],
+  },
+  'prelude-in-c': {
+    label: 'Prelude in C', sub: 'Bach · one marble, pure flow', bpm: 72,
+    scale: ['C','D','E','F','F#','G','A','B'],
+    melody: [
+      // broken chords ARE the harmony — eight bars, eight hops each
+      ['C4', .5], ['E4', .5], ['G4', .5], ['C5', .5], ['E5', .5], ['G4', .5], ['C5', .5], ['E5', .5],
+      ['C4', .5], ['D4', .5], ['A4', .5], ['D5', .5], ['F5', .5], ['A4', .5], ['D5', .5], ['F5', .5],
+      ['B3', .5], ['D4', .5], ['G4', .5], ['D5', .5], ['F5', .5], ['G4', .5], ['D5', .5], ['F5', .5],
+      ['C4', .5], ['E4', .5], ['G4', .5], ['C5', .5], ['E5', .5], ['G4', .5], ['C5', .5], ['E5', .5],
+      ['C4', .5], ['E4', .5], ['A4', .5], ['E5', .5], ['A5', .5], ['A4', .5], ['E5', .5], ['A5', .5],
+      ['C4', .5], ['D4', .5], ['F#4', .5], ['A4', .5], ['D5', .5], ['F#4', .5], ['A4', .5], ['D5', .5],
+      ['B3', .5], ['D4', .5], ['G4', .5], ['D5', .5], ['G5', .5], ['G4', .5], ['D5', .5], ['G5', .5],
+      ['B3', .5], ['D4', .5], ['F4', .5], ['G4', .5], ['B4', .5], ['F4', .5], ['G4', .5], ['B4', .5],
+    ],
+  },
+  'mountain-king': {
+    label: 'Mountain King', sub: 'Grieg · accelerando · two marbles', bpm: 100,
+    scale: ['A','B','C','D','D#','E'],
+    melody: [
+      // the same phrase, four times, each faster — rhythm compressing into geometry
+      ['A4', 1], ['B4', 1], ['C5', 1], ['D5', 1], ['E5', 1], ['C5', 1], ['E5', 2],
+      ['D#5', 1], ['B4', 1], ['D#5', 2], ['D5', 1], ['B4', 1], ['D5', 2],
+      ['A4', .75], ['B4', .75], ['C5', .75], ['D5', .75], ['E5', .75], ['C5', .75], ['E5', 1.5],
+      ['D#5', .75], ['B4', .75], ['D#5', 1.5], ['D5', .75], ['B4', .75], ['D5', 1.5],
+      ['A4', .5], ['B4', .5], ['C5', .5], ['D5', .5], ['E5', .5], ['C5', .5], ['E5', 1],
+      ['D#5', .5], ['B4', .5], ['D#5', 1], ['D5', .5], ['B4', .5], ['D5', 1],
+      ['A4', .375], ['B4', .375], ['C5', .375], ['D5', .375], ['E5', .375], ['C5', .375], ['E5', .75],
+      ['D#5', .375], ['B4', .375], ['D#5', .75], ['D5', .375], ['B4', .375], ['D5', .75],
+      ['A4', 1], ['E5', 1], ['A5', 1],                  // the stinger
+    ],
+    bass: [
+      // stomping root–fifth, accelerating in lockstep
+      ['A3', 2], ['E4', 2], ['A3', 2], ['E4', 2], ['A3', 2], ['E4', 2], ['A3', 2], ['E4', 2],
+      ['A3', 1.5], ['E4', 1.5], ['A3', 1.5], ['E4', 1.5], ['A3', 1.5], ['E4', 1.5], ['A3', 1.5], ['E4', 1.5],
+      ['A3', 1], ['E4', 1], ['A3', 1], ['E4', 1], ['A3', 1], ['E4', 1], ['A3', 1], ['E4', 1],
+      ['A3', .75], ['E4', .75], ['A3', .75], ['E4', .75], ['A3', .75], ['E4', .75], ['A3', .75], ['E4', .75],
+      ['A3', 1], ['E3', 1], ['A3', 1],
+    ],
+  },
+  'toccata': {
+    label: 'Toccata in Dm', sub: 'Bach · organ drama · two marbles', bpm: 72,
+    scale: ['A','A#','C','C#','D','E','F','G'],
+    melody: [
+      // the mordent, the held cry, the falling run — then its octave echo
+      ['A5', .25], ['G5', .25], ['A5', 2],
+      ['G5', .25], ['F5', .25], ['E5', .25], ['D5', .25], ['C#5', .5], ['D5', 2.5],
+      ['A4', .25], ['G4', .25], ['A4', 2],
+      ['G4', .25], ['F4', .25], ['E4', .25], ['D4', .25], ['C#4', .5], ['D4', 2.5],
+      // the diminished climb out of the deep, then the D minor resolution
+      ['C#4', .5], ['E4', .5], ['G4', .5], ['A#4', .5],
+      ['C#5', .5], ['E5', .5], ['G5', .5], ['A#5', .5],
+      ['A5', 1], ['F5', 1], ['D5', 4],
+    ],
+    bass: {
+      delay: 6.5,          // silence under the first cry; the pedal answers the echo
+      notes: [
+        ['D3', 6.5],       // one vast pedal lob spanning the entire low statement
+        ['D3', 2], ['A3', 2], ['D3', 2], ['D4', 4],
+      ],
+    },
+  },
+  'dies-irae': {
+    label: 'Dies Irae', sub: 'Gregorian chant · doom · three marbles', bpm: 56,
+    scale: ['A','C','D','E','F'],
+    melody: [
+      // the chant, twice — slow bells
+      ['F4', 1], ['E4', 1], ['F4', 1], ['D4', 1], ['E4', 1], ['C4', 1], ['D4', 1.5], ['D4', 2.5],
+      ['F4', 1], ['E4', 1], ['F4', 1], ['D4', 1], ['E4', 1], ['C4', 1], ['D4', 1.5], ['D4', 2.5],
+    ],
+    alto: {
+      delay: 5, deep: true,   // the cathedral echo: same chant, five beats behind, an octave down
+      notes: [
+        ['F3', 1], ['E3', 1], ['F3', 1], ['D3', 1], ['E3', 1], ['C3', 1], ['D3', 1.5], ['D3', 2.5],
+        ['F3', 1], ['E3', 1], ['F3', 1], ['D3', 1], ['E3', 1],
+      ],
+    },
+    bass: [
+      // funeral lobs
+      ['D3', 5], ['A3', 5], ['D3', 5], ['A3', 2.5], ['D3', 2.5],
+    ],
+  },
+};
+
+/* ---- mutable song state, filled by buildWorld() ---- */
+let BEAT = .7, SCALE = [];
+let tracks = [], LOOP_T = 0, world = null;
+let camMode = 'auto';
+let autoWant = 'all', lastCut = 0;
+const CAMCOLORS = {auto:'#ffe9c9', all:'#cfd6e6', lead:'#ffaa55', alto:'#c08bff', bass:'#66aaff'};
+const camsEl = document.getElementById('cams');
+function renderCamButtons(){
+  camsEl.innerHTML = '';
+  if (tracks.length < 2){ camsEl.style.display = 'none'; camMode = 'auto'; return; }
+  camsEl.style.display = 'flex';
+  ['auto', 'all', ...tracks.map(t => t.role)].forEach(m => {
+    const b = document.createElement('button');
+    b.className = 'camb' + (camMode === m ? ' on' : '');
+    if (camMode === m) b.style.color = CAMCOLORS[m];
+    b.textContent = m.toUpperCase();
+    b.addEventListener('click', () => { camMode = m; renderCamButtons(); });
+    camsEl.appendChild(b);
+  });
+}
+const ROLL_T = 2.6;                                    // seconds on the rail
+const hueOf = n => Math.max(0, SCALE.indexOf(n.replace(/\d/,''))) / Math.max(1, SCALE.length);
+const octaveOf = n => +n.match(/\d/)[0];
+
+/* ---------------- renderer / scene ---------------- */
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x07060e);
+scene.fog = new THREE.FogExp2(0x07060e, 0.026);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, .1, 200);
+
+scene.add(new THREE.AmbientLight(0x223, 1.4));
+const key = new THREE.DirectionalLight(0x8899ff, .5);
+key.position.set(-6, 10, 4); scene.add(key);
+
+/* --- one-shot procedural environment map → real chrome --- */
+function makeEnv(){
+  const envScene = new THREE.Scene();
+  const grad = (() => {
+    const c = document.createElement('canvas'); c.width = 4; c.height = 256;
+    const g = c.getContext('2d').createLinearGradient(0,0,0,256);
+    g.addColorStop(0,'#3a4d8f'); g.addColorStop(.45,'#0c0d1d');
+    g.addColorStop(.75,'#05040a'); g.addColorStop(1,'#000');
+    const x = c.getContext('2d'); x.fillStyle = g; x.fillRect(0,0,4,256);
+    return new THREE.CanvasTexture(c);
+  })();
+  envScene.add(new THREE.Mesh(new THREE.SphereGeometry(50,16,16),
+    new THREE.MeshBasicMaterial({map:grad, side:THREE.BackSide})));
+  for (let i=0;i<5;i++){
+    const strip = new THREE.Mesh(new THREE.PlaneGeometry(30, 2.2),
+      new THREE.MeshBasicMaterial({color: i%2 ? 0xffc890 : 0x9fb8ff, side:THREE.DoubleSide}));
+    strip.position.set(Math.sin(i*2.4)*18, 6+i*4, Math.cos(i*2.4)*18);
+    strip.lookAt(0,8,0);
+    envScene.add(strip);
+  }
+  const rt = new THREE.WebGLCubeRenderTarget(256, {generateMipmaps:true, minFilter:THREE.LinearMipmapLinearFilter});
+  new THREE.CubeCamera(.1, 100, rt).update(renderer, envScene);
+  return rt.texture;
+}
+const envMap = makeEnv();
+const chrome = new THREE.MeshStandardMaterial({color:0xd8dde8, metalness:1, roughness:.12, envMap, envMapIntensity:1.4});
+const ringGeo = new THREE.TorusGeometry(.58,.035,10,40);
+const padGeo  = new THREE.CylinderGeometry(.5,.56,.13,28);
+
+/* ---------------- marble rigs (lead = amber, bass = ice-blue) ---------- */
+function glowTexture(){                                 // white; tinted per sprite
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const x = c.getContext('2d');
+  const g = x.createRadialGradient(64,64,0,64,64,64);
+  g.addColorStop(0,'rgba(255,255,255,1)'); g.addColorStop(.35,'rgba(255,255,255,.5)');
+  g.addColorStop(1,'rgba(255,255,255,0)');
+  x.fillStyle = g; x.fillRect(0,0,128,128);
+  return new THREE.CanvasTexture(c);
+}
+const glowTex = glowTexture();
+
+function makeRig(opt){
+  const group = new THREE.Group();
+  const core = new THREE.Mesh(new THREE.SphereGeometry(opt.r, 32, 32),
+    new THREE.MeshStandardMaterial({color:opt.body, emissive:opt.emissive, emissiveIntensity:2.2,
+      metalness:.3, roughness:.25, envMap}));
+  const deform = new THREE.Group();                     // squash & stretch happens here
+  deform.add(core);
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex, color:opt.glow,
+    blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:.85}));
+  halo.scale.set(opt.r*8, opt.r*8, 1);
+  const lamp = new THREE.PointLight(opt.glow, 2.4, 10, 2);
+  group.add(deform, halo, lamp);
+  group.visible = false;
+  scene.add(group);
+  return {group, core, deform, halo, lamp, glow:new THREE.Color(opt.glow), squash:0};
+}
+const rigs = [
+  makeRig({r:.26, body:0xffc488, emissive:0xff9233, glow:0xffaa55}),  // lead
+  makeRig({r:.36, body:0xa8d4ff, emissive:0x3d7dff, glow:0x66aaff}),  // bass
+  makeRig({r:.21, body:0xe2c8ff, emissive:0x9a4dff, glow:0xc08bff}),  // alto
+];
+
+/* fading trail (shared pool, tinted per spawn) */
+const TRAIL = 46, trail = [];
+for (let i=0;i<TRAIL;i++){
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex, color:0xffffff,
+    blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:0}));
+  s.scale.set(.6,.6,1); scene.add(s); trail.push(s);
+}
+let trailHead = 0, trailTick = 0;
+
+/* impact ripples (pooled) */
+const ripples = [];
+for (let i=0;i<10;i++){
+  const r = new THREE.Mesh(new THREE.RingGeometry(.5,.56,40),
+    new THREE.MeshBasicMaterial({blending:THREE.AdditiveBlending, transparent:true, opacity:0,
+      side:THREE.DoubleSide, depthWrite:false}));
+  scene.add(r); ripples.push({mesh:r, life:1});
+}
+let rippleIdx = 0;
+
+/* impact sparks (pooled) */
+const PARTS = 150, parts = [];
+for (let i=0;i<PARTS;i++){
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex, color:0xffffff,
+    blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:0}));
+  scene.add(s); parts.push({s, vel:new THREE.Vector3(), life:1, s0:.3});
+}
+let partIdx = 0;
+function spawnBurst(pos, color, n, power){
+  for (let i=0;i<n;i++){
+    const p = parts[partIdx++ % PARTS];
+    p.life = 0;
+    p.s.position.copy(pos);
+    p.s.material.color.copy(color);
+    p.vel.set(Math.random()-.5, Math.random()*.95 + .3, Math.random()-.5)
+       .normalize().multiplyScalar(power*(.45 + Math.random()*.85));
+    p.s0 = .22 + Math.random()*.3;
+  }
+}
+let shakeAmp = 0, expoKick = 0;                         // camera punch & exposure pop
+
+/* drifting dust */
+{
+  const N = 900, dp = new Float32Array(N*3);
+  for (let i=0;i<N;i++){
+    dp[i*3]   = (Math.random()-.5)*70;
+    dp[i*3+1] = 16 - Math.random()*160;                 // covers the deepest songs
+    dp[i*3+2] = (Math.random()-.5)*70;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(dp,3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({map:glowTex, color:0x4455aa,
+    size:.22, transparent:true, opacity:.5, blending:THREE.AdditiveBlending, depthWrite:false})));
+}
+
+/* ---------------- world builder ----------------
+   Solver per track: v0 = (ΔP − ½·g·dt²)/dt — exact, no drift.
+   Descent is proportional to time, so parallel tracks fall together. */
+function buildTrack(melody, zBase, role, rig, delayBeats = 0, deep = false){
+  const isBass = role === 'bass';
+  const voiceDeep = isBass || deep;
+  const padScale = isBass ? 1.4 : (role === 'alto' ? .85 : 1);
+  const rollT = ROLL_T + delayBeats * BEAT;             // late entry = lazy roll
+  const pads = []; let t = 0;
+  {
+    let p = new THREE.Vector3(0, -2.2 * delayBeats * BEAT, zBase), dir = isBass ? -1 : 1;
+    melody.forEach(([note, beats], i) => {
+      const dt = beats * BEAT;
+      pads.push({pos: p.clone(), note, dt, t});
+      t += dt;
+      if (i % 4 === 3) dir *= -1;                       // weave
+      p = p.clone().add(new THREE.Vector3(
+        dir * (0.9 + dt * 2.0),
+        -dt * 2.2,                                      // time-proportional drop
+        Math.sin(i * (isBass ? 1.1 : 1.3)) * (isBass ? 1.0 : 1.4)
+      ));
+    });
+  }
+  const arcs = [];
+  for (let i = 0; i < pads.length; i++){
+    const a = pads[i];
+    const target = (i === pads.length-1)
+      ? a.pos.clone().add(new THREE.Vector3(0,-9,0))
+      : pads[i+1].pos.clone();
+    const dt = a.dt;
+    arcs.push(target.sub(a.pos).addScaledVector(G, -.5*dt*dt).divideScalar(dt));
+  }
+
+  // intro rail aimed along the launch direction
+  const launchDir = arcs[0].clone().normalize();
+  const p0 = pads[0].pos;
+  const rail = new THREE.CatmullRomCurve3([
+    p0.clone().addScaledVector(launchDir,-9).add(new THREE.Vector3(0, 7.5, 1.5)),
+    p0.clone().addScaledVector(launchDir,-6.5).add(new THREE.Vector3(0, 4.6,-1.2)),
+    p0.clone().addScaledVector(launchDir,-4).add(new THREE.Vector3(0, 2.2, .6)),
+    p0.clone().addScaledVector(launchDir,-1.6).add(new THREE.Vector3(0, .55, 0)),
+    p0.clone()
+  ]);
+  {
+    const frames = rail.computeFrenetFrames(120, false);
+    const samples = rail.getSpacedPoints(120);
+    const w = isBass ? .3 : .22;
+    [-w, w].forEach(off => {
+      const pts = samples.map((pt,i)=> pt.clone().addScaledVector(frames.binormals[i], off).add(new THREE.Vector3(0,-.16,0)));
+      world.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 120, .06, 10), chrome));
+    });
+    for (let i=4;i<118;i+=9){
+      const s = new THREE.Mesh(new THREE.CylinderGeometry(.04,.04,isBass?.78:.62,8), chrome);
+      s.position.copy(samples[i]).y -= .2;
+      s.rotation.z = Math.PI/2;
+      s.lookAt(samples[i+1].x, s.position.y, samples[i+1].z);
+      s.rotateOnAxis(new THREE.Vector3(0,1,0), Math.PI/2);
+      world.add(s);
+    }
+  }
+
+  // pads: normal bisects incoming & outgoing velocity
+  const padObjs = pads.map((pad, i) => {
+    const prev = (i-1+pads.length) % pads.length;
+    const vin = arcs[prev].clone().addScaledVector(G, pads[prev].dt);
+    const n = arcs[i].clone().normalize().sub(vin.clone().normalize()).normalize();
+    if (n.y < .2) n.set(0,1,0);
+    const g = new THREE.Group();
+    g.position.copy(pad.pos).y -= .12;
+    g.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), n);
+    g.scale.setScalar(padScale);
+    const body = new THREE.Mesh(padGeo, new THREE.MeshStandardMaterial({
+      color: isBass ? 0x7e8db0 : 0x9aa6bd, metalness:1, roughness:.18, envMap, envMapIntensity:1.2}));
+    const rim = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
+      color: new THREE.Color().setHSL(hueOf(pad.note), .8, .55),
+      transparent:true, opacity:.18}));
+    rim.rotation.x = Math.PI/2; rim.position.y = .09;
+    g.add(body, rim); world.add(g);
+    return {g, rim, body, flash:0, hue:hueOf(pad.note),
+            base: g.position.clone(), n: n.clone(),
+            amp: THREE.MathUtils.clamp(arcs[i].dot(n)*.07, .05, 1.6)};
+  });
+
+  // landing pool
+  const poolPos = pads[pads.length-1].pos.clone().add(new THREE.Vector3(0,-8.6,0));
+  const pool = new THREE.Mesh(new THREE.CircleGeometry(isBass?2.6:2.2, 40),
+    new THREE.MeshBasicMaterial({color: rig.glow.getHex(), transparent:true, opacity:.10}));
+  pool.rotation.x = -Math.PI/2; pool.position.copy(poolPos); world.add(pool);
+
+  rig.group.visible = true;
+  return {pads, arcs, rail, padObjs, poolPos, pool, rig, role, isBass, deep:voiceDeep, rollT, lastIdx:-1, total:t};
+}
+
+function buildWorld(keyName){
+  const S = SONGS[keyName];
+  BEAT = 60 / S.bpm; SCALE = S.scale;
+  document.getElementById('songsub').textContent = S.sub + ' — falling';
+
+  if (world){
+    scene.remove(world);
+    world.traverse(o => {
+      if (o.geometry && o.geometry !== ringGeo && o.geometry !== padGeo) o.geometry.dispose();
+      if (o.material && o.material !== chrome) o.material.dispose();
+    });
+  }
+  world = new THREE.Group(); scene.add(world);
+  rigs.forEach(r => r.group.visible = false);
+
+  tracks = [ buildTrack(S.melody, 0, 'lead', rigs[0]) ];
+  if (S.alto){
+    const d = Array.isArray(S.alto) ? {notes:S.alto, delay:0} : S.alto;
+    tracks.push( buildTrack(d.notes, -3.4, 'alto', rigs[2], d.delay, d.deep) );
+  }
+  if (S.bass){
+    const d = Array.isArray(S.bass) ? {notes:S.bass, delay:0} : S.bass;
+    tracks.push( buildTrack(d.notes, 4.2, 'bass', rigs[1], d.delay) );
+  }
+  LOOP_T = tracks[0].total + 1.2;
+
+  if (eDL){ eDL.delayTime.value = BEAT/2; eDR.delayTime.value = BEAT*.75; }
+  if (camMode !== 'all' && camMode !== 'auto' && !tracks.some(t => t.role === camMode)) camMode = 'auto';
+  renderCamButtons();
+  rebuildBank();
+  if (started) clock.start();                           // restart from the rails
+}
+
+/* ---------------- audio: raw Web Audio, zero dependencies ----------------
+   iOS WebKit bug: a context created before the first user gesture can report
+   state "running" while its clock stays frozen at 0 and emits nothing.
+   So: build the ENTIRE context inside the gesture, and watchdog the clock. */
+let muted = false, audioReady = false;
+let ctx = null, master = null, rebuilds = 0;
+let eDL = null, eDR = null;
+const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+              (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const AC = window.AudioContext || window.webkitAudioContext;
+
+const audioEl = document.createElement('audio');
+audioEl.setAttribute('playsinline','');
+document.body.appendChild(audioEl);
+
+const stateEl = document.getElementById('astate');
+function showState(extra){
+  stateEl.textContent = ctx
+    ? `audio: ${ctx.state} · t=${ctx.currentTime.toFixed(1)}` +
+      (lastPath ? ` · via ${lastPath}` : '') +
+      (rebuilds ? ` · rebuilt×${rebuilds}` : '') + (extra || '')
+    : 'audio: tap to start';
+}
+setInterval(showState, 1000);
+
+function buildAudio(){                                 // MUST be called from a gesture
+  if (ctx){ try { ctx.close(); } catch(e){} }
+  ctx = new AC();
+  master = ctx.createGain(); master.gain.value = .9;
+  const out = ctx.createGain();
+  master.connect(out);
+  // small stereo echo — no convolver, nothing async
+  eDL = ctx.createDelay(1); eDR = ctx.createDelay(1);
+  eDL.delayTime.value = BEAT/2; eDR.delayTime.value = BEAT*.75;
+  const fb = ctx.createGain(); fb.gain.value = .3;
+  const wet = ctx.createGain(); wet.gain.value = .25;
+  master.connect(eDL); eDL.connect(eDR); eDR.connect(fb); fb.connect(eDL);
+  eDL.connect(wet); eDR.connect(wet); wet.connect(out);
+  out.connect(ctx.destination);
+  if (isIOS){                                          // also feed a real media element
+    const msd = ctx.createMediaStreamDestination();
+    out.connect(msd);
+    audioEl.srcObject = msd.stream;
+    audioEl.play().catch(()=>{});
+  }
+  ctx.resume().catch(()=>{});
+  ctx.onstatechange = () => showState();
+  audioReady = true;
+  // watchdog: report a zombie clock; rebuilds must happen inside a tap
+  const born = performance.now();
+  const probe = setInterval(() => {
+    if (!ctx) return clearInterval(probe);
+    if (ctx.currentTime > .05){ clearInterval(probe); showState(); return; }
+    if (performance.now() - born > 900){ clearInterval(probe); showState(' · ctx dead, using samples'); }
+  }, 200);
+  showState();
+}
+function initAudio(){ buildAudio(); primeSamples(); }
+
+/* every tap: prime samples, retry/rebuild the context (gesture context!) */
+['touchend','pointerdown'].forEach(ev => addEventListener(ev, () => {
+  if (!started) return;
+  primeSamples();
+  if (!ctx) buildAudio();
+  else if (ctx.currentTime < .05 && rebuilds < 3){ rebuilds++; buildAudio(); }
+  else if (ctx.state !== 'running') ctx.resume().catch(()=>{});
+  showState();
+}, {passive:true}));
+
+const NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+function noteHz(n){
+  const m = n.match(/^([A-G]#?)(\d)$/);
+  return 440 * Math.pow(2, (NAMES.indexOf(m[1]) - 9)/12 + (+m[2] - 4));
+}
+
+/* ---- Plan B: pre-rendered WAV samples through <audio> elements ----
+   When the iframe denies AudioContext activation but allows media playback,
+   this path still sings. Bass notes get a deeper, rounder render. */
+function renderNoteWav(freq, bass){
+  const sr = 22050, dur = bass ? 3.0 : 2.6, N = (sr*dur)|0;
+  const s = new Float32Array(N);
+  const decay = bass ? 1.7 : 2.6;
+  const tickF = bass ? 700 : 2400, tickA = bass ? .06 : .08;
+  const tickN = (.025*sr)|0;
+  for (let n=0;n<N;n++){
+    const t = n/sr;
+    const env = Math.exp(-t*decay) * Math.min(1, t/(bass?.008:.004));
+    s[n] = bass
+      ? env*( .65*Math.sin(6.2832*freq*t)
+            + .3*Math.sin(6.2832*freq*.5*t)*Math.exp(-t*1.2)   // sub-octave depth
+            + .26*Math.sin(6.2832*freq*2.002*t)*Math.exp(-t*2.2)
+            + .05*Math.sin(6.2832*freq*3.0*t)*Math.exp(-t*5))
+      : env*( .55*Math.sin(6.2832*freq*t)
+            + .22*Math.sin(6.2832*freq*2.004*t)*Math.exp(-t*1.5)
+            + .12*Math.sin(6.2832*freq*2.76*t)*Math.exp(-t*5)   // inharmonic tine
+            + .06*Math.sin(6.2832*freq*4.2*t)*Math.exp(-t*8)    // sparkle
+            + .08*Math.sin(6.2832*freq*3.01*t)*Math.exp(-t*4));
+    if (n < tickN) s[n] += tickA*Math.sign(Math.sin(6.2832*tickF*t))*Math.exp(-t*120);
+  }
+  const d = ((BEAT/2)*sr)|0;                            // baked-in echo
+  const eg = bass ? .18 : .28;
+  for (let n=d;n<N;n++) s[n] += eg*s[n-d];
+  let peak = 0; for (let n=0;n<N;n++) peak = Math.max(peak, Math.abs(s[n]));
+  const k = (bass ? .98 : .85)/Math.max(peak, 1e-6);
+  const buf = new ArrayBuffer(44 + N*2), v = new DataView(buf);
+  const W = (o,str) => { for(let i=0;i<str.length;i++) v.setUint8(o+i, str.charCodeAt(i)); };
+  W(0,'RIFF'); v.setUint32(4, 36+N*2, true); W(8,'WAVE'); W(12,'fmt ');
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,sr,true); v.setUint32(28,sr*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+  W(36,'data'); v.setUint32(40, N*2, true);
+  for (let n=0;n<N;n++) v.setInt16(44+n*2, Math.max(-1,Math.min(1,s[n]*k))*32767, true);
+  return new Blob([buf], {type:'audio/wav'});
+}
+let bank = {}, primed = false;
+const bankKey = (note, bass) => note + (bass ? '|b' : '');
+function rebuildBank(){
+  Object.values(bank).forEach(a => {
+    try { a.pause(); } catch(e){}
+    if (a.src) URL.revokeObjectURL(a.src);
+    a.remove();
+  });
+  bank = {}; primed = false;
+  const wanted = new Map();
+  tracks.forEach(tr => tr.pads.forEach(p => wanted.set(bankKey(p.note, tr.deep), {note:p.note, bass:tr.deep})));
+  wanted.forEach(({note, bass}, k) => {
+    const a = document.createElement('audio');
+    a.setAttribute('playsinline',''); a.preload = 'auto';
+    a.src = URL.createObjectURL(renderNoteWav(noteHz(note), bass));
+    a.addEventListener('error', () => stateEl.textContent = 'audio: sample blocked');
+    document.body.appendChild(a);
+    bank[k] = a;
+  });
+}
+function primeSamples(){                                // gesture-unlocks every element
+  if (primed) return;
+  primed = true;
+  Object.values(bank).forEach(a => {
+    const pr = a.play();
+    if (pr && pr.then) pr.then(() => { a.pause(); a.currentTime = 0; })
+                         .catch(() => { primed = false; });
+  });
+}
+let lastPath = '';
+function playNote(note, bass){
+  if (ctx && ctx.state === 'running' && ctx.currentTime > .05){
+    pluck(note, bass); lastPath = 'webaudio'; return;
+  }
+  const a = bank[bankKey(note, bass)];
+  if (a){
+    try { a.currentTime = 0; } catch(e){}
+    a.play().catch(()=>{});
+    lastPath = 'samples';
+  }
+}
+
+function pluck(note, bass){
+  if (!ctx) return;
+  const f = noteHz(note), t = ctx.currentTime;
+  const dur = bass ? 2.6 : 1.6;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(.0001, t);
+  g.gain.exponentialRampToValueAtTime(bass ? .7 : .5, t + (bass ? .01 : .005));
+  g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+  const o1 = ctx.createOscillator(); o1.type = bass ? 'sine' : 'triangle'; o1.frequency.value = f;
+  const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * (bass ? 2.002 : 2.004);
+  const g2 = ctx.createGain(); g2.gain.value = bass ? .3 : .3;
+  o1.connect(g); o2.connect(g2); g2.connect(g); g.connect(master);
+  o1.start(t); o2.start(t); o1.stop(t+dur+.1); o2.stop(t+dur+.1);
+  if (bass){                                            // sub-octave depth
+    const o3 = ctx.createOscillator(); o3.type = 'sine'; o3.frequency.value = f*.5;
+    const g3 = ctx.createGain(); g3.gain.value = .3;
+    o3.connect(g3); g3.connect(g); o3.start(t); o3.stop(t+dur+.1);
+  } else {                                              // inharmonic tine shimmer
+    const o4 = ctx.createOscillator(); o4.type = 'sine'; o4.frequency.value = f*2.76;
+    const g4 = ctx.createGain();
+    g4.gain.setValueAtTime(.14, t);
+    g4.gain.exponentialRampToValueAtTime(.0001, t + .5);
+    o4.connect(g4); g4.connect(g); o4.start(t); o4.stop(t + .6);
+  }
+  // impact transient
+  const k = ctx.createOscillator(); k.type = 'square'; k.frequency.value = bass ? 700 : 2400;
+  const kg = ctx.createGain();
+  kg.gain.setValueAtTime(bass ? .03 : .05, t);
+  kg.gain.exponentialRampToValueAtTime(.0001, t + .03);
+  k.connect(kg); kg.connect(master); k.start(t); k.stop(t + .05);
+}
+const noteEl = document.getElementById('note');
+function strike(tr, i){
+  const pad = tr.pads[i], po = tr.padObjs[i];
+  po.flash = 1;
+  tr.rig.lamp.intensity = 5;
+  if (tr.role === 'lead') noteEl.innerHTML = `<b>${pad.note}</b>&nbsp; ·&nbsp; ${'·'.repeat(Math.min(i, 40))}`;
+  const rp = ripples[rippleIdx++ % ripples.length];
+  rp.mesh.position.copy(pad.pos);
+  rp.mesh.quaternion.copy(po.g.quaternion);
+  rp.mesh.rotateX(Math.PI/2);
+  rp.mesh.material.color.setHSL(po.hue, .8, .6);
+  rp.mesh.scale.setScalar(tr.isBass ? 1.4 : 1);
+  rp.life = 0;
+  // JUICE: sparks, squash, punch
+  const sparkColor = new THREE.Color().setHSL(po.hue, .85, .62);
+  spawnBurst(pad.pos.clone().add(UP), sparkColor,
+             Math.min(5 + Math.round(pad.dt*7), 16),
+             2.4 + Math.min(pad.dt*1.6, 3));
+  tr.rig.squash = 1;
+  if (tr.role === 'lead'){
+    shakeAmp = Math.min(shakeAmp + .04 + pad.dt*.05, .15);
+    expoKick = 1;
+  }
+  if (audioReady && !muted){
+    try { playNote(pad.note, tr.deep); } catch(e){ /* audio must never break the run */ }
+  }
+}
+
+/* ---------------- timeline ---------------- */
+const clock = new THREE.Clock(); clock.autoStart = false;
+let started = false;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const sel = document.getElementById('song');
+Object.entries(SONGS).forEach(([k, s]) => {
+  const o = document.createElement('option');
+  o.value = k; o.textContent = s.label;
+  sel.appendChild(o);
+});
+buildWorld(sel.value);
+const startPos = tracks[0].rail.getPointAt(0).add(UP);
+const camTarget = startPos.clone();
+const camPos = startPos.clone().add(new THREE.Vector3(4.5, 2.6, 9.5));
+camera.position.copy(camPos); camera.lookAt(camTarget);
+
+/* pad swing: retract, then swing up to meet the marble exactly at impact.
+   phase = now − hit time. A = swing amplitude (impulse-scaled). */
+function padOffset(phase, A){
+  const W = .3 + A*.35;                                 // bigger hits telegraph longer
+  const S = .1;                                         // stroke time
+  if (phase < -W || phase > .6) return 0;
+  if (phase < -S){                                      // wind-up: ease into retraction
+    const u = (phase + W) / (W - S);
+    return -A * u*u;
+  }
+  if (phase < 0){                                       // the stroke: swing hard into contact
+    const u = (phase + S) / S;
+    return -A * (1 - u*u*u);
+  }
+  return A * .33 * Math.sin(phase*16) * Math.exp(-phase*8);  // follow-through wobble
+}
+
+/* position+velocity of a track's marble at loop-time T; fires strikes */
+function trackPos(tr, T){
+  if (T < tr.rollT){
+    const u = T / tr.rollT;
+    const e = Math.min(u*u*(3-2*u)*.65 + u*.35, 1);
+    return {pos: tr.rail.getPointAt(e).add(UP),
+            vel: tr.rail.getTangentAt(Math.min(e,.999)).multiplyScalar(6),
+            plunge:false, nextIdx:0, prog:u, curDt:9, nextDt: tr.pads[0].dt};
+  }
+  let at = T - tr.rollT, i = 0;
+  while (i < tr.pads.length && at >= tr.pads[i].dt){ at -= tr.pads[i].dt; i++; }
+  if (i >= tr.pads.length){                             // tail: continue last arc
+    const a = tr.pads[tr.pads.length-1];
+    const t2 = a.dt + (T - (tr.rollT + a.t + a.dt));
+    const pos = a.pos.clone()
+      .addScaledVector(tr.arcs[tr.arcs.length-1], t2)
+      .addScaledVector(G, .5*t2*t2);
+    return {pos, vel: tr.arcs[tr.arcs.length-1].clone().addScaledVector(G, t2),
+            plunge:true, nextIdx:-1, prog:0, curDt:9, nextDt:9};
+  }
+  if (i !== tr.lastIdx){ tr.lastIdx = i; strike(tr, i); }
+  return {pos: tr.pads[i].pos.clone()
+            .addScaledVector(tr.arcs[i], at)
+            .addScaledVector(G, .5*at*at)
+            .add(UP),
+          vel: tr.arcs[i].clone().addScaledVector(G, at),
+          plunge:false,
+          nextIdx: i+1 < tr.pads.length ? i+1 : -1,
+          prog: at / tr.pads[i].dt,
+          curDt: tr.pads[i].dt,
+          nextDt: i+1 < tr.pads.length ? tr.pads[i+1].dt : 9};
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), .05);
+  const T = started ? clock.elapsedTime % (ROLL_T + LOOP_T) : 0;
+  if (started && T < dt) tracks.forEach(tr => { tr.lastIdx = -1; tr.splashed = false; });   // loop reset
+
+  let leadPos = null;
+  const marblePts = [];
+  tracks.forEach(tr => {
+    const rig = tr.rig;
+    const r = started ? trackPos(tr, T)
+                      : {pos: tr.rail.getPointAt(0).add(UP),
+                         vel: tr.rail.getTangentAt(0), plunge:false, nextIdx:0, prog:0};
+    marblePts.push({p: r.pos, w: tr.role === 'lead' ? 1.7 : 1, role: tr.role});
+    tr._st = {dt: r.curDt, next: r.nextDt, prog: r.prog};
+    if (tr.role === 'lead') leadPos = r.pos;
+    let visible = true;
+    if (r.plunge){
+      const fade = THREE.MathUtils.clamp((tr.poolPos.y + 1 - r.pos.y), 0, 1);
+      rig.halo.material.opacity = .85 * (1-fade);
+      rig.core.material.emissiveIntensity = 2.2*(1-fade)+.1;
+      tr.pool.material.opacity = .10 + fade*.3;
+      if (!tr.splashed && r.pos.y < tr.poolPos.y + .4){
+        tr.splashed = true;
+        spawnBurst(tr.poolPos.clone().add(UP), rig.glow, 22, 5);
+      }
+      if (r.pos.y < tr.poolPos.y) visible = false;
+    } else {
+      rig.halo.material.opacity = .85;
+      rig.core.material.emissiveIntensity = 2.2;
+      tr.pool.material.opacity += (.10 - tr.pool.material.opacity)*.05;
+    }
+    rig.group.visible = visible;
+    rig.group.position.copy(r.pos);
+    rig.core.rotation.x += dt*6; rig.core.rotation.z += dt*3.4;
+    rig.lamp.intensity += (2.4 - rig.lamp.intensity) * dt * 8;
+
+    // squash & stretch along velocity
+    const speed = r.vel.length();
+    if (speed > .01) rig.deform.quaternion.setFromUnitVectors(UPY, r.vel.clone().normalize());
+    rig.squash *= (1 - dt*9);
+    const sq = rig.squash;
+    const stretch = 1 + Math.min(speed*.014, .4);
+    const sy = stretch*(1-sq) + .55*sq;
+    const sxz = (1/Math.sqrt(stretch))*(1-sq) + 1.3*sq;
+    rig.deform.scale.set(sxz, sy, sxz);
+
+    if (started && visible && trailTick > .022){
+      const s = trail[trailHead++ % TRAIL];
+      s.position.copy(r.pos);
+      s.material.color.copy(rig.glow);
+      s.material.opacity = .5;
+      s.scale.setScalar(tr.isBass ? .95 : .7);
+    }
+    tr.padObjs.forEach((po, idx) => {
+      po.flash *= (1 - dt*4);
+      const pre = (idx === r.nextIdx) ? r.prog*r.prog : 0;   // anticipation glow
+      po.rim.material.opacity = .18 + po.flash*.85 + pre*.55;
+      po.rim.scale.setScalar(1 + pre*.22 + po.flash*.12);
+      po.body.material.emissive.setHSL(po.hue, .7, po.flash*.32 + pre*.07);
+      const phase = (started ? T : 0) - (tr.rollT + tr.pads[idx].t);
+      po.g.position.copy(po.base).addScaledVector(po.n, padOffset(phase, po.amp));
+    });
+  });
+  if (trailTick > .022) trailTick = 0;
+  trailTick += dt;
+  trail.forEach(s => { s.material.opacity *= (1 - dt*3.2); s.scale.multiplyScalar(1 - dt*.9); });
+
+  ripples.forEach(r => {
+    if (r.life < 1){
+      r.life = Math.min(1, r.life + dt*1.6);
+      const s = 1 + r.life*3.2;
+      r.mesh.scale.set(s,s,s);
+      r.mesh.material.opacity = (1-r.life)*.8;
+    } else r.mesh.material.opacity = 0;
+  });
+
+  // sparks
+  parts.forEach(p => {
+    if (p.life < 1){
+      p.life = Math.min(1, p.life + dt*1.9);
+      p.vel.y -= 9*dt;
+      p.s.position.addScaledVector(p.vel, dt);
+      const o = 1 - p.life;
+      p.s.material.opacity = o*o*.9;
+      p.s.scale.setScalar(p.s0*(1 + p.life*.5));
+    } else p.s.material.opacity = 0;
+  });
+
+  // exposure pop
+  expoKick *= (1 - dt*6);
+  renderer.toneMappingExposure = 1.15 + expoKick*.2;
+
+  // DIRECTOR: the timeline is known, so cut to the action before it happens
+  let effMode = camMode;
+  if (camMode === 'auto'){
+    let want = 'all', score = 1.0;
+    tracks.forEach(tr => {
+      const s = tr._st; if (!s) return;
+      // a big moment = a long arc in progress, or one about to launch
+      const m = Math.max(s.dt < 8 ? s.dt : 0, (s.prog > .55 && s.next < 8) ? s.next : 0);
+      if (m >= 1.05 && m > score){ score = m; want = tr.role; }
+    });
+    if (want === 'all' && tracks[0]._st && tracks[0]._st.dt <= .33) want = 'lead';  // shred cam
+    if (want !== autoWant && clock.elapsedTime - lastCut > 2.2){
+      autoWant = want; lastCut = clock.elapsedTime;
+    }
+    effMode = autoWant;
+  }
+
+  // camera: follow the chosen marble, or frame them all
+  const sway = reduceMotion ? 0 : Math.sin(clock.elapsedTime*.21);
+  const followed = effMode !== 'all' ? marblePts.find(m => m.role === effMode) : null;
+  const focus = new THREE.Vector3();
+  let back = Math.max(1, 1.3 / Math.min(camera.aspect, 1.3));
+  if (followed){
+    focus.copy(followed.p);
+    back *= .92;                                        // tight, personal chase
+  } else {
+    let wSum = 0;
+    marblePts.forEach(m => { focus.addScaledVector(m.p, m.w); wSum += m.w; });
+    focus.divideScalar(wSum);
+    let spread = 0;
+    marblePts.forEach(m => spread = Math.max(spread, m.p.distanceTo(focus)));
+    back *= (1 + Math.min(spread * .075, .7));
+  }
+  const ideal = focus.clone().add(new THREE.Vector3((4.5 + sway*2.2)*back, 2.6*back, (9.5 - sway*1.4)*back));
+  camPos.lerp(ideal, 1 - Math.pow(.0015, dt));
+  camTarget.lerp(focus, 1 - Math.pow(.0008, dt));
+  camera.position.copy(camPos);
+  shakeAmp *= (1 - dt*7);
+  if (!reduceMotion && shakeAmp > .002){
+    camera.position.x += (Math.random()-.5)*shakeAmp;
+    camera.position.y += (Math.random()-.5)*shakeAmp;
+  }
+  camera.lookAt(camTarget);
+
+  renderer.render(scene, camera);
+}
+animate();
+
+/* ---------------- controls ---------------- */
+document.getElementById('play').addEventListener('click', () => {
+  document.getElementById('overlay').classList.add('gone');
+  clock.start(); started = true;                        // visuals never wait on audio
+  try { initAudio(); } catch(e){ stateEl.textContent = 'audio: failed'; }
+  keepAwake();
+});
+let wakeLock = null;
+async function keepAwake(){
+  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch(e){}
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && started) keepAwake();
+});
+sel.addEventListener('change', () => {
+  buildWorld(sel.value);
+  primeSamples();                                       // change event is a gesture: unlock new bank
+  showState();
+});
+document.getElementById('mute').addEventListener('click', e => {
+  muted = !muted;
+  e.target.textContent = muted ? 'SOUND OFF' : 'SOUND ON';
+  if (!muted){
+    if (!ctx) buildAudio();
+    else ctx.resume().catch(()=>{});
+    primeSamples();
+    try { playNote('E5', false); } catch(e){}           // E5 exists in every song
+  }
+  showState();
+});
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

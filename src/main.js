@@ -1,4 +1,8 @@
 import * as THREE from "three";
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { SONGS } from './songs/index.js';
 import { G, UP, UPY, ROLL_T, solveLaunch, arcPos, arcVel, padOffset } from './engine.js';
 import * as audio from './audio.js';
@@ -46,8 +50,7 @@ const hueOf = n => Math.max(0, SCALE.indexOf(n.replace(/\d/,''))) / Math.max(1, 
 const renderer = new THREE.WebGLRenderer({antialias:true});
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.outputEncoding = THREE.sRGBEncoding;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;     // applied by OutputPass at the end of the chain
 renderer.toneMappingExposure = 1.15;
 document.body.appendChild(renderer.domElement);
 
@@ -86,22 +89,36 @@ function makeEnv(){
   return rt.texture;
 }
 const envMap = makeEnv();
+
+/* --- post chain: render → bloom → tonemap/sRGB out ---
+   Real bloom on the emissive cores; the sprite halos stay as the soft
+   wide base (bloom alone is too tight to replace their reach). */
+const composer = new EffectComposer(renderer);
+composer.setPixelRatio(Math.min(devicePixelRatio, 2));
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), .12, .3, .9);
+/* halos predate bloom and were tuned to BE the glow — with real bloom they
+   drop to a faint wide base or the two stack into giant blobs */
+const HALO_A = .12, EMI = 1.2;
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
 const chrome = new THREE.MeshStandardMaterial({color:0xd8dde8, metalness:1, roughness:.12, envMap, envMapIntensity:1.4});
-const ringGeo = new THREE.TorusGeometry(.58,.035,10,40);
+const ringGeo = new THREE.TorusGeometry(.55,.03,10,40);
 const padGeo  = new THREE.CylinderGeometry(.5,.56,.13,28);
 
 /* ---------------- marble rigs (lead = amber, bass = ice-blue) ---------- */
 function makeRig(opt){
   const group = new THREE.Group();
   const core = new THREE.Mesh(new THREE.SphereGeometry(opt.r, 32, 32),
-    new THREE.MeshStandardMaterial({color:opt.body, emissive:opt.emissive, emissiveIntensity:2.2,
+    new THREE.MeshStandardMaterial({color:opt.body, emissive:opt.emissive, emissiveIntensity:EMI,
       metalness:.3, roughness:.25, envMap}));
   const deform = new THREE.Group();                     // squash & stretch happens here
   deform.add(core);
   const halo = new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex, color:opt.glow,
-    blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:.85}));
-  halo.scale.set(opt.r*8, opt.r*8, 1);
-  const lamp = new THREE.PointLight(opt.glow, 2.4, 10, 2);
+    blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:HALO_A}));
+  halo.scale.set(opt.r*5, opt.r*5, 1);
+  const lamp = new THREE.PointLight(opt.glow, 3.5, 10, 2);  // physical units since r155
   group.add(deform, halo, lamp);
   group.visible = false;
   scene.add(group);
@@ -249,9 +266,9 @@ const noteEl = document.getElementById('note');
 function strike(tr, i){
   const pad = tr.pads[i], po = tr.padObjs[i];
   po.flash = 1;
-  tr.rig.lamp.intensity = 5;
+  tr.rig.lamp.intensity = 7;                            // strike flash
   if (tr.role === 'lead') noteEl.innerHTML = `<b>${pad.note}</b>&nbsp; ·&nbsp; ${'·'.repeat(Math.min(i, 40))}`;
-  spawnRipple(pad.pos, po.g.quaternion, po.hue, tr.isBass);
+  spawnRipple(pad.pos, po.g.quaternion, po.hue, tr.isBass, po.amp);
   // JUICE: sparks, squash, punch
   const sparkColor = new THREE.Color().setHSL(po.hue, .85, .62);
   spawnBurst(pad.pos.clone().add(UP), sparkColor,
@@ -345,8 +362,8 @@ function animate(){
     let visible = true;
     if (r.plunge){
       const fade = THREE.MathUtils.clamp((tr.poolPos.y + 1 - r.pos.y), 0, 1);
-      rig.halo.material.opacity = .85 * (1-fade);
-      rig.core.material.emissiveIntensity = 2.2*(1-fade)+.1;
+      rig.halo.material.opacity = HALO_A * (1-fade);
+      rig.core.material.emissiveIntensity = EMI*(1-fade)+.1;
       tr.pool.material.opacity = .10 + fade*.3;
       if (!tr.splashed && r.pos.y < tr.poolPos.y + .4){
         tr.splashed = true;
@@ -354,14 +371,14 @@ function animate(){
       }
       if (r.pos.y < tr.poolPos.y) visible = false;
     } else {
-      rig.halo.material.opacity = .85;
-      rig.core.material.emissiveIntensity = 2.2;
+      rig.halo.material.opacity = HALO_A;
+      rig.core.material.emissiveIntensity = EMI;
       tr.pool.material.opacity += (.10 - tr.pool.material.opacity)*.05;
     }
     rig.group.visible = visible;
     rig.group.position.copy(r.pos);
     rig.core.rotation.x += dt*6; rig.core.rotation.z += dt*3.4;
-    rig.lamp.intensity += (2.4 - rig.lamp.intensity) * dt * 8;
+    rig.lamp.intensity += (3.5 - rig.lamp.intensity) * dt * 8;
 
     // squash & stretch along velocity
     const speed = r.vel.length();
@@ -378,7 +395,7 @@ function animate(){
     tr.padObjs.forEach((po, idx) => {
       po.flash *= (1 - dt*4);
       const pre = (idx === r.nextIdx) ? r.prog*r.prog : 0;   // anticipation glow
-      po.rim.material.opacity = .18 + po.flash*.85 + pre*.55;
+      po.rim.material.opacity = .08 + po.flash*.5 + pre*.3;
       po.rim.scale.setScalar(1 + pre*.22 + po.flash*.12);
       po.body.material.emissive.setHSL(po.hue, .7, po.flash*.32 + pre*.07);
       const phase = (started ? T : 0) - (tr.rollT + tr.pads[idx].t);
@@ -392,7 +409,7 @@ function animate(){
 
   // exposure pop
   expoKick *= (1 - dt*6);
-  renderer.toneMappingExposure = 1.15 + expoKick*.2;
+  renderer.toneMappingExposure = 1.15 + expoKick*.12;
 
   // DIRECTOR: the timeline is known, so cut to the action before it happens
   let effMode = camMode;
@@ -438,7 +455,7 @@ function animate(){
   }
   camera.lookAt(camTarget);
 
-  renderer.render(scene, camera);
+  composer.render();
 }
 animate();
 
@@ -583,6 +600,7 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
 });
 
 /* ---------------- ?debug scrub bar (dev tooling, not a feature) ----------------

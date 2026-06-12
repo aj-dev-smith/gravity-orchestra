@@ -13,7 +13,7 @@
     "deploy": "npm run build && ./deploy.sh"
   },
   "dependencies": {
-    "three": "0.128.0"
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "vite": "^6.0.0",

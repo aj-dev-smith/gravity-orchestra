@@ -31,10 +31,10 @@ export function initJuice(scene){
     s.scale.set(.6,.6,1); scene.add(s); trail.push(s);
   }
   for (let i=0;i<10;i++){
-    const r = new THREE.Mesh(new THREE.RingGeometry(.5,.56,40),
+    const r = new THREE.Mesh(new THREE.RingGeometry(.5,.532,48),   // thin crisp line
       new THREE.MeshBasicMaterial({blending:THREE.AdditiveBlending, transparent:true, opacity:0,
         side:THREE.DoubleSide, depthWrite:false}));
-    scene.add(r); ripples.push({mesh:r, life:1});
+    scene.add(r); ripples.push({mesh:r, life:1, size:1, peak:.4});
   }
   for (let i=0;i<PARTS;i++){
     const s = new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex, color:0xffffff,
@@ -77,14 +77,17 @@ export function spawnTrail(pos, color, isBass){
   s.scale.setScalar(isBass ? .95 : .7);
 }
 
-/* one impact ring, oriented to the pad it struck */
-export function spawnRipple(pos, quaternion, hue, isBass){
+/* one impact ring, oriented to the pad it struck.
+   amp = launch impulse (.05..1.6): a gentle tap whispers, a big lob rings wide */
+export function spawnRipple(pos, quaternion, hue, isBass, amp = .8){
   const rp = ripples[rippleIdx++ % ripples.length];
   rp.mesh.position.copy(pos);
   rp.mesh.quaternion.copy(quaternion);
   rp.mesh.rotateX(Math.PI/2);
-  rp.mesh.material.color.setHSL(hue, .8, .6);
-  rp.mesh.scale.setScalar(isBass ? 1.4 : 1);
+  rp.mesh.material.color.setHSL(hue, .7, .58);
+  const f = amp / 1.6;
+  rp.size = (isBass ? 1.1 : .8) * (.5 + .5*f);
+  rp.peak = .18 + .2*f;
   rp.life = 0;
 }
 
@@ -93,10 +96,11 @@ export function updateJuice(dt){
   trail.forEach(s => { s.material.opacity *= (1 - dt*3.2); s.scale.multiplyScalar(1 - dt*.9); });
   ripples.forEach(r => {
     if (r.life < 1){
-      r.life = Math.min(1, r.life + dt*1.6);
-      const s = 1 + r.life*3.2;
+      r.life = Math.min(1, r.life + dt*2.4);
+      const e = 1 - Math.pow(1 - r.life, 3);            // cubic-out: fast attack, soft landing
+      const s = r.size * (.55 + e*1.1);
       r.mesh.scale.set(s,s,s);
-      r.mesh.material.opacity = (1-r.life)*.8;
+      r.mesh.material.opacity = (1-r.life)*(1-r.life)*r.peak;
     } else r.mesh.material.opacity = 0;
   });
   parts.forEach(p => {

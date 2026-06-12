@@ -33,10 +33,17 @@ export function showState(extra){
 }
 setInterval(showState, 1000);
 
-/* echo timing follows the song tempo; also updates a live context's delays */
+/* echo timing follows the song tempo; also updates a live context's delays.
+   GLIDE, never jump: snapping delayTime on a live delay line with feedback
+   replays its buffered audio as a burst — sounds like every recent note at
+   once on song change. setTargetAtTime retunes it smoothly instead. */
 export function setBeat(b){
   beat = b;
-  if (eDL){ eDL.delayTime.value = beat/2; eDR.delayTime.value = beat*.75; }
+  if (eDL && ctx){
+    const t = ctx.currentTime;
+    eDL.delayTime.setTargetAtTime(beat/2, t, .12);
+    eDR.delayTime.setTargetAtTime(beat*.75, t, .12);
+  }
 }
 
 function buildAudio(){                                 // MUST be called from a gesture
@@ -122,12 +129,28 @@ function renderNoteWav(freq, bass){
   for (let n=0;n<N;n++) v.setInt16(44+n*2, Math.max(-1,Math.min(1,s[n]*k))*32767, true);
   return new Blob([buf], {type:'audio/wav'});
 }
+/* priming plays THIS, never a real note. iOS ignores el.volume, and several
+   WebKit versions also ignore js-set el.muted on <audio> — which is why the
+   muted-priming fix still blasted every note at once. The only unlock that is
+   guaranteed silent on every platform is playing actually-silent samples; the
+   activation sticks to the ELEMENT, so the real note is swapped in after. */
+const SILENT_URL = (() => {
+  const sr = 8000, N = (sr*.06)|0;                       // 60 ms of true zeros
+  const buf = new ArrayBuffer(44 + N*2), v = new DataView(buf);
+  const W = (o,str) => { for(let i=0;i<str.length;i++) v.setUint8(o+i, str.charCodeAt(i)); };
+  W(0,'RIFF'); v.setUint32(4, 36+N*2, true); W(8,'WAVE'); W(12,'fmt ');
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,sr,true); v.setUint32(28,sr*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+  W(36,'data'); v.setUint32(40, N*2, true);
+  return URL.createObjectURL(new Blob([buf], {type:'audio/wav'}));
+})();
+
 let bank = {}, primed = false;
 const bankKey = (note, bass) => note + (bass ? '|b' : '');
 export function rebuildBank(tracks){
   Object.values(bank).forEach(a => {
     try { a.pause(); } catch(e){}
-    if (a.src) URL.revokeObjectURL(a.src);
+    if (a.dataset.real) URL.revokeObjectURL(a.dataset.real);
     a.remove();
   });
   bank = {}; primed = false;
@@ -136,7 +159,8 @@ export function rebuildBank(tracks){
   wanted.forEach(({note, bass}, k) => {
     const a = document.createElement('audio');
     a.setAttribute('playsinline',''); a.preload = 'auto';
-    a.src = URL.createObjectURL(renderNoteWav(noteHz(note), bass));
+    a.dataset.real = URL.createObjectURL(renderNoteWav(noteHz(note), bass));
+    a.src = SILENT_URL;                                  // real note swapped in after unlock
     a.addEventListener('error', () => stateEl.textContent = 'audio: sample blocked');
     document.body.appendChild(a);
     bank[k] = a;
@@ -145,14 +169,13 @@ export function rebuildBank(tracks){
 export function primeSamples(){                          // gesture-unlocks every element
   if (primed) return;
   primed = true;
-  // iOS ignores el.volume but DOES honor el.muted, and a muted gesture-initiated
-  // play() still unlocks the element for later unmuted playback. So we unlock
-  // silently — otherwise every bank note sounds at once on the priming tap.
   Object.values(bank).forEach(a => {
-    a.muted = true;
-    const pr = a.play();
-    if (pr && pr.then) pr.then(() => { a.pause(); a.currentTime = 0; a.muted = false; })
-                         .catch(() => { primed = false; a.muted = false; });
+    if (a.src !== SILENT_URL) return;                    // already armed with its real note
+    const pr = a.play();                                 // pure silence — inaudible everywhere
+    if (pr && pr.then) pr.then(() => {
+      a.pause();
+      a.src = a.dataset.real; a.load();                  // unlock survives the src swap
+    }).catch(() => { primed = false; });                 // still silent; the next tap retries
   });
 }
 let lastPath = '';

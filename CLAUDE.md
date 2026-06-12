@@ -114,6 +114,12 @@ ctx.currentTime > .05`, else fires the element. The status readout
 
 Hard-won iOS facts: `el.volume` is **ignored** on iOS (you cannot mix element
 levels — that's why timbre/level differences are baked into the WAV renders);
+js-set `el.muted` is ALSO unreliable on `<audio>` (round 5: muted priming
+still blasted every bank note at once on the priming tap — elements now prime
+against a truly silent WAV and swap to the real note after unlock, since the
+activation sticks to the element, not the src; relatedly, never snap the live
+echo's delayTime on song change — glide it, or the delay line replays its
+buffer as a burst);
 element playback has ±30–50 ms latency jitter (audible swing on <0.3s runs —
 acceptable; the webaudio path is tight); phone speakers roll off below
 ~200 Hz, so all bass lines are written in octave 3/4 with a sub-octave

@@ -203,6 +203,13 @@ Dies Irae (deep canon echo, delay 5).
 
 ## 7. Roadmap (discussed and wanted, in rough priority)
 
+> **North star: see [`VISION.md`](VISION.md).** Cascade is becoming a 3D music
+> *creation + visualization tool* (pick instruments, place them in the world, move
+> the camera / director mode, author via MIDI import or piano-roll). The items
+> below are mostly steps toward that — the unifying engine idea is a **ball
+> spawner** feeding two instrument archetypes (conveyor / single-marble and
+> stationary / multi-ball), with everything still **solved up front**.
+
 1. **Repo-ify** ✅ DONE — Vite + ES modules (engine/audio/juice/songs split,
    `verify` is now a Vitest suite, single-file build via vite-plugin-singlefile).
    Songs are `.js` not `.json` to preserve their commentary. See §0.

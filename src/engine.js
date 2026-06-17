@@ -13,6 +13,9 @@ export const G   = new THREE.Vector3(0, -14.5, 0);   // gravity
 export const UP  = new THREE.Vector3(0, .26, 0);     // marble render lift off the pad
 export const UPY = new THREE.Vector3(0, 1, 0);       // world up
 export const ROLL_T = 2.6;                            // seconds on the intro rail
+export const DESCENT = 2.2;                           // world units/sec each track sinks (time-proportional,
+                                                      // identical for every track → one upward conveyor of the
+                                                      // SAME speed cancels it: marble juggles in a static band)
 
 /* Solve the launch velocity that carries `from` to `to` in time `dt`:
    to = from + v0·dt + ½·g·dt²   ⇒   v0 = (to − from − ½·g·dt²) / dt   */
@@ -46,6 +49,18 @@ export function padOffset(phase, A){
     return -A * (1 - u*u*u);
   }
   return A * .33 * Math.sin(phase*16) * Math.exp(-phase*8);  // follow-through wobble
+}
+
+/* Recirculating belt phase. Maps absolute songTime to a CENTERED phase for a
+   pad whose strike happens at `strikeTime` within each loop of `period`:
+   c = 0 exactly at every strike (and every strike + k·period), negative just
+   before (pad still rising toward the band), positive just after (risen above).
+   c ∈ [−period/2, period/2), so the wrap from +period/2 to −period/2 is a jump
+   from far-above-band to far-below-band — off-screen, hence invisible. This is
+   what lets pads stream upward forever with no global loop snap. Pure. */
+export function beltPhase(songTime, strikeTime, period){
+  const half = period / 2;
+  return (((songTime - strikeTime + half) % period) + period) % period - half;
 }
 
 /* Note name → frequency (Hz). Sharps only, e.g. F#5, A3. */
@@ -95,14 +110,14 @@ export function padRadius(notes, role){
    is widened until neighbours clear by (r_i + r_{i+1})·clear. */
 export function layoutPads(melody, { zBase, isBass, delayBeats = 0, beat, radOf, clear = CLEAR }){
   const pads = []; let t = 0;
-  let p = new THREE.Vector3(0, -2.2 * delayBeats * beat, zBase), dir = isBass ? -1 : 1;
+  let p = new THREE.Vector3(0, -DESCENT * delayBeats * beat, zBase), dir = isBass ? -1 : 1;
   melody.forEach(([note, beats], i) => {
     const dt = beats * beat;
     pads.push({ pos: p.clone(), note, dt, t, r: radOf(note) });
     t += dt;
     if (i % 4 === 3) dir *= -1;                          // weave
     const next = melody[i+1];
-    const y = -dt * 2.2;                                 // time-proportional drop — LOCKED (track sync)
+    const y = -dt * DESCENT;                             // time-proportional drop — LOCKED (track sync)
     const z = Math.sin(i * (isBass ? 1.1 : 1.3)) * (isBass ? 1.0 : 1.4);
     const need = next ? (radOf(note) + radOf(next[0])) * clear : 0;
     const xMin = Math.sqrt(Math.max(0, need*need - y*y - z*z));   // widen x until they clear

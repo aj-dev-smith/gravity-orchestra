@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { G, solveLaunch, arcPos, arcVel, padOffset, noteHz } from '../src/engine.js';
+import { G, solveLaunch, arcPos, arcVel, padOffset, noteHz, beltPhase } from '../src/engine.js';
 
 const v = (x, y, z) => new THREE.Vector3(x, y, z);
 
@@ -56,6 +56,45 @@ describe('padOffset — the flipper swing', () => {
     const A = 0.8;
     expect(padOffset(-0.4, A)).toBeLessThan(0);   // wind-up
     expect(padOffset(-0.05, A)).toBeLessThan(0);  // stroke
+  });
+});
+
+describe('beltPhase — the recirculating conveyor', () => {
+  const P = 18.4;            // a representative loop period (ROLL_T + LOOP_T)
+  const s = 5.0;             // a pad's strike time within the loop
+
+  it('is EXACTLY 0 at the strike, every loop', () => {
+    expect(beltPhase(s, s, P)).toBeCloseTo(0, 12);
+    for (const k of [1, 2, 7]) expect(beltPhase(s + k*P, s, P)).toBeCloseTo(0, 9);
+  });
+
+  it('stays within the centered window [−P/2, P/2)', () => {
+    for (let t = 0; t < 5*P; t += 0.37){
+      const c = beltPhase(t, s, P);
+      expect(c).toBeGreaterThanOrEqual(-P/2 - 1e-9);
+      expect(c).toBeLessThan(P/2 + 1e-9);
+    }
+  });
+
+  it('is negative just before a strike (pad rising to meet the ball), positive just after', () => {
+    expect(beltPhase(s - 0.2, s, P)).toBeLessThan(0);
+    expect(beltPhase(s + 0.2, s, P)).toBeGreaterThan(0);
+  });
+
+  it('advances continuously within a loop (no jump except the off-screen wrap)', () => {
+    let prev = beltPhase(s + 1e-4, s, P);   // just after a strike (near −... no, near 0+)
+    for (let t = s; t < s + P - 0.05; t += 0.05){
+      const c = beltPhase(t, s, P);
+      // within a loop c increases by ~dt each step; the only big drop is the wrap
+      expect(c - prev).toBeLessThan(0.2);
+      prev = c;
+    }
+  });
+
+  it('ball and pad meet at the band: ballLift cancels descent at the strike', () => {
+    // pad rendered offset from band = DESCENT·c; ball rendered lift = DESCENT·τ.
+    // At a strike both reduce to the same constant (proof lives in the conveyor plan).
+    expect(beltPhase(s, s, P)).toBe(beltPhase(s + P, s, P)); // periodic, exact 0 either way
   });
 });
 

@@ -4,7 +4,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { SONGS } from './songs/index.js';
-import { G, UP, UPY, ROLL_T, solveLaunch, arcPos, arcVel, padOffset } from './engine.js';
+import { G, UP, UPY, ROLL_T, solveLaunch, arcPos, arcVel, padOffset, PAD_R, padRadius, layoutPads } from './engine.js';
 import * as audio from './audio.js';
 import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } from './juice.js';
 import { encodeSong, decodeSong } from './share.js';
@@ -140,23 +140,13 @@ let shakeAmp = 0, expoKick = 0;                         // camera punch & exposu
 function buildTrack(melody, zBase, role, rig, delayBeats = 0, deep = false){
   const isBass = role === 'bass';
   const voiceDeep = isBass || deep;
-  const padScale = isBass ? 1.4 : (role === 'alto' ? .85 : 1);
   const rollT = ROLL_T + delayBeats * BEAT;             // late entry = lazy roll
-  const pads = []; let t = 0;
-  {
-    let p = new THREE.Vector3(0, -2.2 * delayBeats * BEAT, zBase), dir = isBass ? -1 : 1;
-    melody.forEach(([note, beats], i) => {
-      const dt = beats * BEAT;
-      pads.push({pos: p.clone(), note, dt, t});
-      t += dt;
-      if (i % 4 === 3) dir *= -1;                       // weave
-      p = p.clone().add(new THREE.Vector3(
-        dir * (0.9 + dt * 2.0),
-        -dt * 2.2,                                      // time-proportional drop
-        Math.sin(i * (isBass ? 1.1 : 1.3)) * (isBass ? 1.0 : 1.4)
-      ));
-    });
-  }
+  // pad size encodes register, per voice (smaller = higher) — a pure fn of the note.
+  // hue carries pitch class; this adds the octave hue throws away. Same note → same size.
+  const radOf = padRadius(melody, role);                // world radius, layout-invariant
+  // layout spaces pads apart so fast runs clear — gravity & vertical drop untouched.
+  const pads = layoutPads(melody, {zBase, isBass, delayBeats, beat: BEAT, radOf});
+  const total = pads.reduce((s, p) => s + p.dt, 0);
   const arcs = [];
   for (let i = 0; i < pads.length; i++){
     const a = pads[i];
@@ -204,7 +194,7 @@ function buildTrack(melody, zBase, role, rig, delayBeats = 0, deep = false){
     const g = new THREE.Group();
     g.position.copy(pad.pos).y -= .12;
     g.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), n);
-    g.scale.setScalar(padScale);
+    g.scale.setScalar(radOf(pad.note) / PAD_R);          // same source of truth as the layout
     const body = new THREE.Mesh(padGeo, new THREE.MeshStandardMaterial({
       color: isBass ? 0x7e8db0 : 0x9aa6bd, metalness:1, roughness:.18, envMap, envMapIntensity:1.2}));
     const rim = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
@@ -224,7 +214,7 @@ function buildTrack(melody, zBase, role, rig, delayBeats = 0, deep = false){
   pool.rotation.x = -Math.PI/2; pool.position.copy(poolPos); world.add(pool);
 
   rig.group.visible = true;
-  return {pads, arcs, rail, padObjs, poolPos, pool, rig, role, isBass, deep:voiceDeep, rollT, lastIdx:-1, total:t};
+  return {pads, arcs, rail, padObjs, poolPos, pool, rig, role, isBass, deep:voiceDeep, rollT, lastIdx:-1, total};
 }
 
 function buildWorld(keyName){

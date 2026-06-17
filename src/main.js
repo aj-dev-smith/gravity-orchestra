@@ -24,6 +24,10 @@ let BEAT = .7, SCALE = [];
 let tracks = [], LOOP_T = 0, world = null;
 let camMode = 'auto';
 let autoWant = 'all', lastCut = 0;
+let stageView = {cx: 0, halfW: 8};                      // x-centre + half-width of the pad field (FIXED cam framing)
+const FIXED_ZMAX = 30;                                  // FIXED cam: cap the pull-back. Past ~30 the FogExp2 eats
+                                                        // the chrome to black; better to let a very wide field
+                                                        // overflow the frame edges than fade the whole scene out.
 let muted = false;                                      // sound toggle (mute button)
 let songTime = 0;                                       // the timeline; clock only supplies deltas
 let playRate = 1, skipStrikes = false, dbg = null;      // ?debug scrub: rate + jump suppression
@@ -40,13 +44,13 @@ const DROP_IN = 9;                                      // height (world u) a ne
 const RIG_POOL = 3;                                     // rigs per role — ≤2 balls alive at the seam, 3 is slack
 let recState = 'idle', recorder = null;                 // idle | armed | rec — transitions at the seam
 const recEl = document.getElementById('rec');
-const CAMCOLORS = {auto:'#ffe9c9', all:'#cfd6e6', lead:'#ffaa55', alto:'#c08bff', bass:'#66aaff'};
+const CAMCOLORS = {auto:'#ffe9c9', fixed:'#7fe3c8', all:'#cfd6e6', lead:'#ffaa55', alto:'#c08bff', bass:'#66aaff'};
 const camsEl = document.getElementById('cams');
 function renderCamButtons(){
   camsEl.innerHTML = '';
   if (tracks.length < 2){ camsEl.style.display = 'none'; camMode = 'auto'; return; }
   camsEl.style.display = 'flex';
-  ['auto', 'all', ...tracks.map(t => t.role)].forEach(m => {
+  ['auto', 'fixed', 'all', ...tracks.map(t => t.role)].forEach(m => {
     const b = document.createElement('button');
     b.className = 'camb' + (camMode === m ? ' on' : '');
     if (camMode === m) b.style.color = CAMCOLORS[m];
@@ -289,8 +293,14 @@ function buildWorld(keyName){
   }
   LOOP_T = tracks[0].total + 1.2;
 
+  // FIXED-cam framing: x-centre + half-width of the whole pad field (z stays shallow)
+  let minX = Infinity, maxX = -Infinity;
+  tracks.forEach(tr => tr.padObjs.forEach(po => { minX = Math.min(minX, po.base.x); maxX = Math.max(maxX, po.base.x); }));
+  stageView = {cx: (minX + maxX) / 2, halfW: Math.max(6, (maxX - minX) / 2)};
+
   audio.setBeat(BEAT);
-  if (camMode !== 'all' && camMode !== 'auto' && !tracks.some(t => t.role === camMode)) camMode = 'auto';
+  const FIXED_OK = new Set(['all', 'auto', 'fixed']);
+  if (!FIXED_OK.has(camMode) && !tracks.some(t => t.role === camMode)) camMode = 'auto';
   renderCamButtons();
   audio.rebuildBank(tracks);
   songTime = 0; loopIndex = -1;                         // next frame respawns the loop's balls
@@ -495,34 +505,46 @@ function animate(){
     effMode = autoWant;
   }
 
-  // camera: follow the chosen marble, or frame them all
-  const sway = reduceMotion ? 0 : Math.sin(clock.elapsedTime*.21);
-  const followed = effMode !== 'all' ? marblePts.find(m => m.role === effMode) : null;
-  const focus = new THREE.Vector3();
-  let back = Math.max(1, 1.3 / Math.min(camera.aspect, 1.3));
-  if (!marblePts.length){
-    focus.set(0, STAGE_Y, 0);                           // pre-start (or between balls): frame the band
-  } else if (followed){
-    focus.copy(followed.p);
-    back *= .92;                                        // tight, personal chase
+  // camera: hold a fixed stage view, follow the chosen marble, or frame them all
+  const sway = (reduceMotion || camMode === 'fixed') ? 0 : Math.sin(clock.elapsedTime*.21);
+  let ideal, aim;
+  if (camMode === 'fixed'){
+    // STATIONARY WORLD CAM: a held pose that frames the whole pad field — no chase,
+    // no sway, no shake. Glides into place once (shared lerp below) then holds dead still.
+    const margin = 4;                                   // world-unit breathing room around the field
+    const zFit = (stageView.halfW + margin) /
+      (Math.tan(THREE.MathUtils.degToRad(camera.fov/2)) * Math.min(camera.aspect, 1.7));
+    const z = THREE.MathUtils.clamp(zFit, 16, FIXED_ZMAX);   // fit the width, but never pull back into the fog
+    ideal = new THREE.Vector3(stageView.cx + z*0.22, STAGE_Y + 5, z);   // gentle 3/4, slightly above the band
+    aim   = new THREE.Vector3(stageView.cx, STAGE_Y + 1.5, 0);
   } else {
-    let wSum = 0;
-    marblePts.forEach(m => { focus.addScaledVector(m.p, m.w); wSum += m.w; });
-    focus.divideScalar(wSum);
-    let spread = 0;
-    marblePts.forEach(m => spread = Math.max(spread, m.p.distanceTo(focus)));
-    back *= (1 + Math.min(spread * .075, .7));
+    const followed = effMode !== 'all' ? marblePts.find(m => m.role === effMode) : null;
+    const focus = new THREE.Vector3();
+    let back = Math.max(1, 1.3 / Math.min(camera.aspect, 1.3));
+    if (!marblePts.length){
+      focus.set(0, STAGE_Y, 0);                         // pre-start (or between balls): frame the band
+    } else if (followed){
+      focus.copy(followed.p);
+      back *= .92;                                      // tight, personal chase
+    } else {
+      let wSum = 0;
+      marblePts.forEach(m => { focus.addScaledVector(m.p, m.w); wSum += m.w; });
+      focus.divideScalar(wSum);
+      let spread = 0;
+      marblePts.forEach(m => spread = Math.max(spread, m.p.distanceTo(focus)));
+      back *= (1 + Math.min(spread * .075, .7));
+    }
+    // VERTICAL IS PINNED: the band is static now, so the camera never cranes up/down.
+    // x/z still follow the marble (with sway + spread-dolly); height is locked to the stage plane.
+    ideal = focus.clone().add(new THREE.Vector3((4.5 + sway*2.2)*back, 0, (9.5 - sway*1.4)*back));
+    ideal.y = STAGE_Y + 3.4;                            // constant eye height — no spread-driven bob
+    aim = focus.clone(); aim.y = STAGE_Y + .6;          // look at the band centre, not the bobbing marble
   }
-  // VERTICAL IS PINNED: the band is static now, so the camera never cranes up/down.
-  // x/z still follow the marble (with sway + spread-dolly); height is locked to the stage plane.
-  const ideal = focus.clone().add(new THREE.Vector3((4.5 + sway*2.2)*back, 0, (9.5 - sway*1.4)*back));
-  ideal.y = STAGE_Y + 3.4;                              // constant eye height — no spread-driven bob
   camPos.lerp(ideal, 1 - Math.pow(.0015, dt));
-  const aim = focus.clone(); aim.y = STAGE_Y + .6;      // look at the band centre, not the bobbing marble
   camTarget.lerp(aim, 1 - Math.pow(.0008, dt));
   camera.position.copy(camPos);
   shakeAmp *= (1 - dt*7);
-  if (!reduceMotion && shakeAmp > .002){
+  if (!reduceMotion && camMode !== 'fixed' && shakeAmp > .002){
     camera.position.x += (Math.random()-.5)*shakeAmp;
     camera.position.y += (Math.random()-.5)*shakeAmp;
   }

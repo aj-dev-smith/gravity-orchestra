@@ -23,7 +23,8 @@ const CAMCOLORS = {
 const FIXED_OK = new Set(['all', 'auto', 'fixed', 'free']);   // modes that survive a song change
 
 /* Keyboard fly: key → [right, up, forward] screen-space contribution. */
-const KEY_PAN = 1.1;                                          // pan units = KEY_PAN · distance · dt (scales with zoom)
+const KEY_PAN = 0.65;                                         // pan units = KEY_PAN · distance · dt (scales with zoom)
+const KEY_EASE = .0008;                                       // velocity smoothing — eased accel/decel, no hard start-stop
 const PAN_KEYS = {
   arrowup: [0, 1, 0], w: [0, 1, 0], arrowdown: [0, -1, 0], s: [0, -1, 0],
   arrowleft: [-1, 0, 0], a: [-1, 0, 0], arrowright: [1, 0, 0], d: [1, 0, 0],
@@ -48,9 +49,11 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
      actually picked (and the canvas sits behind the play overlay) so it can never
      swallow the iOS audio-priming tap (§3 of the handoff). */
   const orbit = new OrbitControls(camera, dom);
-  orbit.enableDamping = true; orbit.dampingFactor = .08;       // weighty glide, not a rigid snap
+  orbit.enableDamping = true; orbit.dampingFactor = .06;       // weighty glide, not a rigid snap
   orbit.screenSpacePanning = true;                             // pan up = move UP (not along the ground plane)
-  orbit.panSpeed = 1.6;                                        // snappier right-drag / two-finger pan
+  orbit.panSpeed = 0.9;                                        // calmer right-drag / two-finger pan
+  orbit.rotateSpeed = 0.55;                                    // gentler left-drag orbit
+  orbit.zoomSpeed = 0.6;                                       // gentler scroll / pinch dolly
   orbit.minDistance = 5; orbit.maxDistance = fixedZMax;        // never dolly back into the FogExp2
   orbit.maxPolarAngle = Math.PI * .92;                         // stop just shy of flying under the floor
   orbit.target.copy(camTarget);
@@ -62,7 +65,8 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
      keep travelling instead of stalling at it. */
   const held = new Set();
   const _panR = new THREE.Vector3(), _panU = new THREE.Vector3(),
-        _panF = new THREE.Vector3(), _panD = new THREE.Vector3();
+        _panF = new THREE.Vector3(), _panD = new THREE.Vector3(),
+        _vel = new THREE.Vector3(), _desired = new THREE.Vector3();
   addEventListener('keydown', e => {
     const k = e.key.toLowerCase();
     if (mode !== 'free' || !(k in PAN_KEYS)) return;
@@ -71,18 +75,22 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
   });
   addEventListener('keyup', e => held.delete(e.key.toLowerCase()));
   function keyboardFly(dt){
-    if (!held.size) return;
     let rx = 0, uy = 0, fz = 0;
     held.forEach(k => { const [r, u, f] = PAN_KEYS[k]; rx += r; uy += u; fz += f; });
-    if (!rx && !uy && !fz) return;
-    _panR.setFromMatrixColumn(camera.matrix, 0);              // camera right
-    _panU.setFromMatrixColumn(camera.matrix, 1);              // camera up (screen-space vertical)
-    _panF.setFromMatrixColumn(camera.matrix, 2).negate();     // camera forward (looks down −Z)
-    const step = KEY_PAN * camera.position.distanceTo(orbit.target) * dt;
-    _panD.set(0, 0, 0)
-      .addScaledVector(_panR, rx * step)
-      .addScaledVector(_panU, uy * step)
-      .addScaledVector(_panF, fz * step);
+    _desired.set(0, 0, 0);
+    if (rx || uy || fz){
+      _panR.setFromMatrixColumn(camera.matrix, 0);            // camera right
+      _panU.setFromMatrixColumn(camera.matrix, 1);            // camera up (screen-space vertical)
+      _panF.setFromMatrixColumn(camera.matrix, 2).negate();   // camera forward (looks down −Z)
+      const speed = KEY_PAN * camera.position.distanceTo(orbit.target);
+      _desired.addScaledVector(_panR, rx).addScaledVector(_panU, uy).addScaledVector(_panF, fz)
+        .normalize().multiplyScalar(speed);                   // normalize → diagonals aren't faster than straights
+    }
+    // Ease the live velocity toward the desired (toward zero when nothing's held), so the
+    // fly accelerates in and coasts to a stop instead of snapping — the big smoothness win.
+    _vel.lerp(_desired, 1 - Math.pow(KEY_EASE, dt));
+    if (_vel.lengthSq() < 1e-7) return;
+    _panD.copy(_vel).multiplyScalar(dt);
     camera.position.add(_panD); orbit.target.add(_panD);      // translate BOTH eye + pivot → no spurious rotation
   }
 

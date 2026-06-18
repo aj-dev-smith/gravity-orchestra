@@ -26,9 +26,9 @@ const FIXED_OK = new Set(['all', 'auto', 'fixed', 'free']);   // modes that surv
 const KEY_PAN = 0.65;                                         // pan units = KEY_PAN · distance · dt (scales with zoom)
 const KEY_EASE = .0008;                                       // velocity smoothing — eased accel/decel, no hard start-stop
 const PAN_KEYS = {
-  arrowup: [0, 1, 0], w: [0, 1, 0], arrowdown: [0, -1, 0], s: [0, -1, 0],
+  arrowup: [0, 0, 1], w: [0, 0, 1], arrowdown: [0, 0, -1], s: [0, 0, -1],
   arrowleft: [-1, 0, 0], a: [-1, 0, 0], arrowright: [1, 0, 0], d: [1, 0, 0],
-  e: [0, 0, 1], q: [0, 0, -1],                               // E flies toward the focal point, Q backs away
+  e: [0, 1, 0], q: [0, -1, 0],                               // E lifts the eye up, Q drops it down
 };
 
 export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
@@ -61,8 +61,9 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
 
   /* The keyboard is OURS, not OrbitControls' one-nudge-per-press (which feels
      glacial): a held-keys set integrated per frame, so motion is continuous and
-     the speed is a real knob. WASD/arrows pan; Q/E dolly through the pivot so you
-     keep travelling instead of stalling at it. */
+     the speed is a real knob. W/S + ↑/↓ dolly through the pivot (forward/back,
+     the FPS convention) so you keep travelling instead of stalling at it; A/D + ←/→
+     strafe; Q/E lift/drop the eye. */
   const held = new Set();
   const _panR = new THREE.Vector3(), _panU = new THREE.Vector3(),
         _panF = new THREE.Vector3(), _panD = new THREE.Vector3(),

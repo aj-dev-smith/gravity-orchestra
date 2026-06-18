@@ -8,6 +8,7 @@ import { G, UP, UPY, ROLL_T, DESCENT, solveLaunch, arcPos, arcVel, padOffset, be
 import * as audio from './audio.js';
 import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } from './juice.js';
 import { makeConveyorShop, BELT_DEPTH } from './conveyor.js';
+import { makeDrumMachine } from './drums.js';
 import { makeCameraRig } from './camera.js';
 import { encodeSong, decodeSong } from './share.js';
 import { parseMidi } from './midi/parse.js';
@@ -132,6 +133,13 @@ const padGeo  = new THREE.CylinderGeometry(.5,.56,.13,28);
    cull band for every song. Built per track in buildWorld, lives under tr.stage. */
 const shop = makeConveyorShop({ chrome, envMap, beltSpeed: DESCENT, bandY: STAGE_Y, reach: BELT_REACH, cull: PAD_CULL });
 let machinesOn = true;                                  // key M toggles the whole machine for A/B
+
+/* The drum kit — the stationary/multi-ball instrument archetype. One kit per song
+   (not per track): mortal balls fired onto fixed drums, every ball solved up front
+   via the same solveLaunch the melody uses. The ball pool lives in the scene and
+   persists across songs; the targets rebuild per song under `world`. */
+const drumKit = makeDrumMachine({ envMap, glowTex, bandY: STAGE_Y });
+scene.add(drumKit.ballGroup);
 
 /* ---------------- marble rigs (lead = amber, bass = ice-blue) ---------- */
 function makeRig(opt){
@@ -341,6 +349,10 @@ function buildWorld(keyName){
   }));
   const stageView = {cx: (minX + maxX) / 2, halfW: Math.max(6, (maxX - minX) / 2)};
 
+  // drum kit: built song-level, placed by the wall centre, added under world (so it
+  // disposes with the world on the next song change). Aligned to the lead's timeline.
+  world.add(drumKit.build(S.drums, { rollT: ROLL_T, beat: BEAT, cx: stageView.cx }));
+
   audio.setBeat(BEAT);
   cam.syncTracks(tracks, stageView);                    // reframe + rebuild the cam-button row for the new song
   audio.rebuildBank(tracks);
@@ -369,6 +381,14 @@ function strike(tr, i, rig){
   if (audio.isReady() && !muted){
     try { audio.playNote(pad.note, tr.deep); } catch(e){ /* audio must never break the run */ }
   }
+}
+
+/* A drum ball reaching its head. Render-only for now (sparks + the head flex the kit
+   does itself); the percussion audio voice plugs in right here next. */
+function drumStrike(hit){
+  const c = hit.drum.contact;
+  spawnBurst(c.clone().add(UP), new THREE.Color(hit.drum.style.ball),
+             Math.round(5 + 7 * (hit.vel ?? 1)), 3.0);
 }
 
 /* ---------------- timeline ---------------- */
@@ -540,6 +560,10 @@ function animate(){
     // ---- the visible machine: scroll the belt in lock-step with the rising pads ----
     if (machinesOn) tr.machine.update(reduceMotion ? 0 : dt);
   });
+
+  // ---- drum kit: mortal balls fired onto stationary drums, every arc solved up front ----
+  drumKit.update(songTime, P, dt, { started, skipStrikes, onStrike: drumStrike });
+
   if (trailTick > .022) trailTick = 0;
   trailTick += dt;
   skipStrikes = false;                                  // scrub jumps suppress strikes for one frame only

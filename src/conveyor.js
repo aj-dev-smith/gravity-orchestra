@@ -1,4 +1,10 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+const ZAXIS = new THREE.Vector3(0, 0, 1);
+const ONES  = new THREE.Vector3(1, 1, 1);
+const HUB_BACK = .3;                         // how far the carriage hub tucks behind the disc face (along −n)
+const _anchor = new THREE.Vector3(), _hub = new THREE.Vector3(), _dir = new THREE.Vector3();  // per-frame scratch
 
 /* ============================================================
    CONVEYOR — the visible machine. Third render subsystem, in the
@@ -16,17 +22,19 @@ import * as THREE from 'three';
    neighbours never fight.
    ============================================================ */
 
-const BELT_DEPTH  = -2.6;   // belt sits this far behind its OWN pads (uniform — bays
+const BELT_DEPTH  = -2.0;   // belt sits this far behind its OWN pads (uniform — bays
                             // separate the tracks, so depth no longer has to stagger).
+                            // Kept shallow so the support arms stay short & tidy, with
+                            // clearance for the deepest-weaving pad's back edge.
 const SLAT_WORLD  = 2.4;    // world height of one belt-texture tile (one slat cycle ≈ /4)
 const WALL_MARGIN = 1.4;    // belt overhangs the pad field by this much on each side
 const POST_W      = .16;    // side-frame post thickness
 
 /* Per-voice machine styling — DATA, like the songs. Beefier bass, lighter alto. */
-const MACHINE_STYLE = {
-  lead: { gauge:.22, pulleyR:.50, tint:0x9aa6bd },
-  bass: { gauge:.30, pulleyR:.70, tint:0x7e8db0 },   // heavier machine
-  alto: { gauge:.18, pulleyR:.42, tint:0xa99ec4 },
+const MACHINE_STYLE = {                                // gauge = support-arm thickness (slim — stay out of the way)
+  lead: { gauge:.11, pulleyR:.50, tint:0x9aa6bd },
+  bass: { gauge:.15, pulleyR:.70, tint:0x7e8db0 },   // heavier machine
+  alto: { gauge:.09, pulleyR:.42, tint:0xa99ec4 },
 };
 
 export function makeConveyorShop({ chrome, envMap, beltSpeed, bandY, reach }){
@@ -37,7 +45,7 @@ export function makeConveyorShop({ chrome, envMap, beltSpeed, bandY, reach }){
     const style = MACHINE_STYLE[track.role] || MACHINE_STYLE.lead;
     const wall     = buildBeltWall(track, style, beltCanvas, { chrome, envMap, bandY, reach });
     const pulleys  = buildPulleys(track, style, { chrome, bandY, reach });
-    const brackets = mountBrackets(track, style, { chrome });
+    const brackets = mountBrackets(track, style, { envMap });
     const group = new THREE.Group();
     group.add(wall.group, pulleys.group, brackets.group);
     return {
@@ -136,35 +144,84 @@ function buildPulleys(track, style, { chrome, bandY, reach }){
   };
 }
 
-/* ---- mountBrackets — one arm per pad, clipping it to the belt so the pad visibly
-   RIDES the machine. Collision-safety is built into the geometry, not policed:
+/* ---- boxBetween — a thin strut from point a to point b (the machine's vocabulary
+   word). A unit box stretched to the span and rotated so its z-axis points a→b. ---- */
+function boxBetween(a, b, w){
+  const dir = b.clone().sub(a), len = dir.length() || 1e-3;
+  const geo = new THREE.BoxGeometry(w, w, len);
+  const q = new THREE.Quaternion().setFromUnitVectors(ZAXIS, dir.clone().normalize());
+  return geo.applyMatrix4(new THREE.Matrix4().compose(a.clone().addScaledVector(dir, .5), q, ONES));
+}
 
-     • the arm's FRONT face sits exactly at the pad centre (base.z) and runs
-       BACKWARD to the belt — it never enters z > base.z, so it can't reach into
-       the ball's flight path (the ball lives in front of, and arcs above, the pads).
-     • it hugs the pad's own height and rides the bob, so it only occupies the pad's
-       slab — never the tall gaps between pads where the arcs travel.
-     • it's centred on the pad's x, so it tracks the one pad it holds.
+/* ---- carriageGeometry — the moving half of a mount: a hub tucked UNDER the disc and
+   four short posts splaying out to the rim quadrants. Derived entirely from the pad's
+   own normal `n`, so it self-orients to ANY tilt and the posts meet the rim from BEHIND
+   — never crossing the disc FACE the marble bounces off. Built in the pad's local frame
+   (origin = pad centre). The carriage rides the pad's FULL motion — belt bob AND the
+   flipper wind-up nudge — so the pad can retract to strike without ever out-running its
+   posts (the clip the old rigid arm hit). The pad's tilt is fixed, so this bakes once. */
+function carriageGeometry(po, gauge){
+  const n = po.n;                                        // pad normal — the disc's "up"
+  const R = po.g.scale.x * .55 * .92;                    // rim radius (just inside the ring), world units
+  const t1 = new THREE.Vector3().crossVectors(n, ZAXIS); // two tangents spanning the tilted disc plane
+  if (t1.lengthSq() < 1e-6) t1.crossVectors(n, new THREE.Vector3(1, 0, 0));
+  t1.normalize();
+  const t2 = new THREE.Vector3().crossVectors(n, t1).normalize();
 
-   Built in the machine group (NOT a child of po.g) so it never inherits the pad's
-   tilt/scale. One shared geometry per track: a fixed length works for every pad
-   because the front face lands at base.z no matter how long the tail is — short-reach
-   pads just bury more of their tail behind the belt, where it's hidden. ---- */
-function mountBrackets(track, style, { chrome }){
-  const ARM_LEN = 4.6;                                  // long enough to reach the deepest pad's belt; tail hides behind it
-  const geo = new THREE.BoxGeometry(style.gauge, style.gauge, ARM_LEN);
-  const arms = track.padObjs.map(po => {
-    const m = new THREE.Mesh(geo, chrome);              // chrome is shared → exempt from disposal
-    m.position.set(po.base.x, po.g.position.y, po.base.z - ARM_LEN / 2);  // front face AT the pad, tail toward the belt
-    return { m, po };
-  });
-  const group = new THREE.Group().add(...arms.map(a => a.m));
+  const center = new THREE.Vector3(0, 0, 0);
+  const hub = center.clone().addScaledVector(n, -HUB_BACK);  // under the disc face (back side, off the bounce)
+  const geos = [];
+  for (let k = 0; k < 4; k++){                           // four posts → rim quadrants (45,135,225,315°)
+    const a = (k + .5) * Math.PI / 2;
+    const rim = center.clone().addScaledVector(t1, Math.cos(a) * R).addScaledVector(t2, Math.sin(a) * R);
+    geos.push(boxBetween(hub, rim, gauge * .8));
+  }
+  const merged = mergeGeometries(geos, false);
+  geos.forEach(g => g.dispose());                        // parts are consumed into `merged`
+  return merged;
+}
+
+/* ---- mountBrackets — a per-pad mount in two halves so a pad can wind up and strike
+   without its supports clipping through it:
+     • CARRIAGE (hub + four posts) rides the pad's full position — bob + flipper nudge —
+       so the rim posts stay locked to the disc at any wind-up (no more "clip ahead").
+     • SHOE stays planted on the belt at the pad's un-nudged height (po.beltY).
+     • SPINE bridges shoe → hub, re-aimed and telescoped each frame, so the whole arm
+       visibly tilts back with the pad as it retracts to strike.
+   Dark matte metal so it recedes as structure, not chrome that sparkles. Built in the
+   machine group (NOT under po.g, so no inherited scale). ---- */
+function mountBrackets(track, style, { envMap }){
+  const mat = new THREE.MeshStandardMaterial({ color: 0x262b36, metalness: .6, roughness: .62, envMap });
+  const g = style.gauge;
+  const spineGeo = new THREE.BoxGeometry(g, g, 1);                       // unit length — scaled to span each frame
+  const shoeGeo  = new THREE.BoxGeometry(g * 2.4, g * 2.4, g * .6);      // bolt-plate flush on the belt
+  const parts = track.padObjs.map(po => ({
+    po,
+    car:   new THREE.Mesh(carriageGeometry(po, g), mat),
+    spine: new THREE.Mesh(spineGeo, mat),
+    shoe:  new THREE.Mesh(shoeGeo, mat),
+  }));
+  const group = new THREE.Group();
+  for (const p of parts) group.add(p.car, p.spine, p.shoe);
 
   return {
     group,
-    sync(){                                             // belt loop already placed po.g this frame — just mirror it
-      for (const { m, po } of arms){ m.position.y = po.g.position.y; m.visible = po.g.visible; }
+    sync(){                                             // belt loop already placed po.g + po.beltY this frame
+      for (const { po, car, spine, shoe } of parts){
+        const vis = po.g.visible;
+        car.visible = spine.visible = shoe.visible = vis;
+        if (!vis) continue;
+        car.position.copy(po.g.position);               // carriage rides the pad fully (incl. wind-up nudge)
+        _anchor.set(po.base.x, po.beltY, BELT_DEPTH + g * .3);   // shoe planted on the belt (no nudge)
+        shoe.position.copy(_anchor);
+        _hub.copy(po.g.position).addScaledVector(po.n, -HUB_BACK);
+        _dir.subVectors(_hub, _anchor);
+        const len = _dir.length() || 1e-3;
+        spine.position.copy(_anchor).addScaledVector(_dir, .5);  // midpoint
+        spine.quaternion.setFromUnitVectors(ZAXIS, _dir.divideScalar(len));
+        spine.scale.set(1, 1, len);                     // telescope to span shoe → hub
+      }
     },
-    dispose(){ geo.dispose(); },
+    dispose(){ mat.dispose(); spineGeo.dispose(); shoeGeo.dispose(); for (const p of parts) p.car.geometry.dispose(); },
   };
 }

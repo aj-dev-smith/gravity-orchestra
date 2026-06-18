@@ -520,7 +520,8 @@ function animate(){
       po.rim.material.opacity = .08 + po.flash*.5 + pre*.3;
       po.rim.scale.setScalar(1 + pre*.22 + po.flash*.12);
       po.body.material.emissive.setHSL(po.hue, .7, po.flash*.32 + pre*.07);
-      po.g.position.set(po.base.x, STAGE_Y - .12 + DESCENT * c, po.base.z)
+      po.beltY = STAGE_Y - .12 + DESCENT * c;           // un-nudged belt height — the bracket spine roots here
+      po.g.position.set(po.base.x, po.beltY, po.base.z)
         .addScaledVector(po.n, padOffset(started ? c : 0, po.amp));
     });
 

@@ -7,6 +7,7 @@ import { SONGS } from './songs/index.js';
 import { G, UP, UPY, ROLL_T, DESCENT, solveLaunch, arcPos, arcVel, padOffset, beltPhase, PAD_R, padRadius, layoutPads } from './engine.js';
 import * as audio from './audio.js';
 import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } from './juice.js';
+import { makeConveyorShop } from './conveyor.js';
 import { encodeSong, decodeSong } from './share.js';
 import { parseMidi } from './midi/parse.js';
 import { convertToSong } from './midi/convert.js';
@@ -78,6 +79,11 @@ const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, .1, 200);
 scene.add(new THREE.AmbientLight(0x223, 1.4));
 const key = new THREE.DirectionalLight(0x8899ff, .5);
 key.position.set(-6, 10, 4); scene.add(key);
+/* a soft fill aimed from the camera side at the belt wall — reveals the slat
+   texture on the matte belts without putting a hotspot on the chrome marbles */
+const beltFill = new THREE.DirectionalLight(0xaab8e0, .35);
+beltFill.position.set(0, STAGE_Y + 2, 14);
+beltFill.target.position.set(0, STAGE_Y, -3); scene.add(beltFill, beltFill.target);
 
 /* --- one-shot procedural environment map → real chrome --- */
 function makeEnv(){
@@ -121,6 +127,12 @@ composer.addPass(new OutputPass());
 const chrome = new THREE.MeshStandardMaterial({color:0xd8dde8, metalness:1, roughness:.12, envMap, envMapIntensity:1.4});
 const ringGeo = new THREE.TorusGeometry(.55,.03,10,40);
 const padGeo  = new THREE.CylinderGeometry(.5,.56,.13,28);
+
+/* The visible belt machine. beltSpeed = DESCENT is the honesty hook: pads rise at
+   DESCENT, slats scroll at DESCENT → slip-free, no state. reach=16 covers the ±14
+   cull band for every song. Built per track in buildWorld, lives under tr.stage. */
+const shop = makeConveyorShop({ chrome, envMap, beltSpeed: DESCENT, bandY: STAGE_Y, reach: 16 });
+let machinesOn = true;                                  // key M toggles the whole machine for A/B
 
 /* ---------------- marble rigs (lead = amber, bass = ice-blue) ---------- */
 function makeRig(opt){
@@ -182,6 +194,8 @@ const convX = convCv.getContext('2d');
 const convHist = []; const CONV_N = 300;
 addEventListener('keydown', e => { if (e.key === 'g' || e.key === 'G'){
   convDbgOn = !convDbgOn; convCv.style.display = convDbgOn ? 'block' : 'none'; convRulers.visible = convDbgOn; }});
+addEventListener('keydown', e => { if (e.key === 'm' || e.key === 'M'){    // A/B the visible machine
+  machinesOn = !machinesOn; tracks.forEach(tr => { if (tr.machine) tr.machine.group.visible = machinesOn; }); }});
 function convDebug(markerY, camY){
   if (!convDbgOn) return;
   convHist.push({m:markerY, c:camY});
@@ -277,7 +291,10 @@ function buildWorld(keyName){
     scene.remove(world);
     world.traverse(o => {
       if (o.geometry && o.geometry !== ringGeo && o.geometry !== padGeo) o.geometry.dispose();
-      if (o.material && o.material !== chrome) o.material.dispose();
+      if (o.material && o.material !== chrome){
+        if (o.material.map) o.material.map.dispose();   // per-song belt CanvasTextures — don't leak
+        o.material.dispose();
+      }
     });
   }
   world = new THREE.Group(); scene.add(world);
@@ -310,7 +327,12 @@ function buildWorld(keyName){
     cursor += (hi - lo) + GAP;
   });
   const wallW = cursor - GAP;                           // centre the whole wall on x=0
-  tracks.forEach(tr => { tr.origin.x -= wallW/2; tr.stage.position.copy(tr.origin); world.add(tr.stage); });
+  tracks.forEach(tr => {
+    tr.origin.x -= wallW/2; tr.stage.position.copy(tr.origin); world.add(tr.stage);
+    tr.machine = shop.buildMachine(tr);                 // visible belt machine, in the track's local frame
+    tr.machine.group.visible = machinesOn;
+    tr.stage.add(tr.machine.group);                     // under the stage → inherits the bay placement for free
+  });
 
   // FIXED-cam framing: x-centre + half-width of the whole WALL (world x = base.x + origin.x)
   let minX = Infinity, maxX = -Infinity;
@@ -501,6 +523,9 @@ function animate(){
       po.g.position.set(po.base.x, STAGE_Y - .12 + DESCENT * c, po.base.z)
         .addScaledVector(po.n, padOffset(started ? c : 0, po.amp));
     });
+
+    // ---- the visible machine: scroll the belt in lock-step with the rising pads ----
+    if (machinesOn) tr.machine.update(reduceMotion ? 0 : dt);
   });
   if (trailTick > .022) trailTick = 0;
   trailTick += dt;

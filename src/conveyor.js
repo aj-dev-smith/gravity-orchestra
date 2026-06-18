@@ -110,12 +110,61 @@ function buildBeltWall(track, style, canvas, { chrome, envMap, bandY, reach }){
   };
 }
 
-/* ---- buildPulleys — drums at the band's top & bottom. STUB (milestone 2). ---- */
-function buildPulleys(track, style, deps){
-  return { group: new THREE.Group(), spin(){}, dispose(){} };
+/* ---- buildPulleys — the drums the belt wraps, at the band's top & bottom.
+   Axis along x; angular speed = linear / radius, so a fat bass drum turns slower
+   than a lean alto one at the same belt speed — the machine reads as geared. Mostly
+   off-screen; they're the "it's a real loop" tell when the FIXED cam pulls back. ---- */
+function buildPulleys(track, style, { chrome, bandY, reach }){
+  const xs = track.padObjs.map(po => po.base.x);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const cx = (minX + maxX) / 2, width = (maxX - minX) + 2 * WALL_MARGIN;
+  const r = style.pulleyR;
+
+  const geo = new THREE.CylinderGeometry(r, r, width, 16);
+  geo.rotateZ(Math.PI / 2);                             // lay the drum's axis along x (baked into verts)
+  const drums = [bandY + reach, bandY - reach].map(y => {
+    const m = new THREE.Mesh(geo, chrome);              // chrome is shared → exempt from disposal
+    m.position.set(cx, y, BELT_DEPTH);
+    return m;
+  });
+  const group = new THREE.Group().add(...drums);
+
+  return {
+    group,
+    spin(d){ const da = d / r; drums.forEach(m => m.rotation.x += da); },  // roll with the belt (verify sign live)
+    dispose(){ geo.dispose(); },
+  };
 }
 
-/* ---- mountBrackets — a clip per pad tying it to the belt. STUB (milestone 3). ---- */
-function mountBrackets(track, style, deps){
-  return { group: new THREE.Group(), sync(){}, dispose(){} };
+/* ---- mountBrackets — one arm per pad, clipping it to the belt so the pad visibly
+   RIDES the machine. Collision-safety is built into the geometry, not policed:
+
+     • the arm's FRONT face sits exactly at the pad centre (base.z) and runs
+       BACKWARD to the belt — it never enters z > base.z, so it can't reach into
+       the ball's flight path (the ball lives in front of, and arcs above, the pads).
+     • it hugs the pad's own height and rides the bob, so it only occupies the pad's
+       slab — never the tall gaps between pads where the arcs travel.
+     • it's centred on the pad's x, so it tracks the one pad it holds.
+
+   Built in the machine group (NOT a child of po.g) so it never inherits the pad's
+   tilt/scale. One shared geometry per track: a fixed length works for every pad
+   because the front face lands at base.z no matter how long the tail is — short-reach
+   pads just bury more of their tail behind the belt, where it's hidden. ---- */
+function mountBrackets(track, style, { chrome }){
+  const ARM_LEN = 4.6;                                  // long enough to reach the deepest pad's belt; tail hides behind it
+  const geo = new THREE.BoxGeometry(style.gauge, style.gauge, ARM_LEN);
+  const arms = track.padObjs.map(po => {
+    const m = new THREE.Mesh(geo, chrome);              // chrome is shared → exempt from disposal
+    m.position.set(po.base.x, po.g.position.y, po.base.z - ARM_LEN / 2);  // front face AT the pad, tail toward the belt
+    return { m, po };
+  });
+  const group = new THREE.Group().add(...arms.map(a => a.m));
+
+  return {
+    group,
+    sync(){                                             // belt loop already placed po.g this frame — just mirror it
+      for (const { m, po } of arms){ m.position.y = po.g.position.y; m.visible = po.g.visible; }
+    },
+    dispose(){ geo.dispose(); },
+  };
 }

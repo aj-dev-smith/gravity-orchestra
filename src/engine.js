@@ -63,6 +63,30 @@ export function beltPhase(songTime, strikeTime, period){
   return (((songTime - strikeTime + half) % period) + period) % period - half;
 }
 
+/* Smoothstep on [e0,e1], clamped. The easing vocabulary for render choreography. */
+function smoothstep(e0, e1, x){
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+}
+
+/* Deploy envelope for a pad's entrance/exit on the belt. Pure fn of the centered
+   belt phase `c`: how far the pad has unfolded from STOWED (flat & flush on the
+   belt) to DEPLOYED (tilted to its catch normal, telescoped forward).
+     `inner` — |c| at/inside which the pad is fully deployed (the working band).
+     `edge`  — |c| at which the pad first appears, flat & retracted.
+   Returns {extend, tilt}, each in [0,1], SEQUENCED: the arm extends to reach
+   first, THEN the disc tips into position — so the unfold reads as a real
+   mechanism, not a single blended pop. Both are 0 at the edge and 1 within the
+   band, so the entire strike region is rock-solid and only the screen-edge
+   thirds animate (subtle by construction — it never steals the marble's show). */
+export function deployPose(c, inner, edge){
+  const u = smoothstep(edge, inner, Math.abs(c));   // 0 at the appear edge → 1 inside the band
+  return {
+    extend: smoothstep(0,   .55, u),                // telescope out over the first ~55%
+    tilt:   smoothstep(.45, 1,   u),                // then tip up over the last ~55% (slight overlap)
+  };
+}
+
 /* Note name → frequency (Hz). Sharps only, e.g. F#5, A3. */
 const NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 export function noteHz(n){

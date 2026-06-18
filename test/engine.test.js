@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { G, solveLaunch, arcPos, arcVel, padOffset, noteHz, beltPhase } from '../src/engine.js';
+import { G, solveLaunch, arcPos, arcVel, padOffset, noteHz, beltPhase, deployPose } from '../src/engine.js';
 
 const v = (x, y, z) => new THREE.Vector3(x, y, z);
 
@@ -95,6 +95,56 @@ describe('beltPhase — the recirculating conveyor', () => {
     // pad rendered offset from band = DESCENT·c; ball rendered lift = DESCENT·τ.
     // At a strike both reduce to the same constant (proof lives in the conveyor plan).
     expect(beltPhase(s, s, P)).toBe(beltPhase(s + P, s, P)); // periodic, exact 0 either way
+  });
+});
+
+describe('deployPose — the pad entrance/exit unfold', () => {
+  const inner = 2.9, edge = 6.4;   // representative working-band / appear thresholds
+
+  it('is fully stowed (0,0) at and beyond the appear edge — pads pop in flat & flush', () => {
+    for (const c of [edge, edge + 1, -edge, -8]){
+      const p = deployPose(c, inner, edge);
+      expect(p.extend).toBeCloseTo(0, 9);
+      expect(p.tilt).toBeCloseTo(0, 9);
+    }
+  });
+
+  it('is fully deployed (1,1) within the working band — the strike region never animates', () => {
+    for (const c of [inner, inner - .5, 0, -1, -inner]){
+      const p = deployPose(c, inner, edge);
+      expect(p.extend).toBeCloseTo(1, 9);
+      expect(p.tilt).toBeCloseTo(1, 9);
+    }
+  });
+
+  it('is symmetric in c (entrance and exit mirror each other)', () => {
+    for (const c of [3.5, 4.7, 5.9]){
+      const a = deployPose(c, inner, edge), b = deployPose(-c, inner, edge);
+      expect(a.extend).toBeCloseTo(b.extend, 12);
+      expect(a.tilt).toBeCloseTo(b.tilt, 12);
+    }
+  });
+
+  it('extends BEFORE it tilts — the arm reaches out, then the disc tips up', () => {
+    // sweep from the edge inward; extend must lead tilt the whole way
+    for (let c = edge; c > inner; c -= .1){
+      const p = deployPose(c, inner, edge);
+      expect(p.extend).toBeGreaterThanOrEqual(p.tilt - 1e-9);
+    }
+    // a point where the arm is clearly out but the disc has barely begun to tip
+    const mid = deployPose((inner + edge) / 2, inner, edge);
+    expect(mid.extend).toBeGreaterThan(0.5);
+    expect(mid.tilt).toBeLessThan(mid.extend);
+  });
+
+  it('both channels advance monotonically from edge to band', () => {
+    let pe = 0, pt = 0;
+    for (let c = edge; c >= inner; c -= .05){
+      const p = deployPose(c, inner, edge);
+      expect(p.extend).toBeGreaterThanOrEqual(pe - 1e-9);
+      expect(p.tilt).toBeGreaterThanOrEqual(pt - 1e-9);
+      pe = p.extend; pt = p.tilt;
+    }
   });
 });
 

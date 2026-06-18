@@ -2,9 +2,11 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const ZAXIS = new THREE.Vector3(0, 0, 1);
+const YAXIS = new THREE.Vector3(0, 1, 0);
 const ONES  = new THREE.Vector3(1, 1, 1);
 const HUB_BACK = .3;                         // how far the carriage hub tucks behind the disc face (along −n)
-const _anchor = new THREE.Vector3(), _hub = new THREE.Vector3(), _dir = new THREE.Vector3();  // per-frame scratch
+const _anchor = new THREE.Vector3(), _hub = new THREE.Vector3(), _dir = new THREE.Vector3();
+const _n = new THREE.Vector3();              // per-frame scratch (live pad normal, derived from its quaternion)
 
 /* ============================================================
    CONVEYOR — the visible machine. Third render subsystem, in the
@@ -22,10 +24,10 @@ const _anchor = new THREE.Vector3(), _hub = new THREE.Vector3(), _dir = new THRE
    neighbours never fight.
    ============================================================ */
 
-const BELT_DEPTH  = -2.0;   // belt sits this far behind its OWN pads (uniform — bays
-                            // separate the tracks, so depth no longer has to stagger).
-                            // Kept shallow so the support arms stay short & tidy, with
-                            // clearance for the deepest-weaving pad's back edge.
+export const BELT_DEPTH = -2.0;   // belt sits this far behind its OWN pads (uniform — bays
+                                  // separate the tracks, so depth no longer has to stagger).
+                                  // Kept shallow so the support arms stay short & tidy, with
+                                  // clearance for the deepest-weaving pad's back edge.
 const SLAT_WORLD  = 2.4;    // world height of one belt-texture tile (one slat cycle ≈ /4)
 const WALL_MARGIN = 1.4;    // belt overhangs the pad field by this much on each side
 const POST_W      = .16;    // side-frame post thickness
@@ -154,26 +156,21 @@ function boxBetween(a, b, w){
 }
 
 /* ---- carriageGeometry — the moving half of a mount: a hub tucked UNDER the disc and
-   four short posts splaying out to the rim quadrants. Derived entirely from the pad's
-   own normal `n`, so it self-orients to ANY tilt and the posts meet the rim from BEHIND
-   — never crossing the disc FACE the marble bounces off. Built in the pad's local frame
-   (origin = pad centre). The carriage rides the pad's FULL motion — belt bob AND the
-   flipper wind-up nudge — so the pad can retract to strike without ever out-running its
-   posts (the clip the old rigid arm hit). The pad's tilt is fixed, so this bakes once. */
+   four short posts splaying out to the rim quadrants. Built in the pad's OWN LOCAL frame
+   (disc "up" = +y, disc plane = x/z), so the carriage is just rotated by the pad's live
+   quaternion at render — it self-orients to ANY tilt for free and tips WITH the disc as
+   it unfolds on entry. Posts meet the rim from BEHIND (hub at −y), never crossing the
+   FACE the marble bounces off. The carriage rides the pad's FULL motion — belt bob AND
+   the flipper wind-up nudge — so the pad can retract to strike without out-running its
+   posts (the clip the old rigid arm hit). Pad geometry is identical per note, so this
+   bakes once and is shared by orientation. */
 function carriageGeometry(po, gauge){
-  const n = po.n;                                        // pad normal — the disc's "up"
   const R = po.g.scale.x * .55 * .92;                    // rim radius (just inside the ring), world units
-  const t1 = new THREE.Vector3().crossVectors(n, ZAXIS); // two tangents spanning the tilted disc plane
-  if (t1.lengthSq() < 1e-6) t1.crossVectors(n, new THREE.Vector3(1, 0, 0));
-  t1.normalize();
-  const t2 = new THREE.Vector3().crossVectors(n, t1).normalize();
-
-  const center = new THREE.Vector3(0, 0, 0);
-  const hub = center.clone().addScaledVector(n, -HUB_BACK);  // under the disc face (back side, off the bounce)
+  const hub = new THREE.Vector3(0, -HUB_BACK, 0);        // under the disc face (back side, off the bounce)
   const geos = [];
   for (let k = 0; k < 4; k++){                           // four posts → rim quadrants (45,135,225,315°)
     const a = (k + .5) * Math.PI / 2;
-    const rim = center.clone().addScaledVector(t1, Math.cos(a) * R).addScaledVector(t2, Math.sin(a) * R);
+    const rim = new THREE.Vector3(Math.cos(a) * R, 0, Math.sin(a) * R);   // in the local disc plane
     geos.push(boxBetween(hub, rim, gauge * .8));
   }
   const merged = mergeGeometries(geos, false);
@@ -206,15 +203,17 @@ function mountBrackets(track, style, { envMap }){
 
   return {
     group,
-    sync(){                                             // belt loop already placed po.g + po.beltY this frame
+    sync(){                                             // belt loop already placed po.g (pos + quaternion) + po.beltY
       for (const { po, car, spine, shoe } of parts){
         const vis = po.g.visible;
         car.visible = spine.visible = shoe.visible = vis;
         if (!vis) continue;
         car.position.copy(po.g.position);               // carriage rides the pad fully (incl. wind-up nudge)
-        _anchor.set(po.base.x, po.beltY, BELT_DEPTH + g * .3);   // shoe planted on the belt (no nudge)
+        car.quaternion.copy(po.g.quaternion);           // …and tips WITH it as the disc unfolds on entry
+        _n.copy(YAXIS).applyQuaternion(po.g.quaternion);        // live pad normal (animates flat→deployed on entry)
+        _anchor.set(po.base.x, po.beltY, BELT_DEPTH + g * .3);   // shoe stays planted on the belt (no nudge, no unfold)
         shoe.position.copy(_anchor);
-        _hub.copy(po.g.position).addScaledVector(po.n, -HUB_BACK);
+        _hub.copy(po.g.position).addScaledVector(_n, -HUB_BACK);
         _dir.subVectors(_hub, _anchor);
         const len = _dir.length() || 1e-3;
         spine.position.copy(_anchor).addScaledVector(_dir, .5);  // midpoint

@@ -4,10 +4,10 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { SONGS } from './songs/index.js';
-import { G, UP, UPY, ROLL_T, DESCENT, solveLaunch, arcPos, arcVel, padOffset, beltPhase, PAD_R, padRadius, layoutPads } from './engine.js';
+import { G, UP, UPY, ROLL_T, DESCENT, solveLaunch, arcPos, arcVel, padOffset, beltPhase, deployPose, PAD_R, padRadius, layoutPads } from './engine.js';
 import * as audio from './audio.js';
 import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } from './juice.js';
-import { makeConveyorShop } from './conveyor.js';
+import { makeConveyorShop, BELT_DEPTH } from './conveyor.js';
 import { encodeSong, decodeSong } from './share.js';
 import { parseMidi } from './midi/parse.js';
 import { convertToSong } from './midi/convert.js';
@@ -40,6 +40,11 @@ let loopIndex = -1;                                     // floor(songTime / P); 
    mechanisms share no state; they meet at the band, at strikes, by construction.
    Physics is untouched — this is all render-time framing. */
 const STAGE_Y = DESCENT * ROLL_T;                       // the static strike band (~5.7) every pad rises to meet
+// STOWED pose: disc lying flat & flush on the belt (its "up" faces the camera, +z), the
+// pose a pad pops in/out at. The belt loop slerps qFlat → po.qN as the pad unfolds on entry.
+const Q_FLAT = new THREE.Quaternion().setFromUnitVectors(UPY, new THREE.Vector3(0, 0, 1));
+const _qn = new THREE.Vector3();                        // scratch: live pad normal during unfold
+const FULL_DEPLOY = { extend: 1, tilt: 1 };             // reduced-motion: pads just appear, fully deployed
 const FADE_TAIL = 1.0;                                  // seconds a plunged ball lingers before recycle
 const DROP_IN = 9;                                      // height (world u) a newborn ball falls in from
 const RIG_POOL = 3;                                     // rigs per role — ≤2 balls alive at the seam, 3 is slack
@@ -274,7 +279,7 @@ function buildTrack(melody, zBase, role, delayBeats = 0, deep = false){
     rim.rotation.x = Math.PI/2; rim.position.y = .09;
     g.add(body, rim); stage.add(g);
     return {g, rim, body, flash:0, hue:hueOf(pad.note),
-            base: g.position.clone(), n: n.clone(),
+            base: g.position.clone(), n: n.clone(), qN: g.quaternion.clone(),
             amp: THREE.MathUtils.clamp(arcs[i].dot(n)*.07, .05, 1.6)};
   });
 
@@ -455,6 +460,9 @@ function animate(){
   let leadRender = null;
   const marblePts = [];
   const cullDist = Math.min(14, DESCENT * P * .5 - .5);  // pads wrap off-screen beyond the band
+  const cullC = cullDist / DESCENT;                      // …same edge, in belt-phase units
+  const innerC = cullC * .64;                            // fully deployed within this band — strike zone never animates
+                                                         // (higher = a tighter, snappier unfold nearer the edge)
   tracks.forEach(tr => {
     // ---- mortal balls: render each, strike on the youngest, recycle the dead ----
     let active = null;                                   // youngest live ball drives camera + anticipation
@@ -521,8 +529,15 @@ function animate(){
       po.rim.scale.setScalar(1 + pre*.22 + po.flash*.12);
       po.body.material.emissive.setHSL(po.hue, .7, po.flash*.32 + pre*.07);
       po.beltY = STAGE_Y - .12 + DESCENT * c;           // un-nudged belt height — the bracket spine roots here
-      po.g.position.set(po.base.x, po.beltY, po.base.z)
-        .addScaledVector(po.n, padOffset(started ? c : 0, po.amp));
+      // entrance/exit unfold: at the screen edges the pad lies flat & flush on the belt,
+      // then telescopes out to rest depth and tips up into catch position — sequenced
+      // (extend → tilt) and confined to the edges, so the strike zone stays rock-solid.
+      const dep = reduceMotion ? FULL_DEPLOY : deployPose(c, innerC, cullC);
+      po.g.quaternion.copy(Q_FLAT).slerp(po.qN, dep.tilt);
+      _qn.copy(UPY).applyQuaternion(po.g.quaternion);   // live normal (for the flipper nudge as it unfolds)
+      const z = THREE.MathUtils.lerp(BELT_DEPTH + .15, po.base.z, dep.extend);   // belt-flush → rest depth
+      po.g.position.set(po.base.x, po.beltY, z)
+        .addScaledVector(_qn, padOffset(started ? c : 0, po.amp));
     });
 
     // ---- the visible machine: scroll the belt in lock-step with the rising pads ----

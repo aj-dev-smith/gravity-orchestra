@@ -39,17 +39,18 @@ const MACHINE_STYLE = {                                // gauge = support-arm th
   alto: { gauge:.09, pulleyR:.42, tint:0xa99ec4 },
 };
 
-export function makeConveyorShop({ chrome, envMap, beltSpeed, bandY, reach }){
+export function makeConveyorShop({ chrome, envMap, beltSpeed, bandY, reach, cull }){
   const beltCanvas = makeBeltCanvas();                 // expensive raster, ONCE for every machine
   return { buildMachine };
 
   function buildMachine(track){
     const style = MACHINE_STYLE[track.role] || MACHINE_STYLE.lead;
     const wall     = buildBeltWall(track, style, beltCanvas, { chrome, envMap, bandY, reach });
-    const pulleys  = buildPulleys(track, style, { chrome, bandY, reach });
+    const pulleys  = buildPulleys(track, style, { envMap, bandY, reach });
+    const cowls    = buildCowls(track, style, { envMap, bandY, reach, cull });
     const brackets = mountBrackets(track, style, { envMap });
     const group = new THREE.Group();
-    group.add(wall.group, pulleys.group, brackets.group);
+    group.add(wall.group, pulleys.group, cowls.group, brackets.group);
     return {
       group,                                           // caller adds to tr.stage (local frame)
       update(dt){                                      // call AFTER the belt loop sets po.g.position
@@ -57,7 +58,7 @@ export function makeConveyorShop({ chrome, envMap, beltSpeed, bandY, reach }){
         pulleys.spin(beltSpeed * dt);
         brackets.sync();
       },
-      dispose(){ wall.dispose(); pulleys.dispose(); brackets.dispose(); },
+      dispose(){ wall.dispose(); pulleys.dispose(); cowls.dispose(); brackets.dispose(); },
     };
   }
 }
@@ -124,16 +125,21 @@ function buildBeltWall(track, style, canvas, { chrome, envMap, bandY, reach }){
    Axis along x; angular speed = linear / radius, so a fat bass drum turns slower
    than a lean alto one at the same belt speed — the machine reads as geared. Mostly
    off-screen; they're the "it's a real loop" tell when the FIXED cam pulls back. ---- */
-function buildPulleys(track, style, { chrome, bandY, reach }){
+function buildPulleys(track, style, { envMap, bandY, reach }){
   const xs = track.padObjs.map(po => po.base.x);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const cx = (minX + maxX) / 2, width = (maxX - minX) + 2 * WALL_MARGIN;
   const r = style.pulleyR;
 
-  const geo = new THREE.CylinderGeometry(r, r, width, 16);
+  // Own steel material (NOT shared chrome): a faint cool emissive floor so the rollers
+  // read as lit metal cylinders capping the belt instead of vanishing into the black env,
+  // while metalness keeps a live specular streak from the key light.
+  const mat = new THREE.MeshStandardMaterial({ color: 0xc6d0e8, metalness: 1, roughness: .3, envMap,
+    emissive: new THREE.Color(0x223047), emissiveIntensity: .42 });
+  const geo = new THREE.CylinderGeometry(r, r, width, 24);
   geo.rotateZ(Math.PI / 2);                             // lay the drum's axis along x (baked into verts)
   const drums = [bandY + reach, bandY - reach].map(y => {
-    const m = new THREE.Mesh(geo, chrome);              // chrome is shared → exempt from disposal
+    const m = new THREE.Mesh(geo, mat);
     m.position.set(cx, y, BELT_DEPTH);
     return m;
   });
@@ -142,8 +148,40 @@ function buildPulleys(track, style, { chrome, bandY, reach }){
   return {
     group,
     spin(d){ const da = d / r; drums.forEach(m => m.rotation.x += da); },  // roll with the belt (verify sign live)
-    dispose(){ geo.dispose(); },
+    dispose(){ geo.dispose(); mat.dispose(); },
   };
+}
+
+/* ---- buildCowls — a small dark overhang at the top & bottom of each machine, seated
+   over the drums. Pads ride almost all the way to the drum, then slide BEHIND this lip in
+   their final stowed-flat sliver and cull there unseen — so a pad never just blinks into
+   or out of existence in open air; it emerges from / vanishes under the housing. The lip
+   juts just in front of a STOWED pad (which is the only pose a pad ever holds this high),
+   so it can't clip the deployed pads working far below in the band. Static (no update). ---- */
+const COWL_FRONT = -.3;     // overhang's front face z — in front of a stowed pad, behind the deployed ones
+const COWL_OVER  = .4;      // how far the lip rises above the drum
+const COWL_UNDER = .7;      // how far it dips below the vanish point, so the pad tucks fully before culling
+
+function buildCowls(track, style, { envMap, bandY, reach, cull }){
+  const xs = track.padObjs.map(po => po.base.x);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const cx = (minX + maxX) / 2, width = (maxX - minX) + 2 * WALL_MARGIN + .5;   // slight side overhang past the posts
+  // Faintly self-lit so the hood always reads as a defined dark band capping the belt,
+  // even 16u above the lights — kept under the bloom threshold so it's structure, not a lamp.
+  const mat = new THREE.MeshStandardMaterial({ color: 0x1c2029, metalness: .55, roughness: .55, envMap,
+    emissive: new THREE.Color(0x2b3450), emissiveIntensity: .38 });
+  const zBack = BELT_DEPTH - .3, depth = COWL_FRONT - zBack, zc = (zBack + COWL_FRONT) / 2;
+
+  const top = reach + COWL_OVER, bot = cull - COWL_UNDER;   // span (offset from band): just below the vanish → over the drum
+  const geo = new THREE.BoxGeometry(width, top - bot, depth);
+  const yc = (top + bot) / 2;
+  const lips = [bandY + yc, bandY - yc].map(y => {          // top hood + bottom sill (mirror)
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(cx, y, zc);
+    return m;
+  });
+  const group = new THREE.Group().add(...lips);
+  return { group, dispose(){ geo.dispose(); mat.dispose(); } };
 }
 
 /* ---- boxBetween — a thin strut from point a to point b (the machine's vocabulary

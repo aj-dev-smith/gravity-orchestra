@@ -40,6 +40,9 @@ let loopIndex = -1;                                     // floor(songTime / P); 
    mechanisms share no state; they meet at the band, at strikes, by construction.
    Physics is untouched — this is all render-time framing. */
 const STAGE_Y = DESCENT * ROLL_T;                       // the static strike band (~5.7) every pad rises to meet
+const BELT_REACH = 16;                                  // half-height of the belt: drums sit at band ± this
+const PAD_CULL = BELT_REACH - .2;                       // pads ride to just shy of the drum, then tuck behind the
+                                                        // cowl and vanish unseen (well under any song's half-period)
 // STOWED pose: disc lying flat & flush on the belt (its "up" faces the camera, +z), the
 // pose a pad pops in/out at. The belt loop slerps qFlat → po.qN as the pad unfolds on entry.
 const Q_FLAT = new THREE.Quaternion().setFromUnitVectors(UPY, new THREE.Vector3(0, 0, 1));
@@ -136,7 +139,7 @@ const padGeo  = new THREE.CylinderGeometry(.5,.56,.13,28);
 /* The visible belt machine. beltSpeed = DESCENT is the honesty hook: pads rise at
    DESCENT, slats scroll at DESCENT → slip-free, no state. reach=16 covers the ±14
    cull band for every song. Built per track in buildWorld, lives under tr.stage. */
-const shop = makeConveyorShop({ chrome, envMap, beltSpeed: DESCENT, bandY: STAGE_Y, reach: 16 });
+const shop = makeConveyorShop({ chrome, envMap, beltSpeed: DESCENT, bandY: STAGE_Y, reach: BELT_REACH, cull: PAD_CULL });
 let machinesOn = true;                                  // key M toggles the whole machine for A/B
 
 /* ---------------- marble rigs (lead = amber, bass = ice-blue) ---------- */
@@ -459,7 +462,7 @@ function animate(){
 
   let leadRender = null;
   const marblePts = [];
-  const cullDist = Math.min(14, DESCENT * P * .5 - .5);  // pads wrap off-screen beyond the band
+  const cullDist = Math.min(PAD_CULL, DESCENT * P * .5 - .5);  // ride to the drum; never past the half-period
   const cullC = cullDist / DESCENT;                      // …same edge, in belt-phase units
   const innerC = cullC * .64;                            // fully deployed within this band — strike zone never animates
                                                          // (higher = a tighter, snappier unfold nearer the edge)

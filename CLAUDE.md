@@ -52,8 +52,9 @@ on. Treat it as live.
                      mortal-ball pool. The stationary/multi-ball instrument archetype.
     src/drumkit.js   the drum REGISTRY: canonical name ↔ GM note ↔ mix gain. One source
                      of truth for the song validator, audio, render, future MIDI import.
-    src/midi/        MIDI import: parse.js (type-0/1 → tracks) + convert.js (→ song JSON,
-                     quantized, lock-rule-correct). Drops channel 9 today (see §6).
+    src/midi/        MIDI import: parse.js (type-0/1 → tracks, FAITHFUL — keeps every
+                     channel incl. 9, with velocity) + convert.js (→ song JSON, quantized,
+                     lock-rule-correct; channel 9 → drum lanes via drumByGm — see §6).
     src/share.js     song ⇄ deflate→base64url share links
     src/record.js    canvas captureStream + MediaRecorder → "one perfect loop" video
     src/songs/*.js   one module per song (the comments are sacred), aggregated by index.js
@@ -153,9 +154,12 @@ swaps "next pad" for the target; a drum swaps in a stationary drum. Future instr
 (lob / shoot / drop) swap only those two terms and stay just as solved-up-front. Audio
 is part of the instrument too — we design the *sound of each hit* per instrument (§5).
 
-Status: drums are implemented (kick/snare/hat voiced + rendered; toms/clap/crash/ride
-reserved in the registry, voiced as fallbacks). Only **Mountain King** carries a `drums`
-block so far; any song can get one.
+Status: drums are implemented (kick/snare/hat + the full **six-tom set** voiced + rendered;
+clap/crash/ride reserved in the registry, voiced as fallbacks). Toms are **pitched** — each
+carries a `tone` (Hz) in the registry and a real membrane voice (downward bend + stick
+attack), so a descending fill reads and sounds as a tonal cascade (this is what makes an
+imported intro tom roll land). **Mountain King** carries a hand-authored `drums` block; any
+song can get one, and **MIDI import now generates drums from channel 9** (§6).
 
 ---
 
@@ -233,13 +237,19 @@ formation — descent is time-proportional precisely so parallel tracks fall tog
 **Drums are different — DECIDED: absolute beats grouped by lane, NO lock rule.** Each
 lane lists the beat positions it strikes (a hit is `beat` or `[beat, velocity]`,
 velocity 0..1). Drums don't chain — each hit is an independent mortal ball **pinned** to a
-moment — so the lock rule's reason doesn't apply; pinned beats can't desync. The only rule:
-every hit ∈ `[0, loopBeats)` where `loopBeats = sum(melody beats)`. Validated in
-`test/drums.test.js`. Velocity is *dynamics* (audio gain + strike flash), separate from
-*impact speed* (geometry) — keep them apart. `src/drumkit.js` (`GM_DRUMS`) is the one
-source of truth: name ↔ GM note ↔ mix gain, reused by the validator, audio, render, and a
-future MIDI importer. This shape is deliberately MIDI-friendly (group channel-9 by note →
-`drumByGm` → a lane of quantized beats).
+moment — so the lock rule's reason doesn't apply; pinned beats can't desync. For
+**hand-authored** songs every hit ∈ `[0, loopBeats)` where `loopBeats = sum(melody beats)`
+(validated in `test/drums.test.js`). Velocity is *dynamics* (audio gain + strike flash),
+separate from *impact speed* (geometry) — keep them apart. `src/drumkit.js` (`GM_DRUMS`) is
+the one source of truth: name ↔ GM note ↔ mix gain (+ `tone` Hz for the pitched toms),
+reused by the validator, audio, render, and the MIDI importer. That last reuse is now live:
+`convert.js` groups channel-9 notes by GM number → `drumByGm` → a lane of quantized,
+lead-aligned beats (velocity = MIDI vel/127). Unmapped GM notes are dropped+warned; a
+percussion-only file errors (the engine needs a melodic spine). **A pickup fill before the
+lead keeps a NEGATIVE beat** (import-only — the hand-authored `[0, loopBeats)` convention
+stands): the render places beat `b` at `ROLL_T + b·BEAT`, so a negative beat lands in the
+marble's roll-in window and butts up against the downbeat — the intro tom roll leads into the
+first note instead of stranding at the loop tail. Covered in `test/midi.test.js`.
 
 Catalog (9): Für Elise (duo), Ode to Joy (trio thirds), Canon in D (true canon), Greensleeves
 (6/8), Gymnopédie 1, Prelude in C (single track — camera buttons auto-hide), Mountain King
@@ -295,8 +305,13 @@ state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machi
   MIDI drum import (thousands of hits) would want a windowed scan + a bigger/instanced pool.
 - Drum *timing* math lives inside `drums.js` (coupled to THREE), so it has no pure unit test
   — only the underlying `solveLaunch` is covered. Extract it if you want belt-and-suspenders.
-- MIDI import currently **drops channel 9** (`convertToSong`) — percussion import is a TODO:
-  route channel-9 notes through `drumByGm` → drum lanes.
+- MIDI import now routes **channel 9 → drum lanes**, but a **percussion-only file is rejected**
+  (no melodic spine to drive loop length / timeline-zero / camera); unmapped GM notes are
+  dropped (warned in console, not surfaced in-UI). Pickup fills are kept as negative beats and
+  render in the roll-in; a pickup longer than the roll-in (`~ROLL_T/BEAT` beats) can clip.
+- Every song now opens with a **`LEAD_IN` count-in** (`main.js`, default 2.4 s): `songTime`
+  starts negative, so the machine runs solo before the marble spawns (and the pickup fill plays
+  ahead of the downbeat). It's a feel knob — one const; tune freely.
 - Greensleeves uses the F#/dorian variant; Gymnopédie is the theme stated twice; Canon's late
   cycles are faithful-in-gesture simplifications.
 
@@ -306,16 +321,15 @@ state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machi
 
 The north star is the 3D music **creation + visualization tool**: pick instruments, place
 them in the world, move/director the camera, author via MIDI import or a piano-roll / drum
-grid. Shipped toward it: repo-ification, MIDI import, share links, recording, the
-**conveyor + spawner** (archetype 1), and the **drum machine** (archetype 2). Near-term,
-in rough priority:
+grid. Shipped toward it: repo-ification, MIDI import (**now incl. channel-9 drums**), share
+links, recording, the **conveyor + spawner** (archetype 1), and the **drum machine**
+(archetype 2). Near-term, in rough priority:
 
 1. **Drums on more songs**; **more kit pieces** (toms/clap/crash/ride — registry + fallback
    voices already exist, need geometry styling + use).
-2. **MIDI channel-9 import** → drum lanes (unlocks imported beats).
-3. **Instrument mapping + world placement** on MIDI import (creation mode 1).
-4. **Melody/drum editor** — piano-roll + drum-grid, exports the same song format (mode 2).
-5. Personal/private only: Zelda transcriptions (Nintendo IP — keep out of the public
+2. **Instrument mapping + world placement** on MIDI import (creation mode 1).
+3. **Melody/drum editor** — piano-roll + drum-grid, exports the same song format (mode 2).
+4. Personal/private only: Zelda transcriptions (Nintendo IP — keep out of the public
    repo/demo), more Peer Gynt.
 
 ---

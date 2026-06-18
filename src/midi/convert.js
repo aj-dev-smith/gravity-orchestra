@@ -1,7 +1,12 @@
 // convert.js — convert parseMidi output to the cascade song format
 // returns { song, warnings }
 
+import { GM_DRUMS, drumByGm } from '../drumkit.js';
+
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+// stable lane order for the emitted drums block (registry order → consistent
+// left-to-right kit layout in the render)
+const LANE_ORDER = Object.keys(GM_DRUMS);
 
 function midiToName(midi) {
   return NOTE_NAMES[midi % 12] + (Math.floor(midi / 12) - 1);
@@ -10,6 +15,11 @@ function midiToName(midi) {
 // round to nearest multiple of 1/12 (the quantize grid)
 function quantize(beats) {
   return Math.round(beats * 12) / 12;
+}
+
+// keep beats clean after the leadOffset subtraction (still on the 1/12 grid)
+function tidy(beats) {
+  return Math.round(beats * 12000) / 12000;
 }
 
 export function convertToSong(parsed, opts = {}) {
@@ -25,9 +35,26 @@ export function convertToSong(parsed, opts = {}) {
   // grid = 1/12 beat
   const beatsPerTick = 1 / ppq;
 
+  // --- step 0: split percussion (channel 9) from the melodic material ---
+  // Drums are defined as channel 9, gathered from EVERY input track. The melodic
+  // pipeline below runs only on what's left; the drum lanes are built in step 12
+  // once we know the lead's timeline offset and the loop length.
+  const drumNotes = [];
+  const melodicTracks = inputTracks
+    .map(tr => {
+      const mel = [];
+      for (const n of tr.notes) (n.channel === 9 ? drumNotes : mel).push(n);
+      return { ...tr, notes: mel };
+    })
+    .filter(tr => tr.notes.length > 0);
+
+  if (melodicTracks.length === 0) {
+    throw new Error('midi: only channel-9 percussion found — need at least one melodic track to drive the engine');
+  }
+
   // --- step 2: monophonic reduction per track ---
   // group by quantized onset, keep highest midi pitch per group
-  const monoTracks = inputTracks.map(tr => {
+  const monoTracks = melodicTracks.map(tr => {
     const byOnset = new Map();
     for (const n of tr.notes) {
       const onsetBeats = quantize(n.tick * beatsPerTick);
@@ -86,6 +113,29 @@ export function convertToSong(parsed, opts = {}) {
   const leadOffset = lead.onsets[0].onset;
   const shiftOnsets = t => t.onsets.map(n => ({ ...n, onset: n.onset - leadOffset }));
 
+  // --- step 5b: prepare drum hits (mapped + lead-aligned), pre-loop ---
+  // Map each ch9 note to a registry lane and quantize + shift onto the lead's
+  // zero. Unknown GM notes are dropped. Hits BEFORE the lead (a pickup fill — the
+  // iconic intro tom roll, say) are NOT dropped: they keep their NEGATIVE beat and
+  // render in the roll-in window just before the downbeat (step 12), leading into
+  // the first note exactly as a pickup should, instead of stranding at the tail.
+  const drumHits = [];                              // [{ lane, beat, vel }]  (beat may be < 0)
+  const unmappedGm = new Set();
+  let pickups = 0;
+  for (const n of drumNotes) {
+    const lane = drumByGm(n.midi);
+    if (!lane) { unmappedGm.add(n.midi); continue; }
+    const beat = tidy(quantize(n.tick * beatsPerTick) - leadOffset);
+    if (beat < 0) pickups++;
+    drumHits.push({ lane, beat, vel: Math.max(0.01, Math.min(1, n.vel / 127)) });
+  }
+  if (unmappedGm.size > 0) {
+    warnings.push(`drums: dropped ${unmappedGm.size} unmapped percussion note${unmappedGm.size > 1 ? 's' : ''} (GM ${[...unmappedGm].sort((a, b) => a - b).join(', ')})`);
+  }
+  if (pickups > 0) {
+    warnings.push(`drums: kept ${pickups} pickup hit${pickups > 1 ? 's' : ''} before the downbeat (the lead-in fill)`);
+  }
+
   lead = { ...lead, onsets: shiftOnsets(lead) };
   if (alto) {
     const shifted = shiftOnsets(alto);
@@ -133,6 +183,10 @@ export function convertToSong(parsed, opts = {}) {
   if (bass && bass.onsets.length > 0) {
     maxEnd = Math.max(maxEnd, bass.onsets[bass.onsets.length - 1].onset + 1);
   }
+  // a trailing drum hit (e.g. a final crash) must fit inside the loop window too —
+  // one grid cell past it is enough to keep the strict `beat < loopBeats` invariant.
+  // (negative beats are pickups; they wrap into the existing window, never extend it.)
+  for (const h of drumHits) if (h.beat > 0) maxEnd = Math.max(maxEnd, h.beat + 1 / 12);
   const loopBeats = Math.ceil(maxEnd / 4) * 4;
 
   function onsetsToNotes(onsets, role) {
@@ -204,6 +258,35 @@ export function convertToSong(parsed, opts = {}) {
     const bassDelay = bass.onsets[0].onset;
     const bassNotes = onsetsToNotesDelayed(bass.onsets);
     song.bass = { delay: bassDelay, notes: bassNotes };
+  }
+
+  // --- step 12: drum lanes ---
+  // Group the prepared hits by lane, drop the rare hit that lands at/after the
+  // loop seam, dedup same-beat retriggers (keep the loudest), and emit each lane
+  // as ascending hits — a bare beat at full velocity, [beat, vel] otherwise.
+  const laneMap = new Map();              // lane -> Map(beat -> vel)
+  for (const h of drumHits) {
+    // PICKUPS keep their NEGATIVE beat: the render places beat b at ROLL_T + b·BEAT,
+    // so a pre-lead hit lands in the roll-in window just ahead of the downbeat — the
+    // intro fill butts up against the first note instead of stranding at the loop
+    // tail. Only a rare hit past the seam folds back to the front.
+    let beat = h.beat;
+    if (beat >= loopBeats) beat = tidy(beat % loopBeats);
+    if (!laneMap.has(h.lane)) laneMap.set(h.lane, new Map());
+    const beats = laneMap.get(h.lane);
+    beats.set(beat, Math.max(beats.get(beat) ?? 0, h.vel));
+  }
+  if (laneMap.size > 0) {
+    const drums = {};
+    for (const lane of LANE_ORDER) {
+      if (!laneMap.has(lane)) continue;
+      drums[lane] = [...laneMap.get(lane).entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([beat, vel]) => (vel >= 0.97 ? beat : [beat, Math.round(vel * 100) / 100]));
+    }
+    song.drums = drums;
+    const laneCount = Object.keys(drums).length;
+    song.sub += ` + drums (${laneCount} lane${laneCount > 1 ? 's' : ''})`;
   }
 
   return { song, warnings };

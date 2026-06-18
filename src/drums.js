@@ -45,9 +45,14 @@ const DRUM_STYLE = {
   hat:     { r:0.66, h:0.16, shell:0x3a4230, head:0xffe27a, ball:0xfff0a8, spread:0 },
   hatOpen: { r:0.66, h:0.20, shell:0x3a4230, head:0xffe8a0, ball:0xfff0a8, spread:0 },
   clap:    { r:0.6,  h:0.4,  shell:0x402840, head:0xff9ad8, ball:0xffc0e8, spread:0 },
-  tomLow:  { r:0.82, h:0.7,  shell:0x33243a, head:0xff7a6a, ball:0xffae9a, spread:0 },
-  tomMid:  { r:0.74, h:0.62, shell:0x2f2a44, head:0xffb06a, ball:0xffd09a, spread:0 },
-  tomHigh: { r:0.66, h:0.54, shell:0x2a3048, head:0xffd06a, ball:0xffe49a, spread:0 },
+  // the six toms, low → high: bigger/darker/warmer at the bottom, smaller/brighter
+  // up top, so a descending fill reads as a tonal sweep across the kit.
+  floorLow:  { r:0.92, h:0.82, shell:0x3a2230, head:0xff665a, ball:0xffa692, spread:0 },
+  floorHigh: { r:0.85, h:0.74, shell:0x382436, head:0xff7460, ball:0xffb096, spread:0 },
+  tomLow:    { r:0.78, h:0.68, shell:0x33243a, head:0xff8868, ball:0xffbc98, spread:0 },
+  tomMid:    { r:0.71, h:0.62, shell:0x2f2a44, head:0xffa468, ball:0xffcc98, spread:0 },
+  tomHiMid:  { r:0.65, h:0.56, shell:0x2c2e48, head:0xffbe68, ball:0xffdc98, spread:0 },
+  tomHigh:   { r:0.59, h:0.50, shell:0x2a3048, head:0xffd668, ball:0xffe898, spread:0 },
   crash:   { r:0.95, h:0.1,  shell:0x444a30, head:0xfff0b0, ball:0xfff6d0, spread:0 },
   ride:    { r:0.95, h:0.1,  shell:0x33402f, head:0xe8f0b0, ball:0xf2f8d0, spread:0 },
 };

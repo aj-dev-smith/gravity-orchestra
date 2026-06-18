@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { parseMidi } from '../src/midi/parse.js';
 import { convertToSong } from '../src/midi/convert.js';
 import { buildMidi } from './helpers/midi-builder.js';
+import { DRUM_NAMES, normalizeHit } from '../src/drumkit.js';
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -361,25 +362,27 @@ describe('parseMidi — event skipping', () => {
 });
 
 // ---------------------------------------------------------------------------
-// parse — channel 9 (percussion) dropped
+// parse — channel 9 (percussion) kept faithfully, with velocity
 // ---------------------------------------------------------------------------
 
-describe('parseMidi — channel 9 percussion drop', () => {
-  it('drops notes on channel 9 (zero-indexed)', () => {
+describe('parseMidi — channel 9 percussion kept', () => {
+  it('keeps notes on channel 9 (zero-indexed), with channel + velocity', () => {
     const bytes = buildMidi({
       format: 1, ppq: 480,
       tracks: [{
         events: [
-          { tick: 0,   type: 'on', note: 36, vel: 100, channel: 9 },  // kick — drop
-          { tick: 0,   type: 'on', note: 60, vel: 80,  channel: 0 },  // keep
-          { tick: 480, type: 'on', note: 38, vel: 100, channel: 9 },  // snare — drop
+          { tick: 0,   type: 'on', note: 36, vel: 100, channel: 9 },  // kick
+          { tick: 0,   type: 'on', note: 60, vel: 80,  channel: 0 },  // melody
+          { tick: 480, type: 'on', note: 38, vel: 100, channel: 9 },  // snare
         ],
       }],
     });
     const { tracks } = parseMidi(bytes);
-    expect(tracks[0].notes.every(n => n.channel !== 9)).toBe(true);
-    expect(tracks[0].notes.length).toBe(1);
-    expect(tracks[0].notes[0].midi).toBe(60);
+    const all = tracks.flatMap(t => t.notes);
+    expect(all.length).toBe(3);
+    const perc = all.filter(n => n.channel === 9);
+    expect(perc.map(n => n.midi).sort((a, b) => a - b)).toEqual([36, 38]);
+    expect(perc.every(n => n.vel === 100)).toBe(true);
   });
 });
 
@@ -410,8 +413,8 @@ describe('parseMidi — format 0 channel split', () => {
     expect(tracks[1].notes.every(n => n.channel === 1)).toBe(true);
   });
 
-  it('drops empty channels from format-0 split result', () => {
-    // channel 9 (perc) dropped → only channel 0 survives
+  it('drops empty channels but keeps channel 9 as its own track', () => {
+    // channel 9 (perc) now survives the split → channels 0 and 9 both present
     const bytes = buildMidi({
       format: 0, ppq: 480,
       tracks: [{
@@ -422,7 +425,8 @@ describe('parseMidi — format 0 channel split', () => {
       }],
     });
     const { tracks } = parseMidi(bytes);
-    expect(tracks.length).toBe(1);
+    expect(tracks.length).toBe(2);
+    expect(tracks.map(t => t.name)).toEqual(['ch0', 'ch9']);
   });
 });
 
@@ -930,8 +934,8 @@ describe('convertToSong — scale', () => {
 // ---------------------------------------------------------------------------
 
 describe('convertToSong — error on empty input', () => {
-  it('throws a descriptive error when no note tracks survive', () => {
-    // format 1 with only percussion (channel 9) — all dropped
+  it('throws a descriptive error when only percussion (no melodic spine) survives', () => {
+    // format 1 with only percussion (channel 9) — the engine needs a melody to ride
     const bytes = buildMidi({
       format: 1, ppq: 480,
       tracks: [{
@@ -942,7 +946,7 @@ describe('convertToSong — error on empty input', () => {
       }],
     });
     const parsed = parseMidi(bytes);
-    expect(() => convertToSong(parsed)).toThrow(/no tracks/i);
+    expect(() => convertToSong(parsed)).toThrow(/melodic track/i);
   });
 });
 
@@ -1093,5 +1097,150 @@ describe('integration — realistic 2-track MIDI conversion', () => {
     expect(Array.isArray(song.scale)).toBe(true);
     expect(song.scale.length).toBeGreaterThan(0);
     for (const pc of song.scale) expect(pc).toMatch(/^[A-G]#?$/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// convert — channel-9 percussion → drum lanes
+// ---------------------------------------------------------------------------
+
+// a melody on ch0 (beats 0..3) plus a kick/snare/hat groove on ch9, and one
+// unmapped percussion note (GM 60, not in the registry) that must be dropped.
+function drumMidi() {
+  const Q = 480; // ticks per beat
+  return buildMidi({
+    format: 1, ppq: Q,
+    tracks: [
+      { events: [
+        { tick: 0,     type: 'on', note: 60, vel: 90, channel: 0 },
+        { tick: 1 * Q, type: 'on', note: 62, vel: 90, channel: 0 },
+        { tick: 2 * Q, type: 'on', note: 64, vel: 90, channel: 0 },
+        { tick: 3 * Q, type: 'on', note: 65, vel: 90, channel: 0 },
+      ] },
+      { events: [
+        // kick (GM36) at full velocity → bare beats
+        { tick: 0,     type: 'on', note: 36, vel: 127, channel: 9 },
+        { tick: 2 * Q, type: 'on', note: 36, vel: 127, channel: 9 },
+        // snare (GM38) at vel 110 → [beat, vel]
+        { tick: 1 * Q, type: 'on', note: 38, vel: 110, channel: 9 },
+        { tick: 3 * Q, type: 'on', note: 38, vel: 110, channel: 9 },
+        // hat (GM42) on eighths, accented downbeats
+        { tick: 0,       type: 'on', note: 42, vel: 100, channel: 9 },
+        { tick: 0.5 * Q, type: 'on', note: 42, vel: 60,  channel: 9 },
+        { tick: 1 * Q,   type: 'on', note: 42, vel: 100, channel: 9 },
+        { tick: 1.5 * Q, type: 'on', note: 42, vel: 60,  channel: 9 },
+        { tick: 2 * Q,   type: 'on', note: 42, vel: 100, channel: 9 },
+        { tick: 2.5 * Q, type: 'on', note: 42, vel: 60,  channel: 9 },
+        { tick: 3 * Q,   type: 'on', note: 42, vel: 100, channel: 9 },
+        { tick: 3.5 * Q, type: 'on', note: 42, vel: 60,  channel: 9 },
+        // unmapped percussion (GM 60) → dropped + warned
+        { tick: 0, type: 'on', note: 60, vel: 100, channel: 9 },
+      ] },
+    ],
+  });
+}
+
+describe('convertToSong — drum lanes from channel 9', () => {
+  const { song, warnings } = convertToSong(parseMidi(drumMidi()));
+  const loop = song.melody.reduce((s, [, b]) => s + b, 0);
+
+  it('emits a drums block with registered lanes', () => {
+    expect(song.drums).toBeTruthy();
+    for (const lane of Object.keys(song.drums)) {
+      expect(DRUM_NAMES.has(lane), `unknown lane ${lane}`).toBe(true);
+    }
+    expect(Object.keys(song.drums).sort()).toEqual(['hat', 'kick', 'snare']);
+  });
+
+  it('full-velocity hits are bare beats; softer hits carry [beat, vel]', () => {
+    expect(song.drums.kick).toEqual([0, 2]);                    // vel 127 → bare
+    expect(song.drums.snare).toEqual([[1, 0.87], [3, 0.87]]);   // vel 110 → 0.87
+  });
+
+  it('hats land on the eighth grid with accents preserved', () => {
+    const beats = song.drums.hat.map(h => normalizeHit(h).beat);
+    expect(beats).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]);
+    const downbeat = normalizeHit(song.drums.hat[0]);
+    const offbeat  = normalizeHit(song.drums.hat[1]);
+    expect(downbeat.vel).toBeGreaterThan(offbeat.vel);
+  });
+
+  it('percussion never leaks into the melodic tracks', () => {
+    expect(song.melody.length).toBe(4);
+    // the melody is the ch0 line (C4,D4,E4,F4) — no kick/snare/hat pitches
+    expect(song.melody.map(([n]) => n)).toEqual(['C4', 'D4', 'E4', 'F4']);
+    expect(song.alto).toBeUndefined();
+    expect(song.bass).toBeUndefined();
+  });
+
+  it('warns about the unmapped percussion note', () => {
+    expect(warnings.some(w => /unmapped/.test(w) && /60/.test(w))).toBe(true);
+  });
+
+  it('mentions drums in the sub line', () => {
+    expect(song.sub).toMatch(/drums/);
+  });
+
+  it('every emitted hit satisfies the drum invariants', () => {
+    for (const [lane, hits] of Object.entries(song.drums)) {
+      expect(DRUM_NAMES.has(lane)).toBe(true);
+      let prev = -1;
+      for (const h of hits) {
+        const { beat, vel } = normalizeHit(h);
+        expect(beat).toBeGreaterThanOrEqual(0);
+        expect(beat).toBeLessThan(loop);
+        expect(beat).toBeGreaterThanOrEqual(prev);   // ascending
+        prev = beat;
+        expect(vel).toBeGreaterThan(0);
+        expect(vel).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+});
+
+describe('convertToSong — drum pickups before the lead keep a negative beat', () => {
+  it('keeps a pre-lead hit as a negative beat (renders in the roll-in, not the tail)', () => {
+    const Q = 480;
+    const bytes = buildMidi({
+      format: 1, ppq: Q,
+      tracks: [
+        // lead enters at beat 2 → leadOffset = 2, loop rounds to 4 beats
+        { events: [
+          { tick: 2 * Q, type: 'on', note: 60, vel: 90, channel: 0 },
+          { tick: 3 * Q, type: 'on', note: 62, vel: 90, channel: 0 },
+        ] },
+        // kick at beat 0 (a pickup → beat -2, kept negative so it leads into the
+        // downbeat) and beat 3 (→ beat 1 after shift)
+        { events: [
+          { tick: 0,     type: 'on', note: 36, vel: 127, channel: 9 },
+          { tick: 3 * Q, type: 'on', note: 36, vel: 127, channel: 9 },
+        ] },
+      ],
+    });
+    const { song, warnings } = convertToSong(parseMidi(bytes));
+    // the pickup stays at -2 (a pre-downbeat hit), the on-grid hit stays at 1
+    expect(song.drums.kick).toEqual([-2, 1]);
+    expect(warnings.some(w => /pickup/.test(w))).toBe(true);
+  });
+});
+
+describe('convertToSong — drums from a format-0 file', () => {
+  it('pulls channel-9 hits out of a single-track format-0 file', () => {
+    const Q = 480;
+    const bytes = buildMidi({
+      format: 0, ppq: Q,
+      tracks: [{
+        events: [
+          { tick: 0,     type: 'on', note: 60, vel: 90,  channel: 0 },
+          { tick: 1 * Q, type: 'on', note: 62, vel: 90,  channel: 0 },
+          { tick: 0,     type: 'on', note: 36, vel: 127, channel: 9 },
+          { tick: 1 * Q, type: 'on', note: 38, vel: 127, channel: 9 },
+        ],
+      }],
+    });
+    const { song } = convertToSong(parseMidi(bytes));
+    expect(song.drums.kick).toEqual([0]);
+    expect(song.drums.snare).toEqual([1]);
+    expect(song.melody.length).toBe(2);
   });
 });

@@ -51,6 +51,10 @@ const FADE_TAIL = 1.0;                                  // seconds a plunged bal
 const BIRTH_DROP = 10;                                  // world-u a newborn FREE-FALLS in (honest G, fixed height)
 const BIRTH_FALL = Math.sqrt(2 * BIRTH_DROP / -G.y);    // time that drop takes under real gravity (≈1.17s) —
                                                         // fixed, so delayed voices just hold longer, then drop identically
+const LEAD_IN = 2.4;                                    // seconds of count-in BEFORE the marble spawns (songTime starts
+                                                        // negative): the machine runs solo so songs don't snap straight
+                                                        // in. A pickup fill (negative drum beats) rides the marble's
+                                                        // roll-in just ahead of the downbeat — see convert.js step 12.
 const RIG_POOL = 3;                                     // rigs per role — ≤2 balls alive at the seam, 3 is slack
 let recState = 'idle', recorder = null;                 // idle | armed | rec — transitions at the seam
 const recEl = document.getElementById('rec');
@@ -356,7 +360,11 @@ function buildWorld(keyName){
   audio.setBeat(BEAT);
   cam.syncTracks(tracks, stageView);                    // reframe + rebuild the cam-button row for the new song
   audio.rebuildBank(tracks, S.drums ? Object.keys(S.drums) : []);
-  songTime = 0; loopIndex = -1;                         // next frame respawns the loop's balls
+  // start in the loop's TAIL: songTime < 0 means no ball has spawned yet (li stays
+  // -1), so the machine + any tail/pickup drums play as a count-in, then the marble
+  // spawns at songTime 0 and rolls into the downbeat. skipStrikes guards the first
+  // frame from retro-firing every drum edge it lands on (same as a scrub jump).
+  songTime = -LEAD_IN; loopIndex = -1; skipStrikes = true;
   if (started) clock.start();
 }
 
@@ -460,7 +468,7 @@ function animate(){
   const dt = Math.min(clock.getDelta(), .05);
   songTime += dt * playRate;
   const P = ROLL_T + LOOP_T;                             // loop period (per song)
-  const T = started ? songTime % P : 0;                 // loop-local time — display + scrub only
+  const T = started ? ((songTime % P) + P) % P : 0;     // loop-local time (always ≥0, even during the lead-in) — display + scrub
   if (started){                                         // spawn one ball per track at each loop boundary
     const li = Math.floor(songTime / P);
     if (li > loopIndex){

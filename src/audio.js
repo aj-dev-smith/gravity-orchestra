@@ -283,6 +283,26 @@ function hitDrum(name, vel){
       g.gain.exponentialRampToValueAtTime(.0001, t + .12);
       o.connect(g); g.connect(dst); o.start(t); o.stop(t + .16);
     });
+  } else if (GM_DRUMS[name]?.tone){                          // toms — a pitched, ringing membrane
+    const f0 = GM_DRUMS[name].tone;
+    const o = ctx.createOscillator(); o.type = 'triangle';
+    o.frequency.setValueAtTime(f0 * 1.5, t);
+    o.frequency.exponentialRampToValueAtTime(f0, t + .08);   // a subtle pitch drop — the skin tensioning
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(amp, t);
+    g.gain.exponentialRampToValueAtTime(.0001, t + .4);
+    o.connect(g); g.connect(dst); o.start(t); o.stop(t + .44);
+    const o2 = ctx.createOscillator(); o2.type = 'sine';     // an octave partial for body
+    o2.frequency.setValueAtTime(f0 * 3, t);
+    o2.frequency.exponentialRampToValueAtTime(f0 * 2, t + .08);
+    const g2 = ctx.createGain();
+    g2.gain.setValueAtTime(amp * .3, t); g2.gain.exponentialRampToValueAtTime(.0001, t + .18);
+    o2.connect(g2); g2.connect(dst); o2.start(t); o2.stop(t + .22);
+    const nz = ctx.createBufferSource(); nz.buffer = getNoise();   // a stick-attack transient
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 2000;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(amp * .22, t); ng.gain.exponentialRampToValueAtTime(.0001, t + .03);
+    nz.connect(hp); hp.connect(ng); ng.connect(dst); nz.start(t); nz.stop(t + .05);
   } else {                                                   // hat / hatOpen / crash / ride — bright noise
     const open = name === 'hatOpen' || name === 'crash' || name === 'ride';
     const n = ctx.createBufferSource(); n.buffer = getNoise();
@@ -301,7 +321,9 @@ function hitDrum(name, vel){
    ignored on iOS so per-hit dynamics live only on the webaudio path (§3). ---- */
 function renderDrumWav(name){
   const sr = 22050;
+  const tone = GM_DRUMS[name]?.tone;
   const dur = name === 'kick' ? .4 :
+              tone ? .45 :
               (name === 'snare' || name === 'clap') ? .26 :
               (name === 'hatOpen' || name === 'crash' || name === 'ride') ? .3 : .1;
   const N = (sr * dur) | 0, s = new Float32Array(N);
@@ -312,6 +334,16 @@ function renderDrumWav(name){
       ph += 6.2832 * f / sr;
       s[n] = .95 * Math.exp(-t * 9) * Math.min(1, t / .002) * Math.sin(ph);
       if (t < .02) s[n] += .25 * Math.exp(-t * 180) * Math.sign(Math.sin(6.2832 * 900 * t));
+    }
+  } else if (tone){                                          // tom — pitched membrane + stick attack
+    let ph = 0, ph2 = 0;
+    for (let n = 0; n < N; n++){
+      const t = n / sr, bend = 1 + .5 * Math.exp(-t * 28);   // 1.5 → 1.0 pitch drop
+      ph  += 6.2832 * tone * bend / sr;
+      ph2 += 6.2832 * tone * 2 * bend / sr;
+      const env = Math.exp(-t * 7) * Math.min(1, t / .002);
+      s[n] = .9 * env * Math.sin(ph) + .27 * Math.exp(-t * 13) * Math.sin(ph2);
+      if (t < .02) s[n] += .2 * Math.exp(-t * 130) * (Math.random() * 2 - 1);   // stick
     }
   } else if (name === 'snare' || name === 'clap'){
     let hp = 0, xp = 0;

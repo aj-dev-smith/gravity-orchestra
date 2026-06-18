@@ -28,9 +28,15 @@ export const GM_DRUMS = {
   // reserved — names a future kit + MIDI import already map onto:
   hatOpen: { gm: 46, gain: 0.50 },
   clap:    { gm: 39, gain: 0.70 },
-  tomLow:  { gm: 45, gain: 0.80 },
-  tomMid:  { gm: 47, gain: 0.80 },
-  tomHigh: { gm: 50, gain: 0.80 },
+  // the full GM tom set, low → high. `tone` is the membrane fundamental in Hz:
+  // a tom is PITCHED, so a descending fill reads (and sounds) as a real cascade.
+  // ordered low→high here so the render lays the kit out as a tonal sweep.
+  floorLow:  { gm: 41, gain: 0.85, tone: 93 },    // low floor tom
+  floorHigh: { gm: 43, gain: 0.85, tone: 110 },   // high floor tom
+  tomLow:    { gm: 45, gain: 0.82, tone: 131 },   // low tom
+  tomMid:    { gm: 47, gain: 0.82, tone: 154 },   // low-mid tom
+  tomHiMid:  { gm: 48, gain: 0.80, tone: 178 },   // hi-mid tom
+  tomHigh:   { gm: 50, gain: 0.80, tone: 207 },   // high tom
   crash:   { gm: 49, gain: 0.60 },
   ride:    { gm: 51, gain: 0.50 },
 };

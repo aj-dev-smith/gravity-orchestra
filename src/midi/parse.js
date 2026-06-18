@@ -1,5 +1,10 @@
 // parse.js — zero-dependency MIDI parser (format 0 and 1)
-// returns { format, ppq, bpm, tracks: [{ name, notes: [{ midi, tick, channel }] }] }
+// returns { format, ppq, bpm, tracks: [{ name, notes: [{ midi, tick, channel, vel }] }] }
+//
+// The parser is FAITHFUL: it decodes every sounding note-on (vel > 0) on every
+// channel — including channel 9 (percussion) — and records its velocity. The
+// melody-vs-drum policy (which channel is percussion, how to map it) lives one
+// layer up in convert.js. Keep this seam clean: parse decodes, convert decides.
 
 // read a variable-length quantity from buf at pos; returns [value, newPos]
 function readVlq(buf, pos) {
@@ -86,9 +91,10 @@ function parseTrack(buf, start, end) {
       case 0x9: { // note-on: two data bytes
         const midi = buf[pos++];
         const vel  = buf[pos++];
-        // vel 0 = note-off; channel 9 = percussion — both dropped
-        if (vel > 0 && ch !== 9) {
-          notes.push({ midi, tick: abs, channel: ch });
+        // vel 0 = note-off. Every other note-on is kept, channel 9 included —
+        // convert.js decides what's melody and what's percussion.
+        if (vel > 0) {
+          notes.push({ midi, tick: abs, channel: ch, vel });
         }
         break;
       }

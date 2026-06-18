@@ -8,6 +8,7 @@ import { G, UP, UPY, ROLL_T, DESCENT, solveLaunch, arcPos, arcVel, padOffset, be
 import * as audio from './audio.js';
 import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } from './juice.js';
 import { makeConveyorShop, BELT_DEPTH } from './conveyor.js';
+import { makeCameraRig } from './camera.js';
 import { encodeSong, decodeSong } from './share.js';
 import { parseMidi } from './midi/parse.js';
 import { convertToSong } from './midi/convert.js';
@@ -23,9 +24,6 @@ import { recSupported, startRecording } from './record.js';
 /* ---- mutable song state, filled by buildWorld() ---- */
 let BEAT = .7, SCALE = [];
 let tracks = [], LOOP_T = 0, world = null;
-let camMode = 'auto';
-let autoWant = 'all', lastCut = 0;
-let stageView = {cx: 0, halfW: 8};                      // x-centre + half-width of the pad field (FIXED cam framing)
 const FIXED_ZMAX = 30;                                  // FIXED cam: cap the pull-back. Past ~30 the FogExp2 eats
                                                         // the chrome to black; better to let a very wide field
                                                         // overflow the frame edges than fade the whole scene out.
@@ -53,21 +51,6 @@ const DROP_IN = 9;                                      // height (world u) a ne
 const RIG_POOL = 3;                                     // rigs per role — ≤2 balls alive at the seam, 3 is slack
 let recState = 'idle', recorder = null;                 // idle | armed | rec — transitions at the seam
 const recEl = document.getElementById('rec');
-const CAMCOLORS = {auto:'#ffe9c9', fixed:'#7fe3c8', all:'#cfd6e6', lead:'#ffaa55', alto:'#c08bff', bass:'#66aaff'};
-const camsEl = document.getElementById('cams');
-function renderCamButtons(){
-  camsEl.innerHTML = '';
-  if (tracks.length < 2){ camsEl.style.display = 'none'; camMode = 'auto'; return; }
-  camsEl.style.display = 'flex';
-  ['auto', 'fixed', 'all', ...tracks.map(t => t.role)].forEach(m => {
-    const b = document.createElement('button');
-    b.className = 'camb' + (camMode === m ? ' on' : '');
-    if (camMode === m) b.style.color = CAMCOLORS[m];
-    b.textContent = m.toUpperCase();
-    b.addEventListener('click', () => { camMode = m; renderCamButtons(); });
-    camsEl.appendChild(b);
-  });
-}
 const hueOf = n => Math.max(0, SCALE.indexOf(n.replace(/\d/,''))) / Math.max(1, SCALE.length);
 
 /* ---------------- renderer / scene ---------------- */
@@ -82,7 +65,13 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x07060e);
 scene.fog = new THREE.FogExp2(0x07060e, 0.026);
 
-const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, .1, 200);
+/* every way of looking at the static stage — director / fixed / free-fly / follow —
+   lives in the camera rig. It owns the camera object, the cam-button row, the orbit
+   + WASD/QE fly controls, and the per-frame framing. main just feeds it the live
+   marbles each frame and the tracks on each song change. */
+const cam = makeCameraRig({ stageY: STAGE_Y, fixedZMax: FIXED_ZMAX,
+                            dom: renderer.domElement, camsEl: document.getElementById('cams') });
+const camera = cam.camera;
 
 scene.add(new THREE.AmbientLight(0x223, 1.4));
 const key = new THREE.DirectionalLight(0x8899ff, .5);
@@ -236,7 +225,7 @@ function convDebug(markerY, camY){
   convX.fillText(`cam y ${last.c.toFixed(1)}  loop ${loopIndex}  balls ${nBalls}  (G to hide)`, 4, H-4);
 }
 let trailTick = 0;                                      // gates trail spawns to every .022s
-let shakeAmp = 0, expoKick = 0;                         // camera punch & exposure pop
+let expoKick = 0;                                       // exposure pop on lead strikes (camera shake lives in the rig)
 
 /* ---------------- world builder ----------------
    Solver per track: v0 = (ΔP − ½·g·dt²)/dt — exact, no drift.
@@ -348,12 +337,10 @@ function buildWorld(keyName){
     const x = po.base.x + tr.origin.x;
     minX = Math.min(minX, x); maxX = Math.max(maxX, x);
   }));
-  stageView = {cx: (minX + maxX) / 2, halfW: Math.max(6, (maxX - minX) / 2)};
+  const stageView = {cx: (minX + maxX) / 2, halfW: Math.max(6, (maxX - minX) / 2)};
 
   audio.setBeat(BEAT);
-  const FIXED_OK = new Set(['all', 'auto', 'fixed']);
-  if (!FIXED_OK.has(camMode) && !tracks.some(t => t.role === camMode)) camMode = 'auto';
-  renderCamButtons();
+  cam.syncTracks(tracks, stageView);                    // reframe + rebuild the cam-button row for the new song
   audio.rebuildBank(tracks);
   songTime = 0; loopIndex = -1;                         // next frame respawns the loop's balls
   if (started) clock.start();
@@ -374,7 +361,7 @@ function strike(tr, i, rig){
              2.4 + Math.min(pad.dt*1.6, 3));
   rig.squash = 1;
   if (tr.role === 'lead'){
-    shakeAmp = Math.min(shakeAmp + .04 + pad.dt*.05, .15);
+    cam.addShake(.04 + pad.dt*.05);                       // micro camera punch on lead strikes
     expoKick = 1;
   }
   if (audio.isReady() && !muted){
@@ -397,9 +384,6 @@ buildWorld(sel.value);
 /* the machine runs from first paint — only AUDIO waits for a gesture.
    (reduced-motion users keep the old behavior: stillness until they opt in) */
 if (!reduceMotion){ clock.start(); started = true; }
-const camTarget = new THREE.Vector3(0, STAGE_Y + .6, 0);   // the static band centre
-const camPos = new THREE.Vector3(4.5, STAGE_Y + 3.4, 9.5);
-camera.position.copy(camPos); camera.lookAt(camTarget);
 
 /* A mortal ball's state at LOCAL time τ (seconds since its birth). Pure: no wrap,
    no strike side-effect — it just reports where the ball is and which pad index
@@ -555,69 +539,11 @@ function animate(){
   expoKick *= (1 - dt*6);
   renderer.toneMappingExposure = 1.15 + expoKick*.12;
 
-  // DIRECTOR: the timeline is known, so cut to the action before it happens
-  let effMode = camMode;
-  if (camMode === 'auto'){
-    let want = 'all', score = 1.0;
-    tracks.forEach(tr => {
-      const s = tr._st; if (!s) return;
-      // a big moment = a long arc in progress, or one about to launch
-      const m = Math.max(s.dt < 8 ? s.dt : 0, (s.prog > .55 && s.next < 8) ? s.next : 0);
-      if (m >= 1.05 && m > score){ score = m; want = tr.role; }
-    });
-    if (want === 'all' && tracks[0]._st && tracks[0]._st.dt <= .33) want = 'lead';  // shred cam
-    if (want !== autoWant && clock.elapsedTime - lastCut > 2.2){
-      autoWant = want; lastCut = clock.elapsedTime;
-    }
-    effMode = autoWant;
-  }
+  // CAMERA: the rig decides the pose (director / fixed / free-fly / follow) from the
+  // live marbles. main just hands it the frame's state; physics stays untouched.
+  cam.update({ dt, time: clock.elapsedTime, tracks, marblePts, leadRender, reduceMotion, started });
 
-  // camera: hold a fixed stage view, follow the chosen marble, or frame them all
-  const sway = (reduceMotion || camMode === 'fixed') ? 0 : Math.sin(clock.elapsedTime*.21);
-  let ideal, aim;
-  if (camMode === 'fixed'){
-    // STATIONARY WORLD CAM: a held pose that frames the whole pad field — no chase,
-    // no sway, no shake. Glides into place once (shared lerp below) then holds dead still.
-    const margin = 4;                                   // world-unit breathing room around the field
-    const zFit = (stageView.halfW + margin) /
-      (Math.tan(THREE.MathUtils.degToRad(camera.fov/2)) * Math.min(camera.aspect, 1.7));
-    const z = THREE.MathUtils.clamp(zFit, 16, FIXED_ZMAX);   // fit the width, but never pull back into the fog
-    ideal = new THREE.Vector3(stageView.cx + z*0.22, STAGE_Y + 5, z);   // gentle 3/4, slightly above the band
-    aim   = new THREE.Vector3(stageView.cx, STAGE_Y + 1.5, 0);
-  } else {
-    const followed = effMode !== 'all' ? marblePts.find(m => m.role === effMode) : null;
-    const focus = new THREE.Vector3();
-    let back = Math.max(1, 1.3 / Math.min(camera.aspect, 1.3));
-    if (!marblePts.length){
-      focus.set(0, STAGE_Y, 0);                         // pre-start (or between balls): frame the band
-    } else if (followed){
-      focus.copy(followed.p);
-      back *= .92;                                      // tight, personal chase
-    } else {
-      let wSum = 0;
-      marblePts.forEach(m => { focus.addScaledVector(m.p, m.w); wSum += m.w; });
-      focus.divideScalar(wSum);
-      let spread = 0;
-      marblePts.forEach(m => spread = Math.max(spread, m.p.distanceTo(focus)));
-      back *= (1 + Math.min(spread * .075, .7));
-    }
-    // VERTICAL IS PINNED: the band is static now, so the camera never cranes up/down.
-    // x/z still follow the marble (with sway + spread-dolly); height is locked to the stage plane.
-    ideal = focus.clone().add(new THREE.Vector3((4.5 + sway*2.2)*back, 0, (9.5 - sway*1.4)*back));
-    ideal.y = STAGE_Y + 3.4;                            // constant eye height — no spread-driven bob
-    aim = focus.clone(); aim.y = STAGE_Y + .6;          // look at the band centre, not the bobbing marble
-  }
-  camPos.lerp(ideal, 1 - Math.pow(.0015, dt));
-  camTarget.lerp(aim, 1 - Math.pow(.0008, dt));
-  camera.position.copy(camPos);
-  shakeAmp *= (1 - dt*7);
-  if (!reduceMotion && camMode !== 'fixed' && shakeAmp > .002){
-    camera.position.x += (Math.random()-.5)*shakeAmp;
-    camera.position.y += (Math.random()-.5)*shakeAmp;
-  }
-  camera.lookAt(camTarget);
-
-  if (convDbgOn) convDebug(leadRender ? leadRender.y : camTarget.y, camera.position.y);
+  if (convDbgOn) convDebug(leadRender ? leadRender.y : cam.target.y, camera.position.y);
   composer.render();
 }
 animate();
@@ -760,8 +686,7 @@ document.getElementById('mute').addEventListener('click', e => {
   audio.showState();
 });
 addEventListener('resize', () => {
-  camera.aspect = innerWidth/innerHeight;
-  camera.updateProjectionMatrix();
+  cam.resize();
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
 });

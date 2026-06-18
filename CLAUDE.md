@@ -4,23 +4,64 @@
 This project began as "a shiny track, a glowing marble, surfaces to bounce off" in
 a Claude.ai chat artifact and grew into a multi-track ballistic music engine.
 It went mildly viral after the three.js account reposted it (~30k views).
-It is now a Vite + ES-module repo (`src/`) bundling three.js r128. The single
-self-contained `marble-cascade.html` still exists as the shareable "viral unit"
-— but it is now a BUILD ARTIFACT (`npm run build:single`), not the source of
-truth. Live at https://cascade.ajsmithhq.com.
+It is now a Vite + ES-module repo (`src/`). The single self-contained
+`marble-cascade.html` still exists as the shareable "viral unit" — but it is a
+BUILD ARTIFACT (`npm run build:single`), not the source of truth. Live at
+https://cascade.ajsmithhq.com.
+
 This document is the scar tissue: what the architecture means, what must never
-break, and what we already know we want next.
+break, what we already learned the hard way. The *north star* — where this is
+all heading (a 3D music **creation + visualization tool**) — lives in
+[`VISION.md`](VISION.md). Read that for the "why"; read this for the "how".
 
 ---
 
-## 0. Repo layout, build & deploy (added when we repo-ified)
+## ⚠️ 0. BRANCH & DEPLOY STATUS — read before you ship anything
 
-    src/engine.js   pure physics/music — solver, arcPos/arcVel, padOffset, noteHz (unit-tested)
-    src/audio.js    dual-path Web Audio + iOS sample fallback — ported VERBATIM (see §3)
-    src/juice.js    trail / ripple / spark / dust pools, spawnBurst, glowTex
-    src/songs/*.js  one module per song (the comments are sacred), aggregated by index.js
-    src/main.js     scene, rigs, buildWorld, trackPos, animate(), controls — the orchestrator
-    test/           Vitest: song lock-rule + engine ballistics
+There are two realities, and they are not the same:
+
+- **`main` = what's DEPLOYED** at cascade.ajsmithhq.com. It is the original
+  **falling-world** engine (the whole scene sinks; the marble rides it down) plus
+  r184/bloom, MIDI import, share links, recording, autostart.
+- **`v2` = what you're probably working on.** It replaces the falling world with a
+  **static-band CONVEYOR** (§3) and adds the **DRUM MACHINE** — the second
+  instrument archetype (§4). **NOT deployed. Do not deploy it casually.**
+
+Before any v2 deploy, the gate is:
+1. **Flip `convDbgOn` default → `false`** in `src/main.js` (the conveyor debug HUD —
+   rulers + a height-over-time graph — is ON by default for dev; ship it OFF).
+2. Confirm with the human. **No v2 deploy until a real v2 is declared ready.**
+
+`npm run deploy` builds + ships to production. It does not care which branch you're
+on. Treat it as live.
+
+---
+
+## 1. Repo layout, build & deploy
+
+    src/engine.js    pure physics/music — solver, arcPos/arcVel, padOffset, beltPhase,
+                     deployPose, layoutPads, noteHz (unit-tested, no THREE-scene/DOM/audio)
+    src/audio.js     dual-path Web Audio + iOS sample fallback (see §5). Melodic voices
+                     + percussion voices. Ported VERBATIM from the single-file build.
+    src/juice.js     trail / ripple / spark / dust pools, spawnBurst, glowTex
+    src/conveyor.js  the visible belt MACHINE (render subsystem): belt wall, pulleys,
+                     cowls, articulated per-pad mounts. DI'd seam, no engine reach.
+    src/camera.js    the camera RIG (render subsystem): director / fixed / free-fly /
+                     follow modes, orbit + WASD/QE keyboard fly. "Sees the future."
+    src/drums.js     the DRUM KIT (render subsystem): stationary drums + spouts + a
+                     mortal-ball pool. The stationary/multi-ball instrument archetype.
+    src/drumkit.js   the drum REGISTRY: canonical name ↔ GM note ↔ mix gain. One source
+                     of truth for the song validator, audio, render, future MIDI import.
+    src/midi/        MIDI import: parse.js (type-0/1 → tracks) + convert.js (→ song JSON,
+                     quantized, lock-rule-correct). Drops channel 9 today (see §6).
+    src/share.js     song ⇄ deflate→base64url share links
+    src/record.js    canvas captureStream + MediaRecorder → "one perfect loop" video
+    src/songs/*.js   one module per song (the comments are sacred), aggregated by index.js
+    src/main.js      scene, rigs, buildWorld, ballPos, animate(), controls — the orchestrator
+    test/            Vitest: engine ballistics, song lock-rule, drum validation, MIDI,
+                     layout overlap, share round-trip (177 tests)
+    VISION.md        the product north star (vision, not spec)
+    docs/PLAN-*.md   the conveyor design notes (how the static band was reasoned out)
 
     npm run dev            # vite dev server (add --host to reach a phone on the LAN)
     npm test               # vitest — run after ANY song or engine edit
@@ -28,210 +69,274 @@ break, and what we already know we want next.
     npm run build:single   # → marble-cascade.html  (self-contained viral artifact)
     npm run deploy         # build + ./deploy.sh → S3 sync + CloudFront invalidation
 
-Deploy: private S3 bucket `cascade.ajsmithhq.com` (CloudFront OAC) → CloudFront
-`E1U4B3EV2WPMZS` → ACM cert + Route53 alias. three.js is r128 pinned in
-package.json. The module seams are deliberately thin: audio takes `setBeat(beat)`
-+ `rebuildBank(tracks)`; juice takes `initJuice(scene)` then `spawn*`/`updateJuice`.
+Deploy infra: private S3 bucket `cascade.ajsmithhq.com` (CloudFront OAC) → CloudFront
+`E1U4B3EV2WPMZS` → ACM cert + Route53 alias. three.js is **r184** (`^0.184.0`),
+postprocessing on (EffectComposer → UnrealBloom → ACES OutputPass). The module seams
+are deliberately thin and dependency-injected: audio takes `setBeat` + `rebuildBank`;
+juice takes `initJuice(scene)` then `spawn*`/`updateJuice`; conveyor/camera/drums are
+`make*({deps})` factories that never reach into the engine.
 
 ---
 
-## 1. The core idea (do not lose this)
+## 2. The core idea (do not lose this — it is the moat)
 
 **The melody is authored first; the physics is solved backward from it.**
-Pads are not simulated — each pad's launch velocity is the closed-form ballistic
-solution that lands the marble on the next pad in exactly the note's duration:
+Pads are not simulated — each launch velocity is the closed-form ballistic solution
+that lands the marble on its target in exactly the note's duration:
 
-    v0 = (ΔP − ½·g·dt²) / dt
+    v0 = solveLaunch(from, to, dt) = (ΔP − ½·g·dt²) / dt
 
-Position during an arc is the analytic `P(t) = P0 + v0·t + ½·g·t²`. There is no
-integrator, therefore no drift, therefore audio/visual sync is structurally
-perfect forever. Rhythm is literally visible: long notes = tall arcs, fast runs
-= flat skims (apex height scales with dt²).
+Position along an arc is the analytic `P(t) = P0 + v0·t + ½·g·t²` (`arcPos`); velocity
+is `V(t) = v0 + g·t` (`arcVel`). **There is no integrator, therefore no drift,
+therefore audio/visual sync is structurally perfect forever.** Rhythm is literally
+visible: long notes = tall arcs, fast runs = flat skims (apex height scales with dt²).
 
-**Visuals drive audio.** Notes trigger when the timeline crosses a segment
-boundary in `trackPos()`, never from a scheduler. If you add a scheduler you
-will create drift. Don't.
+**Visuals drive audio.** Notes trigger when the timeline crosses a segment boundary
+(melodic: `ballPos` idx advances; drums: a hit's strike phase wraps), never from a
+scheduler. **If you add a scheduler you will create drift. Don't.**
 
-**Time is the only state.** `T = clock.elapsedTime % (ROLL_T + LOOP_T)`. Every
-marble position, pad swing, and anticipation glow is a pure function of T.
-This is why the director camera can "see the future" — keep it that way.
+**Time is the only state.** Every marble position, pad swing, drum-ball arc, and
+anticipation glow is a pure function of `songTime`. This is why the director camera
+can "see the future," why the world can be re-derived from scratch every frame, and
+why a new instrument is *tractable*. Protect this invariant like gravity.
 
-## 2. Architecture map (sections of the file, in order)
+---
 
-- `SONGS` — all musical content. Pure data. See §4.
-- Mutable song state + camera mode + `renderCamButtons()`
-- Renderer/scene/env: one-shot procedural env map via CubeCamera → real chrome
-  (`MeshStandardMaterial` metalness 1). No image assets anywhere.
-- Marble rigs (`makeRig`): lead amber r=.26, bass ice-blue r=.36, alto violet
-  r=.21. Each has a `deform` group (squash & stretch) inside the position group.
-- Pools: trail sprites (shared, tinted per spawn), ripples, spark particles
-  (`spawnBurst`), dust field (spans y +16..−144 for long songs).
-- `buildTrack(melody, zBase, role, rig, delayBeats, deep)` — solver + rail +
-  pads + landing pool for one track. `buildWorld(key)` — disposes old world
-  group, assembles lead/alto/bass lanes, rebuilds sample bank, revalidates
-  camera mode.
-- Audio (§3 — read it twice).
-- `padOffset(phase, A)` — the flipper curve (§5).
-- `trackPos(tr, T)` — position, velocity, plunge flag, next pad index,
-  progress, current & next note durations. The heart.
-- `animate()` — per-track marble/rig/pad updates, particles, director,
-  camera, shake, exposure pop.
-- Controls: play (gesture → clock + audio + wake lock), song select,
-  camera buttons, mute.
+## 3. The static-band CONVEYOR (v2's big render move)
 
-## 3. THE iOS AUDIO WAR (most expensive knowledge in this file)
+The original engine let the whole world fall: `T = clock % P`, every track sinking at
+`DESCENT` (2.2 u/s), the camera craning down to follow. v2 keeps **all of that physics
+untouched** and reframes it at **render time** into a *static band*:
 
-We fought four rounds getting sound to work in the Claude iOS app's artifact
-iframe. The final system is dual-path. Symptoms → causes we hit, in order:
+- Each pad **RECIRCULATES**: it rises to a fixed strike band (`STAGE_Y = DESCENT·ROLL_T
+  ≈ 5.7`) exactly at its strike, then wraps off-screen and comes around again. The map
+  from songTime to a pad's centered height is `beltPhase(songTime, strikeTime, period)`
+  — 0 at every strike, negative just before (rising to meet the ball), positive just
+  after. The only discontinuity is the off-screen wrap, so pads stream upward forever
+  with no global loop snap.
+- Each marble is **MORTAL**: born once per loop, it juggles in the band via a per-ball
+  render lift `+ DESCENT·τ` (τ = age), then plunges out the bottom and is recycled to a
+  per-role rig pool (`RIG_POOL = 3`). Birth is an **honest free-fall** onto pad 0
+  (`BIRTH_DROP = 10` u, `BIRTH_FALL ≈ 1.17 s` under the same G as every arc; delayed
+  voices just hold longer off-screen, then drop identically).
+- The two mechanisms share no state. They meet at the band, at strikes, **by
+  construction** (`beltPhase` is 0 at a strike; the ball lift cancels descent there).
 
-1. **Tone.js silently failing** — its Reverb generates an impulse response
-   asynchronously; a ConvolverNode with no buffer outputs pure silence with no
-   error. We removed Tone entirely. The synth is ~40 lines of raw Web Audio
-   (triangle + detuned 2.004× partial + inharmonic 2.76× "music-box tine" +
-   4.2× sparkle; bass voice = sine + sub-octave 0.5× partial + 2.002×).
-2. **Zombie AudioContext** — an AudioContext created *before* the first user
-   gesture in iOS WebKit can report `state === "running"` while
-   `currentTime` stays frozen at 0 and emits nothing. Fix: construct the
-   ENTIRE context inside the gesture (`buildAudio()` from the play tap).
+This is the key mental model for reading `main.js`: positions come out of `ballPos`/the
+arc math in the *falling frame*; the animate loop adds `DESCENT·τ` (balls) or
+`DESCENT·beltPhase` (pads) to pin everything in the static band. To express something
+directly in rendered-band space inside `ballPos`, subtract `DESCENT·τ` so the re-add
+cancels. The visible machine (`conveyor.js`) only ever *draws what the math implies*: a
+belt scrolling at `DESCENT` and pads rising at `DESCENT` are slip-free with zero state.
+
+`docs/PLAN-seamless-conveyor.md` and `docs/PLAN-real-conveyor.md` are the reasoning trail.
+
+---
+
+## 4. Two instrument archetypes (the extensibility bet)
+
+VISION.md's core bet: adding an instrument = **design a 3D shape + solve its physics**,
+nothing more. The unifying runtime primitive is a **ball spawner** — mortal balls, born
+→ fly a solved arc → strike → die. Two archetypes already cover huge musical ground:
+
+1. **CONVEYOR — single marble, moving instrument** (the melodic voice). A belt
+   *manufactures* the right pad for each note (sized to register, tilted to its bounce);
+   one marble chains pad → pad, each pad launching it to the next. `buildTrack` + the
+   conveyor machine. Range is effectively unlimited — the belt produces the pad on demand.
+2. **STATIONARY — many marbles, fixed instrument** (the rhythmic voice; the drum kit).
+   A drum is a **fixed target**; each hit is a **mortal ball** fired from a spout so that
+   — by the *same* `solveLaunch` — it lands on the drumhead at exactly the right beat,
+   then takes a short solved bounce-out and fades. `drums.js` + `drumkit.js`.
+
+**The generalization to hold onto:** a hit = **a target + a launch solve**. The melody
+swaps "next pad" for the target; a drum swaps in a stationary drum. Future instruments
+(lob / shoot / drop) swap only those two terms and stay just as solved-up-front. Audio
+is part of the instrument too — we design the *sound of each hit* per instrument (§5).
+
+Status: drums are implemented (kick/snare/hat voiced + rendered; toms/clap/crash/ride
+reserved in the registry, voiced as fallbacks). Only **Mountain King** carries a `drums`
+block so far; any song can get one.
+
+---
+
+## 5. THE iOS AUDIO WAR (most expensive knowledge in this repo)
+
+We fought four rounds getting sound to work in the Claude iOS app's artifact iframe.
+The final system is **dual-path**. Symptoms → causes, in the order we hit them:
+
+1. **Tone.js silently failing** — its Reverb builds an impulse response asynchronously;
+   a ConvolverNode with no buffer outputs pure silence, no error. We removed Tone. The
+   melodic synth is ~40 lines of raw Web Audio (triangle + detuned 2.004× partial +
+   inharmonic 2.76× music-box tine + 4.2× sparkle; bass = sine + 0.5× sub-octave + 2.002×).
+2. **Zombie AudioContext** — a context created *before* the first user gesture in iOS
+   WebKit can report `state === "running"` while `currentTime` stays frozen at 0 and emits
+   nothing. Fix: construct the ENTIRE context inside the gesture (`buildAudio()` from the
+   play tap).
 3. **Watchdog rebuild trap** — our first watchdog rebuilt the context from a
-   `setInterval`. A context born outside a gesture is guaranteed-suspended, so
-   it rebuilt 4 zombies in a row. Rebuilds may ONLY happen inside tap handlers.
-   The watchdog now only reports; `touchend`/`pointerdown` handlers retry.
-4. **The iframe denies AudioContext activation outright** (permissions policy
-   in the artifact preview) — `resume()` from a genuine gesture still left it
-   suspended, while `<audio>` element playback was allowed. This is the wall
-   no JS climbs, hence:
+   `setInterval`; a context born outside a gesture is guaranteed-suspended, so it rebuilt
+   4 zombies in a row. Rebuilds may ONLY happen inside tap handlers. The watchdog now only
+   reports; `touchend`/`pointerdown` handlers retry.
+4. **The iframe denies AudioContext activation outright** (artifact-preview permissions
+   policy) — `resume()` from a genuine gesture still left it suspended, while `<audio>`
+   element playback was allowed. No JS climbs this wall, hence:
 
-**Plan B — the path that actually plays in the iOS app:** every unique
-(note, timbre) pair is synthesized in pure JS (`renderNoteWav`: 22050 Hz,
-16-bit mono WAV with the echo BAKED IN, ~2.6s lead / 3.0s bass), wrapped in a
-Blob URL, loaded into its own `<audio playsinline>` element, and
-**primed** on the first tap (`play()` then `pause()` inside the gesture —
-this unlocks each element for later programmatic playback). `playNote()`
-prefers the live Web Audio path when `ctx.state==='running' &&
-ctx.currentTime > .05`, else fires the element. The status readout
-(bottom-right) shows state / clock / active path — keep it, it's how we debug.
+**Plan B — the path that actually plays on iOS:** every unique (note, timbre) and every
+drum is synthesized to a 16-bit mono WAV (`renderNoteWav` / `renderDrumWav`, echo baked
+into notes, drums dry), wrapped in a Blob URL, loaded into its own `<audio playsinline>`,
+and **primed** on the first tap (`play()` then swap in the real src — the activation
+sticks to the element). `playNote`/`playDrum` prefer the live Web Audio path when
+`ctx.state==='running' && ctx.currentTime > .05`, else fire the element. The status
+readout (bottom-right) shows state / clock / active path — keep it; it's how we debug.
 
-Hard-won iOS facts: `el.volume` is **ignored** on iOS (you cannot mix element
-levels — that's why timbre/level differences are baked into the WAV renders);
-js-set `el.muted` is ALSO unreliable on `<audio>` (round 5: muted priming
-still blasted every bank note at once on the priming tap — elements now prime
-against a truly silent WAV and swap to the real note after unlock, since the
-activation sticks to the element, not the src; relatedly, never snap the live
-echo's delayTime on song change — glide it, or the delay line replays its
-buffer as a burst);
-element playback has ±30–50 ms latency jitter (audible swing on <0.3s runs —
-acceptable; the webaudio path is tight); phone speakers roll off below
-~200 Hz, so all bass lines are written in octave 3/4 with a sub-octave
-partial supplying depth on real speakers; bank keys are `note + '|b'` flagged
-by `tr.deep` so the same pitch can exist in both voices.
+Hard-won iOS facts (still true): `el.volume` is **ignored** on iOS (you cannot mix
+element levels — timbre/level differences are baked into the WAV renders; **drum per-hit
+velocity therefore lives only on the webaudio path**, samples play full). js-set
+`el.muted` is ALSO unreliable on `<audio>`, so priming plays a truly-silent WAV and swaps
+to the real src after unlock. Never snap the live echo's `delayTime` on song change — glide
+it (`setTargetAtTime`), or the delay line replays its buffer as a burst. Element playback
+has ±30–50 ms jitter (audible on <0.3 s runs — acceptable; the webaudio path is tight).
+Phone speakers roll off below ~200 Hz, so bass lines live in octave 3/4 with a sub-octave
+partial. Bank keys: `note` / `note|b` (deep voice) / `drum:<name>`.
 
-Also: `MediaStreamDestination → <audio el>.srcObject` is wired as a parallel
-output on iOS. The wake lock (`navigator.wakeLock`) keeps the screen on.
+**Percussion voices** (added with the drum machine, same dual-path, iOS-war internals
+untouched): live `hitDrum` — kick = sine pitch-drop + beater click, snare = highpassed
+noise + tonal body, hat = bright noise transient — routed **dry to `busOut`** (past the
+melody's echo) so they punch. Baked `renderDrumWav` for the iOS path. Known degradations,
+both already in this ledger: iOS drum samples play full-velocity; a dense hat run can clip
+its own tail (one `<audio>` element per drum). The webaudio path has neither.
 
-## 4. Song data format & THE LOCK RULE
+Also: `MediaStreamDestination → <audio>.srcObject` is a parallel iOS output; the recording
+tap (`captureStream`) hangs off the post-echo mix. `navigator.wakeLock` keeps the screen on.
+
+---
+
+## 6. Song data format & THE LOCK RULE
 
 ```js
 'song-key': {
   label, sub, bpm,
   scale: [...pitch classes...],        // drives pad-rim hue mapping
-  melody: [['F#5', 1], ...],           // [note, beats-until-next-hit]
+  melody: [['F#5', 1], ...],           // [note, beats-until-next-hit]  (MONOPHONIC, chained)
   alto:  [...] | {delay, deep, notes}, // optional; delay = beats of rest
   bass:  [...] | {delay, notes},       // optional
+  drums: { kick:[0,1,2,3], snare:[1,3], hat:[0,.5,1,...] },   // optional; see below
 }
 ```
 
-**THE LOCK RULE: for every track, sum(beats) + delay must equal the melody's
-sum exactly**, or it desyncs at the loop seam. Verify after ANY song edit:
+**THE LOCK RULE (melodic tracks): for every track, sum(beats) + delay must equal the
+melody's sum exactly**, or it desyncs at the loop seam. These tracks *chain* (each pad
+launches the marble to the next), so a wrong total drifts. Verified in
+`test/songs.test.js` after ANY song edit. Notes are `[A-G]#?\d` (sharps only). `deep:true`
+selects the sub-octave voice. `delay` makes a track enter late (start lower, fall in
+formation — descent is time-proportional precisely so parallel tracks fall together).
 
-```js
-// node verify.js — extract SONGS, then:
-const sum = a => a.reduce((s,[,b])=>s+b,0);
-// assert sum(part.notes) + (part.delay||0) === sum(melody) for alto & bass
-```
-(Port the inline checker we used in chat into a real `verify.js` / test.)
+**Drums are different — DECIDED: absolute beats grouped by lane, NO lock rule.** Each
+lane lists the beat positions it strikes (a hit is `beat` or `[beat, velocity]`,
+velocity 0..1). Drums don't chain — each hit is an independent mortal ball **pinned** to a
+moment — so the lock rule's reason doesn't apply; pinned beats can't desync. The only rule:
+every hit ∈ `[0, loopBeats)` where `loopBeats = sum(melody beats)`. Validated in
+`test/drums.test.js`. Velocity is *dynamics* (audio gain + strike flash), separate from
+*impact speed* (geometry) — keep them apart. `src/drumkit.js` (`GM_DRUMS`) is the one
+source of truth: name ↔ GM note ↔ mix gain, reused by the validator, audio, render, and a
+future MIDI importer. This shape is deliberately MIDI-friendly (group channel-9 by note →
+`drumByGm` → a lane of quantized beats).
 
-Notes are `[A-G]#?\d` (sharps only — translate flats). `deep:true` on a
-non-bass track selects the sub-octave voice (used by Dies Irae's echo).
-`delay` makes the marble roll its rail lazily and its chain start lower
-(`y0 = −2.2·delay·BEAT`) so delayed entries still descend in formation —
-descent is time-proportional (`Δy = 2.2·dt`) precisely so parallel tracks
-fall together. bpm is the single tempo knob; everything re-solves from it.
+Catalog (9): Für Elise (duo), Ode to Joy (trio thirds), Canon in D (true canon), Greensleeves
+(6/8), Gymnopédie 1, Prelude in C (single track — camera buttons auto-hide), Mountain King
+(accelerando — **now with a kick/snare/hat groove**), Toccata in Dm (6.5-beat pedal lob),
+Dies Irae (deep canon echo, delay 5). bpm is the single tempo knob; everything re-solves.
 
-Current catalog (9): Für Elise (duo, rolling arpeggio LH, 4-beat entry rest),
-Ode to Joy (trio, thirds alto), Canon in D (TRUE canon — alto = lead's exact
-line one full 16-beat ground later, octave down; 4 escalating variation
-cycles), Greensleeves (6/8 lilt), Gymnopédie 1 (slow float), Prelude in C
-(single track — harmony lives in the line; camera buttons auto-hide),
-Mountain King (accelerando: same phrase at 1/.75/.5/.375 scale),
-Toccata in Dm (a 6.5-beat pedal lob — the engine's biggest launch),
-Dies Irae (deep canon echo, delay 5).
+---
 
-## 5. Juice systems (and their contracts)
+## 7. Render systems & their contracts (juice, camera, machines)
 
-- **Flipper pads** (`padOffset`): wind-up (W = .3 + A·.35), stroke (last
-  100 ms), follow-through wobble. CONTRACT: offset must be ~0 at phase 0 —
-  the pad arrives at rest exactly at impact so contact is honest. Amplitude
-  `A = clamp(launchVelocity·padNormal × .07, .05, 1.6)` — fast notes barely
-  move (gravity sells them), big lobs telegraph like catapults.
-- **Squash & stretch**: `deform` node oriented along velocity; stretch
-  `1 + min(speed·.014, .4)`, impact squash to .55 decaying ×(1−9dt).
-- **Anticipation glow**: next pad's rim brightens with `prog²` — possible
-  only because the timeline is analytic.
-- **Sparks** (`spawnBurst`), camera micro-shake (lead strikes, capped .15,
-  skipped under `prefers-reduced-motion`), exposure pop (ACES exposure
-  1.15 + kick·.2), pool splash on plunge.
-- **Director cam** (`camMode='auto'`, default): cuts to any track whose
-  current-or-imminent note dt ≥ 1.05s (it pre-cuts during wind-up via
-  `nextDt` once prog > .55); lead shred-cam when lead dt ≤ .33; else wide.
-  2.2 s cut hysteresis. Cuts are lerps, not snaps.
+- **Flipper pads** (`padOffset`): wind-up → stroke (last 100 ms) → follow-through wobble.
+  CONTRACT: offset is ~0 at phase 0 — the pad arrives at rest exactly at impact, so contact
+  is honest (a unit test enforces `padOffset(0,A)===0`). Amplitude `A = clamp(launchVel·
+  padNormal × .07, .05, 1.6)`.
+- **Pad size encodes register** (`padRadius`/`pitchSize`): smaller = higher, a PURE FUNCTION
+  OF THE NOTE — never of layout/spacing (that would imply the physics of sounding a note
+  changed with context, a lie). Overlap is solved by spacing pads apart (`layoutPads`'
+  relaxation pass), never by shrinking them. `test/layout.test.js` guards no-overlap.
+- **Squash & stretch**: a `deform` node oriented along velocity; stretch with speed, impact
+  squash decaying.
+- **Anticipation glow**: the next pad's rim brightens with `prog²` — possible only because
+  the timeline is analytic.
+- **Bloom** (r184): EffectComposer → UnrealBloom (`.12, .3, .9`) → ACES OutputPass. The
+  sprite halos (`HALO_A=.12`) predate bloom and stay as the soft wide base; emissive cores
+  (`EMI=1.2`) feed the real bloom. Exposure pops 1.15 + kick on lead strikes.
+- **The visible machine** (`conveyor.js`): belt wall + pulleys + cowls + four-post
+  articulated per-pad mounts, built per track in its local bay frame (`tr.stage`). Key `M`
+  toggles it for A/B. It only draws what the conveyor math already implies (§3).
+- **The drum kit** (`drums.js`): stationary drums + chrome spouts + a shared mortal-ball
+  pool (re-derived from songTime every frame — time is the only state). Drum heads flex on
+  strike; the `drumStrike` hook in main fires sparks + `audio.playDrum`.
+- **Camera rig** (`camera.js`, `makeCameraRig`): modes auto / fixed / free / all / lead /
+  alto / bass via the button row (hidden for single-track songs). **auto = DIRECTOR**: it
+  cuts to whichever track is about to do something big (current-or-imminent note dt ≥ 1.05 s,
+  pre-cutting during wind-up), shred-cam when lead dt ≤ .33, 2.2 s hysteresis, lerps not
+  snaps — possible only because the whole timeline is known. **free** hands over orbit-drag +
+  WASD/arrows/QE fly (disabled until picked, so it can never swallow the iOS priming tap).
+  Vertical is pinned (the band is static); x/z follow with sway + spread-dolly.
 
-## 6. Known issues / honest limitations
+Dev toggles: `G` = conveyor debug HUD (rulers + height graph; `convDbgOn`, ON by default —
+**flip before deploy**, §0). `M` = machines on/off. `?debug` = a scrub bar (time is the only
+state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machine-gunning).
 
-- Sample-path latency jitter on fast runs (iOS element playback). Unfixable
-  in the iframe; fine in Safari/desktop where webaudio path wins.
-- Same-note retrigger cuts its own tail (one element per note+voice). Could
-  pool 2 elements per note if it ever bothers anyone.
-- Camera can briefly lose a marble during extreme spread if AUTO is off and
-  a single-track cam is chosen — by design (user's choice).
-- Greensleeves uses the F#/dorian variant; Gymnopédie is the theme stated
-  twice (a tasteful excerpt, not the full form); Canon cycles 3–4 are
-  faithful-in-gesture simplifications of the violin figuration.
-- r128 is old. Upgrading three.js means: `outputEncoding` →
-  `outputColorSpace`, geometry/material API audits, but BUYS postprocessing
-  (UnrealBloom would replace the fake sprite glow beautifully).
+---
 
-## 7. Roadmap (discussed and wanted, in rough priority)
+## 8. Known issues / honest limitations
 
-> **North star: see [`VISION.md`](VISION.md).** Cascade is becoming a 3D music
-> *creation + visualization tool* (pick instruments, place them in the world, move
-> the camera / director mode, author via MIDI import or piano-roll). The items
-> below are mostly steps toward that — the unifying engine idea is a **ball
-> spawner** feeding two instrument archetypes (conveyor / single-marble and
-> stationary / multi-ball), with everything still **solved up front**.
+- Sample-path latency jitter on fast runs (iOS element playback). Unfixable in the iframe;
+  the webaudio path wins on Safari/desktop.
+- Same-note / same-drum retrigger cuts its own tail (one element per note+voice / per drum).
+- Drum scale ceilings are fine for hand-authored songs, not infinite: the ball pool caps at
+  `POOL = 36` (extras drop silently) and the strike/airborne scan is O(hits)/frame. A dense
+  MIDI drum import (thousands of hits) would want a windowed scan + a bigger/instanced pool.
+- Drum *timing* math lives inside `drums.js` (coupled to THREE), so it has no pure unit test
+  — only the underlying `solveLaunch` is covered. Extract it if you want belt-and-suspenders.
+- MIDI import currently **drops channel 9** (`convertToSong`) — percussion import is a TODO:
+  route channel-9 notes through `drumByGm` → drum lanes.
+- Greensleeves uses the F#/dorian variant; Gymnopédie is the theme stated twice; Canon's late
+  cycles are faithful-in-gesture simplifications.
 
-1. **Repo-ify** ✅ DONE — Vite + ES modules (engine/audio/juice/songs split,
-   `verify` is now a Vitest suite, single-file build via vite-plugin-singlefile).
-   Songs are `.js` not `.json` to preserve their commentary. See §0.
-2. **Recording/share**: canvas `captureStream()` + MediaRecorder; mix audio
-   in via the webaudio path's MediaStreamDestination. This is why the dual
-   output bus already exists — recording was anticipated.
-3. **MIDI import**: parse type-0/1 MIDI → tracks (quantize dt to the data
-   format). Instantly unlocks the whole public-domain repertoire.
-4. **Melody editor**: tap-out rhythm + piano-roll lite, exports song JSON.
-5. **Bloom + color grading** post-upgrade.
-6. AJ's personal wishlist: Zelda transcriptions for private use (Nintendo
-   IP — keep out of the public repo/demo), more Peer Gynt, possibly a
-   percussion track type (click-transient-only pads).
+---
 
-## 8. Working agreements that served us well
+## 9. Roadmap → see [`VISION.md`](VISION.md)
 
-- Verify lock totals after every song edit (it caught real mistakes).
-- `node --check` the extracted script after every hand-edit batch.
-- New features as data first, engine second — alto, delay, deep, and the
-  director all fell out of making `trackPos` richer rather than adding state.
-- When iOS audio misbehaves: read the status line, check `t=` motion, and
-  remember rounds 1–4 above before writing any new code.
+The north star is the 3D music **creation + visualization tool**: pick instruments, place
+them in the world, move/director the camera, author via MIDI import or a piano-roll / drum
+grid. Shipped toward it: repo-ification, MIDI import, share links, recording, the
+**conveyor + spawner** (archetype 1), and the **drum machine** (archetype 2). Near-term,
+in rough priority:
 
-— Claude (chat-side), handing the marble to Claude (code-side). It's a good
-machine. Keep the physics honest.
+1. **Drums on more songs**; **more kit pieces** (toms/clap/crash/ride — registry + fallback
+   voices already exist, need geometry styling + use).
+2. **MIDI channel-9 import** → drum lanes (unlocks imported beats).
+3. **Instrument mapping + world placement** on MIDI import (creation mode 1).
+4. **Melody/drum editor** — piano-roll + drum-grid, exports the same song format (mode 2).
+5. Personal/private only: Zelda transcriptions (Nintendo IP — keep out of the public
+   repo/demo), more Peer Gynt.
+
+---
+
+## 10. Working agreements that served us well
+
+- **Discuss the approach before editing — even small changes.** Talk through the shape, then
+  cut.
+- **Verify after every change**: `npm test` after ANY song/engine edit (the lock + drum +
+  layout suites catch real mistakes); `node --check` after hand-edit batches; `npm run build`
+  before claiming done.
+- **Features as data first, engine second.** alto, delay, deep, the director, and the whole
+  drum format all fell out of making the *data* richer rather than adding engine state.
+- **The engine/physics is NEVER altered for visuals.** All conveyor/camera/drum framing is
+  render-time only — "solved up front" is the moat. A note's visual size depends only on the
+  note, never on spacing.
+- **New instruments = a target + a launch solve.** Reach for `solveLaunch`/`arcPos`, not an
+  integrator.
+- **When iOS audio misbehaves**: read the status line, check `t=` motion, and remember rounds
+  1–4 of §5 before writing any new code.
+- Delegate simple, independent tasks to subagents in parallel; prefer light verification.
+
+— Claude (chat-side) handed the marble to Claude (code-side); code-side has since built the
+conveyor and the drums. It's a good machine with two instruments now. Keep the physics honest.

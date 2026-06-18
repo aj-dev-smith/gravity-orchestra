@@ -222,6 +222,7 @@ let shakeAmp = 0, expoKick = 0;                         // camera punch & exposu
 function buildTrack(melody, zBase, role, delayBeats = 0, deep = false){
   const isBass = role === 'bass';
   const voiceDeep = isBass || deep;
+  const stage = new THREE.Group();                      // the track's LOCAL frame; buildWorld places it via tr.origin
   const rollT = ROLL_T + delayBeats * BEAT;             // late entry = lazy drop-in
   // pad size encodes register, per voice (smaller = higher) — a pure fn of the note.
   // hue carries pitch class; this adds the octave hue throws away. Same note → same size.
@@ -257,13 +258,13 @@ function buildTrack(melody, zBase, role, delayBeats = 0, deep = false){
       color: new THREE.Color().setHSL(hueOf(pad.note), .8, .55),
       transparent:true, opacity:.18}));
     rim.rotation.x = Math.PI/2; rim.position.y = .09;
-    g.add(body, rim); world.add(g);
+    g.add(body, rim); stage.add(g);
     return {g, rim, body, flash:0, hue:hueOf(pad.note),
             base: g.position.clone(), n: n.clone(),
             amp: THREE.MathUtils.clamp(arcs[i].dot(n)*.07, .05, 1.6)};
   });
 
-  return {pads, arcs, padObjs, role, isBass, deep:voiceDeep, rollT, total, balls:[], active:null};
+  return {stage, origin:new THREE.Vector3(), pads, arcs, padObjs, role, isBass, deep:voiceDeep, rollT, total, balls:[], active:null};
 }
 
 function buildWorld(keyName){
@@ -282,20 +283,41 @@ function buildWorld(keyName){
   world = new THREE.Group(); scene.add(world);
   Object.values(rigPool).flat().forEach(checkinRig);   // recall every marble from the old song
 
+  // Each track now builds in its OWN local frame (zBase = 0 — the z-weave still
+  // wiggles ±~1.4 around 0, keeping arc depth; it's just no longer pushed onto a
+  // private z-plane). Placement is the bay layout below.
   tracks = [ buildTrack(S.melody, 0, 'lead') ];
   if (S.alto){
     const d = Array.isArray(S.alto) ? {notes:S.alto, delay:0} : S.alto;
-    tracks.push( buildTrack(d.notes, -3.4, 'alto', d.delay, d.deep) );
+    tracks.push( buildTrack(d.notes, 0, 'alto', d.delay, d.deep) );
   }
   if (S.bass){
     const d = Array.isArray(S.bass) ? {notes:S.bass, delay:0} : S.bass;
-    tracks.push( buildTrack(d.notes, 4.2, 'bass', d.delay) );
+    tracks.push( buildTrack(d.notes, 0, 'bass', d.delay) );
   }
   LOOP_T = tracks[0].total + 1.2;
 
-  // FIXED-cam framing: x-centre + half-width of the whole pad field (z stays shallow)
+  // BAY LAYOUT — side-by-side machines on a common wall (lead, alto, bass, left→right).
+  // tr.origin is a real placement transform (the seed of user-placed instruments).
+  // Sliding a track in x is a rigid translation; gravity is vertical, so the solved
+  // physics is untouched — we add tr.origin only at render time. Common wall ⇒ z=0,y=0.
+  const GAP = 3;
+  let cursor = 0;
+  tracks.forEach(tr => {
+    const xs = tr.padObjs.map(po => po.base.x);
+    const lo = Math.min(...xs), hi = Math.max(...xs);
+    tr.origin.set(cursor - lo, 0, 0);                   // shift the field's left edge to the cursor
+    cursor += (hi - lo) + GAP;
+  });
+  const wallW = cursor - GAP;                           // centre the whole wall on x=0
+  tracks.forEach(tr => { tr.origin.x -= wallW/2; tr.stage.position.copy(tr.origin); world.add(tr.stage); });
+
+  // FIXED-cam framing: x-centre + half-width of the whole WALL (world x = base.x + origin.x)
   let minX = Infinity, maxX = -Infinity;
-  tracks.forEach(tr => tr.padObjs.forEach(po => { minX = Math.min(minX, po.base.x); maxX = Math.max(maxX, po.base.x); }));
+  tracks.forEach(tr => tr.padObjs.forEach(po => {
+    const x = po.base.x + tr.origin.x;
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+  }));
   stageView = {cx: (minX + maxX) / 2, halfW: Math.max(6, (maxX - minX) / 2)};
 
   audio.setBeat(BEAT);
@@ -313,7 +335,7 @@ function strike(tr, i, rig){
   po.flash = 1;
   rig.lamp.intensity = 7;                               // strike flash
   if (tr.role === 'lead') noteEl.innerHTML = `<b>${pad.note}</b>&nbsp; ·&nbsp; ${'·'.repeat(Math.min(i, 40))}`;
-  const padR = new THREE.Vector3(pad.pos.x, STAGE_Y, pad.pos.z);   // every pad strikes at the band
+  const padR = new THREE.Vector3(pad.pos.x, STAGE_Y, pad.pos.z).add(tr.origin);   // every pad strikes at the band, in its bay
   spawnRipple(padR, po.g.quaternion, po.hue, tr.isBass, po.amp);
   // JUICE: sparks, squash, punch
   const sparkColor = new THREE.Color().setHSL(po.hue, .85, .62);
@@ -419,6 +441,7 @@ function animate(){
       const tau = songTime - ball.birthT;
       const r = ballPos(tr, tau);
       const rpos = r.pos.clone(); rpos.y += DESCENT * tau;   // per-ball render lift → juggles in the band
+      rpos.add(tr.origin);                                   // …in its track's bay (rigs live in scene, not the stage)
       const rig = ball.rig;
 
       // strike when the ball reaches a fresh, valid pad (dying balls overrun the end → never strike)

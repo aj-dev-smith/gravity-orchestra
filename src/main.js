@@ -47,7 +47,9 @@ const Q_FLAT = new THREE.Quaternion().setFromUnitVectors(UPY, new THREE.Vector3(
 const _qn = new THREE.Vector3();                        // scratch: live pad normal during unfold
 const FULL_DEPLOY = { extend: 1, tilt: 1 };             // reduced-motion: pads just appear, fully deployed
 const FADE_TAIL = 1.0;                                  // seconds a plunged ball lingers before recycle
-const DROP_IN = 9;                                      // height (world u) a newborn ball falls in from
+const BIRTH_DROP = 10;                                  // world-u a newborn FREE-FALLS in (honest G, fixed height)
+const BIRTH_FALL = Math.sqrt(2 * BIRTH_DROP / -G.y);    // time that drop takes under real gravity (≈1.17s) —
+                                                        // fixed, so delayed voices just hold longer, then drop identically
 const RIG_POOL = 3;                                     // rigs per role — ≤2 balls alive at the seam, 3 is slack
 let recState = 'idle', recorder = null;                 // idle | armed | rec — transitions at the seam
 const recEl = document.getElementById('rec');
@@ -391,13 +393,20 @@ if (!reduceMotion){ clock.start(); started = true; }
    strike when idx advances. Positions are WORLD (un-lifted); the +UP marble lift
    off the pad is baked in on the arc segments. */
 function ballPos(tr, tau){
-  if (tau < tr.rollT){                                  // birth: drop straight in above pad 0
-    const u = THREE.MathUtils.clamp(tau / tr.rollT, 0, 1);
+  if (tau < tr.rollT){                                  // birth: free-FALL onto pad 0 under HONEST gravity
     const p0 = tr.pads[0].pos;
-    const drop = DROP_IN * (1-u)*(1-u);                 // eased fall, arrives at the band at u=1
-    return {pos: new THREE.Vector3(p0.x, STAGE_Y + UP.y + drop - DESCENT*tau, p0.z),
-            vel: new THREE.Vector3(0, -2*DROP_IN*(1-u)/tr.rollT - DESCENT, 0),
-            plunge:false, idx:-1, nextIdx:0, prog:u, curDt:9, nextDt: tr.pads[0].dt};
+    // Wait in the mouth (longer for delayed voices), then free-fall a fixed BIRTH_DROP so the
+    // marble accelerates exactly like every other arc — no more anti-gravity float. Lands on pad 0
+    // moving (a real strike the pad flips), continuous with the first arc at tau=rollT.
+    const hold = tr.rollT - BIRTH_FALL;                 // off-screen hold absorbs the variable roll budget
+    const s = Math.max(0, tau - hold);                  // seconds into the actual fall
+    const fallY = .5 * G.y * s * s;                      // ½·g·s²: starts at rest, accelerates (−BIRTH_DROP at s=FALL)
+    const yRender = STAGE_Y + UP.y + BIRTH_DROP + fallY; // mouth → band; render re-adds DESCENT·tau, so subtract it here
+    const appear = THREE.MathUtils.clamp((s + .2) / .35, 0, 1);   // fade in as it's released (hidden during the hold)
+    return {pos: new THREE.Vector3(p0.x, yRender - DESCENT*tau, p0.z),
+            vel: new THREE.Vector3(0, G.y*s - DESCENT, 0),
+            plunge:false, idx:-1, nextIdx:0, prog: THREE.MathUtils.clamp(s/BIRTH_FALL, 0, 1),
+            curDt:9, nextDt: tr.pads[0].dt, appear};
   }
   let at = tau - tr.rollT, i = 0;
   while (i < tr.pads.length && at >= tr.pads[i].dt){ at -= tr.pads[i].dt; i++; }
@@ -478,9 +487,10 @@ function animate(){
       }
       if (tau > P + FADE_TAIL || fade >= 1){ checkinRig(rig); tr.balls.splice(bi, 1); continue; }
 
-      rig.halo.material.opacity = HALO_A * (1 - fade);
-      rig.core.material.emissiveIntensity = EMI * (1 - fade) + .1;
-      rig.group.visible = true;
+      const show = (1 - fade) * (r.appear ?? 1);        // appear<1 only during the newborn's pre-fall hold
+      rig.halo.material.opacity = HALO_A * show;
+      rig.core.material.emissiveIntensity = EMI * show + .1;
+      rig.group.visible = show > .002;
       rig.group.position.copy(rpos);
       rig.core.rotation.x += dt*6; rig.core.rotation.z += dt*3.4;
       rig.lamp.intensity += (3.5 - rig.lamp.intensity) * dt * 8;
@@ -493,7 +503,7 @@ function animate(){
       const sxz = (1/Math.sqrt(stretch))*(1-sq) + 1.3*sq;
       rig.deform.scale.set(sxz, stretch*(1-sq) + .55*sq, sxz);
 
-      if (started && trailTick > .022 && playRate && fade < .5)
+      if (started && trailTick > .022 && playRate && fade < .5 && show > .5)
         spawnTrail(rpos, rig.glow, tr.isBass);
 
       if (!active){ active = {r, rpos}; }                // first live one we hit is the youngest

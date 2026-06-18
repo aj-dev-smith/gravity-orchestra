@@ -355,7 +355,7 @@ function buildWorld(keyName){
 
   audio.setBeat(BEAT);
   cam.syncTracks(tracks, stageView);                    // reframe + rebuild the cam-button row for the new song
-  audio.rebuildBank(tracks);
+  audio.rebuildBank(tracks, S.drums ? Object.keys(S.drums) : []);
   songTime = 0; loopIndex = -1;                         // next frame respawns the loop's balls
   if (started) clock.start();
 }
@@ -389,6 +389,9 @@ function drumStrike(hit){
   const c = hit.drum.contact;
   spawnBurst(c.clone().add(UP), new THREE.Color(hit.drum.style.ball),
              Math.round(5 + 7 * (hit.vel ?? 1)), 3.0);
+  if (audio.isReady() && !muted){
+    try { audio.playDrum(hit.lane, hit.vel ?? 1); } catch(e){ /* audio must never break the run */ }
+  }
 }
 
 /* ---------------- timeline ---------------- */

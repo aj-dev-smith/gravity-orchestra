@@ -1,4 +1,5 @@
 import { noteHz } from './engine.js';
+import { GM_DRUMS } from './drumkit.js';
 
 /* ---------------- audio: raw Web Audio, zero dependencies ----------------
    iOS WebKit bug: a context created before the first user gesture can report
@@ -14,6 +15,7 @@ let audioReady = false;
 let ctx = null, master = null, rebuilds = 0;
 let eDL = null, eDR = null;
 let busOut = null, recDest = null;                     // recording tap (additive seam, not war logic)
+let noiseBuf = null;                                   // white-noise buffer for drum voices (per-context)
 let beat = .7;                                         // fed by setBeat() on every song build
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -61,6 +63,7 @@ function buildAudio(){                                 // MUST be called from a 
   eDL.connect(wet); eDR.connect(wet); wet.connect(out);
   out.connect(ctx.destination);
   busOut = out; recDest = null;                        // rebuilt context → old recording tap is dead
+  noiseBuf = null;                                     // …and the old noise buffer belongs to the dead ctx
   if (isIOS){                                          // also feed a real media element
     const msd = ctx.createMediaStreamDestination();
     out.connect(msd);
@@ -147,7 +150,7 @@ const SILENT_URL = (() => {
 
 let bank = {}, primed = false;
 const bankKey = (note, bass) => note + (bass ? '|b' : '');
-export function rebuildBank(tracks){
+export function rebuildBank(tracks, drumLanes = []){
   Object.values(bank).forEach(a => {
     try { a.pause(); } catch(e){}
     if (a.dataset.real) URL.revokeObjectURL(a.dataset.real);
@@ -156,11 +159,13 @@ export function rebuildBank(tracks){
   bank = {}; primed = false;
   const wanted = new Map();
   tracks.forEach(tr => tr.pads.forEach(p => wanted.set(bankKey(p.note, tr.deep), {note:p.note, bass:tr.deep})));
-  wanted.forEach(({note, bass}, k) => {
+  drumLanes.forEach(name => wanted.set('drum:' + name, {drum:name}));   // one sample per drum lane
+  wanted.forEach((spec, k) => {
     const a = document.createElement('audio');
     a.setAttribute('playsinline',''); a.preload = 'auto';
-    a.dataset.real = URL.createObjectURL(renderNoteWav(noteHz(note), bass));
-    a.src = SILENT_URL;                                  // real note swapped in after unlock
+    a.dataset.real = URL.createObjectURL(
+      spec.drum ? renderDrumWav(spec.drum) : renderNoteWav(noteHz(spec.note), spec.bass));
+    a.src = SILENT_URL;                                  // real sample swapped in after unlock
     a.addEventListener('error', () => stateEl.textContent = 'audio: sample blocked');
     document.body.appendChild(a);
     bank[k] = a;
@@ -184,6 +189,20 @@ export function playNote(note, bass){
     pluck(note, bass); lastPath = 'webaudio'; return;
   }
   const a = bank[bankKey(note, bass)];
+  if (a){
+    try { a.currentTime = 0; } catch(e){}
+    a.play().catch(()=>{});
+    lastPath = 'samples';
+  }
+}
+
+/* Drum trigger — webaudio when the live context is awake, else the baked sample.
+   vel 0..1 → amplitude on the live path; the iOS sample plays full (see §3). */
+export function playDrum(name, vel = 1){
+  if (ctx && ctx.state === 'running' && ctx.currentTime > .05){
+    hitDrum(name, vel); lastPath = 'webaudio'; return;
+  }
+  const a = bank['drum:' + name];
   if (a){
     try { a.currentTime = 0; } catch(e){}
     a.play().catch(()=>{});
@@ -221,6 +240,113 @@ function pluck(note, bass){
   kg.gain.setValueAtTime(bass ? .03 : .05, t);
   kg.gain.exponentialRampToValueAtTime(.0001, t + .03);
   k.connect(kg); kg.connect(master); k.start(t); k.stop(t + .05);
+}
+
+/* ---- PERCUSSION (live Web Audio) — noise-based voices, routed DRY to busOut so
+   they punch through instead of smearing in the melody's echo. velocity → amp. ---- */
+function getNoise(){                                    // one white-noise buffer per context
+  if (noiseBuf) return noiseBuf;
+  const N = (ctx.sampleRate * .4) | 0;
+  noiseBuf = ctx.createBuffer(1, N, ctx.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < N; i++) d[i] = Math.random() * 2 - 1;
+  return noiseBuf;
+}
+function hitDrum(name, vel){
+  if (!ctx) return;
+  const dst = busOut || master;                        // dry bus (no echo); master is a safe fallback
+  const t = ctx.currentTime;
+  const amp = (GM_DRUMS[name]?.gain ?? .7) * (.35 + .65 * vel);
+  if (name === 'kick'){
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(125, t);
+    o.frequency.exponentialRampToValueAtTime(44, t + .09);   // the pitch-drop = a kick
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(amp, t);
+    g.gain.exponentialRampToValueAtTime(.0001, t + .34);
+    o.connect(g); g.connect(dst); o.start(t); o.stop(t + .38);
+    const c = ctx.createOscillator(); c.type = 'square'; c.frequency.value = 900;   // beater click
+    const cg = ctx.createGain();
+    cg.gain.setValueAtTime(amp * .18, t); cg.gain.exponentialRampToValueAtTime(.0001, t + .02);
+    c.connect(cg); cg.connect(dst); c.start(t); c.stop(t + .03);
+  } else if (name === 'snare' || name === 'clap'){
+    const n = ctx.createBufferSource(); n.buffer = getNoise();
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 1400;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(amp * .85, t);
+    ng.gain.exponentialRampToValueAtTime(.0001, t + .19);
+    n.connect(hp); hp.connect(ng); ng.connect(dst); n.start(t); n.stop(t + .24);
+    [188, 330].forEach((f, i) => {                            // tonal body under the noise
+      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = f;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(amp * (i ? .12 : .2), t);
+      g.gain.exponentialRampToValueAtTime(.0001, t + .12);
+      o.connect(g); g.connect(dst); o.start(t); o.stop(t + .16);
+    });
+  } else {                                                   // hat / hatOpen / crash / ride — bright noise
+    const open = name === 'hatOpen' || name === 'crash' || name === 'ride';
+    const n = ctx.createBufferSource(); n.buffer = getNoise();
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass';
+    hp.frequency.value = name === 'crash' || name === 'ride' ? 5000 : 7800;
+    const g = ctx.createGain();
+    const dur = open ? .3 : .05;
+    g.gain.setValueAtTime(amp * .5, t);
+    g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    n.connect(hp); hp.connect(g); g.connect(dst); n.start(t); n.stop(t + dur + .02);
+  }
+}
+
+/* ---- PERCUSSION (baked WAV) — the iOS fallback, same shape as renderNoteWav but
+   dry (no echo) and punchy. One render per drum at full strength: el.volume is
+   ignored on iOS so per-hit dynamics live only on the webaudio path (§3). ---- */
+function renderDrumWav(name){
+  const sr = 22050;
+  const dur = name === 'kick' ? .4 :
+              (name === 'snare' || name === 'clap') ? .26 :
+              (name === 'hatOpen' || name === 'crash' || name === 'ride') ? .3 : .1;
+  const N = (sr * dur) | 0, s = new Float32Array(N);
+  if (name === 'kick'){
+    let ph = 0;
+    for (let n = 0; n < N; n++){
+      const t = n / sr, f = 44 + 81 * Math.exp(-t * 34);
+      ph += 6.2832 * f / sr;
+      s[n] = .95 * Math.exp(-t * 9) * Math.min(1, t / .002) * Math.sin(ph);
+      if (t < .02) s[n] += .25 * Math.exp(-t * 180) * Math.sign(Math.sin(6.2832 * 900 * t));
+    }
+  } else if (name === 'snare' || name === 'clap'){
+    let hp = 0, xp = 0;
+    for (let n = 0; n < N; n++){
+      const t = n / sr, x = Math.random() * 2 - 1;
+      hp = .82 * (hp + x - xp); xp = x;                       // one-pole highpass on the noise
+      const env = Math.exp(-t * 19);
+      s[n] = .7 * hp * env + env * (.2 * Math.sin(6.2832 * 188 * t) + .12 * Math.sin(6.2832 * 330 * t));
+    }
+  } else {                                                   // hat family
+    const open = name === 'hatOpen' || name === 'crash' || name === 'ride';
+    const dec = open ? 12 : 60;
+    let hp = 0, xp = 0;
+    for (let n = 0; n < N; n++){
+      const t = n / sr, x = Math.random() * 2 - 1;
+      hp = .9 * (hp + x - xp); xp = x;                        // brighter highpass for the metal
+      s[n] = .5 * hp * Math.exp(-t * dec);
+    }
+  }
+  return encodeWav(s, sr);
+}
+/* PCM-16 mono WAV encoder, peak-normalized. (renderNoteWav keeps its own inline
+   encoder verbatim — the iOS-war code is untouched; this serves the drum path.) */
+function encodeWav(s, sr){
+  const N = s.length;
+  let peak = 0; for (let n = 0; n < N; n++) peak = Math.max(peak, Math.abs(s[n]));
+  const k = .92 / Math.max(peak, 1e-6);
+  const buf = new ArrayBuffer(44 + N * 2), v = new DataView(buf);
+  const W = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+  W(0, 'RIFF'); v.setUint32(4, 36 + N * 2, true); W(8, 'WAVE'); W(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  W(36, 'data'); v.setUint32(40, N * 2, true);
+  for (let n = 0; n < N; n++) v.setInt16(44 + n * 2, Math.max(-1, Math.min(1, s[n] * k)) * 32767, true);
+  return new Blob([buf], { type: 'audio/wav' });
 }
 
 /* --- small API for the controls/mute handler --- */

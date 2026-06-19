@@ -68,7 +68,8 @@ const SPAWN_DIST = 2.8;   // the nozzle floats this far out from each head ALONG
 // face along its normal (above). `kind` picks the builder; `sup` the procedural stand.
 // The kick stays head-up (struck from on top like everything) — the one honest stylization.
 const RISER_TOP = 1.5;   // the drum-riser deck height (world y) the whole kit stands on
-const KIT_Z     = 2.6;   // kit sits this far in FRONT of the wall (clear of the weaving pads)
+const KIT_X     = 7.0;   // kit sits this far to the RIGHT of the melody belt (not directly in front)
+const KIT_Z     = 5.0;   // …and this far in FRONT of the wall, well clear of the weaving melody pads
 // tilt = [rake, yaw, roll]. +rake tilts the face toward the DRUMMER (+z, camera side);
 // side pieces YAW inward (left +, right −) so the kit wraps around the seat. The kick is
 // the exception: rx≈π/2 stands it UP on the deck, big face toward the drummer like a real one.
@@ -123,7 +124,7 @@ export function makeDrumMachine({ envMap, glowTex, bandY, floorY }){
     drums = []; hits = [];
     if (!spec){ return group; }                    // song has no drums — empty kit
 
-    const K = new THREE.Vector3(cx, RISER_TOP, KIT_Z);          // kit origin: wall-centre, deck height, in front
+    const K = new THREE.Vector3(cx + KIT_X, RISER_TOP, KIT_Z);  // kit origin: off to the right, deck height, in front
     if (floorY != null) group.add(buildRiser(K, floorY, envMap));  // the riser the whole kit stands on
 
     // ONE chrome material for all hardware in this build (rims, lugs, stands) — disposed

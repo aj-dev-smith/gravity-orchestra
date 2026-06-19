@@ -39,7 +39,7 @@ const MACHINE_STYLE = {                                // gauge = support-arm th
   alto: { gauge:.09, pulleyR:.42, tint:0xa99ec4 },
 };
 
-export function makeConveyorShop({ chrome, envMap, beltSpeed, bandY, reach, cull }){
+export function makeConveyorShop({ chrome, envMap, beltSpeed, bandY, reach, cull, floorY }){
   const beltCanvas = makeBeltCanvas();                 // expensive raster, ONCE for every machine
   return { buildMachine };
 
@@ -49,8 +49,9 @@ export function makeConveyorShop({ chrome, envMap, beltSpeed, bandY, reach, cull
     const pulleys  = buildPulleys(track, style, { envMap, bandY, reach });
     const cowls    = buildCowls(track, style, { envMap, bandY, reach, cull });
     const brackets = mountBrackets(track, style, { envMap });
+    const base     = buildBase(track, style, { envMap, bandY, reach, floorY });
     const group = new THREE.Group();
-    group.add(wall.group, pulleys.group, cowls.group, brackets.group);
+    group.add(wall.group, pulleys.group, cowls.group, brackets.group, base.group);
     return {
       group,                                           // caller adds to tr.stage (local frame)
       update(dt){                                      // call AFTER the belt loop sets po.g.position
@@ -58,7 +59,7 @@ export function makeConveyorShop({ chrome, envMap, beltSpeed, bandY, reach, cull
         pulleys.spin(beltSpeed * dt);
         brackets.sync();
       },
-      dispose(){ wall.dispose(); pulleys.dispose(); cowls.dispose(); brackets.dispose(); },
+      dispose(){ wall.dispose(); pulleys.dispose(); cowls.dispose(); brackets.dispose(); base.dispose(); },
     };
   }
 }
@@ -150,6 +151,36 @@ function buildPulleys(track, style, { envMap, bandY, reach }){
     spin(d){ const da = d / r; drums.forEach(m => m.rotation.x += da); },  // roll with the belt (verify sign live)
     dispose(){ geo.dispose(); mat.dispose(); },
   };
+}
+
+/* ---- buildBase — plants the machine on the room floor. Two chrome legs run from the
+   bottom housing (bandY − reach) down to floorY, splayed feet rest on the floor, and a
+   cross beam ties them under the housing. PURE STAGING — drawn in the same local frame
+   (y matches world), so it only needs floorY; touches no physics. No-op if there's no
+   floor below the machine (legH ≤ 0), so it self-disables if the room shrinks. ---- */
+function buildBase(track, style, { envMap, bandY, reach, floorY }){
+  const xs = track.padObjs.map(po => po.base.x);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const cx = (minX + maxX) / 2, width = (maxX - minX) + 2 * WALL_MARGIN;
+  const group = new THREE.Group();
+  const top = bandY - reach, legH = top - floorY;
+  if (legH <= 0) return { group, dispose(){} };          // room floor is above the housing — skip
+
+  const mat = new THREE.MeshStandardMaterial({ color: 0x6a7390, metalness: .85, roughness: .35, envMap,
+    emissive: new THREE.Color(0x1c2333), emissiveIntensity: .3 });
+  const legW = POST_W * 2.2;
+  const geos = [];
+  const box = (w, h, d, x, y) => {
+    const g = new THREE.BoxGeometry(w, h, d); geos.push(g);
+    const m = new THREE.Mesh(g, mat); m.position.set(x, y, BELT_DEPTH); group.add(m);
+  };
+  [-1, 1].forEach(side => {
+    const x = cx + side * (width / 2 - legW);
+    box(legW, legH, legW, x, floorY + legH / 2);         // leg down to the floor
+    box(legW * 2.6, .5, legW * 3.4, x, floorY + .25);    // splayed foot plate
+  });
+  box(width, legW, legW, cx, top - legW / 2);            // cross beam under the housing
+  return { group, dispose(){ geos.forEach(g => g.dispose()); mat.dispose(); } };
 }
 
 /* ---- buildCowls — a small dark overhang at the top & bottom of each machine, seated

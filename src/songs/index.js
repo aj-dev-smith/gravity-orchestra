@@ -7,6 +7,7 @@ import preludeInC from './prelude-in-c.js';
 import mountainKing from './mountain-king.js';
 import toccata from './toccata.js';
 import diesIrae from './dies-irae.js';
+import backbeat from './backbeat.js';
 
 export const SONGS = {
   'fur-elise': furElise,
@@ -18,4 +19,5 @@ export const SONGS = {
   'mountain-king': mountainKing,
   'toccata': toccata,
   'dies-irae': diesIrae,
+  'backbeat': backbeat,
 };

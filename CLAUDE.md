@@ -62,7 +62,9 @@ on. Treat it as live.
     test/            Vitest: engine ballistics, song lock-rule, drum validation, MIDI,
                      layout overlap, share round-trip (177 tests)
     VISION.md        the product north star (vision, not spec)
-    docs/PLAN-*.md   the conveyor design notes (how the static band was reasoned out)
+    docs/PLAN-*.md   design notes: PLAN-{real,seamless}-conveyor (how the static band
+                     was reasoned out) + PLAN-staging (instrument/room/support/placement
+                     abstractions + the human-curation-over-auto-layout decision)
 
     npm run dev            # vite dev server (add --host to reach a phone on the LAN)
     npm test               # vitest — run after ANY song or engine edit
@@ -154,7 +156,8 @@ swaps "next pad" for the target; a drum swaps in a stationary drum. Future instr
 (lob / shoot / drop) swap only those two terms and stay just as solved-up-front. Audio
 is part of the instrument too — we design the *sound of each hit* per instrument (§5).
 
-Status: drums are implemented (kick/snare/hat + the full **six-tom set** voiced + rendered;
+Status: drums are implemented (kick/snare/hat + a **five-tom set** voiced + rendered — one
+floor tom; GM 41's low floor tom is merged onto it via `GM_MERGE` in drumkit.js;
 clap/crash/ride reserved in the registry, voiced as fallbacks). Toms are **pitched** — each
 carries a `tone` (Hz) in the registry and a real membrane voice (downward bend + stick
 attack), so a descending fill reads and sounds as a tonal cascade (this is what makes an

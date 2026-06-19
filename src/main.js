@@ -80,7 +80,10 @@ const cam = makeCameraRig({ stageY: STAGE_Y, fixedZMax: FIXED_ZMAX,
                             dom: renderer.domElement, camsEl: document.getElementById('cams') });
 const camera = cam.camera;
 
-scene.add(new THREE.AmbientLight(0x223, 1.4));
+scene.add(new THREE.AmbientLight(0x223, 1.6));
+/* gentle global fill: cool from the ceiling, dim warm bounce from the floor — lifts
+   the room and the matte instrument bodies a touch without flattening the bloom mood */
+scene.add(new THREE.HemisphereLight(0x4a5a8c, 0x161420, .45));
 const key = new THREE.DirectionalLight(0x8899ff, .5);
 key.position.set(-6, 10, 4); scene.add(key);
 /* a soft fill aimed from the camera side at the belt wall — reveals the slat
@@ -115,6 +118,53 @@ function makeEnv(){
 }
 const envMap = makeEnv();
 
+/* --- greybox dev room: a grid-walled box around the static band. PURE STAGING —
+   no engine reach. Persistent (added to scene, not the per-song world). The grid is
+   procedural; an emissiveMap of the same grid self-lights the lines so they read in
+   the dark room (and feed bloom a touch). Existing fog fades the far walls into haze,
+   which conveniently keeps the conveyor wrap / ball death hidden. Toggle R. */
+function gridTex(){
+  const S = 256, c = document.createElement('canvas'); c.width = c.height = S;
+  const x = c.getContext('2d');
+  x.fillStyle = '#0a0b15'; x.fillRect(0,0,S,S);
+  const N = 4, step = S/N;                                // 4 minor cells per tile
+  x.strokeStyle = 'rgba(86,120,205,.5)'; x.lineWidth = 1;
+  for (let i=1;i<N;i++){ const p = i*step;
+    x.beginPath(); x.moveTo(p,0); x.lineTo(p,S); x.stroke();
+    x.beginPath(); x.moveTo(0,p); x.lineTo(S,p); x.stroke(); }
+  x.strokeStyle = 'rgba(130,180,255,.9)'; x.lineWidth = 3; // bright major line at the tile edge
+  x.strokeRect(0,0,S,S);
+  return new THREE.CanvasTexture(c);
+}
+/* one source of truth for the room box — the instrument legs/stands plant on ROOM.FLOOR */
+const ROOM = { HW:38, FLOOR:-22, CEIL:36, BACK:-34, FRONT:42 };
+function makeRoom(){
+  const g = new THREE.Group();
+  const base = gridTex();
+  const TILE = 8;                                         // world-u per grid tile → 2u minor cells
+  const panel = (w, h) => {
+    const t = base.clone(); t.needsUpdate = true;
+    t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(w/TILE, h/TILE);
+    const m = new THREE.MeshStandardMaterial({
+      map:t, emissive:0x33508c, emissiveMap:t, emissiveIntensity:.55,
+      roughness:.9, metalness:.05, side:THREE.DoubleSide });
+    return new THREE.Mesh(new THREE.PlaneGeometry(w,h), m);
+  };
+  const { HW, FLOOR, CEIL, BACK, FRONT } = ROOM;
+  const W = HW*2, D = FRONT-BACK, H = CEIL-FLOOR, MZ = (FRONT+BACK)/2, MY = (CEIL+FLOOR)/2;
+  const add = (m, rx, ry, x, y, z) => { m.rotation.x = rx; m.rotation.y = ry; m.position.set(x,y,z); g.add(m); };
+  add(panel(W, D), -Math.PI/2, 0, 0, FLOOR, MZ);         // floor
+  add(panel(W, D),  Math.PI/2, 0, 0, CEIL,  MZ);         // ceiling
+  add(panel(W, H), 0, 0,        0, MY, BACK);            // back wall
+  add(panel(W, H), 0, Math.PI,  0, MY, FRONT);           // front wall (behind the camera)
+  add(panel(D, H), 0,  Math.PI/2, -HW, MY, MZ);          // left wall
+  add(panel(D, H), 0, -Math.PI/2,  HW, MY, MZ);          // right wall
+  return g;
+}
+const room = makeRoom();
+scene.add(room);
+let roomOn = true;                                        // key R toggles the dev room
+
 /* --- post chain: render → bloom → tonemap/sRGB out ---
    Real bloom on the emissive cores; the sprite halos stay as the soft
    wide base (bloom alone is too tight to replace their reach). */
@@ -135,14 +185,14 @@ const padGeo  = new THREE.CylinderGeometry(.5,.56,.13,28);
 /* The visible belt machine. beltSpeed = DESCENT is the honesty hook: pads rise at
    DESCENT, slats scroll at DESCENT → slip-free, no state. reach=16 covers the ±14
    cull band for every song. Built per track in buildWorld, lives under tr.stage. */
-const shop = makeConveyorShop({ chrome, envMap, beltSpeed: DESCENT, bandY: STAGE_Y, reach: BELT_REACH, cull: PAD_CULL });
+const shop = makeConveyorShop({ chrome, envMap, beltSpeed: DESCENT, bandY: STAGE_Y, reach: BELT_REACH, cull: PAD_CULL, floorY: ROOM.FLOOR });
 let machinesOn = true;                                  // key M toggles the whole machine for A/B
 
 /* The drum kit — the stationary/multi-ball instrument archetype. One kit per song
    (not per track): mortal balls fired onto fixed drums, every ball solved up front
    via the same solveLaunch the melody uses. The ball pool lives in the scene and
    persists across songs; the targets rebuild per song under `world`. */
-const drumKit = makeDrumMachine({ envMap, glowTex, bandY: STAGE_Y });
+const drumKit = makeDrumMachine({ envMap, glowTex, bandY: STAGE_Y, floorY: ROOM.FLOOR });
 scene.add(drumKit.ballGroup);
 
 /* ---------------- marble rigs (lead = amber, bass = ice-blue) ---------- */
@@ -207,6 +257,8 @@ addEventListener('keydown', e => { if (e.key === 'g' || e.key === 'G'){
   convDbgOn = !convDbgOn; convCv.style.display = convDbgOn ? 'block' : 'none'; convRulers.visible = convDbgOn; }});
 addEventListener('keydown', e => { if (e.key === 'm' || e.key === 'M'){    // A/B the visible machine
   machinesOn = !machinesOn; tracks.forEach(tr => { if (tr.machine) tr.machine.group.visible = machinesOn; }); }});
+addEventListener('keydown', e => { if (e.key === 'r' || e.key === 'R'){    // A/B the greybox dev room
+  roomOn = !roomOn; room.visible = roomOn; }});
 function convDebug(markerY, camY){
   if (!convDbgOn) return;
   convHist.push({m:markerY, c:camY});

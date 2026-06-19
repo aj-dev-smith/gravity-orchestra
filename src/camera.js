@@ -34,7 +34,11 @@ const PAN_KEYS = {
 export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
   const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, .1, 200);
 
-  let mode = 'auto', autoWant = 'all', lastCut = 0;
+  // FREE-look is the default so you can move around the scene; the director ('auto') and
+  // the rest are one button-tap away. Free orbit still only engages once `started` (after
+  // the play tap), so it can never swallow the iOS audio-priming tap.
+  const DEFAULT_MODE = 'free';
+  let mode = DEFAULT_MODE, autoWant = 'all', lastCut = 0;
   let shakeAmp = 0;
   let stageView = { cx: 0, halfW: 8 };                        // x-centre + half-width of the field (FIXED framing)
   let curTracks = [];                                         // last-built tracks, for the button row
@@ -98,7 +102,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
   /* The cam-button row. Hidden for single-track songs (the line IS the harmony). */
   function renderButtons(){
     camsEl.innerHTML = '';
-    if (curTracks.length < 2){ camsEl.style.display = 'none'; mode = 'auto'; return; }
+    if (curTracks.length < 2){ camsEl.style.display = 'none'; mode = DEFAULT_MODE; return; }
     camsEl.style.display = 'flex';
     ['auto', 'fixed', 'free', 'all', ...curTracks.map(t => t.role)].forEach(m => {
       const b = document.createElement('button');

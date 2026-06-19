@@ -32,10 +32,11 @@ const EXPECTED_KEYS = [
   'mountain-king',
   'toccata',
   'dies-irae',
+  'backbeat',
 ];
 
 describe('SONGS catalogue', () => {
-  it('has exactly the 9 expected keys in order', () => {
+  it('has exactly the 10 expected keys in order', () => {
     expect(Object.keys(SONGS)).toEqual(EXPECTED_KEYS);
   });
 });

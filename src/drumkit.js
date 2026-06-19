@@ -28,11 +28,11 @@ export const GM_DRUMS = {
   // reserved — names a future kit + MIDI import already map onto:
   hatOpen: { gm: 46, gain: 0.50 },
   clap:    { gm: 39, gain: 0.70 },
-  // the full GM tom set, low → high. `tone` is the membrane fundamental in Hz:
-  // a tom is PITCHED, so a descending fill reads (and sounds) as a real cascade.
-  // ordered low→high here so the render lays the kit out as a tonal sweep.
-  floorLow:  { gm: 41, gain: 0.85, tone: 93 },    // low floor tom
-  floorHigh: { gm: 43, gain: 0.85, tone: 110 },   // high floor tom
+  // the GM tom set, low → high. `tone` is the membrane fundamental in Hz: a tom is
+  // PITCHED, so a descending fill reads (and sounds) as a real cascade. ordered low→high
+  // here so the render lays the kit out as a tonal sweep. The kit has ONE floor tom, so
+  // GM 41 (low floor tom) is MERGED onto floorHigh below (see GM_MERGE).
+  floorHigh: { gm: 43, gain: 0.85, tone: 110 },   // the kit's single floor tom
   tomLow:    { gm: 45, gain: 0.82, tone: 131 },   // low tom
   tomMid:    { gm: 47, gain: 0.82, tone: 154 },   // low-mid tom
   tomHiMid:  { gm: 48, gain: 0.80, tone: 178 },   // hi-mid tom
@@ -44,9 +44,13 @@ export const GM_DRUMS = {
 /** The set of legal lane names — the song validator checks against this. */
 export const DRUM_NAMES = new Set(Object.keys(GM_DRUMS));
 
+// GM notes MERGED onto another lane — the kit has one floor tom, so the low floor tom
+// (GM 41) plays the existing floor tom instead of spawning a second drum on import.
+const GM_MERGE = { 41: 'floorHigh' };
+
 /** GM note number → canonical drum name (for MIDI channel-9 import). */
 export function drumByGm(gm){
-  return Object.keys(GM_DRUMS).find(n => GM_DRUMS[n].gm === gm);
+  return GM_MERGE[gm] || Object.keys(GM_DRUMS).find(n => GM_DRUMS[n].gm === gm);
 }
 
 /** Normalize one hit: bare `beat` OR `[beat, velocity]` → {beat, vel}.

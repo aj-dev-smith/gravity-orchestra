@@ -407,7 +407,8 @@ function buildWorld(keyName){
 
   // drum kit: built song-level, placed by the wall centre, added under world (so it
   // disposes with the world on the next song change). Aligned to the lead's timeline.
-  world.add(drumKit.build(S.drums, { rollT: ROLL_T, beat: BEAT, cx: stageView.cx }));
+  // P feeds the juggle allocator — ball schedules are cyclic over the whole loop.
+  world.add(drumKit.build(S.drums, { rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T, cx: stageView.cx }));
 
   audio.setBeat(BEAT);
   cam.syncTracks(tracks, stageView);                    // reframe + rebuild the cam-button row for the new song

@@ -4,7 +4,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 const ZAXIS = new THREE.Vector3(0, 0, 1);
 const YAXIS = new THREE.Vector3(0, 1, 0);
 const ONES  = new THREE.Vector3(1, 1, 1);
-const HUB_BACK = .3;                         // how far the carriage hub tucks behind the disc face (along −n)
+export const HUB_BACK = .3;                  // how far the carriage hub tucks behind the disc face (along −n)
 const _anchor = new THREE.Vector3(), _hub = new THREE.Vector3(), _dir = new THREE.Vector3();
 const _n = new THREE.Vector3();              // per-frame scratch (live pad normal, derived from its quaternion)
 
@@ -232,9 +232,10 @@ function boxBetween(a, b, w){
    FACE the marble bounces off. The carriage rides the pad's FULL motion — belt bob AND
    the flipper wind-up nudge — so the pad can retract to strike without out-running its
    posts (the clip the old rigid arm hit). Pad geometry is identical per note, so this
-   bakes once and is shared by orientation. */
-function carriageGeometry(po, gauge){
-  const R = po.g.scale.x * .55 * .92;                    // rim radius (just inside the ring), world units
+   bakes once and is shared by orientation.
+   EXPORTED: the drum kit grips ITS pads with the exact same carriage (one mount
+   primitive, two stagings — riding a belt there, bolted to a static panel there). */
+export function carriageGeometry(R, gauge){             // R = rim radius (just inside the ring), world units
   const hub = new THREE.Vector3(0, -HUB_BACK, 0);        // under the disc face (back side, off the bounce)
   const geos = [];
   for (let k = 0; k < 4; k++){                           // four posts → rim quadrants (45,135,225,315°)
@@ -263,7 +264,7 @@ function mountBrackets(track, style, { envMap }){
   const shoeGeo  = new THREE.BoxGeometry(g * 2.4, g * 2.4, g * .6);      // bolt-plate flush on the belt
   const parts = track.padObjs.map(po => ({
     po,
-    car:   new THREE.Mesh(carriageGeometry(po, g), mat),
+    car:   new THREE.Mesh(carriageGeometry(po.g.scale.x * .55 * .92, g), mat),
     spine: new THREE.Mesh(spineGeo, mat),
     shoe:  new THREE.Mesh(shoeGeo, mat),
   }));

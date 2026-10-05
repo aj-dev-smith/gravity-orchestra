@@ -192,7 +192,6 @@ let machinesOn = true;                                  // key M toggles the who
    pistons for force, magnets for long rests (src/marbledrums.js). Rebuilt per song
    under `world`; every frame is a pure function of songTime. */
 const drumKit = makeMarbleDrums({ envMap, glowTex });
-scene.add(drumKit.ballGroup);
 
 /* ---------------- marble rigs (lead = amber, bass = ice-blue) ---------- */
 function makeRig(opt){
@@ -404,9 +403,9 @@ function buildWorld(keyName){
   }));
   const stageView = {cx: (minX + maxX) / 2, halfW: Math.max(6, (maxX - minX) / 2)};
 
-  // drum kit: built song-level, placed by the wall centre, added under world (so it
-  // disposes with the world on the next song change). Aligned to the lead's timeline.
-  // P feeds the juggle allocator — ball schedules are cyclic over the whole loop.
+  // marble drums: built song-level, placed right of the wall, added under world (so it
+  // disposes with the world on the next song change). Aligned to the lead's timeline;
+  // `start` arms every ball on its magnet for the count-in.
   world.add(drumKit.build(S.drums, { rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T, cx: stageView.cx, start: -LEAD_IN }));
 
   audio.setBeat(BEAT);
@@ -443,8 +442,8 @@ function strike(tr, i, rig){
   }
 }
 
-/* A drum ball reaching its head. Render-only for now (sparks + the head flex the kit
-   does itself); the percussion audio voice plugs in right here next. */
+/* A drum ball reaching its head: sparks + the percussion voice (the head flash and
+   piston are the machine's own). */
 function drumStrike(hit){
   const c = hit.drum.contact;
   spawnBurst(c.clone().add(UP), new THREE.Color(hit.drum.style.ball),

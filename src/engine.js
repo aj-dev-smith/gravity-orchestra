@@ -88,61 +88,6 @@ export function deployPose(c, inner, edge){
 }
 
 /* ============================================================
-   JUGGLE ALLOCATOR — the drum kit's buildTrack. Drum hits CHAIN
-   like melody pads chain: the bounce-out of one hit is the solved
-   flight to that ball's next hit, so a small set of immortal balls
-   juggles the whole kit. This function decides WHICH ball takes
-   WHICH hit; it is pure schedule math (no THREE, no geometry), so
-   the render layer just solves an arc or a rail path per leg.
-
-   Between consecutive strikes a ball does one of two things, by
-   gap length alone:
-     'air'   — an aerial chain/dribble (gap ≤ dtMax; apex ~ G·dt²/8,
-               the same dt² grammar as the belt — rhythm visible)
-     'plumb' — too long to fly: exit into the basin, ride the rails
-               back to a nozzle, dwell, fire (gap ≥ minTransit)
-   Gaps in the DEAD ZONE between the two get a fresh ball instead
-   (a stretched arc looks wrong, a rushed rail ride looks worse).
-
-   Greedy MRU: each hit is taken by the most-recently-struck ball
-   that can make the flight. MRU keeps arcs low, and it keeps a
-   fast run DRIBBLING on one ball instead of raining spare balls —
-   density reads as one ball moving faster, never as more balls.
-
-   Cyclic by construction: every ball's last strike chains to its
-   first strike + P, classified by the same rule, so each ball's
-   legs sum to exactly P and the loop seam is invisible. */
-export function allocateJuggle(hits, P, { dtMax = 1.7, minTransit = 2.2, minHop = 0.05, beaterLanes = [] } = {}){
-  const norm = s => ((s % P) + P) % P;                  // pickup fills keep negative beats — wrap them in
-  const hs = hits
-    .filter(h => !beaterLanes.includes(h.lane))
-    .map(h => ({ lane: h.lane, s: norm(h.s), vel: h.vel ?? 1 }))
-    .sort((a, b) => a.s - b.s || (a.lane < b.lane ? -1 : 1));
-  // drop exact duplicates (same lane, same instant) — two balls can't share a landing
-  const balls = [];                                     // { strikes:[], legs:[] } — legs[i] leaves strikes[i]
-  let prev = null;
-  for (const h of hs){
-    if (prev && prev.lane === h.lane && Math.abs(prev.s - h.s) < 1e-9) continue;
-    prev = h;
-    const last = b => b.strikes[b.strikes.length - 1].s;
-    const take = (b, mode) => { b.legs.push({ mode, dt: h.s - last(b) }); b.strikes.push(h); };
-    let pick = null;                                    // aerial first: MRU within [minHop, dtMax]
-    for (const b of balls){ const g = h.s - last(b);
-      if (g >= minHop && g <= dtMax && (!pick || last(b) > last(pick))) pick = b; }
-    if (pick){ take(pick, 'air'); continue; }
-    for (const b of balls){ const g = h.s - last(b);    // else a rail trip: MRU beyond minTransit
-      if (g >= minTransit && (!pick || last(b) > last(pick))) pick = b; }
-    if (pick){ take(pick, 'plumb'); continue; }
-    balls.push({ strikes: [h], legs: [] });             // dead zone / first hit → a fresh ball
-  }
-  for (const b of balls){                               // close every cycle across the loop seam
-    const g = b.strikes[0].s + P - b.strikes[b.strikes.length - 1].s;
-    b.legs.push({ mode: g >= minHop && g <= dtMax ? 'air' : 'plumb', dt: g });
-  }
-  return balls;
-}
-
-/* ============================================================
    DRIBBLE — the marble drum machine's buildTrack. One immortal
    ball per drum, and it only ever bounces on THAT drum: the
    vertical flight between two strikes is the solved arc for the

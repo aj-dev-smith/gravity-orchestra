@@ -62,7 +62,6 @@ const FALLBACK = STYLE.snare;
 const wrapP = (t, P) => ((t % P) + P) % P;
 
 export function makeMarbleDrums({ envMap, glowTex }){
-  const ballGroup = new THREE.Group();                  // kept for main's scene wiring; balls live per build
   let lanes = [];                                       // [{lane, L, style, contact, head, ball, coil, ...}]
   let start = -Infinity;
 
@@ -157,7 +156,7 @@ export function makeMarbleDrums({ envMap, glowTex }){
     }
   }
 
-  return { ballGroup, build, update };
+  return { build, update };
 }
 
 /* ---- the riser deck the station stands on ---- */

@@ -18,16 +18,16 @@ all heading (a 3D music **creation + visualization tool**) — lives in
 
 ## ⚠️ 0. BRANCH & DEPLOY STATUS — read before you ship anything
 
-There are two realities, and they are not the same:
+**Production ≠ `main`.** As of 2026-10-05, `v2` was fast-forwarded into `main`:
 
-- **`main` = what's DEPLOYED** at cascade.ajsmithhq.com. It is the original
-  **falling-world** engine (the whole scene sinks; the marble rides it down) plus
-  r184/bloom, MIDI import, share links, recording, autostart.
-- **`v2` = what you're probably working on.** It replaces the falling world with a
-  **static-band CONVEYOR** (§3) and adds the **DRUM MACHINE** — the second
-  instrument archetype (§4). **NOT deployed. Do not deploy it casually.**
+- **Production** (cascade.ajsmithhq.com) still runs the original **falling-world**
+  engine (the whole scene sinks; the marble rides it down) plus r184/bloom, MIDI
+  import, share links, recording, autostart — i.e. the old `main` tip, `255c7d2`.
+- **`main` (and `v2`) = the new engine**: the **static-band CONVEYOR** (§3) and the
+  **MARBLE DRUM MACHINE** — the second instrument archetype (§4). **NOT deployed. Do
+  not deploy it casually.**
 
-Before any v2 deploy, the gate is:
+Before any deploy of `main`, the gate is:
 1. **Flip `convDbgOn` default → `false`** in `src/main.js` (the conveyor debug HUD —
    rulers + a height-over-time graph — is ON by default for dev; ship it OFF).
 2. Confirm with the human. **No v2 deploy until a real v2 is declared ready.**
@@ -48,8 +48,10 @@ on. Treat it as live.
                      cowls, articulated per-pad mounts. DI'd seam, no engine reach.
     src/camera.js    the camera RIG (render subsystem): director / fixed / free-fly /
                      follow modes, orbit + WASD/QE keyboard fly. "Sees the future."
-    src/drums.js     the DRUM KIT (render subsystem): stationary drums + spouts + a
-                     mortal-ball pool. The stationary/multi-ball instrument archetype.
+    src/marbledrums.js  the MARBLE DRUM MACHINE (render subsystem): one ball per drum,
+                     dribbling on its own head; pistons + electromagnets. Math lives in
+                     engine.js (dribbleLane/dribbleAt/dribblePiston), tested in dribble.test.js.
+    src/drums.js     SUPERSEDED juggling kit — no longer imported; delete when convenient.
     src/drumkit.js   the drum REGISTRY: canonical name ↔ GM note ↔ mix gain. One source
                      of truth for the song validator, audio, render, future MIDI import.
     src/midi/        MIDI import: parse.js (type-0/1 → tracks, FAITHFUL — keeps every
@@ -146,10 +148,16 @@ nothing more. The unifying runtime primitive is a **ball spawner** — mortal ba
    *manufactures* the right pad for each note (sized to register, tilted to its bounce);
    one marble chains pad → pad, each pad launching it to the next. `buildTrack` + the
    conveyor machine. Range is effectively unlimited — the belt produces the pad on demand.
-2. **STATIONARY — many marbles, fixed instrument** (the rhythmic voice; the drum kit).
-   A drum is a **fixed target**; each hit is a **mortal ball** fired from a spout so that
-   — by the *same* `solveLaunch` — it lands on the drumhead at exactly the right beat,
-   then takes a short solved bounce-out and fades. `drums.js` + `drumkit.js`.
+2. **STATIONARY — one marble per drum, fixed instrument** (the rhythmic voice). Each
+   drum owns ONE immortal ball that only ever bounces on that drum: the flight between
+   strikes is the solved vertical arc for the gap (apex = |G|·gap²/8, the belt's dt²
+   grammar — the groove reads as bounce height). A gap longer than `DT_MAX` ends on an
+   **electromagnet** hung at exactly the max apex: the ball arrives at zero speed, is
+   held, and released so the free fall lands on the beat. Every head rides a **piston**
+   that supplies each bounce's lost energy (restitution `e`, Δv = vOut − e·vIn), at rest
+   at contact. No allocator, no feed, no plumbing — lanes never interact.
+   `engine.js` dribble* + `marbledrums.js` + `drumkit.js`. (History: spouts → bell →
+   Doc-Ock → golf club → juggling all drowned in feed plumbing; parked on `juggling-wip`.)
 
 **The generalization to hold onto:** a hit = **a target + a launch solve**. The melody
 swaps "next pad" for the target; a drum swaps in a stationary drum. Future instruments

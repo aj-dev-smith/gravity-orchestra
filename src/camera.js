@@ -212,5 +212,5 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
     camera.updateProjectionMatrix();
   }
 
-  return { camera, target: camTarget, update, syncTracks, addShake, resize };
+  return { camera, target: camTarget, orbit, update, syncTracks, addShake, resize };
 }

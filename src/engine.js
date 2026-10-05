@@ -142,6 +142,146 @@ export function allocateJuggle(hits, P, { dtMax = 1.7, minTransit = 2.2, minHop 
   return balls;
 }
 
+/* ============================================================
+   DRIBBLE — the marble drum machine's buildTrack. One immortal
+   ball per drum, and it only ever bounces on THAT drum: the
+   vertical flight between two strikes is the solved arc for the
+   gap (apex = |G|·gap²/8 — the belt's dt² grammar, so the groove
+   is readable as bounce height). Lanes never interact, so there
+   is no allocator, no feed, no plumbing: polyphony is free and
+   conservation is automatic.
+
+   A gap longer than dtMax can't be flown honestly (the apex would
+   leave the screen), so above every drum hangs an ELECTROMAGNET at
+   exactly the max apex H = |G|·dtMax²/8. The ball flies the max arc,
+   reaches the magnet AT its apex with zero velocity (a kiss, not a
+   slam), is held, and is released dtMax/2 before the next strike —
+   the free fall from H takes exactly that long. So a long gap is
+   just the max arc with a pause at the top: continuous, no snap.
+
+   The bounce is not elastic — each strike's out-speed is set by the
+   NEXT gap, not the last — and a real bounce is lossy anyway. The
+   drumhead rides a PISTON that supplies the difference every strike
+   (a kick up, harder before a taller arc; a soft give when even the
+   lossy bounce would overshoot): dribblePiston. That visible cause is what keeps
+   it honest, same as the belt's flipper pads.
+
+   Pure schedule math in ONE dimension (height above the head), no
+   THREE: the render places the lane in the world. Time is the only
+   state. */
+const g = -G.y;                                          // |gravity| (scalar — the dribble is 1-D)
+
+export function dribbleLane(strikes, P, { dtMax = 1.2 } = {}){
+  const wrapP = s => ((s % P) + P) % P;                 // pickup fills keep negative beats — wrap them in
+  const s = [...new Set(strikes.map(wrapP))].sort((a, b) => a - b);
+  const n = s.length;
+  const gaps = s.map((si, i) => (i + 1 < n ? s[i + 1] : s[0] + P) - si);   // cyclic: the last gap closes the seam
+  const flight = gaps.map(gp => Math.min(gp, dtMax));   // the airborne part of each gap
+  return {
+    s, gaps, P, dtMax, H: g * dtMax * dtMax / 8,
+    vOut: flight.map(f => g * f / 2),                    // launch speed leaving strike i
+    vIn:  flight.map((_, i) => g * flight[(i - 1 + n) % n] / 2),   // impact speed arriving at strike i
+  };
+}
+
+/* Index of the strike that most recently happened at wrapped time τ (binary search). */
+function lastStrike(s, tau){
+  let lo = 0, hi = s.length - 1;
+  if (tau < s[0]) return hi;                             // before the first strike → the last one (previous loop)
+  while (lo < hi){ const m = (lo + hi + 1) >> 1; if (s[m] <= tau) lo = m; else hi = m - 1; }
+  return lo;
+}
+
+/* The ball at songTime t. `start` is when the song started (the count-in): until the
+   lane's first strike after it, the ball hangs ARMED on its magnet, then drops onto the
+   downbeat — so every song opens with the whole machine loaded and waiting.
+   Returns { y, vy, mode:'arc'|'hold'|'drop', i, since, until }: y = height of the
+   ball's underside above the head; i = the strike it last left; since/until = time
+   from the last strike / to the next. */
+export function dribbleAt(L, t, start = -Infinity){
+  const { s, gaps, P, dtMax, H } = L, half = dtMax / 2;
+  if (t < start) t = start;
+  const first = firstStrike(L, start);                  // armed until the lane's first strike after `start`
+  if (t < first){
+    const until = first - t;
+    if (until > half) return { y: H, vy: 0, mode: 'hold', i: -1, since: Infinity, until };
+    const f = half - until;                               // time spent falling from the magnet
+    return { y: H - .5 * g * f * f, vy: -g * f, mode: 'drop', i: -1, since: Infinity, until };
+  }
+  const tau = ((t % P) + P) % P;
+  const i = lastStrike(s, tau);
+  const since = ((tau - s[i]) % P + P) % P, gap = gaps[i], until = gap - since;
+  if (gap <= dtMax){                                     // a plain solved arc: v0 = g·gap/2, lands at gap
+    const v0 = g * gap / 2;
+    return { y: v0 * since - .5 * g * since * since, vy: v0 - g * since, mode: 'arc', i, since, until };
+  }
+  if (since < half){                                     // rise to the magnet, arriving at zero velocity
+    const v0 = g * half;
+    return { y: v0 * since - .5 * g * since * since, vy: v0 - g * since, mode: 'arc', i, since, until };
+  }
+  if (until > half) return { y: H, vy: 0, mode: 'hold', i, since, until };
+  const f = half - until;                                // released: free fall, lands exactly at the strike
+  return { y: H - .5 * g * f * f, vy: -g * f, mode: 'drop', i, since, until };
+}
+
+/* The drumhead's piston travel at songTime t — the visible force behind every bounce.
+   A real marble on a real head is NOT elastic: it keeps only `e` of its speed (the
+   coefficient of restitution). So every strike the piston must supply what the bounce
+   alone can't: Δv = vOut − e·vIn. Positive (almost always) = a kick up through contact,
+   bigger for heavier arcs; negative = the next arc is so much shorter that even a lossy
+   bounce overshoots, so the head reaches up and gives with the ball, catching it like an
+   egg. Each strike contributes a padOffset-shaped envelope (wind-up → stroke →
+   follow-through) scaled by k·Δv.
+   CONTRACT: exactly 0 at every strike — contact is honest (padOffset's contract).
+   `maxA` clamps the travel. During the armed count-in the ball falls from the magnet,
+   so the first strike's vIn is the full drop speed. */
+export function dribblePiston(L, t, { e = .6, k = .08, maxA = .45, start = -Infinity } = {}){
+  const { s, gaps, P, vIn, vOut, dtMax } = L, n = s.length;
+  const first = firstStrike(L, start);
+  const vin = (i, armed) => armed ? g * dtMax / 2 : vIn[i];   // the armed drop lands at full speed
+  const amp = (i, armed) => Math.max(-maxA, Math.min(maxA, k * (vOut[i] - e * vin(i, armed))));
+  if (t < first){                                        // count-in: only the first strike's wind-up
+    const i = s.indexOf(((first % P) + P) % P);
+    return windup(t - first, amp(i, true), first - start, vin(i, true));
+  }
+  // between strike i (just left) and strike j (next): i's follow-through + j's wind-up,
+  // each squeezed to fit inside THIS gap, so dense runs never bleed across a contact
+  const tau = ((t % P) + P) % P;
+  const i = lastStrike(s, tau), j = (i + 1) % n, gap = gaps[i];
+  const since = ((tau - s[i]) % P + P) % P;
+  const armedI = Math.abs((t - since) - first) < 1e-6;
+  return follow(since, amp(i, armedI), gap) + windup(since - gap, amp(j, false), gap, vin(j, false));
+}
+
+/* padOffset's wind-up/stroke, compressed to fit `room` and signed: c ≤ 0 is time to
+   the strike. A > 0 retracts then strokes UP through contact (a kick); A < 0 reaches up
+   then gives DOWN into contact (a catch). Exactly 0 at c = 0 and at c = −room.
+   A catch reaches up INTO the falling ball's path, so its reach is capped by the ball's
+   arrival speed `vi`: the head's stroke (slope ≈ 3|A|/S) must stay slower than the ball,
+   or the head would rise through it. A kick retracts away from the ball — no cap. */
+function windup(c, A, room, vi){
+  if (c > 0 || Math.abs(A) < 1e-4) return 0;
+  const W = Math.min(.3 + Math.abs(A) * .35, room * .6), S = Math.min(.1, W * .5);
+  if (A < 0) A = Math.max(A, -.3 * vi * S);
+  if (c < -W) return 0;
+  if (c < -S){ const u = (c + W) / (W - S); return -A * u * u; }
+  const u = (c + S) / S; return -A * (1 - u * u * u);
+}
+/* padOffset's follow-through wobble, tapered to exactly 0 by `room` (the next strike). */
+function follow(c, A, room){
+  if (c < 0 || c >= room || Math.abs(A) < 1e-4) return 0;
+  const taper = (1 - c / room) ** 2;
+  return A * .33 * Math.sin(c * 16) * Math.exp(-c * 8) * taper;
+}
+
+/* The lane's first strike at or after `start`, in absolute time (−∞ start → −∞: no count-in). */
+export function firstStrike({ s, P }, start){
+  if (!isFinite(start)) return -Infinity;
+  let first = Infinity;
+  for (const si of s){ const a = si + Math.ceil((start - si) / P) * P; if (a < first) first = a; }
+  return first;
+}
+
 /* Note name → frequency (Hz). Sharps only, e.g. F#5, A3. */
 const NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 export function noteHz(n){

@@ -172,7 +172,7 @@ composer.addPass(new OutputPass());
 let bloomScale = 1;
 const _bloomSize = bloom.setSize.bind(bloom);
 bloom.setSize = (w, h) => _bloomSize(Math.max(1, Math.round(w * bloomScale)), Math.max(1, Math.round(h * bloomScale)));
-const gov = makePerfGovernor({ maxPR: Math.min(devicePixelRatio, 2), msaa: MSAA, apply(q){
+const gov = makePerfGovernor({ screen: () => ({ maxPR: Math.min(devicePixelRatio, 2), msaa: Math.min(devicePixelRatio, 2) < 1.5 ? 4 : 0 }), apply(q){
   bloomScale = q.bloomScale;
   for (const rt of [composer.renderTarget1, composer.renderTarget2]) if (rt.samples !== q.msaa){ rt.samples = q.msaa; rt.dispose(); }
   renderer.setPixelRatio(q.pr); composer.setPixelRatio(q.pr);   // (both re-size their targets)

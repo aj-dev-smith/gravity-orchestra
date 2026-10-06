@@ -158,7 +158,7 @@ export function beamMat({ color = 0xffffff, gain = .35, falloff = 1.6, edge = 2 
       varying vec3 vN; varying vec3 vV; varying float vY; varying vec3 vC;
       void main(){
         float face = pow(abs(dot(vN, vV)), uEdge);
-        float a = face * pow(vY, uFall) * uGain;
+        float a = face * pow(clamp(vY, 0., 1.), uFall) * uGain;   // (clamped: MSAA samples edge pixels at the centre, extrapolating vY < 0 → pow = NaN → bloom smears it over the frame)
         gl_FragColor = vec4(uColor * vC, a);              // additive (SrcAlpha·One) → × a once
       }`,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,

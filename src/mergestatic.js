@@ -108,9 +108,27 @@ function freezeStill(root, locals){
   // effects (lights, sprites, points, see-through glows) are placed by STRIKES, which the sweep
   // does not fire — they are never frozen; the rest is guarded by watchFrozen
   const fx = o => o.isLight || o.isSprite || o.isPoints || [].concat(o.material || []).some(m => m.transparent);
-  const freeze = o => { if (!o.matrixAutoUpdate || blocked.has(o) || fx(o)) return; o.matrixAutoUpdate = false; FROZEN.push(o); n++; };
+  const freeze = o => { if (!o.matrixAutoUpdate || blocked.has(o) || fx(o)) return; o.matrixAutoUpdate = false; FROZEN.push(o); n++;
+                       if (o === root) o.updateMatrixWorld = forcedUpdate; };
   for (const l of locals) if (l.still && l.o.matrix.equals(l.m) && (l.o === root || isUnder(l.o, root))) freeze(l.o);
   root.traverse(o => { if (o.name === 'merged-static') freeze(o); });   // (built still)
+  return n;
+}
+/* A frozen STATION ROOT is the one frozen thing outside code is allowed to move (layout, the stage
+   editor: set position/rotation, then updateMatrixWorld(true)). three.js skips the local matrix
+   when matrixAutoUpdate is off, so a FORCED update on a frozen root recomposes it first — the
+   editor's move/turn/measure then sees the truth without knowing about freezing. The per-frame
+   render traversal never forces a still world, so this costs nothing while playing. */
+function forcedUpdate(force){
+  if (force && !this.matrixAutoUpdate) this.updateMatrix();
+  return Object.getPrototypeOf(this).updateMatrixWorld.call(this, force);
+}
+/** Unfreeze a subtree for good (an editor about to animate parts by hand can call this; the next
+    world rebuild re-proves and re-freezes). */
+export function thaw(root){
+  let n = 0; const f = new Set(FROZEN);
+  root.traverse(o => { if (!o.matrixAutoUpdate && f.has(o)){ o.matrixAutoUpdate = true; n++; } });
+  for (let i = FROZEN.length - 1; i >= 0; i--) if (FROZEN[i].matrixAutoUpdate) FROZEN.splice(i, 1);
   return n;
 }
 const isUnder = (o, root) => { for (let p = o.parent; p; p = p.parent) if (p === root) return true; return false; };

@@ -3,7 +3,8 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { SONGS } from './songs/index.js';
+import { SONGS, DEFAULT_SONG, defaultSongKey } from './songs/index.js';
+import { fillSongMenu, addSongOption, isRuntimeSong } from './songmenu.js';
 import { G, UP, UPY, ROLL_T, DESCENT, solveLaunch, arcPos, arcVel, padOffset, beltPhase, deployPose, PAD_R, padRadius, layoutPads } from './engine.js';
 import * as audio from './audio.js';
 import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } from './juice.js';
@@ -1061,11 +1062,11 @@ if (soloI && soloI.demo){
     melody: Array.from({ length: Math.round(beats / 4) }, (_, i) => [i % 2 ? 'G3' : 'C3', 4]),
     parts: { [soloKey]: part } };
 }
-Object.entries(SONGS).forEach(([k, s]) => {
-  const o = document.createElement('option');
-  o.value = k; o.textContent = s.label;
-  sel.appendChild(o);
-});
+fillSongMenu(sel, SONGS, isRuntimeSong);              // shelved <optgroup>s (songmenu.js)
+{ // opening song: ?song=<key> > the seasonal house song (songs/index.js) — pinned under ?debug
+  const q = new URLSearchParams(location.search), want = q.get('song');
+  sel.value = SONGS[want] ? want : q.has('debug') ? DEFAULT_SONG : defaultSongKey();
+}
 if (soloI && SONGS['solo-' + soloKey]) sel.value = 'solo-' + soloKey;
 buildWorld(sel.value);
 if (soloI) lookAtStation(soloKey);
@@ -1377,17 +1378,19 @@ sel.addEventListener('change', () => {
   audio.primeSamples();                                 // change event is a gesture: unlock new bank
   audio.showState();
   shareEl.hidden = !DYNAMIC.has(sel.value);
-  if (!DYNAMIC.has(sel.value)) history.replaceState(null, '', location.pathname + location.search);
+  if (!DYNAMIC.has(sel.value)){                         // address bar = the song on screen (drops a stale #s=)
+    const u = new URL(location.href), d = u.searchParams.has('debug') ? DEFAULT_SONG : defaultSongKey();
+    if (isRuntimeSong(sel.value) || sel.value === d) u.searchParams.delete('song'); else u.searchParams.set('song', sel.value);
+    history.replaceState(null, '', u.pathname + u.search.replace(/=(?=&|$)/g, ''));   // keep a bare '?debug' bare
+  }
 });
 
 /* ---------------- dynamic songs (MIDI import / share links) ---------------- */
-const DYNAMIC = new Set(['imported', 'shared']);
+const DYNAMIC = new Set(['imported', 'shared']);   // SHARE LINK shows for these — narrower than isRuntimeSong (a ?solo demo isn't shareable song data)
 const shareEl = document.getElementById('share');
 function registerSong(key, song){
   SONGS[key] = song;
-  let o = [...sel.options].find(x => x.value === key);
-  if (!o){ o = document.createElement('option'); o.value = key; sel.appendChild(o); }
-  o.textContent = song.label;
+  addSongOption(sel, key, song.label);                  // the 'Yours' shelf, top of the menu
   sel.value = key;
   buildWorld(key);
   shareEl.hidden = false;

@@ -18,13 +18,13 @@
                 ending with the mock-sob E5–D5. Lead alone at first, the MUSIC BOX joins
                 an octave up for the second half (a wind-up toy's shadow).
      B  48–72   THE EPISODE ON A: the hop moves to A, sweeter; the TURNTABLE (vibraphone)
-                carries it an octave down, the music box glints; a climb to E6 over B♭ and
+                carries it an octave down, the music box glints; a climb to E6 over F and
                 C (Gounod's sidestep) and a sigh home.
      A' 72–96   THE PROCESSION AGAIN: the theme's closing half — everyone, the bell tolls
                 for the puppet, the bass drum walks, and the mock-sob lands on D.
 
    WHO PLAYS: lead belt (the theme), string bass (pizzicato roots on both dotted beats —
-   8 strings: D2 A1 F2 G1 D#2 A#1 E2 C2), marimba (the puppets' wooden clatter: soft dry
+   7 strings: D2 A1 F2 G1 D#2 E2 C2), marimba (the puppets' wooden clatter: soft dry
    dyads on the off-eighths), music box (C5–C7: the octave shadow + glints), turntable
    (A3–E5: the episode's melody and the return's lower octave), bowls (a soft dirge drone on A),
    bells (the funeral toll), drums (a muffled bass drum + a ticking snare: the march).
@@ -72,11 +72,11 @@ const melody = [...PHRASE_1, ...PHRASE_2, ...EPISODE, ...PHRASE_2];
 // ---- harmony: one chord per 6/8 bar -------------------------------------------------
 const CH_1 = ['Dm', 'A', 'Dm', 'A', 'Dm', 'F', 'Am', 'A7'];
 const CH_2 = ['Dm', 'A', 'Dm', 'A', 'Gm', 'Eb', 'A7', 'A7>Dm'];
-const CH_E = ['A', 'E7', 'A', 'E7', 'Bb', 'C7', 'A7', 'A7'];
+const CH_E = ['A', 'E7', 'A', 'E7', 'F', 'C7', 'A7', 'A7'];   // (bar 5 on F: the line A·A·A#·C·D = root-3rd, passing, 5th, 6th)
 const CHART = [...CH_1, ...CH_2, ...CH_E, ...CH_2];
 const ROOT = { Dm: 'D2', A: 'A1', F: 'F2', Am: 'A1', A7: 'A1', Gm: 'G1', Eb: 'D#2', E7: 'E2', Bb: 'A#1', C7: 'C2' };
 const DYAD = {                                    // the clatter: two soft notes under the tune
-  Dm: ['F4', 'A4'], A: ['E4', 'A4'], F: ['F4', 'A4'], Am: ['E4', 'A4'], A7: ['E4', 'G4'], Gm: ['G4', 'A#4'],
+  Dm: ['F4', 'A4'], A: ['E4', 'A4'], F: ['F4', 'A4'], Am: ['E4', 'A4'], A7: ['E4', 'G4'], Gm: ['D4', 'G4'],
   Eb: ['G4', 'A#4'], E7: ['E4', 'G#4'], Bb: ['F4', 'A#4'], C7: ['E4', 'G4'],
 };
 
@@ -111,7 +111,7 @@ const turntable = [
 // BOWLS: a soft dirge drone on A, the procession's floor; D only for the last step
 // (A, the dominant: it sits under both the D minor and the A bars without a rub)
 const bowls = [
-  [0, 'A3', .32, 6], [24, 'A3', .32, 6], [60, 'A#3', .3, 3], [63, 'C4', .28, 3],
+  [0, 'A3', .32, 6], [24, 'A3', .32, 6], [60, 'A3', .3, 3], [63, 'C4', .28, 3],
   [72, 'A3', .4, 6], [94.5, 'D3', .45, 7], [94.5, 'A3', .38, 7],
 ];
 // BELLS: the funeral toll
@@ -132,7 +132,10 @@ export default {
   melody,
   parts: { musicbox, turntable, marimba, bass, bowls, bells },
   mix: { musicbox: .75, turntable: .62, marimba: .5, bass: .72, bowls: .55, bells: .75 },
-  director: { musicbox: 1.6, turntable: 1.6, bells: 1.8, marimba: .5 },   // the clatter is dense but it's the accompaniment
+  director: { musicbox: 1.6, turntable: 1.6, bells: 1.8, marimba: .5,   // the clatter is dense but it's the accompaniment
+    shots: { bells: { x: 4.5, up: 7.2, dist: 12.5 } },   // the toll against the moon, clear of the music box
+    at: [[0, 'stage', 6], [48, 'turntable', 12], [71.6, 'bells', 6], [90, 'stage', 6]] },   // the procession, the episode, the toll
+  storm: [72],                                       // one distant flicker as the puppet's bell tolls
   drums: { kick, snare, floorHigh, crash },
 };
 

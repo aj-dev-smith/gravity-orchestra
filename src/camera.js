@@ -32,6 +32,7 @@ const MIN_HOLD = 2.6, BORED = 7, SWITCH = 1.15, HARD_CUT = 12, STAGE_PULL = .9;
      SKIM_S      — the lead's 16th-note skim is the money shot: hold the belt
      the loop seam (no music, no lead marble) breathes wide, never the empty-wall shot. */
 const ENSEMBLE_N = 7, ENSEMBLE_S = 2.6, ENSEMBLE_REST = 4, SKIM_S = 2.8;   // REST: s off the wide before it re-earns one
+const FORCE_HOLD = 1;   // s: an entrance can't cut away from a shot younger than this (no .2 s flash cuts)
 const _Y = new THREE.Vector3(0, 1, 0);
 
 /* Keyboard fly: key → [right, up, forward] screen-space contribution. */
@@ -56,7 +57,22 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
   let curTracks = [];                                         // last-built tracks, for the button row
   let stations = [], stage = null;                            // [{key, eye, aim, color}] + the wide {eye, aim}
   let cutNow = false, openUntil = -Infinity, stageOff = -99;
+  let blockers = [];                                          // world Box3s a glide must not fly through
   const _ideal = new THREE.Vector3(), _aim = new THREE.Vector3(), _focus = new THREE.Vector3();
+  const _ray = new THREE.Ray(), _hit = new THREE.Vector3(), _box = new THREE.Box3();
+  /* does the straight eye path from → to pass THROUGH a blocker (a station, the kit, a belt
+     bay)? Boxes are shrunk a touch (their bounds are loose round rails and legs) and a box
+     that holds either end is ignored (an eye parked inside a loose bound isn't a crossing). */
+  function pathBlocked(from, to){
+    const len = from.distanceTo(to); if (len < 1e-3) return false;
+    _ray.origin.copy(from); _ray.direction.copy(to).sub(from).divideScalar(len);
+    for (const b of blockers){
+      _box.copy(b).expandByScalar(-.6);
+      if (_box.isEmpty() || _box.containsPoint(from) || _box.containsPoint(to)) continue;
+      if (_ray.intersectBox(_box, _hit) && _hit.distanceTo(from) < len) return true;
+    }
+    return false;
+  }
 
   const camTarget = new THREE.Vector3(0, stageY + .6, 0);     // the static band centre
   const camPos = new THREE.Vector3(4.5, stageY + 3.4, 9.5);
@@ -142,9 +158,9 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
   /* Called by buildWorld after syncTracks: the song's instrument stations (world-space
      eye + aim per station) and the wide STAGE shot. A song that brings stations opens
      on the director — it is the show; songs without keep the free-look default. */
-  function syncStations(list, wide, { auto = true, openWide = false, openUntil: openT = 0 } = {}){
+  function syncStations(list, wide, { auto = true, openWide = false, openUntil: openT = 0, blockers: bl = [] } = {}){
     const had = stations.length;
-    stations = list; stage = wide;
+    stations = list; stage = wide; blockers = bl;
     if (auto && list.length && !had && mode === DEFAULT_MODE) mode = 'auto';
     if (!list.length && mode === 'stage') mode = DEFAULT_MODE;
     if (!FIXED_OK.has(mode) && !curTracks.some(t => t.role === mode) && !list.some(st => st.key === mode)) mode = 'auto';
@@ -202,10 +218,13 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
         if (marblePts.length) cand[want] = want === 'all' ? 1.25 : Math.min(Math.max(score, 1.4) * 1.05, 1.9);
         stations.forEach(st => { cand[st.key] = sc[st.key] ?? 0; });
         const held = time - lastCut;
-        if (sc._skim){                                        // the money shot: the lead's skim, no matter the hold
+        if (sc._script && (sc._script === 'stage' || stations.some(st => st.key === sc._script) ||
+            (marblePts.length && tracks.some(t => t.role === sc._script)))){   // the song's SCRIPTED story beat
+          if (autoWant !== sc._script){ autoWant = sc._script; lastCut = time; cutNow = true; }
+        } else if (sc._skim){                                 // the money shot: the lead's skim, no matter the hold
           if (autoWant !== 'lead'){ autoWant = 'lead'; lastCut = time; cutNow = true; }
         } else if (sc._force && stations.some(st => st.key === sc._force)){   // a station's ENTRANCE: cut on it
-          if (autoWant !== sc._force){ autoWant = sc._force; lastCut = time; cutNow = true; }
+          if (autoWant !== sc._force && time - lastCut > FORCE_HOLD){ autoWant = sc._force; lastCut = time; cutNow = true; }
         } else if (sc._seam){                                 // the loop seam: breathe wide, re-open on the newborn's fall
           if (autoWant !== 'stage'){ autoWant = 'stage'; lastCut = time; cutNow = true; }
         } else {
@@ -266,7 +285,8 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
       ideal.y = stageY + 3.4 + lift*.4;                       // eye height: the band plane (+ a share of the lift)
       aim.copy(focus); aim.y = stageY + .6 + lift*.6;         // look at the band centre, not the bobbing marble
     }
-    if (cutNow && camPos.distanceTo(ideal) > HARD_CUT){ camPos.copy(ideal); camTarget.copy(aim); }
+    // a far jump — or a glide whose eye would fly through a machine — is a hard CUT
+    if (cutNow && (camPos.distanceTo(ideal) > HARD_CUT || pathBlocked(camPos, ideal))){ camPos.copy(ideal); camTarget.copy(aim); }
     cutNow = false;
     camPos.lerp(ideal, 1 - Math.pow(.0015, dt));
     camTarget.lerp(aim, 1 - Math.pow(.0008, dt));

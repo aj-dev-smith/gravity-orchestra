@@ -10,8 +10,14 @@ import { STAGE, rng, canvasTex, radialTex, glowPoints, glowMat, instanced, trs }
    oaks clawing up past the machines; candles guttering on the graves;
    will-o'-the-wisps drifting low; bats wheeling across the moon; a
    cold green-silver GROUND FOG rolling over everything. Now and then
-   (a pure fn of songTime — the same night every loop) sheet lightning
-   flickers behind the chapel and every silhouette jumps out.
+   sheet lightning flickers behind the chapel and every silhouette jumps
+   out — ON THE MUSIC: a song lists its thunder in `song.storm` (beats; the
+   thunder IS the cymbal), so the flash lands on the crash, every loop. A
+   song that declares no storm gets only a rare, faint hashed rumble.
+   And a song can bring the DAWN (`song.sky`: [[beat, 'night'|'dawn']]):
+   the sky greys toward rose, the horizon warms, the candles and wisps
+   gutter out, the ground fog thins — then night falls again across the
+   loop's roll-in. Both are pure fns of songTime (no state, no allocation).
 
    Layers, near → far: the stage (instruments on the floor contract),
    the side graves (lit, fogged), the fence, the chapel + trees (dark
@@ -26,7 +32,7 @@ import { STAGE, rng, canvasTex, radialTex, glowPoints, glowMat, instanced, trs }
 
 const FOG = 0x0e151c;           // = the sky's horizon: far ground melts into it
 const SKY_R = 140;              // sky dome radius (camera.far is 200; the stage cam sits ≤ ~50 from the origin)
-const MOON = new THREE.Vector3(-40, 22, -120);
+const MOON = new THREE.Vector3(84, -5, -122);   // low, right of the chapel: from the stage shot it hangs behind the bells' arch
 const MOON_R = 15;
 const N_BATS = 14;
 const FENCE_Z = -58, FENCE_X = 62;
@@ -68,16 +74,18 @@ function moonTex(){
   });
 }
 
-/* a rag of cloud: soft noise inside an elliptical mask (no hard plane edges) */
+/* a rag of cloud: soft noise inside an elliptical mask (no hard plane edges), blurred */
 function cloudRagTex(seed){
-  return canvasTex(256, 128, (x, w, h) => {
+  return canvasTex(512, 256, (x, w, h) => {
     const R = rng(seed);
-    for (let i = 0; i < 70; i++){
-      const cx = w * (.1 + .8 * R()), cy = h * (.3 + .4 * R()), r = 10 + R() * 36, a = .08 + R() * .2;
+    x.filter = 'blur(6px)';                                       // soft edges: no stair-steps when lit by a flash
+    for (let i = 0; i < 90; i++){
+      const cx = w * (.1 + .8 * R()), cy = h * (.3 + .4 * R()), r = 20 + R() * 72, a = .06 + R() * .16;
       const g = x.createRadialGradient(cx, cy, 0, cx, cy, r);
       g.addColorStop(0, `rgba(255,255,255,${a})`); g.addColorStop(1, 'rgba(255,255,255,0)');
       x.fillStyle = g; x.fillRect(cx - r, cy - r, 2 * r, 2 * r);
     }
+    x.filter = 'none';
     x.globalCompositeOperation = 'destination-in';
     x.save(); x.translate(w / 2, h / 2); x.scale(1, h / w);
     const m = x.createRadialGradient(0, 0, 0, 0, 0, w / 2);
@@ -394,7 +402,7 @@ export default {
     const bats = new THREE.InstancedMesh(new THREE.PlaneGeometry(2.4, 1.2), batMat, N_BATS);
     bats.frustumCulled = false; group.add(bats);
     const batP = Array.from({ length: N_BATS }, (_, i) => ({
-      cx: MOON.x * .6 + (R() - .5) * 30, cy: 14 + R() * 24, cz: -64 + (R() - .5) * 36,
+      cx: MOON.x * .6 + (R() - .5) * 30, cy: 2 + R() * 18, cz: -64 + (R() - .5) * 36,
       rx: 16 + R() * 26, rz: 8 + R() * 14, w: (.25 + R() * .3) * (i % 3 ? 1 : -1), ph: R() * 6.283, flap: 9 + R() * 5, s: .7 + R() * .6 }));
     const _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _e = new THREE.Euler();
     function updateBats(t){
@@ -411,38 +419,86 @@ export default {
     }
     updateBats(0);
 
-    /* sheet lightning: a pure fn of songTime — windows every ~11–19 s (hashed), each a
-       double flicker. Brightens the sky dome + moon halo; the silhouettes jump out. */
+    // ---- DAWN: a rose-grey glow low behind the chapel (opacity driven by the song's sky) ----
+    const dawnMat = glowMat(radialTex(128, [[0, 1], [.4, .45], [1, 0]]), 0xd99a8c, 0);
+    const dawnGlow = new THREE.Mesh(new THREE.PlaneGeometry(420, 90), dawnMat);
+    dawnGlow.position.set(10, F + 6, -130); dawnGlow.renderOrder = -8; group.add(dawnGlow);
+    const NIGHT_FOG = new THREE.Color(FOG), DAWN_FOG = new THREE.Color(0x3a3c48);
+    const DAWN_SKY = new THREE.Color(2.6, 2.2, 2.35);             // ×the sky texture: ink → slate-rose
+    const CLOUD_NIGHT = new THREE.Color(0x1c2630), CLOUD_LIT = new THREE.Color(0x9fb0c8), CLOUD_DAWN = new THREE.Color(0x6a5a66);
+    const background = new THREE.Color(FOG);
+
+    /* sheet lightning, a double flicker: d = seconds since the strike */
+    const bolt = d => (d < 0 || d > .8) ? 0 : Math.exp(-d * 18) + .7 * Math.exp(-Math.max(0, d - .22) * 14) * (d > .22 ? 1 : 0);
     const hash = k => { const s = Math.sin(k * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
-    function lightning(t){
-      const W = 14, k = Math.floor(t / W), u = t - k * W, at = 2 + hash(k) * 9;
-      if (hash(k + 7) < .45) return 0;                                 // not every window
-      const d = u - at;
-      if (d < 0 || d > .7) return 0;
-      return Math.exp(-d * 18) + .7 * Math.exp(-Math.max(0, d - .22) * 14) * (d > .22 ? 1 : 0);
+    const wrap = (x, P) => ((x % P) + P) % P;
+    /* the song's STORM (cues.storm = beats): a flash on each, same moment every loop.
+       No storm declared → a rare faint rumble (hashed 20 s windows, ~1 in 4, at half strength). */
+    function lightning(t, cues){
+      if (cues && cues.storm){
+        const { rollT, beat, P } = cues, lt = wrap(t, P);
+        let L = 0;
+        for (const b of cues.storm) L = Math.max(L, bolt(wrap(lt - (rollT + b * beat), P)));
+        return L;
+      }
+      const W = 20, k = Math.floor(t / W);
+      return hash(k + 7) < .75 ? 0 : .5 * bolt(t - k * W - (3 + hash(k) * 12));
     }
+    /* how far toward DAWN (0 night … 1 dawn): the phase in force at this loop beat, eased in
+       over 8 beats; across the seam's roll-in night falls back in (a 2.6 s fade). */
+    function dawnAt(t, cues){
+      if (!cues || !cues.sky || !cues.sky.length) return 0;
+      const { rollT, beat, P } = cues, lt = wrap(t, P), b = (lt - rollT) / beat;
+      const sky = cues.sky;
+      if (lt < rollT){                                                // the roll-in: from the loop's last phase back to the first
+        const last = sky[sky.length - 1][1] === 'dawn' ? 1 : 0, first = sky[0][1] === 'dawn' ? 1 : 0;
+        const u = lt / rollT, e = u * u * (3 - 2 * u);
+        return last + (first - last) * e;
+      }
+      let k = -1;
+      for (let i = 0; i < sky.length; i++) if (sky[i][0] <= b) k = i;
+      if (k < 0) return sky[0][1] === 'dawn' ? 1 : 0;
+      const to = sky[k][1] === 'dawn' ? 1 : 0, from = k > 0 ? (sky[k - 1][1] === 'dawn' ? 1 : 0) : 0;
+      const u = Math.min(1, (b - sky[k][0]) / 8), e = u * u * (3 - 2 * u);
+      return from + (to - from) * e;
+    }
+    let fogBase = -1;                                                 // main's density for this song (read at night)
 
     return {
       group, ...STAGE, HW: FENCE_X, BACK: FENCE_Z, FRONT: 40,
-      fog: new THREE.FogExp2(FOG, .017), background: new THREE.Color(FOG),
+      fog: new THREE.FogExp2(FOG, .017), background,
       mood: { ambient: [0x26324a, 1.6], hemi: [0x9db4e0, 0x141c16, .95] },   // cold moonlight
-      update(dt, songTime, camera, energy = 0){
+      update(dt, songTime, camera, energy = 0, cues = null){
         const t = songTime;
+        const L = lightning(t, cues), Dn = dawnAt(t, cues);
         flames.material.uniforms.uTime.value = t; halos.material.uniforms.uTime.value = t;
         wisps.material.uniforms.uTime.value = t;
-        flames.material.uniforms.uBoost.value = 1 + .3 * energy;
+        flames.material.uniforms.uBoost.value = (1 + .3 * energy) * (1 - .75 * Dn);   // the candles gutter at dawn
+        halos.material.uniforms.uBoost.value = 1 - .8 * Dn;
+        wisps.material.uniforms.uBoost.value = 1 - .95 * Dn;                          // the wisps flee the light
         for (const f of fogs) f.material.uniforms.uTime.value = t;
         for (const c of clouds){                                        // slide across the moon, fade at the ends
           const span = 150, u = ((t * c.speed + c.off) % span + span) % span;
           c.c.position.x = MOON.x - span / 2 + u;
           c.m.opacity = .75 * Math.sin(Math.PI * u / span);
+          c.m.color.copy(CLOUD_NIGHT).lerp(CLOUD_DAWN, Dn).lerp(CLOUD_LIT, Math.min(1, .8 * L));   // a flash lights their rims
         }
         updateBats(t);
-        const L = lightning(t);
-        skyMat.color.copy(skyBase).multiplyScalar(1 + .7 * L);
+        skyMat.color.copy(skyBase).lerp(DAWN_SKY, Dn).multiplyScalar(1 + .7 * L);
         flashMat.opacity = .85 * L;
-        haloMat.opacity = .55 + .25 * energy + .6 * L;
-        for (const f of fogs) f.material.uniforms.uBoost.value = 1 + 1.4 * L;
+        dawnMat.opacity = .5 * Dn;
+        moonMat.opacity = 1 - .45 * Dn;
+        haloMat.opacity = (.55 + .25 * energy) * (1 - .6 * Dn) + .6 * L;
+        for (const f of fogs) f.material.uniforms.uBoost.value = (1 + 1.4 * L) * (1 + .5 * Dn);
+        // the shared FogExp2 (owned by the host; this room tints it while it's showing):
+        // greyer and ~30 % thinner at dawn. main sets the song's density — read it at night.
+        const fog = scene.fog;
+        if (fog){
+          if (Dn === 0 || fogBase < 0) fogBase = fog.density;
+          fog.density = fogBase * (1 - .3 * Dn);
+          fog.color.copy(NIGHT_FOG).lerp(DAWN_FOG, Dn);
+          background.copy(fog.color);
+        }
       },
       dispose(){},
     };

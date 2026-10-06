@@ -417,3 +417,131 @@ describe('ricochet: POWERED plates (lossy bounce + a moving-wall kick)', () => {
     expect(wallSpeed(-4, 4 * E_REST)).toBeCloseTo(0, 12);             // e·|vIn| out: a fixed wall suffices
   });
 });
+
+import { phosphor, phosphorAt, charge, hotOf, PHOS, LOOK, armPhosphor, paintPhosphor } from '../src/instruments/ricochet/phosphor.js';
+
+describe('ricochet: phosphor plates (struck once per loop → a visible afterglow)', () => {
+  const en = orb.entry;
+  const levelAt = (j, t) => phosphorAt(orb, j, t, {}).level;
+  it('every plate is DORMANT through the count-in and until its own first strike', () => {
+    for (let t = START; t < en.tFirst - 1e-6; t += .05)
+      for (let j = 0; j < N; j++) expect(levelAt(j, t)).toBe(0);
+    for (let j = 0; j < N; j++){
+      const t1 = orb.nodes[j].t + Math.ceil((en.tFirst - 1e-6 - orb.nodes[j].t) / P) * P;   // its first real strike
+      expect(levelAt(j, t1 - 1e-4)).toBe(0);
+      expect(levelAt(j, t1 + .5)).toBeGreaterThan(.5);                                       // charged
+      expect(phosphorAt(orb, j, t1 + .5, {}).n).toBe(1);
+      expect(phosphorAt(orb, j, t1 + P + .5, {}).n).toBe(2);
+    }
+    expect(phosphor(Infinity, P)).toBe(0);
+    expect(hotOf(Infinity)).toBe(0);
+  });
+  it('one charge: zero at contact (continuous), soaks in, then decays monotonically', () => {
+    expect(charge(0, P)).toBe(0);
+    let peakS = 0;                                                       // numeric argmax of c
+    for (let s = 0, best = -1; s < P; s += .001){ const c = charge(s, P); if (c > best){ best = c; peakS = s; } }
+    expect(peakS).toBeGreaterThan(0); expect(peakS).toBeLessThan(1);   // soaks in fast, then only fades
+    let prev = Infinity;
+    for (let s = peakS; s < 3 * P; s += .01){ const c = charge(s, P); expect(c).toBeLessThanOrEqual(prev + 1e-12); prev = c; }
+    for (const n of [1, 2, Infinity]){
+      prev = Infinity;
+      for (let s = peakS + .05; s < P; s += .01){ const L = phosphor(s, P, n); expect(L).toBeLessThanOrEqual(prev + 1e-12); prev = L; }
+    }
+  });
+  it('re-charges at each loop\'s strike: dim just before, bright again just after', () => {
+    for (let j = 0; j < N; j++){
+      if (orb.nodes[j].relay) continue;
+      const t2 = orb.nodes[j].t + Math.ceil((en.tFirst - 1e-6 - orb.nodes[j].t) / P) * P + P;   // its 2nd strike
+      const before = levelAt(j, t2 - 1e-3), after = levelAt(j, t2 + .6);
+      expect(before).toBeLessThan(.2);                          // faded over ~one loop
+      expect(before).toBeGreaterThan(0);                        // …but still a memory, not reset
+      expect(after).toBeGreaterThan(.8);
+      expect(after).toBeLessThan(1.05);                         // steady state never runs away
+    }
+  });
+  it('is continuous everywhere — across every strike, the loop seam and the count-in edge', () => {
+    const seams = [en.tFirst, P, 2 * P, 3 * P, ...orb.nodes.map(n => n.t + 2 * P)];
+    for (const ts of seams) for (let j = 0; j < N; j++)
+      expect(Math.abs(levelAt(j, ts + 1e-7) - levelAt(j, ts - 1e-7))).toBeLessThan(1e-4);
+    // and smooth to the eye frame-to-frame (60 fps) over three loops
+    for (let j = 0; j < N; j += 3){
+      let prev = levelAt(j, START);
+      for (let t = START; t < 3 * P; t += 1 / 60){ const L = levelAt(j, t); expect(Math.abs(L - prev)).toBeLessThan(.15); prev = L; }
+    }
+  });
+  it('the sculpture FILLS IN: late in the loop the most recent plates glow brightest', () => {
+    const t = 2 * P + orb.nodes[N - 1].t + .5;                  // just after the last note of loop 3
+    const lit = orb.nodes.map((nd, j) => ({ j, s: phosphorAt(orb, j, t, {}).s, L: levelAt(j, t) }))
+      .filter(x => x.s > .6).sort((a, b) => a.s - b.s);
+    for (let k = 1; k < lit.length; k++) expect(lit[k].L).toBeLessThanOrEqual(lit[k - 1].L + 1e-12);
+  });
+  it('two-part decay: a vivid WAKE behind the marble, a faint memory elsewhere — not a lit constellation', () => {
+    // steady state (loops 3+), at every moment incl. the silent seam: only a minority of plates are bright
+    let worst = 0;
+    for (let t = 3 * P; t < 4 * P; t += .1){
+      let hi = 0;
+      for (let j = 0; j < N; j++) if (levelAt(j, t) > .4) hi++;
+      worst = Math.max(worst, hi / N);
+    }
+    expect(worst).toBeLessThanOrEqual(.3);
+    // and a plate half a loop old is a dim memory (but alive)
+    const mid = phosphor(P / 2, P);
+    expect(mid).toBeGreaterThan(.05); expect(mid).toBeLessThan(.3);
+  });
+});
+
+describe('ricochet: phosphor render (paint is honest: no negative light, no allocation)', () => {
+  const lit = c => [c.r, c.g, c.b].every(x => x >= 0 && isFinite(x));
+  const mk = (variant, relay, hue) => {
+    const col = new THREE.Color(hue);
+    const discM = relay
+      ? new THREE.MeshStandardMaterial({ color: 0x0a0c14, envMapIntensity: 1.1, emissive: col.clone(), emissiveIntensity: .05 })
+      : new THREE.MeshStandardMaterial({ color: col.clone().lerp(new THREE.Color(0xffffff), .35), envMapIntensity: 2,
+          emissive: col.clone(), emissiveIntensity: .12, transparent: true, opacity: .38 });
+    const pl = { i: 0, relay, col, colBase: col.clone(), discM, nd: { vel: .8 } };
+    if (variant === 'powered'){                     // the main tree's driver: coil on rimM, jewel rim on bezelM
+      pl.rimM = new THREE.MeshBasicMaterial({ color: col.clone().multiplyScalar(.25) });
+      pl.bezelM = new THREE.MeshStandardMaterial({ emissive: col.clone(), emissiveIntensity: relay ? .1 : .5 });
+      pl.pw = .6;
+    } else pl.rimM = new THREE.MeshBasicMaterial({ color: col.clone() });
+    return pl;
+  };
+  for (const variant of ['plain', 'powered']) for (const relay of [false, true]) for (const hue of [0x40e0ff, 0xff4fa8, 0x9a6bff])
+    it(`${variant} ${relay ? 'relay' : 'plate'} ${hue.toString(16)}: 1000 frames over three loops stay physical`, () => {
+      const pl = mk(variant, relay, hue);
+      armPhosphor(pl);
+      const ph = pl.ph, refs = [pl.discM.emissive, pl.discM.color, pl.rimM.color, pl.bezelM?.emissive];
+      const H = new THREE.Color(0xe8fbff);
+      for (let f = 0; f < 1000; f++){
+        const t = START + f * (3 * P - START) / 1000;
+        const st = phosphorAt(orb, 0, t, {});
+        const fl = isFinite(st.s) ? .8 * Math.exp(-st.s * 5) : 0;
+        // simulate the loop's own baseline writes this frame
+        pl.discM.emissiveIntensity = (relay ? .05 : .12) + (relay ? 1.2 : 3.2) * fl;
+        let pre = 0;
+        if (variant === 'powered'){
+          const ch = .5 * (1 + Math.sin(t)) * pl.pw, fx = fl * pl.pw, hot = Math.min(1, fx * 1.2);
+          pre = ch;
+          pl.discM.emissiveIntensity += .5 * ch;
+          pl.rimM.color.copy(pl.colBase).multiplyScalar(.25 + 2.6 * ch).lerp(H, hot).multiplyScalar(1 + 2.4 * fx);
+          pl.bezelM.emissive.copy(pl.colBase).lerp(H, hot);
+          pl.bezelM.emissiveIntensity = (relay ? .1 : .5) + 1.6 * ch + 2.2 * fx;
+        } else pl.rimM.color.copy(pl.colBase).multiplyScalar(.7 + 3.5 * fl);
+        const coil = pl.rimM.color.clone();
+        paintPhosphor(pl, st, pre);
+        expect(pl.ph).toBe(ph);
+        expect(lit(pl.discM.emissive)).toBe(true); expect(lit(pl.discM.color)).toBe(true);
+        expect(lit(pl.rimM.color)).toBe(true);
+        expect(pl.discM.emissiveIntensity).toBeGreaterThanOrEqual(0);
+        expect(pl.discM.opacity).toBeGreaterThanOrEqual(0); expect(pl.discM.opacity).toBeLessThanOrEqual(1);
+        if (variant === 'powered'){
+          expect(pl.rimM.color.equals(coil)).toBe(true);               // the voice coil is NOT the phosphor's
+          expect(pl.bezelM.emissiveIntensity).toBeGreaterThanOrEqual(0);
+          expect(lit(pl.bezelM.emissive)).toBe(true);
+        }
+        // the body never gets brighter than the smoked-lit cap (no mirror pop at contact)
+        if (!relay) expect(pl.discM.envMapIntensity).toBeLessThanOrEqual(2 * LOOK.BODY_LIT + 1e-9);
+      }
+      expect(refs.every((r, k) => r === [pl.discM.emissive, pl.discM.color, pl.rimM.color, pl.bezelM?.emissive][k])).toBe(true);
+    });
+});

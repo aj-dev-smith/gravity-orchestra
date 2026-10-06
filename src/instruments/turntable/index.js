@@ -98,13 +98,15 @@ export default {
       group.add(platter);
       const st = R.staff;
       const rings = st ? [...new Set(R.evs.map(e => e.note))].sort((a, b) => noteNum(a) - noteNum(b)) : [];
-      const vinylTex = vinylTexture();
-      const vinyl = new THREE.Mesh(new THREE.CylinderGeometry(R_PLAT, R_PLAT, TOP_T, 128, 1),
-        [new THREE.MeshStandardMaterial({ color: 0x15171d, metalness: .7, roughness: .3, envMap }),
-         new THREE.MeshStandardMaterial({ map: vinylTex, color: 0xffffff, metalness: .35, roughness: .32, envMap, envMapIntensity: .9 }),
-         M.dark]);
-      vinyl.position.y = -TOP_T / 2 - .003;
-      platter.add(vinyl);
+            // (single-material meshes only: main disposes o.material directly on a song change)
+      const side = new THREE.Mesh(new THREE.CylinderGeometry(R_PLAT, R_PLAT, TOP_T, 128, 1, true),
+        new THREE.MeshStandardMaterial({ color: 0x15171d, metalness: .7, roughness: .3, envMap }));
+      side.position.y = -TOP_T / 2; platter.add(side);
+      const under = new THREE.Mesh(new THREE.CircleGeometry(R_PLAT, 96).rotateX(Math.PI / 2), M.dark);
+      under.position.y = -TOP_T; platter.add(under);
+      const vinyl = new THREE.Mesh(new THREE.CircleGeometry(R_PLAT, 128).rotateX(-Math.PI / 2),
+        new THREE.MeshStandardMaterial({ map: vinylTexture(), color: 0xffffff, metalness: .35, roughness: .32, envMap, envMapIntensity: .9 }));
+      vinyl.position.y = -.003; platter.add(vinyl);
       // strobe band: rows of dots on the rim's upper edge
       const strobeTex = strobeTexture();
       const band = new THREE.Mesh(new THREE.CylinderGeometry(R_PLAT + .012, R_PLAT + .012, .2, 180, 1, true),
@@ -115,9 +117,10 @@ export default {
       const driveRim = new THREE.Mesh(new THREE.CylinderGeometry(R_SUB, R_SUB, PLAT_T - TOP_T, 96, 1), M.alu);
       driveRim.position.y = Y_DRIVE - Y_PLAT; platter.add(driveRim);
       // centre label + spindle
+      const labelTex = labelTexture();
       const label = new THREE.Mesh(new THREE.CircleGeometry(R_LABEL, 64).rotateX(-Math.PI / 2),
-        new THREE.MeshStandardMaterial({ map: labelTexture(), metalness: .1, roughness: .5,
-          emissive: new THREE.Color(0xffffff), emissiveMap: labelTexture(true), emissiveIntensity: .55 }));
+        new THREE.MeshStandardMaterial({ map: labelTex, metalness: .1, roughness: .5,
+          emissive: new THREE.Color(0xffffff), emissiveMap: labelTex, emissiveIntensity: .35 }));
       label.position.y = .004; platter.add(label);
       const spindle = new THREE.Mesh(new THREE.CylinderGeometry(.09, .11, .6, 16), M.chrome);
       spindle.position.y = .3; platter.add(spindle);
@@ -240,6 +243,14 @@ export default {
       const b = ballAt(R, t);
       const bp = toLocal(b.s, b.y);
       S.marble.position.set(bp[0], bp[1], bp[2]);
+      // squash & stretch: stretch along the velocity with speed, a quick squash at each contact
+      const sp = Math.hypot(b.vs, b.vy), sq = b.i >= 0 ? .28 * ring(b.since, 22) : 0;
+      if (sp > .05){
+        S.nv.set(b.vs * Math.cos(GEOM.A_S), b.vy, b.vs * Math.sin(GEOM.A_S)).divideScalar(sp);
+        S.marble.quaternion.setFromUnitVectors(S.up, S.nv);
+      }
+      const st = Math.min(.22, sp * .018) - sq;
+      S.marble.scale.set(1 - st * .5, 1 + st, 1 - st * .5);
       const ev = b.i >= 0 ? R.evs[b.i] : null;
       const since = b.i >= 0 ? b.since : Infinity;
       const vel = ev ? ev.vel : 0;
@@ -457,13 +468,18 @@ function buildCowl(group, M){
   // three.js cylinder theta: x = r·sin θ, z = r·cos θ  ⇒  θ = π/2 − a
   const th0 = Math.PI / 2 - a1, thL = a1 - a0;
   const topG = new THREE.RingGeometry(r0, r1, 48, 1, 0, thL).rotateX(-Math.PI / 2);   // vertex azimuth a = −φ, normal +y
-  const top = new THREE.Mesh(topG, M.lacquer);
+  const top = new THREE.Mesh(topG, M.dark);
   top.rotation.y = -a1;                                    // a' = a + a1 → [a0, a1]
   top.position.y = y0 + H; group.add(top);
   const outer = new THREE.Mesh(new THREE.CylinderGeometry(r1, r1, H, 48, 1, true, th0, thL), M.lacquer);
   outer.position.y = y0 + H / 2; group.add(outer);
   const inner = new THREE.Mesh(new THREE.CylinderGeometry(r0, r0, H, 24, 1, true, th0, thL), M.lacquer);
   inner.position.y = y0 + H / 2; group.add(inner);
+  // a chrome lip along the hood's outer and inner edges
+  for (const [r, tr] of [[r1, .045], [r0, .035]]){
+    const lip = new THREE.Mesh(new THREE.TorusGeometry(r, tr, 6, 48, thL).rotateX(Math.PI / 2), M.chrome);
+    lip.rotation.y = -a0; lip.position.y = y0 + H; group.add(lip);
+  }
   const rm = (r0 + r1) / 2;
   for (const a of [a0, a1]){
     const lintel = new THREE.Mesh(new THREE.BoxGeometry(r1 - r0, .1, .08), M.dark);
@@ -581,27 +597,27 @@ function strobeTexture(){
   return tex;
 }
 
-/* The label: deep vermilion with a cream ring and the name; `glow` = the emissive pass. */
-function labelTexture(glow = false){
+/* The label: deep vermilion with a cream ring and the name (also its own emissive map). */
+function labelTexture(){
   const cv = typeof document !== 'undefined' ? document.createElement('canvas') : null;
   if (!cv) return null;
   const W = 512; cv.width = cv.height = W;
   const g = cv.getContext('2d'), c = W / 2;
-  g.fillStyle = glow ? '#000' : '#7a1f12'; g.fillRect(0, 0, W, W);
-  if (!glow){
+  g.fillStyle = '#7a1f12'; g.fillRect(0, 0, W, W);
+  {
     const grd = g.createRadialGradient(c, c, 10, c, c, c);
     grd.addColorStop(0, '#c2491f'); grd.addColorStop(1, '#5a140c');
     g.fillStyle = grd; g.beginPath(); g.arc(c, c, c, 0, 2 * Math.PI); g.fill();
   }
-  g.strokeStyle = glow ? 'rgba(255,170,90,.9)' : '#f2d6a2'; g.lineWidth = 6;
+  g.strokeStyle = '#f2d6a2'; g.lineWidth = 6;
   g.beginPath(); g.arc(c, c, c * .9, 0, 2 * Math.PI); g.stroke();
   g.lineWidth = 2; g.beginPath(); g.arc(c, c, c * .82, 0, 2 * Math.PI); g.stroke();
-  g.fillStyle = glow ? 'rgba(255,190,110,.9)' : '#f6e2b8';
+  g.fillStyle = '#f6e2b8';
   g.textAlign = 'center'; g.textBaseline = 'middle';
   g.font = 'bold 64px Georgia, serif'; g.fillText('CASCADE', c, c - 92);
   g.font = 'italic 30px Georgia, serif'; g.fillText('marble melody machine', c, c + 92);
   g.font = 'bold 34px Georgia, serif'; g.fillText('33⅓', c, c + 140);
-  if (!glow){ g.fillStyle = '#20080a'; g.beginPath(); g.arc(c, c, 14, 0, 2 * Math.PI); g.fill(); }
+  { g.fillStyle = '#20080a'; g.beginPath(); g.arc(c, c, 14, 0, 2 * Math.PI); g.fill(); }
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;

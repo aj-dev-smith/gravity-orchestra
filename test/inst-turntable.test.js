@@ -229,6 +229,20 @@ describe('turntable continuity — strikes, the loop seam and the count-in', () 
   });
 });
 
+describe('turntable edge cases', () => {
+  it('a one-note part loops on the magnet forever; an empty part is inert', () => {
+    const R1 = buildRecord([[3, 'A4']], { rollT: ROLL_T, beat, P, start: START });
+    expect(R1.n).toBe(1); expect(R1.evs[0].park).toBe(true);
+    for (let t = START; t < R1.first + 2.2 * P; t += .37){
+      const b = ballAt(R1, t), c = carriageAt(R1, t);
+      expect(Number.isFinite(b.s) && Number.isFinite(b.y) && Number.isFinite(c.s)).toBe(true);
+      expect(b.y).toBeLessThanOrEqual(Y_M + 1e-9);
+    }
+    const R0 = buildRecord([], { rollT: ROLL_T, beat, P, start: START });
+    expect(R0.n).toBe(0); expect(forActivePads(R0, 1, () => {})).toBe(0);
+  });
+});
+
 describe('turntable voice — vibraphone', () => {
   it('renders a bounded, decaying, deterministic bar across F3–F6; higher rings shorter', () => {
     for (const note of ['F3', 'C4', 'A4', 'F5', 'F6']){

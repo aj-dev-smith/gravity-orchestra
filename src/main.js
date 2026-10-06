@@ -1515,8 +1515,8 @@ addEventListener('drop', async e => {
    is a zombie). The ?midi boot just registers the song; the veil tap starts sound. */
 function importMidi(bytes, name, gesture){
   const parsed = parseMidi(bytes), label = name.replace(/^.*\//, '').replace(/\.midi?$/i, '');
-  const { song, warnings } = convertToSong(parsed, {label});
-  editor.midiLoaded(parsed, label, warnings);           // the instrument MAP opens on it (src/editor)
+  const { song, warnings, phrase } = convertToSong(parsed, {label});   // a long song loops its best phrase (src/midi/phrase.js)
+  editor.midiLoaded(parsed, label, warnings, phrase);   // the instrument MAP opens on it (src/editor) — LOOP / WHOLE SONG there
   if (gesture) enterSound();                            // a drop is a gesture: veil off, audio up
   registerSong('imported', song);
   if (gesture){

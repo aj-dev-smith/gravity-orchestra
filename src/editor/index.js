@@ -20,9 +20,17 @@
    ============================================================ */
 import { makeMapPanel } from './panel.js';
 import { makeStageEdit } from './stage-edit.js';
-import { midiSources, defaultMidiMapping, applyMidiMapping, songSources, defaultSongMapping, applySongMapping,
+import { midiSources, midiSourcesIn, defaultMidiMapping, applyMidiMapping, songSources, defaultSongMapping, applySongMapping,
          setTarget, sameMapping, loadMapping, saveMapping, sanitizeMapping, targetsFor, machineOf } from './mapping.js';
+import { convertToSong } from '../midi/convert.js';
 import { placeSlot, sanitizeLayout, encodeLayout, loadLayout, saveLayout, makeHistory } from './placement.js';
+
+/** "bars 33–48 (0:41 of 3:27) — the chorus" — a phrase window in words */
+export function loopText(p, short = false){
+  const t = s => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+  return short ? `one ${t(p.songSec)} loop`
+               : `bars ${p.fromBar}–${p.fromBar + p.bars - 1} (${t(p.sec)} of ${t(p.songSec)})${p.label ? ` — ${p.label}` : ''}`;
+}
 
 /** a short stable hash of a string (FNV-1a 32 → base36) */
 export function fnv1a(str){
@@ -74,8 +82,21 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
   const isMidi = key => key === 'imported' && !!midi;
   const labels = Object.fromEntries(machines.map(m => [m.key, m.label]));
 
-  function sources(key){ return isMidi(key) ? midiSources(midi.parsed) : songSources(songs[key], labels); }
-  function defaults(key){ return isMidi(key) ? (midi.def ||= defaultMidiMapping(midi.parsed, { label: midi.label })) : defaultSongMapping(songs[key]); }
+  // (looping: each row shows what the voice plays IN the loop — a voice that sits it out says so)
+  function sources(key){
+    if (!isMidi(key)) return songSources(songs[key], labels);
+    return midi.phrase && midi.win !== 'whole' ? midiSourcesIn(midi.parsed, midi.phrase) : midiSources(midi.parsed);
+  }
+  /* PHRASE LOOP (src/midi/phrase.js): a long import loops its best window; the panel can swap to the
+     whole song. midi.win: 'loop' | 'whole' — the convert opts every re-solve of this import uses */
+  const winOpts = () => !midi?.phrase ? {} : midi.win === 'whole' ? { window: 'full' }
+    : { window: { fromBar: midi.phrase.fromBar, bars: midi.phrase.bars, label: midi.phrase.label } };
+  const winDefault = () => !midi?.phrase || midi.win !== 'whole';     // the import as registered
+  function defaults(key){
+    if (!isMidi(key)) return defaultSongMapping(songs[key]);
+    const k = midi.win || 'loop';                    // the orchestra routes the LOOP's material: one default per window
+    return (midi.def[k] ||= defaultMidiMapping(midi.parsed, { label: midi.label, ...winOpts() }));
+  }
   function mappingFor(key){
     const d = defaults(key), m = loadMapping(store, idOf(key));
     if (!m) return d;
@@ -91,15 +112,22 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     const orig = songs[key];
     if (!orig) return orig;
     const m = loadMapping(store, curId);
-    if (!m){ lastWarnings = isMidi(key) ? midi.warnings : []; return orig; }
-    const mapping = mappingFor(key);
-    if (sameMapping(mapping, defaults(key))){ lastWarnings = isMidi(key) ? midi.warnings : []; return orig; }
-    const mk = `${curId}|${JSON.stringify(mapping)}`;
+    const mapping = m ? mappingFor(key) : null, plain = !mapping || sameMapping(mapping, defaults(key));
+    if (plain && (!isMidi(key) || winDefault())){ lastWarnings = isMidi(key) ? midi.warnings : []; return orig; }
+    const mk = `${curId}|${isMidi(key) ? midi.win || 'loop' : ''}|${plain ? 'auto' : JSON.stringify(mapping)}`;
     if (!memo.has(mk)){
-      try { memo.set(mk, isMidi(key) ? applyMidiMapping(midi.parsed, mapping, { label: midi.label }) : applySongMapping(orig, mapping)); }
+      try { memo.set(mk, !isMidi(key) ? applySongMapping(orig, mapping)
+                        : plain ? convertToSong(midi.parsed, { label: midi.label, ...winOpts() })
+                        : applyMidiMapping(midi.parsed, mapping, { label: midi.label, ...winOpts() })); }
       catch (e){ status = `couldn't apply the saved map: ${e.message}`; return orig; }
     }
     const r = memo.get(mk);
+    // a saved map whose lead never plays in the loop: convert played the whole song — say so, and
+    // show WHOLE SONG (not a LOOP the room isn't playing)
+    if (isMidi(key) && midi.phrase && midi.win !== 'whole' && !r.phrase){
+      midi.win = 'whole';
+      status = 'the saved map’s lead never plays in the loop — playing the whole song';
+    }
     lastWarnings = r.warnings;
     return r.song;
   }
@@ -126,14 +154,27 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
       r.mapping = { ...defaults(key), ...sanitizeMapping(r.mapping) };
       if (sameMapping(r.mapping, mappingFor(key))){ status = r.note; renderPanel(); return; }
       if (isMidi(key)){                              // try it before committing: a map that can't make a song is refused
-        try { applyMidiMapping(midi.parsed, r.mapping, { label: midi.label }); }
+        let t;
+        try { t = applyMidiMapping(midi.parsed, r.mapping, { label: midi.label, ...winOpts() }); }
         catch (e){ status = e.message; renderPanel(); return; }
+        // …and so is a LEAD that never plays in the loop (convert would quietly play the whole song)
+        if (midi.phrase && midi.win !== 'whole' && !t.phrase){
+          status = `${source.name} never plays in the loop (bars ${midi.phrase.fromBar}–${midi.phrase.fromBar + midi.phrase.bars - 1}) — can't lead it; WHOLE SONG can`;
+          renderPanel(); return;
+        }
       }
       saveMapping(store, idOf(key), r.mapping, defaults(key));
       status = r.note || `${src.find(s => s.id === id)?.name} → ${target === 'off' ? 'off' : labelOf(target)}`;
       resolve();
     },
     onAuto(){ saveMapping(store, idOf(host.key()), null); status = 'back to the importer’s routing'; resolve(); },
+    onWindow(mode){
+      if (!isMidi(host.key()) || !midi.phrase || (midi.win || 'loop') === mode) return;
+      midi.win = mode;
+      try { store?.setItem(`cascade:win:${midi.id}`, mode); } catch (e){}
+      status = mode === 'whole' ? `the whole song (${loopText(midi.phrase, true)})` : `looping ${loopText(midi.phrase)}`;
+      resolve();
+    },
     onClose(){ panel.show(false); syncButtons(); },
   });
   const labelOf = t => t === 'lead' ? 'the belt lead' : t === 'belt' ? 'a harmony belt' : t.startsWith('lead+') ? `the belt lead + ${labels[t.slice(5)] || t.slice(5)}` : labels[t] || t;
@@ -152,7 +193,8 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     if (!songs[key]) return;
     const m = mappingFor(key);
     const strained = new Set(strain.map(w => w.key));
-    panel.render({ title: `${songs[key].label}${isMidi(key) ? ' · MIDI import' : ''}`, sources: sources(key), mapping: m,
+    const loop = isMidi(key) && midi.phrase ? { mode: midi.win || 'loop', text: loopText(midi.phrase) } : null;
+    panel.render({ title: `${songs[key].label}${isMidi(key) ? ' · MIDI import' : ''}`, loop, sources: sources(key), mapping: m,
                    authored: !isMidi(key), custom: !sameMapping(m, defaults(key)), warnings: lastWarnings, status, busy,
                    strain: strain.map(w => `${labels[w.key] || w.key} is straining: ${w.msg}`),
                    strained: id => strained.has(machineOf(m[id])) });
@@ -243,9 +285,12 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     /** does this song differ from the authored/imported one (a stored map or layout) */
     get custom(){ return customMap() || customStage(); },
     /** a MIDI import landed (main registers its default song as 'imported') */
-    midiLoaded(parsed, label, warnings = []){
+    midiLoaded(parsed, label, warnings = [], phrase = null){
       const n = parsed.tracks.reduce((s, t) => s + t.notes.length, 0);
-      midi = { parsed, label, id: `midi:${label}:${n}`, warnings, def: null };
+      midi = { parsed, label, id: `midi:${label}:${n}`, warnings, def: {}, phrase, win: 'loop' };
+      /* a whole-song choice sticks to this file (per id); main registered the LOOP, so a stored
+         'whole' is applied by the effective song (song()) like a stored mapping */
+      try { if (phrase && store?.getItem(`cascade:win:${midi.id}`) === 'whole') midi.win = 'whole'; } catch (e){}
       memo.clear();
       panelWanted = true;                            // opens on the import's own build — once the veil is gone
     },
@@ -289,7 +334,16 @@ function injectStyles(){
   .map-panel .x:hover{color:var(--ink)}
   .mp-song{margin-top:6px;letter-spacing:.12em;color:var(--ink)}
   .mp-lede{margin-top:3px;color:var(--dim);font-size:10px;letter-spacing:.06em}
+  .mp-loop[hidden]{display:none}
+  .mp-loop{margin-top:9px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:10px;color:var(--dim)}
+  .mp-loop .mp-lt{flex:1 1 180px;letter-spacing:.04em;line-height:1.4}
+  .mp-loop .mp-lt b{color:var(--ink);font-weight:500}
+  .mp-loop button{background:none;border:1px solid rgba(90,97,120,.45);color:var(--dim);font:inherit;font-size:9.5px;letter-spacing:.16em;
+    padding:3px 10px;border-radius:999px;cursor:pointer}
+  .mp-loop button.on{color:var(--amber);border-color:var(--amber);background:rgba(255,183,100,.08)}
+  .mp-loop button:hover:not(.on):not(:disabled){color:var(--ink)}
   .mp-rows{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+  .mp-row.idle{opacity:.5}
   .mp-row{display:grid;grid-template-columns:minmax(0,1fr) 96px 150px;gap:10px;align-items:center;padding:7px 8px 7px 10px;border-radius:8px;
     background:rgba(90,97,120,.08);border-left:2px solid var(--c)}
   .mp-row.off{opacity:.62}

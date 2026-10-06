@@ -1,5 +1,5 @@
 // parse.js — zero-dependency MIDI parser (format 0 and 1)
-// returns { format, ppq, bpm, tempos, hasPrograms,
+// returns { format, ppq, bpm, tempos, timeSigs, hasPrograms,
 //           tracks: [{ name, notes: [{ midi, tick, channel, vel, dur, program }] }] }
 //   dur      sounding length in ticks (note-on → its note-off, FIFO per channel+key);
 //            null when the file never releases the note
@@ -14,6 +14,8 @@
 //            on a 200-bpm count-in marker and plays at 118 must import at 118.
 //   tempos   the tempo map, [{ tick, bpm }] ascending (one per tick: the first event at a
 //            tick — the conductor track's — wins)
+//   timeSigs the meter map, [{ tick, num, den }] ascending (same first-wins rule); [] when the
+//            file states none (4/4 by MIDI convention) — phrase.js reads bars from it
 //
 // The parser is FAITHFUL: it decodes every sounding note-on (vel > 0) on every
 // channel — including channel 9 (percussion) — and records its velocity. The
@@ -38,7 +40,7 @@ function readUint(buf, pos, len) {
   return v;
 }
 
-// parse a single MTrk chunk; returns { name, notes, tempos, pcs }
+// parse a single MTrk chunk; returns { name, notes, tempos, timeSigs, pcs }
 function parseTrack(buf, start, end) {
   let pos = start;
   let abs = 0;      // absolute tick counter
@@ -52,6 +54,7 @@ function parseTrack(buf, start, end) {
   };
   let name = '';
   const tempos = [];       // { tick, bpm }
+  const timeSigs = [];     // { tick, num, den }
 
   while (pos < end) {
     let [delta, p] = readVlq(buf, pos);
@@ -82,6 +85,10 @@ function parseTrack(buf, start, end) {
         // set tempo: 3 bytes = microseconds per quarter note
         const uspq = readUint(buf, pos, 3);
         if (uspq > 0) tempos.push({ tick: abs, bpm: Math.round((60_000_000 / uspq) * 100) / 100 });
+      } else if (type === 0x58 && len >= 2) {
+        // time signature: numerator, log2(denominator), clocks/click, 32nds/quarter
+        const num = buf[pos], den = 2 ** buf[pos + 1];
+        if (num > 0 && den >= 1 && den <= 64) timeSigs.push({ tick: abs, num, den });
       }
       pos += len;
       status = 0; // meta clears running status
@@ -141,7 +148,16 @@ function parseTrack(buf, start, end) {
     }
   }
 
-  return { name, notes, tempos, pcs };
+  return { name, notes, tempos, timeSigs, pcs };
+}
+
+/** the meter map across every track: ascending, one per tick (the first track's wins) */
+export function meterMap(rawTracks) {
+  const all = rawTracks.flatMap((t, ti) => (t.timeSigs || []).map((e, i) => ({ ...e, k: ti * 1e6 + i })))
+    .sort((a, b) => a.tick - b.tick || a.k - b.k);
+  const out = [];
+  for (const e of all) if (!out.length || out[out.length - 1].tick !== e.tick) out.push({ tick: e.tick, num: e.num, den: e.den });
+  return out;
 }
 
 /** The tempo map (one event per tick, first wins) and its dominant bpm: the BEAT-WEIGHTED
@@ -235,10 +251,11 @@ export function parseMidi(bytes) {
   const { bpm, tempos } = tempoMap(rawTracks);
 
   const hasPrograms = assignPrograms(rawTracks);
+  const timeSigs = meterMap(rawTracks);
 
   // format 0: split single track by channel
   if (format === 0) {
-    if (rawTracks.length === 0) return { format, ppq, bpm, tempos, hasPrograms, tracks: [] };
+    if (rawTracks.length === 0) return { format, ppq, bpm, tempos, timeSigs, hasPrograms, tracks: [] };
     const src = rawTracks[0].notes;
     const byChannel = new Map();
     for (const n of src) {
@@ -249,7 +266,7 @@ export function parseMidi(bytes) {
     for (const [ch, notes] of [...byChannel.entries()].sort((a, b) => a[0] - b[0])) {
       if (notes.length > 0) tracks.push({ name: `ch${ch}`, notes });
     }
-    return { format, ppq, bpm, tempos, hasPrograms, tracks };
+    return { format, ppq, bpm, tempos, timeSigs, hasPrograms, tracks };
   }
 
   // format 1: one logical track per MTrk, drop empty
@@ -257,5 +274,5 @@ export function parseMidi(bytes) {
     .filter(t => t.notes.length > 0)
     .map(t => ({ name: t.name, notes: t.notes }));
 
-  return { format, ppq, bpm, tempos, hasPrograms, tracks };
+  return { format, ppq, bpm, tempos, timeSigs, hasPrograms, tracks };
 }

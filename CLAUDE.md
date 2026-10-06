@@ -398,6 +398,14 @@ state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machi
   (solve budgets keep a contiguous window per machine) — phrase detection is the open lever.
   Imported rooms are `staging: 'auto'`: stations step around a wide belt wall and blocked
   station shots re-aim (main.js / stations.js placeStation); hand-authored rooms are untouched.
+- **Phrase loops** (`src/midi/phrase.js`): a MIDI longer than 75 s imports as its best LOOPABLE
+  window (8–32 bars, ~30–75 s: the most-repeated, lead-active section whose next bar is its first —
+  bar-level self-similarity, pure + tested in `test/phrase.test.js`), re-routed on the window alone and
+  cut as a circle at the lead's first note. The whole song's LEAD is PINNED through that re-route
+  (`_pin`), lead activity is measured on ONSETS (a held note is an idle arc), and the final belt is
+  checked — a window whose lead strikes in < 70% of its bars falls back to the next-ranked one.
+  `opts.window: 'auto' | 'full' | {fromBar, bars}`; the MAP panel offers LOOP / WHOLE SONG (rows show
+  the loop's notes). Labels are guesses: "the chorus" only for a sung (vocal-named) lead.
 - Every song now opens with a **`LEAD_IN` count-in** (`main.js`, default 2.4 s): `songTime`
   starts negative, so the machine runs solo before the marble spawns (and the pickup fill plays
   ahead of the downbeat). It's a feel knob — one const; tune freely.

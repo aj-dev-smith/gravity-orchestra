@@ -9,11 +9,12 @@ import { targetsFor, machineOf, isLead, LEAD, BELT, DRUMS, OFF } from './mapping
 
 const BELT_COL = { [LEAD]: '#ffb764', [BELT]: '#c08bff', [DRUMS]: '#ff8a3d', [OFF]: '#3a4158' };
 
-export function makeMapPanel({ machines, onPick, onAuto, onClose }){
+export function makeMapPanel({ machines, onPick, onAuto, onWindow = () => {}, onClose }){
   const colorOf = t => BELT_COL[t] || machines.find(m => m.key === machineOf(t))?.color || '#cfd6e6';
   const el = document.createElement('div'); el.className = 'map-panel'; el.hidden = true;
   el.innerHTML = `<header><b>INSTRUMENT MAP</b><button class="x" title="close (Esc)" aria-label="close">×</button></header>
     <p class="mp-song"></p><p class="mp-lede">who plays what — change one and the whole room re-solves</p>
+    <p class="mp-loop" hidden><span class="mp-lt"></span><button data-w="loop" title="loop the song's best phrase (the chorus / its most-repeated, seamless section)">LOOP</button><button data-w="whole" title="import the whole song as one long loop">WHOLE SONG</button></p>
     <div class="mp-rows"></div>
     <footer><span class="mp-status"></span><button class="mp-auto" title="back to the importer's own routing">AUTO</button></footer>
     <p class="mp-strain" hidden></p>
@@ -22,24 +23,34 @@ export function makeMapPanel({ machines, onPick, onAuto, onClose }){
   const rowsEl = el.querySelector('.mp-rows'), statusEl = el.querySelector('.mp-status'), notesEl = el.querySelector('.mp-notes');
   el.querySelector('.x').addEventListener('click', () => onClose());
   el.querySelector('.mp-auto').addEventListener('click', () => onAuto());
+  const loopEl = el.querySelector('.mp-loop');
+  for (const b of loopEl.querySelectorAll('button')) b.addEventListener('click', () => onWindow(b.dataset.w));
   let cur = null;
 
   const strainEl = el.querySelector('.mp-strain');
-  function render({ title, sources, mapping, authored, custom, warnings = [], status = '', busy = false, strain = [], strained = () => false }){
+  function render({ title, loop = null, sources, mapping, authored, custom, warnings = [], status = '', busy = false, strain = [], strained = () => false }){
     cur = { sources, mapping };
     el.querySelector('.mp-song').textContent = title;
+    // the PHRASE LOOP row (a long import loops its best window — or the whole song)
+    loopEl.hidden = !loop;
+    if (loop){
+      const lt = loopEl.querySelector('.mp-lt'); lt.textContent = '';
+      lt.append(loop.mode === 'whole' ? 'whole song · LOOP plays ' : 'looping ', Object.assign(document.createElement('b'), { textContent: loop.text }));
+      for (const b of loopEl.querySelectorAll('button')){ b.classList.toggle('on', b.dataset.w === loop.mode); b.disabled = busy; }
+    }
     el.querySelector('.mp-auto').disabled = !custom || busy;
     el.classList.toggle('busy', busy);
     rowsEl.textContent = '';
     for (const s of sources){
       const t = mapping[s.id] ?? OFF;
       const hot = t !== OFF && strained(s.id);
-      const row = document.createElement('div'); row.className = 'mp-row' + (t === OFF ? ' off' : '') + (hot ? ' strain' : '');
+      const row = document.createElement('div'); row.className = 'mp-row' + (t === OFF ? ' off' : '') + (hot ? ' strain' : '') + (s.idle ? ' idle' : '');
       if (hot) row.title = 'this machine is straining to play its part (see below)';
       row.style.setProperty('--c', colorOf(t));
       const info = document.createElement('div'); info.className = 'mp-info';
       const nm = document.createElement('span'); nm.className = 'mp-name'; nm.textContent = s.name; nm.title = s.name;
-      const meta = document.createElement('span'); meta.className = 'mp-meta'; meta.textContent = `${s.gm} · ${s.count} note${s.count === 1 ? '' : 's'}`;
+      const meta = document.createElement('span'); meta.className = 'mp-meta';
+      meta.textContent = s.idle ? `${s.gm} · not in the loop` : `${s.gm} · ${s.count} note${s.count === 1 ? '' : 's'}`;
       if (hot) meta.textContent = `⚠ straining · ${meta.textContent}`;
       info.append(nm, meta);
       const cv = document.createElement('canvas'); cv.className = 'mp-spark'; cv.width = 192; cv.height = 52;
@@ -59,7 +70,7 @@ export function makeMapPanel({ machines, onPick, onAuto, onClose }){
     strainEl.hidden = !strain.length;
     strainEl.textContent = strain.length ? `⚠ ${strain.join(' · ')} — the part asks more than the machine can physically do; try another machine or thin the part` : '';
     statusEl.textContent = busy ? 're-solving the room…' : status;
-    statusEl.classList.toggle('warn', /needs|room for|can't|couldn/.test(status));
+    statusEl.classList.toggle('warn', /needs|room for|can't|couldn|never plays/.test(status));
     notesEl.hidden = !warnings.length;
     notesEl.querySelector('summary').textContent = `${warnings.length} fitting note${warnings.length === 1 ? '' : 's'} — how each machine was made to fit`;
     const ul = notesEl.querySelector('ul'); ul.textContent = '';

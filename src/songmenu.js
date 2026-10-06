@@ -8,6 +8,10 @@ import { songShelves } from './songs/index.js';
    ============================================================ */
 const YOURS = 'Yours';
 
+/** THE rule for 'runtime song' (lives on the Yours shelf, not in the catalogue, never a
+    ?song= deep link): a dropped/?midi import, a share link, or a ?solo instrument demo. */
+export const isRuntimeSong = k => /^(solo-|imported$|shared$)/.test(k);
+
 function shelf(sel, label, first = false){
   let g = [...sel.children].find(c => c.tagName === 'OPTGROUP' && c.label === label);
   if (!g){
@@ -18,7 +22,7 @@ function shelf(sel, label, first = false){
 }
 
 /** Fill `sel` from `songs`. `dynamic` = keys that belong on the 'Yours' shelf. */
-export function fillSongMenu(sel, songs, dynamic = () => false){
+export function fillSongMenu(sel, songs, dynamic = isRuntimeSong){
   sel.innerHTML = '';
   const builtIn = Object.fromEntries(Object.entries(songs).filter(([k]) => !dynamic(k)));
   for (const [label, keys] of songShelves(builtIn)){

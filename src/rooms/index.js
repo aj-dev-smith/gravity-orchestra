@@ -122,9 +122,14 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
     'color:#5a6178;font:11px ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.2em;padding:6px;text-transform:uppercase;' +
     'text-align:right;line-height:1.35;text-shadow:0 0 8px #07060e';
   btn.title = 'cycle rooms (R)';
-  // two lines: a dim 'ROOM ↻' caption over the room's own name (long names fit a phone)
-  const btnText = () => { btn.innerHTML = '<span style="display:block;font-size:9px;opacity:.75">ROOM&nbsp;›</span>' +
-    '<span style="display:block;color:#cfd6e6;opacity:.7"></span>'; btn.lastChild.textContent = cur ? cur.label : 'none'; };
+  // two lines: a dim 'ROOM ›' caption over the room's own name. Capped width so a long
+  // name wraps onto right-aligned lines instead of crowding the HUD subtitle on a phone.
+  btn.style.maxWidth = 'max(120px, calc(100vw - 600px))'; btn.style.whiteSpace = 'normal';
+  const btnCap = document.createElement('span'), btnName = document.createElement('span');
+  btnCap.style.cssText = 'display:block;font-size:9px;opacity:.75'; btnCap.textContent = 'ROOM\u00a0›';
+  btnName.style.cssText = 'display:block;color:#cfd6e6;opacity:.7';
+  btn.append(btnCap, btnName);
+  const btnText = () => { btnName.textContent = cur ? cur.label : 'none'; };
   btn.addEventListener('click', () => { host.cycle(); });
   btn.addEventListener('pointerenter', () => { btn.style.color = '#cfd6e6'; });
   btn.addEventListener('pointerleave', () => { btn.style.color = '#5a6178'; });

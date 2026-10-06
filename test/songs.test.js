@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { SONGS, SONG_GROUPS, songShelves, defaultSongKey, DEFAULT_SONG } from '../src/songs/index.js';
+import { isRuntimeSong } from '../src/songmenu.js';
 import { buildRecord } from '../src/instruments/turntable/solve.js';
 import { buildOrbit, CLEAR as RICO_CLEAR, FOOT_MAX } from '../src/instruments/ricochet/solve.js';
 import { eventTimes } from '../src/instruments/clock.js';
@@ -66,6 +67,10 @@ describe('SONGS catalogue', () => {
     expect(defaultSongKey(new Date(2026, 9, 31))).toBe('danse-macabre');
     expect(defaultSongKey(new Date(2026, 10, 1))).toBe(DEFAULT_SONG);
     expect(defaultSongKey(new Date(2026, 5, 19))).toBe('daybreak-engine');
+  });
+  it('no catalogue key collides with the runtime-song rule (Yours shelf / no ?song= link)', () => {
+    for (const k of EXPECTED_KEYS) expect(isRuntimeSong(k), k).toBe(false);
+    for (const k of ['imported', 'shared', 'solo-bells']) expect(isRuntimeSong(k), k).toBe(true);
   });
 });
 

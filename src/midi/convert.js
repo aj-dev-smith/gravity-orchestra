@@ -62,7 +62,9 @@ export function convertToSong(parsed, opts = {}) {
   let beltTracks = melodicTracks;
   let routed = [];                                  // [{ key, name, notes }] raw parse notes
   if (orchestra) {
-    const r = orchestrate(melodicTracks, { ppq, bpm });
+    // opts.route: a caller-supplied router with orchestrate's signature + result shape (the
+    // creation tools' instrument-mapping panel — src/editor/mapping.js — routes by hand)
+    const r = (opts.route || orchestrate)(melodicTracks, { ppq, bpm });
     beltTracks = r.belt;
     routed = r.parts;
     warnings.push(...r.warnings);

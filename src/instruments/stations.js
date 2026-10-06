@@ -39,6 +39,7 @@ export const STATIONS = {
   bowls:    { x: -13,  y: -.5, z: 18,  yaw:  .8,  w: 10, d: 9 },   // front-left, low
   musicbox: { x:  25,  y: -.5, z:  3.2, yaw: -.9,  w: 10, d: 9 },   // mid-right, behind the drums, turned to the middle
   turntable: { x:  0,  y: -1.0, z: 12.5, yaw: 0, w: 14, d: 14 },  // front-centre, low: the stage camera looks down onto the spinning record, clear of the UI
+  ricochet: { x:   0,  y: 15,  z: 16,  yaw:  0,   w: 16, d: 16 },  // a CHANDELIER hung high over the front-centre: the stage + wide cams look UP into it, above the band (no wall in the way, clear of every floor station)
 };
 
 /* Fallback for an instrument with no named slot: park it out front, in a row. */

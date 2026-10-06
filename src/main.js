@@ -444,7 +444,7 @@ function buildWorld(keyName){
     station.position.set(stageView.cx + st.x, st.y, st.z);
     station.rotation.y = st.yaw;
     station.add(rig.inst.build(part, { rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T, start: -LEAD_IN,
-      station: st, floorY: ROOM.FLOOR - st.y, loopBeats: S.melody.reduce((a, n) => a + n[1], 0) }));
+      station: st, floorY: ROOM.FLOOR - st.y, ceilY: ROOM.CEIL - st.y, loopBeats: S.melody.reduce((a, n) => a + n[1], 0) }));
     world.add(station);
     station.updateMatrixWorld(true);
     rig.station = station;

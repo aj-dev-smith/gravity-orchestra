@@ -442,9 +442,10 @@ function buildWorld(keyName){
     station.updateMatrixWorld(true);
     rig.station = station;
     rig.cue = eventTimes(part, { rollT: ROLL_T, beat: BEAT }).map(e => ({ t: e.t, w: e.vel }));
+    rig.mix = partMix(S, rig.I.key);
     instLive.push(rig);
     const ids = rig.I.voiceIds ? rig.I.voiceIds(part) : [...new Set(part.map(e => e[1]))];
-    ids.forEach(id => voices.push({ key: `inst:${rig.I.key}:${id}`, wet: !!rig.I.wet, render: () => rig.I.voice(id) }));
+    ids.forEach(id => voices.push({ key: `inst:${rig.I.key}:${id}`, wet: !!rig.I.wet, render: () => mixRender(rig.I.voice(id), rig.mix.base) }));
   });
 
   audio.setBeat(BEAT);
@@ -512,7 +513,7 @@ function syncDirector(S, view){
     shots.push({ key: rig.I.key, color: rig.I.color,
       aim: st.localToWorld(new THREE.Vector3(0, h, 0)),
       eye: st.localToWorld(new THREE.Vector3(c.x ?? 0, h + (c.up ?? 5), c.dist ?? 15)) });
-    cues.push({ key: rig.I.key, cue: rig.cue, weight: rig.I.directorWeight ?? 1 });
+    cues.push({ key: rig.I.key, cue: rig.cue, weight: (rig.I.directorWeight ?? 1) * dirWeight(S, rig.I.key) });
   });
   if (S.drums){
     const kx = view.cx + 14;                            // marbledrums.js KIT_X / KIT_Z
@@ -520,11 +521,15 @@ function syncDirector(S, view){
     const cue = [];
     Object.entries(S.drums).forEach(([lane, hits]) => hits.map(normalizeHit).forEach(h =>
       cue.push({ t: wrapP(ROLL_T + h.beat * BEAT, P), w: h.vel * (lane === 'kick' || lane === 'crash' ? 1 : .45) })));
-    cues.push({ key: 'drums', cue, weight: .8 });
+    cues.push({ key: 'drums', cue, weight: .8 * dirWeight(S, 'drums') });
   }
   const wide = { aim: new THREE.Vector3(view.cx, 4, 2), eye: new THREE.Vector3(view.cx + 4, 15, 39) };
   cam.syncStations(shots, wide, { auto: !soloKey });   // ?solo dev demos stay in free-look
 }
+/* song.director — optional per-station pull for THIS song ({ bowls: 2.2 }): sparse,
+   sustained machines (a bowl struck once a bar) score low on hit density, so a song
+   that showcases one says so in its data. Clamped; absent → 1. */
+function dirWeight(S, key){ const w = S.director?.[key]; return Number.isFinite(w) ? Math.max(0, Math.min(4, w)) : 1; }
 const DIRECTOR_AHEAD = 2.2;                             // seconds of look-ahead
 function stationScores(){
   const P = ROLL_T + LOOP_T, now = wrapP(songTime, P), out = {};
@@ -553,6 +558,22 @@ function lookAtStation(key, dist = 15, up = 5){
   return true;
 }
 
+/* song.mix — an AUDIO-ONLY level per plugin part: { <partKey>: gain | [[beat, gain], …] }.
+   Velocity stays DYNAMICS (it also drives the strike light, sparks, a voice's velocity
+   layer and the director's cue weight), so a song can stage its gain without dimming
+   its tutti. A number is baked into the voice render, so it holds on the iOS sample
+   path too; a step envelope bakes its loudest step and scales each hit by step/loudest
+   on the webaudio path (iOS plays every sample full — §5). No `mix` → unity, unchanged. */
+function partMix(S, key){
+  const m = S.mix?.[key], g01 = v => Math.max(0, Math.min(1, v));   // share links are untrusted: clamp, never amplify
+  if (Number.isFinite(m)) return { base: g01(m), at: () => 1 };
+  if (!Array.isArray(m) || !m.length || !m.every(s => Array.isArray(s) && Number.isFinite(s[0]) && Number.isFinite(s[1])))
+    return { base: 1, at: () => 1 };
+  const base = g01(Math.max(...m.map(s => s[1])));
+  return { base, at: beat => { let g = m[0][1]; for (const [b, v] of m) if (beat >= b) g = v; return base > 0 ? g01(g) / base : 0; } };
+}
+function mixRender(r, g){ return g === 1 ? r : { sr: r.sr, samples: r.samples.map(x => x * g) }; }
+
 /* An instrument plugin's strike: sparks + a shared strike light at the contact (its
    local pos → world through the station), an optional camera punch, and its voice.
    hit = { note, vel, pos (Vector3, instrument-local), color, dur (s), shake, sparks } */
@@ -566,7 +587,8 @@ function instStrike(rig, hit){
   L.age = 0; L.peak = 8 * (.35 + .65 * v) * (hit.light ?? 1);
   if (hit.shake) cam.addShake(hit.shake * v);
   if (audio.isReady() && !muted){
-    try { audio.playVoice(`inst:${rig.I.key}:${hit.note}`, v, { dur: hit.dur || 0 }); } catch(e){ /* audio must never break the run */ }
+    const beat = (wrapP(songTime, ROLL_T + LOOP_T) - ROLL_T) / BEAT;   // loop-local beat (song.mix envelope)
+    try { audio.playVoice(`inst:${rig.I.key}:${hit.note}`, v * (rig.mix ? rig.mix.at(beat) : 1), { dur: hit.dur || 0 }); } catch(e){ /* audio must never break the run */ }
   }
 }
 

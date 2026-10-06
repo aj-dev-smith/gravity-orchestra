@@ -18,9 +18,15 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const CAMCOLORS = {
   auto:'#ffe9c9', fixed:'#7fe3c8', free:'#ff8fd0',
-  all:'#cfd6e6', lead:'#ffaa55', alto:'#c08bff', bass:'#66aaff',
+  all:'#cfd6e6', lead:'#ffaa55', alto:'#c08bff', bass:'#66aaff', stage:'#9fe8ff',
 };
-const FIXED_OK = new Set(['all', 'auto', 'fixed', 'free']);   // modes that survive a song change
+const FIXED_OK = new Set(['all', 'auto', 'fixed', 'free', 'stage']);
+/* DIRECTOR over STATIONS (instrument plugins + the drum machine): the song data is
+   known, so main scores each station by what it is ABOUT to play (look-ahead) and
+   the director cuts there before it happens — the same "sees the future" trick the
+   track director uses. Cuts hold ≥ MIN_HOLD; a shot held past BORED loses its pull,
+   so the film keeps moving round the room. A far jump is a hard CUT, a near one glides. */
+const MIN_HOLD = 2.6, BORED = 7, SWITCH = 1.15, HARD_CUT = 12, STAGE_PULL = .9;   // modes that survive a song change
 
 /* Keyboard fly: key → [right, up, forward] screen-space contribution. */
 const KEY_PAN = 0.65;                                         // pan units = KEY_PAN · distance · dt (scales with zoom)
@@ -42,6 +48,8 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
   let shakeAmp = 0;
   let stageView = { cx: 0, halfW: 8 };                        // x-centre + half-width of the field (FIXED framing)
   let curTracks = [];                                         // last-built tracks, for the button row
+  let stations = [], stage = null;                            // [{key, eye, aim, color}] + the wide {eye, aim}
+  let cutNow = false;
 
   const camTarget = new THREE.Vector3(0, stageY + .6, 0);     // the static band centre
   const camPos = new THREE.Vector3(4.5, stageY + 3.4, 9.5);
@@ -102,12 +110,14 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
   /* The cam-button row. Hidden for single-track songs (the line IS the harmony). */
   function renderButtons(){
     camsEl.innerHTML = '';
-    if (curTracks.length < 2){ camsEl.style.display = 'none'; mode = DEFAULT_MODE; return; }
+    if (curTracks.length < 2 && !stations.length){ camsEl.style.display = 'none'; mode = DEFAULT_MODE; return; }
     camsEl.style.display = 'flex';
-    ['auto', 'fixed', 'free', 'all', ...curTracks.map(t => t.role)].forEach(m => {
+    const multi = curTracks.length > 1;
+    ['auto', ...(stations.length ? ['stage'] : []), 'fixed', 'free',
+     ...(multi ? ['all', ...curTracks.map(t => t.role)] : []), ...stations.map(st => st.key)].forEach(m => {
       const b = document.createElement('button');
       b.className = 'camb' + (mode === m ? ' on' : '');
-      if (mode === m) b.style.color = CAMCOLORS[m];
+      if (mode === m) b.style.color = CAMCOLORS[m] || stations.find(st => st.key === m)?.color || '#cfd6e6';
       b.textContent = m.toUpperCase();
       b.addEventListener('click', () => { mode = m; renderButtons(); });
       camsEl.appendChild(b);
@@ -122,12 +132,25 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
     renderButtons();
   }
 
+  /* Called by buildWorld after syncTracks: the song's instrument stations (world-space
+     eye + aim per station) and the wide STAGE shot. A song that brings stations opens
+     on the director — it is the show; songs without keep the free-look default. */
+  function syncStations(list, wide, { auto = true } = {}){
+    const had = stations.length;
+    stations = list; stage = wide;
+    if (auto && list.length && !had && mode === DEFAULT_MODE) mode = 'auto';
+    if (!list.length && mode === 'stage') mode = DEFAULT_MODE;
+    if (!FIXED_OK.has(mode) && !curTracks.some(t => t.role === mode) && !list.some(st => st.key === mode)) mode = 'auto';
+    autoWant = 'all'; lastCut = -99;
+    renderButtons();
+  }
+
   function addShake(amt){ shakeAmp = Math.min(shakeAmp + amt, .15); }
 
   /* The per-frame pose. Mutates `camera`; leaves `camTarget` as the live aim (read
      by the debug HUD). marblePts = [{p, w, role}] of the live balls; leadRender is
      the lead ball's render position (or null). */
-  function update({ dt, time, tracks, marblePts, reduceMotion, started }){
+  function update({ dt, time, tracks, marblePts, reduceMotion, started, stationScores }){
     // FREE-LOOK vs DIRECTOR. The orbit camera owns the pose only in 'free' (and only
     // after the play gesture). Entering, we seed its target from the live aim; while
     // active we shadow camPos/camTarget off the live camera, so the moment the user
@@ -155,11 +178,22 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
         if (m >= 1.05 && m > score){ score = m; want = tr.role; }
       });
       if (want === 'all' && tracks[0]._st && tracks[0]._st.dt <= .33) want = 'lead';  // shred cam
-      if (want !== autoWant && time - lastCut > 2.2){
-        autoWant = want; lastCut = time;
+      if (!stations.length){
+        if (want !== autoWant && time - lastCut > 2.2){
+          autoWant = want; lastCut = time;
+        }
+      } else {                                                // the room director: tracks vs stations vs wide
+        const cand = { stage: STAGE_PULL, [want]: want === 'all' ? 1.0 : Math.max(score, 1.4) };
+        stations.forEach(st => { cand[st.key] = stationScores?.[st.key] ?? 0; });
+        const held = time - lastCut;
+        const cur = (cand[autoWant] ?? 0) * (held > BORED ? .45 : 1);
+        let best = autoWant, bestS = -1;
+        for (const k in cand) if (k !== autoWant && cand[k] > bestS){ best = k; bestS = cand[k]; }
+        if (held > MIN_HOLD && bestS > cur * SWITCH){ autoWant = best; lastCut = time; cutNow = true; }
       }
       effMode = autoWant;
     }
+    const shot = effMode === 'stage' ? stage : stations.find(st => st.key === effMode);
 
     // hold a fixed stage view, follow the chosen marble, or frame them all
     const sway = (reduceMotion || mode === 'fixed') ? 0 : Math.sin(time*.21);
@@ -173,6 +207,10 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
       const z = THREE.MathUtils.clamp(zFit, 16, fixedZMax);   // fit the width, but never pull back into the fog
       ideal = new THREE.Vector3(stageView.cx + z*0.22, stageY + 5, z);   // gentle 3/4, slightly above the band
       aim   = new THREE.Vector3(stageView.cx, stageY + 1.5, 0);
+    } else if (shot){
+      // a STATION shot: its own eye → aim, with a slow orbit drift so a held shot breathes
+      aim = shot.aim.clone();
+      ideal = shot.eye.clone().sub(aim).applyAxisAngle(new THREE.Vector3(0, 1, 0), sway * .12).add(aim);
     } else {
       const followed = effMode !== 'all' ? marblePts.find(m => m.role === effMode) : null;
       const focus = new THREE.Vector3();
@@ -196,6 +234,8 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
       ideal.y = stageY + 3.4;                                 // constant eye height — no spread-driven bob
       aim = focus.clone(); aim.y = stageY + .6;               // look at the band centre, not the bobbing marble
     }
+    if (cutNow && camPos.distanceTo(ideal) > HARD_CUT){ camPos.copy(ideal); camTarget.copy(aim); }
+    cutNow = false;
     camPos.lerp(ideal, 1 - Math.pow(.0015, dt));
     camTarget.lerp(aim, 1 - Math.pow(.0008, dt));
     camera.position.copy(camPos);
@@ -212,5 +252,6 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
     camera.updateProjectionMatrix();
   }
 
-  return { camera, target: camTarget, orbit, update, syncTracks, addShake, resize };
+  return { camera, target: camTarget, orbit, update, syncTracks, syncStations, addShake, resize,
+           get mode(){ return mode; }, set mode(m){ mode = m; renderButtons(); }, get shot(){ return autoWant; } };
 }

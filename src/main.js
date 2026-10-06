@@ -12,6 +12,8 @@ import { makeMarbleDrums } from './marbledrums.js';
 import { makeCameraRig } from './camera.js';
 import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
 import { stationFor } from './instruments/stations.js';
+import { eventTimes, wrapP } from './instruments/clock.js';
+import { normalizeHit } from './drumkit.js';
 import { encodeSong, decodeSong } from './share.js';
 import { parseMidi } from './midi/parse.js';
 import { convertToSong } from './midi/convert.js';
@@ -439,6 +441,7 @@ function buildWorld(keyName){
     world.add(station);
     station.updateMatrixWorld(true);
     rig.station = station;
+    rig.cue = eventTimes(part, { rollT: ROLL_T, beat: BEAT }).map(e => ({ t: e.t, w: e.vel }));
     instLive.push(rig);
     const ids = rig.I.voiceIds ? rig.I.voiceIds(part) : [...new Set(part.map(e => e[1]))];
     ids.forEach(id => voices.push({ key: `inst:${rig.I.key}:${id}`, wet: !!rig.I.wet, render: () => rig.I.voice(id) }));
@@ -446,6 +449,7 @@ function buildWorld(keyName){
 
   audio.setBeat(BEAT);
   cam.syncTracks(tracks, stageView);                    // reframe + rebuild the cam-button row for the new song
+  syncDirector(S, stageView);
   audio.rebuildBank(tracks, S.drums ? Object.keys(S.drums) : [], voices);
   // start in the loop's TAIL: songTime < 0 means no ball has spawned yet (li stays
   // -1), so the machine + any tail/pickup drums play as a count-in, then the marble
@@ -494,6 +498,47 @@ function drumStrike(hit){
   }
 }
 
+/* ---- the room DIRECTOR's inputs: one shot per station (instrument plugins + the
+   drum machine) and a wide stage shot, plus each station's CUE — its hits as
+   loop-local times. Every frame stationScores() looks AHEAD through the cue (the
+   song is data, so the camera can see the future) and the rig cuts to whatever is
+   about to play. ---- */
+let cues = [];                                          // [{key, cue:[{t,w}], weight}]
+function syncDirector(S, view){
+  const shots = [], P = ROLL_T + LOOP_T;
+  cues = [];
+  instLive.forEach(rig => {
+    const st = rig.station, h = rig.I.lookHeight ?? 3, c = rig.I.camera || {};
+    shots.push({ key: rig.I.key, color: rig.I.color,
+      aim: st.localToWorld(new THREE.Vector3(0, h, 0)),
+      eye: st.localToWorld(new THREE.Vector3(c.x ?? 0, h + (c.up ?? 5), c.dist ?? 15)) });
+    cues.push({ key: rig.I.key, cue: rig.cue, weight: rig.I.directorWeight ?? 1 });
+  });
+  if (S.drums){
+    const kx = view.cx + 14;                            // marbledrums.js KIT_X / KIT_Z
+    shots.push({ key: 'drums', color: '#ff8a3d', aim: new THREE.Vector3(kx, 3.6, 2.5), eye: new THREE.Vector3(kx - 2, 8.5, 18) });
+    const cue = [];
+    Object.entries(S.drums).forEach(([lane, hits]) => hits.map(normalizeHit).forEach(h =>
+      cue.push({ t: wrapP(ROLL_T + h.beat * BEAT, P), w: h.vel * (lane === 'kick' || lane === 'crash' ? 1 : .45) })));
+    cues.push({ key: 'drums', cue, weight: .8 });
+  }
+  const wide = { aim: new THREE.Vector3(view.cx, 4, 2), eye: new THREE.Vector3(view.cx + 4, 15, 39) };
+  cam.syncStations(shots, wide, { auto: !soloKey });   // ?solo dev demos stay in free-look
+}
+const DIRECTOR_AHEAD = 2.2;                             // seconds of look-ahead
+function stationScores(){
+  const P = ROLL_T + LOOP_T, now = wrapP(songTime, P), out = {};
+  for (const c of cues){
+    let sum = 0;
+    for (const e of c.cue){
+      const d = wrapP(e.t - now, P);                    // seconds until this hit (wrapping the seam)
+      if (d < DIRECTOR_AHEAD) sum += e.w * (1 - .6 * d / DIRECTOR_AHEAD);
+    }
+    out[c.key] = Math.sqrt(sum) * c.weight;             // sqrt: a dense run beats a lone hit, but not by 10×
+  }
+  return out;
+}
+
 /* Frame the free camera on an instrument's station: from out front of it (its local
    +z, through the station's yaw), a little above, looking at its middle. dist/up are
    in world units. Used by ?solo and window.__dev.station(key). */
@@ -501,6 +546,7 @@ function lookAtStation(key, dist = 15, up = 5){
   const rig = instLive.find(r => r.I.key === key);
   if (!rig) return false;
   const st = rig.station, h = rig.I.lookHeight ?? 3;
+  if (cam.mode !== 'free') cam.mode = 'free';           // framing by hand = free-look (the director would override)
   const tgt = st.localToWorld(new THREE.Vector3(0, h, 0));
   const eye = st.localToWorld(new THREE.Vector3(0, h + up, dist));
   cam.camera.position.copy(eye); cam.target.copy(tgt); cam.orbit.target.copy(tgt); cam.orbit.update();
@@ -727,7 +773,8 @@ function animate(){
 
   // CAMERA: the rig decides the pose (director / fixed / free-fly / follow) from the
   // live marbles. main just hands it the frame's state; physics stays untouched.
-  cam.update({ dt, time: clock.elapsedTime, tracks, marblePts, leadRender, reduceMotion, started });
+  cam.update({ dt, time: clock.elapsedTime, tracks, marblePts, leadRender, reduceMotion, started,
+               stationScores: cues.length ? stationScores() : null });
 
   if (convDbgOn) convDebug(leadRender ? leadRender.y : cam.target.y, camera.position.y);
   composer.render();
@@ -916,6 +963,7 @@ if (new URLSearchParams(location.search).has('debug')){
     song(k){ sel.value = k; sel.dispatchEvent(new Event('change')); },
     station(key, dist, up){ return lookAtStation(key, dist, up); },
     instruments: () => instLive.map(r => r.I.key),
+    cam(m){ cam.mode = m; }, get shot(){ return cam.shot; },
   };
   dbg = { update(T){
     if (!held) bar.value = Math.round(T / (ROLL_T + LOOP_T) * 1000);

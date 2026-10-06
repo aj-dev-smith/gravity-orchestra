@@ -3,7 +3,7 @@
    so parallel agents never fight over a shared tab.
      node scripts/shot.mjs --url 'http://localhost:5180/?solo=marimba&debug' \
        --out /path/a.png [--station marimba,15,5] [--look px,py,pz,tx,ty,tz] \
-       [--t 3.2] [--rate .25] [--wait 1500] [--frames t1,t2,...] [--size 1200x800]
+       [--song key] [--cam auto|stage|free|<station>] [--t 3.2] [--rate .25] [--wait 1500] [--frames t1,t2,...] [--size 1200x800]
    --frames takes several shots (out-0.png, out-1.png…) at songTimes t1, t2… (each a
    scrub: __dev.t = t, then --wait ms of real playback at --rate before the shot).
    Prints console errors + a JSON line of __dev state. Needs ?debug in the URL. */
@@ -29,6 +29,8 @@ page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') er
 page.on('pageerror', e => errs.push(`[pageerror] ${e.message}`));
 await page.goto(A.url, { waitUntil: 'networkidle0' });
 await page.waitForFunction(() => window.__dev, { timeout: 15000 });
+if (A.song){ await page.evaluate(k => window.__dev.song(k), A.song); await new Promise(r => setTimeout(r, 300)); }
+if (A.cam) await page.evaluate(m => window.__dev.cam(m), A.cam);
 await page.evaluate(() => {                          // hide the veil + dev HUD clutter for clean frames
   document.getElementById('overlay')?.classList.add('gone');
   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'g' }));
@@ -49,7 +51,7 @@ if (A.frames){
   const ts = A.frames.split(',');
   for (let i = 0; i < ts.length; i++) await frame(out.replace(/\.png$/, `-${i}.png`), ts[i]);
 } else await frame(out, A.t);
-const state = await page.evaluate(() => ({ t: window.__dev.t, instruments: window.__dev.instruments?.() }));
+const state = await page.evaluate(() => ({ t: window.__dev.t, shot: window.__dev.shot, instruments: window.__dev.instruments?.() }));
 console.log(errs.length ? errs.join('\n') : '(no console errors/warnings)');
 console.log(JSON.stringify(state));
 await browser.close();

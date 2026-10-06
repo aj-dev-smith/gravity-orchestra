@@ -200,7 +200,7 @@ export default {
     group.add(panels);
     const woodMat = new THREE.MeshStandardMaterial({ color: 0x8a5a34, roughness: .55, metalness: .05, envMap, envMapIntensity: .3 });
     const qrdM = [];
-    for (const s of [-1, 1]) for (let iz = 1; iz < 11; iz += 4) for (let i = 0; i < 11; i++) for (let j = 0; j < 12; j++){
+    for (const s of [-1, 1]) for (let iz = 1; iz < 9; iz += 4) for (let i = 0; i < 11; i++) for (let j = 0; j < 12; j++){
       const dep = .3 + R() * 1.4, zc = BACK + 6 + iz * 9.6;
       qrdM.push(trs(s * (HW - dep / 2), F + 23 + j * .8, zc - 4.4 + i * .8, 0, 0, 0, dep, .74, .74));
     }
@@ -241,7 +241,12 @@ export default {
 
     const neon = new THREE.Mesh(new THREE.PlaneGeometry(24, 6),
       new THREE.MeshBasicMaterial({ map: neonTex('Cascade'), color: new THREE.Color(1.8, 1.8, 1.8), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-    neon.position.set(-HW + .7, F + 34, 4); neon.rotation.y = Math.PI / 2; group.add(neon);
+    neon.position.set(-HW + 2.2, F + 34, 4); neon.rotation.y = Math.PI / 2; group.add(neon);
+    // a dark backing plate on stand-offs, proud of the panels + diffusers, so the sign reads clean
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(.25, 7.4, 25.5), new THREE.MeshStandardMaterial({ color: 0x050508, roughness: .4, metalness: .6, envMap, envMapIntensity: .4 }));
+    plate.position.set(-HW + 2.0, F + 34, 4); group.add(plate);
+    group.add(instanced(new THREE.CylinderGeometry(.08, .08, 1.8, 6).rotateZ(Math.PI / 2), metal,
+      [[-2.6, -10], [2.6, -10], [-2.6, 10], [2.6, 10]].map(([dy, dz]) => trs(-HW + 1.05, F + 34 + dy, 4 + dz))));
 
     // ---- ceiling truss + volumetric beams onto the stage ----
     const trussM = [];
@@ -280,6 +285,11 @@ export default {
         glows.material.uniforms.uTime.value = songTime;
         beams.material.uniforms.uGain.value = beamBase * (1 + .5 * energy);
         cycMat.color.copy(cycBase).multiplyScalar(1 + .25 * energy);
+      },
+      resize(w, h, pr){                                      // keep the mirror sharp across rotations / DPR changes
+        const tw = Math.max(256, Math.round(w * pr * REFL_SCALE)), th = Math.max(256, Math.round(h * pr * REFL_SCALE));
+        floor.getRenderTarget().setSize(tw, th);
+        floor.material.uniforms.uTexel.value.set(1 / tw, 1 / th);
       },
       dispose(){},
     };

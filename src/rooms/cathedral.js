@@ -206,11 +206,18 @@ export default {
     const wallMat = new THREE.MeshStandardMaterial({ map: wall, color: 0xc0ae98, alphaTest: .5, roughness: .9, side: THREE.DoubleSide });
     const glassMat = new THREE.MeshBasicMaterial({ map: glass, color: new THREE.Color(2.4, 2.1, 1.9), blending: THREE.AdditiveBlending,
       transparent: true, depthWrite: false, side: THREE.DoubleSide });
+    /* the glass is an ADDITIVE overlay — mostly black texels that still cost fill. Crop it to the
+       window band (lancet sills y≈40 → rose top ≈62) and to the first GB bays (the haze has
+       swallowed everything beyond), with the uvs remapped so it registers exactly. */
+    const G0 = 39, G1 = 62.5, GB = 9;
+    const glassGeo = new THREE.PlaneGeometry(GB * BAY, G1 - G0);
+    { const uv = glassGeo.attributes.uv, v0 = (G0 - SPRING) / (CLER_TOP - SPRING), v1 = (G1 - SPRING) / (CLER_TOP - SPRING);
+      for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * GB / NB, v0 + uv.getY(i) * (v1 - v0)); }
     for (const s of [-1, 1]){
       const wm = new THREE.Mesh(wallGeo, wallMat);
       wm.rotation.y = s * Math.PI / 2; wm.position.set(s * NAVE_X, (SPRING + CLER_TOP) / 2, Z0 - NB * BAY / 2);
-      const gm = new THREE.Mesh(wallGeo, glassMat);
-      gm.rotation.copy(wm.rotation); gm.position.copy(wm.position); gm.position.x -= s * .3;
+      const gm = new THREE.Mesh(glassGeo, glassMat);
+      gm.rotation.copy(wm.rotation); gm.position.set(wm.position.x - s * .3, (G0 + G1) / 2, Z0 - GB * BAY / 2);
       group.add(wm, gm);
     }
     // aisle outer walls + vault + ceiling: dark masses the haze swallows
@@ -232,7 +239,7 @@ export default {
       new THREE.MeshBasicMaterial({ map: roseTex(), color: new THREE.Color(1.5, 1.3, 1.25), blending: THREE.AdditiveBlending,
         transparent: true, depthWrite: false, fog: false }));
     rose.position.set(0, 48, zEnd - 1); group.add(rose);
-    const roseHalo = new THREE.Mesh(new THREE.PlaneGeometry(110, 110), glowMat(radialTex(), 0xff9f5a, .12));
+    const roseHalo = new THREE.Mesh(new THREE.PlaneGeometry(76, 76), glowMat(radialTex(), 0xff9f5a, .16));
     roseHalo.position.set(0, 48, zEnd + 1); group.add(roseHalo);
 
     // ---- light shafts: crossed additive planes from the LEFT clerestory, slanting down

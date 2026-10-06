@@ -70,6 +70,12 @@ const LIGHT_PEAK = 9;       // strike-light intensity at full velocity
 
 const wrapP = (t, P) => ((t % P) + P) % P;
 
+/* Where the kit stands, for staging (rooms' anchor points, the director's drum shot) —
+   one source of truth so a plinth / camera never ends up under nothing if the kit moves.
+   Footprint = the riser sector + the head arc's wings, world units. */
+export const KIT_X_OFFSET = KIT_X;
+export function kitAnchor(cx){ return { x: cx + KIT_X, z: KIT_Z - .5, w: 16, d: 11, yaw: 0, y: RISER_TOP }; }
+
 export function makeMarbleDrums({ envMap, glowTex }){
   let lanes = [];                                       // [{lane, L, style, contact, head, ball, coil, ...}]
   let start = -Infinity;

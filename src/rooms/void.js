@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { STAGE, rng, canvasTex, radialTex, glowPoints, beamMat, trs } from './common.js';
 /* ============================================================
    THE VOID — no room at all: an infinite starfield + nebula with a
@@ -11,9 +12,10 @@ import { STAGE, rng, canvasTex, radialTex, glowPoints, beamMat, trs } from './co
    ============================================================ */
 
 const FOG = 0x0a0822;
-const GRID_Y = -95;               // the horizon grid, far below the plinths
+const GRID_Y = -220;               // the horizon grid, far below the plinths
 const MAX_PLINTHS = 16;
-const DECK_Y = -58;               // the cloud deck the light pillars sink into
+const DECKS = [[-40, .9, 0x6a58c8, .9], [-68, 1, 0x3a2c88, 1.3]];
+const DECK_W = 360;               // deck size: its faded rim stays inside camera.far (200) from the stage   // two cloud decks: [y, opacity, tint, tex repeat] — plinth / cloud / cloud / grid depth layers
 const PILLAR = 70;                // light-pillar length below each plinth
 
 function skyTex(){
@@ -66,8 +68,8 @@ function skyTex(){
 function cloudTex(){                                        // tileable soft fbm-ish puffs, alpha only
   return canvasTex(512, 512, (x, w) => {
     const R = rng(5);
-    for (let i = 0; i < 160; i++){
-      const cx = R() * w, cy = R() * w, r = 20 + R() * 80, a = .05 + R() * .1;
+    for (let i = 0; i < 110; i++){                          // soft banks with clear gaps between them
+      const cx = R() * w, cy = R() * w, r = 24 + R() * 80, a = .08 + R() * .2;
       for (const ox of [-w, 0, w]) for (const oy of [-w, 0, w]){
         const g = x.createRadialGradient(cx + ox, cy + oy, 0, cx + ox, cy + oy, r);
         g.addColorStop(0, `rgba(255,255,255,${a})`); g.addColorStop(1, 'rgba(255,255,255,0)');
@@ -77,27 +79,34 @@ function cloudTex(){                                        // tileable soft fbm
   }, { srgb: false });
 }
 
-/* the neon horizon grid: anti-aliased lines, scrolling, fading with distance. Fog-free. */
+/* the neon horizon grid: WORLD-SPACE line widths (so lines thin with distance like real
+   perspective — screen-constant lines read as a floor right under you), big 20u cells, faded
+   + hazed by true 3D distance from the camera so it glows toward the horizon and sinks into
+   atmosphere below. Additive, fog-free (does its own atmospheric perspective). */
+const CELL = 60;
 function gridMat(){
   return new THREE.ShaderMaterial({
     uniforms: { uTime: { value: 0 }, uCam: { value: new THREE.Vector3() }, uGain: { value: 1 } },
     vertexShader: /* glsl */`
       varying vec3 vW;
-      void main(){ vW = (modelMatrix * vec4(position, 1.)).xyz; gl_Position = projectionMatrix * viewMatrix * vec4(vW, 1.); }`,
+      void main(){ vW = (modelMatrix * vec4(position, 1.)).xyz; gl_Position = projectionMatrix * viewMatrix * vec4(vW, 1.);
+        gl_Position.z = gl_Position.w * .99999; }`,   // pinned to the far plane (the skybox trick): it lies BEYOND camera.far (200), yet never clips
     fragmentShader: /* glsl */`
       uniform float uTime, uGain; uniform vec3 uCam; varying vec3 vW;
-      float line(float v, float wdt){ float d = abs(fract(v - .5) - .5); float fw = fwidth(v); return 1. - smoothstep(wdt * fw, (wdt + 1.5) * fw, d); }
+      // a line of world half-width hw (in cell units); when a pixel is wider than the line,
+      // fade by coverage instead of fattening it → lines genuinely thin into the distance
+      float line(float v, float hw){ float d = abs(fract(v - .5) - .5); float fw = max(fwidth(v), 1e-4);
+        return (1. - smoothstep(hw - fw * .5, hw + fw * .5, d)) * min(1., hw * 2. / fw); }
       void main(){
-        vec2 p = vW.xz / 10.; p.y -= uTime * .25;               // drift toward the audience
-        float L = max(line(p.x, .25), line(p.y, .25));
-        float L2 = max(line(p.x * 5., .3), line(p.y * 5., .3)) * .18;
-        float dist = length(vW.xz - uCam.xz);
-        float fade = (1. - smoothstep(120., 195., dist)) * (.15 + .85 * smoothstep(50., 150., dist));   // dim right below (it's FAR), glow toward the horizon
-        vec3 near = vec3(.25, .85, 1.), far = vec3(1., .25, .8);
-        vec3 c = mix(near, far, smoothstep(20., 160., dist));
-        float a = (L + L2) * fade * uGain;
-        float glow = exp(-dist * .012) * .08;                   // a faint wash under the stage
-        gl_FragColor = vec4(c * a * .42 + vec3(.25, .2, .7) * glow, 1.);
+        vec2 p = vW.xz / ${CELL.toFixed(1)}; p.y -= uTime * .06;    // drift toward the audience
+        float L = max(line(p.x, .012), line(p.y, .012));
+        float d3 = length(vW - uCam);                                // true 3D distance (camera is ~100u above)
+        float dep = (uCam.y - vW.y) / d3;                            // sin(depression angle) of this texel
+        float fade = smoothstep(.012, .05, dep) * (1. - smoothstep(.1, .3, dep));   // a band toward the horizon only: straight down is just void
+        float far = 1. - smoothstep(.04, .2, dep);   // faint straight down, glowing at the horizon
+        vec3 c = mix(vec3(.25, .7, 1.), vec3(1., .3, .85), far);
+        float glow = exp(-length(vW.xz - uCam.xz) * .006) * .05;      // a faint wash far under the stage
+        gl_FragColor = vec4(c * L * fade * uGain * .5 + vec3(.25, .2, .7) * glow, 1.);
       }`,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
   });
@@ -112,16 +121,26 @@ export default {
     const sky = skyTex(); sky.mapping = THREE.EquirectangularReflectionMapping;
 
     // ---- horizon grid (follows the camera in x/z, snapped to the cell so it never swims) ----
-    const grid = new THREE.Mesh(new THREE.PlaneGeometry(420, 420), gridMat());
-    grid.rotation.x = -Math.PI / 2; grid.position.y = GRID_Y; grid.frustumCulled = false;
+    const grid = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000), gridMat());
+    grid.rotation.x = -Math.PI / 2; grid.position.y = GRID_Y; grid.frustumCulled = false; grid.renderOrder = -3;   // under both cloud decks (they occlude it)
     group.add(grid);
 
-    // ---- a thin cloud deck between the plinths and the grid: sells the drop (depth cue) ----
-    const deckTex = cloudTex(); deckTex.wrapS = deckTex.wrapT = THREE.RepeatWrapping; deckTex.repeat.set(3, 3);
-    const deck = new THREE.Mesh(new THREE.PlaneGeometry(420, 420).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ map: deckTex, color: 0x7a5ad8, transparent: true, opacity: .9, depthWrite: false,
-        blending: THREE.AdditiveBlending, fog: false, side: THREE.DoubleSide }));
-    deck.position.y = DECK_Y; deck.frustumCulled = false; group.add(deck);
+    // ---- two cloud decks between the plinths and the grid: NORMAL-blended, so they occlude
+    // the grid (additive clouds only brighten — they can't put anything "in front"). Sells the drop.
+    const cloud = cloudTex();
+    // radial falloff (green channel → alphaMap, its own untransformed uv): the decks thin out
+    // toward their rim, so there's never a hard plane edge on the horizon
+    const edge = canvasTex(128, 128, (x, w) => { x.fillStyle = '#000'; x.fillRect(0, 0, w, w);
+      const g = x.createRadialGradient(w / 2, w / 2, 0, w / 2, w / 2, w / 2);
+      g.addColorStop(0, '#fff'); g.addColorStop(.35, '#ccc'); g.addColorStop(.85, '#222'); g.addColorStop(1, '#000');
+      x.fillStyle = g; x.fillRect(0, 0, w, w); }, { srgb: false });
+    const decks = DECKS.map(([y, op, tint, rep], i) => {
+      const t = cloud.clone(); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep, rep); t.needsUpdate = true;
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(DECK_W, DECK_W).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial({ map: t, alphaMap: edge, color: tint, transparent: true, opacity: op, depthWrite: false, fog: false, side: THREE.DoubleSide }));
+      m.position.y = y; m.frustumCulled = false; m.renderOrder = -1 - i; group.add(m);
+      return { m, t, k: DECK_W / rep, sx: .002 * (i ? -1 : 1), sz: .003 };
+    });
 
     // ---- motes: slow sparkles drifting around the stage ----
     const mP = [], mC = [], mS = [], mPh = [];
@@ -134,34 +153,88 @@ export default {
     const motes = glowPoints(mP, { colors: mC, sizes: mS, phases: mPh, map: radialTex(32, [[0, 1], [.3, .4], [1, 0]]), flicker: .8, rate: 1.7, drift: 1.2 });
     group.add(motes);
 
-    // ---- plinths + light pillars (instanced, capacity MAX_PLINTHS; filled by place()) ----
+    // ---- floating islands: hull-shaped decks (rebuilt per song by place()) + instanced light pillars ----
     const slabMat = new THREE.MeshStandardMaterial({ color: 0x14152a, metalness: .85, roughness: .22, envMap, envMapIntensity: 1.1 });
-    const rimMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    const slab = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), slabMat, MAX_PLINTHS);
-    const rim = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), rimMat, MAX_PLINTHS);
-    const keel = new THREE.InstancedMesh(new THREE.CylinderGeometry(.5, .08, 1, 6).translate(0, -.5, 0), slabMat, MAX_PLINTHS);   // a tapered underside
+    const keelMat = new THREE.MeshStandardMaterial({ color: 0x0d0e1c, metalness: .7, roughness: .4, envMap, envMapIntensity: .8 });
+    const rimMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+    const isl = { slab: new THREE.Mesh(new THREE.BufferGeometry(), slabMat), keel: new THREE.Mesh(new THREE.BufferGeometry(), keelMat),
+                  rim: new THREE.Mesh(new THREE.BufferGeometry(), rimMat) };
+    for (const m of Object.values(isl)){ m.frustumCulled = false; group.add(m); }
     const pillar = new THREE.InstancedMesh(new THREE.CylinderGeometry(.5, .5, 1, 28, 1, true).translate(0, -.5, 0),
       beamMat({ gain: .42, falloff: 2.2, edge: 1.4 }), MAX_PLINTHS);
     const halo = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ map: radialTex(), transparent: true, opacity: .55, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }), MAX_PLINTHS);
-    for (const im of [slab, rim, keel, pillar, halo]){ im.count = 0; im.frustumCulled = false; group.add(im); }
+      new THREE.MeshBasicMaterial({ map: radialTex(), transparent: true, opacity: .3, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }), MAX_PLINTHS);
+    for (const im of [pillar, halo]){ im.count = 0; im.frustumCulled = false; group.add(im); }
     const PAL = [0x5fd8ff, 0xb57bff, 0xff7ac8, 0x7affc8, 0xffb36a];
 
+    /* Islands. Anchors whose RAW footprints touch (oriented-rect SAT, small clearance) join one
+       cluster; each cluster becomes ONE island shaped to the convex hull of its members' padded
+       corners — a clean outline with one rim, never a zig-zag stack of overlapping slabs. A
+       freestanding station keeps its own (yawed-rect) island. Pillars + halos stay per anchor. */
+    const PAD = 1.2, GAP = .6;                              // island margin round the legs, cluster clearance
+    const _c = new THREE.Color();
+    const corners = (a, pad) => {
+      const yaw = a.yaw || 0, c = Math.cos(yaw), s = Math.sin(yaw), hw = a.w / 2 + pad, hd = a.d / 2 + pad;
+      return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => [a.x + c * hw * u + s * hd * v, a.z - s * hw * u + c * hd * v]);
+    };
+    function touch(A, B){                                   // separating-axis test on two oriented rects
+      const pa = corners(A, GAP / 2), pb = corners(B, GAP / 2);
+      for (const P of [pa, pb]) for (let i = 0; i < 2; i++){
+        const ax = P[i + 1][0] - P[i][0], az = P[i + 1][1] - P[i][1];
+        const pr = Q => { let lo = Infinity, hi = -Infinity; for (const q of Q){ const d = q[0] * ax + q[1] * az; lo = Math.min(lo, d); hi = Math.max(hi, d); } return [lo, hi]; };
+        const [a0, a1] = pr(pa), [b0, b1] = pr(pb);
+        if (a1 < b0 || b1 < a0) return false;
+      }
+      return true;
+    }
+    function hull(pts){                                     // monotone chain, CCW in (x, z)
+      pts = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+      const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+      const lo = [], up = [];
+      for (const p of pts){ while (lo.length > 1 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+      for (const p of pts.reverse()){ while (up.length > 1 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
+      return lo.slice(0, -1).concat(up.slice(0, -1));
+    }
+    // extrude a hull (scaled k about its centroid) downward from y=top by `depth`; optional flat colour
+    function slabGeo(H, k, top, depth, col){
+      const cx = H.reduce((a, p) => a + p[0], 0) / H.length, cz = H.reduce((a, p) => a + p[1], 0) / H.length;
+      const sh = new THREE.Shape(H.map(([x, z]) => new THREE.Vector2(cx + (x - cx) * k, cz + (z - cz) * k)));
+      const g = new THREE.ExtrudeGeometry(sh, { depth, bevelEnabled: false, curveSegments: 1 }).rotateX(Math.PI / 2);   // shape y → world z, extrudes down
+      g.translate(0, top, 0);
+      if (col){ const n = g.attributes.position.count, c = new Float32Array(n * 3);
+        for (let i = 0; i < n; i++){ c[i * 3] = col.r; c[i * 3 + 1] = col.g; c[i * 3 + 2] = col.b; }
+        g.setAttribute('color', new THREE.BufferAttribute(c, 3)); }
+      return g;
+    }
     function place(anchors){
       const list = anchors.slice(0, MAX_PLINTHS);
-      list.forEach((a, i) => {
-        const w = a.w + 2, d = a.d + 2, yaw = a.yaw || 0;
-        const c = new THREE.Color(PAL[i % PAL.length]);
-        slab.setMatrixAt(i, trs(a.x, F - .9, a.z, 0, yaw, 0, w, 1.8, d));
-        rim.setMatrixAt(i, trs(a.x, F - .25, a.z, 0, yaw, 0, w + .25, .22, d + .25));
-        rim.setColorAt(i, c.clone().multiplyScalar(2.6));
-        keel.setMatrixAt(i, trs(a.x, F - 1.8, a.z, 0, yaw, 0, w * .9, 9, d * .9));
-        pillar.setMatrixAt(i, trs(a.x, F - 1.8, a.z, 0, yaw, 0, w * .62, PILLAR, d * .62));
-        pillar.setColorAt(i, c);
-        halo.setMatrixAt(i, trs(a.x, F + .06, a.z, 0, yaw, 0, w * 1.5, 1, d * 1.5));
-        halo.setColorAt(i, c.clone().multiplyScalar(.5));
+      const par = list.map((_, i) => i), find = i => par[i] === i ? i : (par[i] = find(par[i]));
+      for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) if (touch(list[i], list[j])) par[find(i)] = find(j);
+      const groups = {};
+      list.forEach((a, i) => (groups[find(i)] ||= []).push(a));
+      const slabs = [], keels = [], rims = [];
+      Object.values(groups).forEach((g, gi) => {
+        const top = F + .003 * gi;                                   // staggered tops: coplanar islands can never z-fight
+        const H = hull(g.flatMap(a => corners(a, PAD))), HR = hull(g.flatMap(a => corners(a, PAD + .14)));
+        _c.setHex(g.length > 1 ? 0x5fd8ff : PAL[(gi + 1) % PAL.length]).multiplyScalar(1.8);
+        rims.push(slabGeo(HR, 1, top - .14, .22, _c));
+        slabs.push(slabGeo(H, 1, top, 1.8));
+        keels.push(slabGeo(H, .82, top - 1.8, 2.6), slabGeo(H, .55, top - 4.4, 3.4), slabGeo(H, .25, top - 7.8, 3));   // stepped keel
       });
-      for (const im of [slab, rim, keel, pillar, halo]){
+      for (const [m, gs] of [[isl.slab, slabs], [isl.keel, keels], [isl.rim, rims]]){
+        m.geometry.dispose();
+        m.geometry = gs.length ? mergeGeometries(gs) : new THREE.BufferGeometry();
+        gs.forEach(g => g.dispose());
+      }
+      list.forEach((a, i) => {
+        const yaw = a.yaw || 0, r = Math.min(a.w, a.d);
+        _c.setHex(PAL[i % PAL.length]);
+        pillar.setMatrixAt(i, trs(a.x, F - 2, a.z, 0, yaw, 0, r * .55, PILLAR, r * .55));
+        pillar.setColorAt(i, _c);
+        halo.setMatrixAt(i, trs(a.x, F + .06 + .002 * i, a.z, 0, yaw, 0, a.w * 1.2, 1, a.d * 1.2));
+        halo.setColorAt(i, _c.multiplyScalar(.45));
+      });
+      for (const im of [pillar, halo]){
         im.count = list.length; im.instanceMatrix.needsUpdate = true;
         if (im.instanceColor) im.instanceColor.needsUpdate = true;
       }
@@ -176,15 +249,18 @@ export default {
       place,
       update(dt, songTime, camera, energy = 0){
         gu.uTime.value = songTime; gu.uCam.value.copy(camera.position);
-        grid.position.x = Math.round(camera.position.x / 10) * 10;
-        grid.position.z = Math.round(camera.position.z / 10) * 10;
-        deck.position.x = camera.position.x; deck.position.z = camera.position.z;
-        deckTex.offset.set(camera.position.x / 140 + songTime * .002, -camera.position.z / 140 - songTime * .003);   // world-locked + slow drift
+        grid.position.x = Math.round(camera.position.x / CELL) * CELL;
+        grid.position.z = Math.round(camera.position.z / CELL) * CELL;
+        for (const dk of decks){                                 // follow the camera, texture world-locked + slow drift
+          dk.m.position.x = camera.position.x; dk.m.position.z = camera.position.z;
+          dk.t.offset.set(camera.position.x / dk.k + songTime * dk.sx, -camera.position.z / dk.k - songTime * dk.sz);
+        }
         gu.uGain.value = 1 + .6 * energy;
         motes.material.uniforms.uTime.value = songTime;
         pillar.material.uniforms.uGain.value = pillarBase * (1 + .08 * Math.sin(songTime * 1.3) + .5 * energy);
+        rimMat.color.setScalar(1 + .7 * energy);                // island rims pulse with the kick / lead strikes
       },
-      dispose(){},
+      dispose(){ sky.dispose(); cloud.dispose(); edge.dispose(); decks.forEach(dk => dk.t.dispose()); },
     };
   },
 };

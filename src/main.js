@@ -8,7 +8,7 @@ import { G, UP, UPY, ROLL_T, DESCENT, solveLaunch, arcPos, arcVel, padOffset, be
 import * as audio from './audio.js';
 import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } from './juice.js';
 import { makeConveyorShop, BELT_DEPTH } from './conveyor.js';
-import { makeMarbleDrums } from './marbledrums.js';
+import { makeMarbleDrums, kitAnchor, KIT_X_OFFSET } from './marbledrums.js';
 import { makeCameraRig } from './camera.js';
 import { makeRoomHost } from './rooms/index.js';
 import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
@@ -407,10 +407,11 @@ function buildWorld(keyName){
     ids.forEach(id => voices.push({ key: `inst:${rig.I.key}:${id}`, wet: !!rig.I.wet, render: () => rig.I.voice(id) }));
   });
 
+  rooms.suggest(S.room);                                // a song may name its room (data); a viewer's pick wins
   // anchor points for the room (the Void grows a plinth + light pillar under each)
   rooms.place([
     { x: stageView.cx, z: BELT_DEPTH, w: wallW + 4, d: 8, yaw: 0, y: STAGE_Y - BELT_REACH },
-    ...(S.drums ? [{ x: stageView.cx + 14, z: 4, w: 16, d: 11, yaw: 0, y: 1.5 }] : []),   // marbledrums.js KIT_X / KIT_Z
+    ...(S.drums ? [kitAnchor(stageView.cx)] : []),
     ...instLive.map(r => ({ x: r.station.position.x, z: r.station.position.z, yaw: r.station.rotation.y,
       ...(({ w, d, y }) => ({ w, d, y }))(stationFor(r.I.key, instRigs.indexOf(r))) })),
   ]);
@@ -483,7 +484,7 @@ function syncDirector(S, view){
     cues.push({ key: rig.I.key, cue: rig.cue, weight: rig.I.directorWeight ?? 1 });
   });
   if (S.drums){
-    const kx = view.cx + 14;                            // marbledrums.js KIT_X / KIT_Z
+    const kx = view.cx + KIT_X_OFFSET;                  // marbledrums.js KIT_X
     shots.push({ key: 'drums', color: '#ff8a3d', aim: new THREE.Vector3(kx, 3.6, 2.5), eye: new THREE.Vector3(kx - 2, 8.5, 18) });
     const cue = [];
     Object.entries(S.drums).forEach(([lane, hits]) => hits.map(normalizeHit).forEach(h =>
@@ -749,6 +750,7 @@ function animate(){
   composer.render();
 }
 animate();
+setTimeout(() => rooms.prewarm(camera), 1200);    // build + compile the other rooms in idle time (no first-swap stall)
 
 /* ---------------- controls ---------------- */
 const overlay = document.getElementById('overlay');
@@ -891,6 +893,7 @@ addEventListener('resize', () => {
   cam.resize();
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
+  rooms.resize(innerWidth, innerHeight, renderer.getPixelRatio());
 });
 
 /* ---------------- ?debug scrub bar (dev tooling, not a feature) ----------------

@@ -2,7 +2,7 @@
 // returns { song, warnings }
 
 import { GM_DRUMS, drumByGm } from '../drumkit.js';
-import { orchestrate, shapePart, PART_SPEC } from './orchestra.js';
+import { orchestrate, orchestrateByRole, shapePart, PART_SPEC, ROLL_T } from './orchestra.js';
 
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 // stable lane order for the emitted drums block (registry order → consistent
@@ -53,16 +53,33 @@ export function convertToSong(parsed, opts = {}) {
     throw new Error('midi: only channel-9 percussion found — need at least one melodic track to drive the engine');
   }
 
-  // --- step 0b: ORCHESTRA — route each voice by its GM program (orchestra.js) ---
-  // Pianos / guitars / leads stay belt candidates (the melodic spine); mallets, chimes,
-  // basses, pads/strings go to the room's instrument plugins as song.parts. A file with
-  // NO program changes is a bare sketch (GM default = piano everywhere): it keeps the
-  // classic belts-only import exactly, unless opts.orchestra forces routing on.
-  const orchestra = opts.orchestra ?? !!parsed.hasPrograms;
+  // --- step 0b: ORCHESTRA — who plays what (orchestra.js) ---
+  // opts.route: 'auto' (default) | 'programs' | 'roles' | 'legacy'
+  //   programs  route each voice by its GM program: pianos / guitars / leads stay belt
+  //             candidates (the melodic spine); mallets, chimes, basses, pads/strings go to
+  //             the room's instrument plugins as song.parts
+  //   roles     route each voice by its musical SHAPE (orchestrateByRole) — for files
+  //             whose programs say nothing
+  //   legacy    the classic belts-only importer: the busiest 3 tracks, top notes
+  //   auto      programs when the file has them; ROLES when it has none (GM default =
+  //             piano everywhere: a bare sketch / reduction / rip), or when the programs
+  //             give the room nothing to play (all pianos / leads: belts only) while there
+  //             are ≥ 2 voices or a chordal voice squashed onto the belt
+  // opts.orchestra (older flag) still works: true = 'programs', false = 'legacy'.
+  const mode = opts.orchestra === true ? 'programs' : opts.orchestra === false ? 'legacy' : (opts.route || 'auto');
+  const orchestra = mode !== 'legacy';
   let beltTracks = melodicTracks;
   let routed = [];                                  // [{ key, name, notes }] raw parse notes
   if (orchestra) {
-    const r = orchestrate(melodicTracks, { ppq, bpm });
+    let r;
+    if (mode === 'programs' || (mode === 'auto' && parsed.hasPrograms)) {
+      r = orchestrate(melodicTracks, { ppq, bpm });
+      if (mode === 'auto' && !r.parts.length && (r.squashed || r.voices >= 2))
+        r = orchestrateByRole(melodicTracks, { ppq, bpm, programs: true, reason: 'its programs give the room nothing to play' });
+    } else {
+      r = orchestrateByRole(melodicTracks, { ppq, bpm, programs: !!parsed.hasPrograms,
+                                             reason: parsed.hasPrograms ? 'forced' : 'no program data' });
+    }
     beltTracks = r.belt;
     routed = r.parts;
     warnings.push(...r.warnings);
@@ -138,21 +155,30 @@ export function convertToSong(parsed, opts = {}) {
   // iconic intro tom roll, say) are NOT dropped: they keep their NEGATIVE beat and
   // render in the roll-in window just before the downbeat (step 12), leading into
   // the first note exactly as a pickup should, instead of stranding at the tail.
+  // A pickup only has the ROLL-IN to live in (beat ≥ −ROLL_T/BEAT: the render's t ≥ 0).
+  // Anything earlier is an intro the lead doesn't play: the dribble lane would wrap it
+  // mod the loop, right on top of the real groove mid-song — so it's dropped (warned).
   const drumHits = [];                              // [{ lane, beat, vel }]  (beat may be < 0)
-  const unmappedGm = new Set();
-  let pickups = 0;
+  const unmappedGm = new Map();                     // gm → hits
+  const pickupFloor = -ROLL_T * bpm / 60;
+  let pickups = 0, intro = 0;
   for (const n of drumNotes) {
     const lane = drumByGm(n.midi);
-    if (!lane) { unmappedGm.add(n.midi); continue; }
+    if (!lane) { unmappedGm.set(n.midi, (unmappedGm.get(n.midi) || 0) + 1); continue; }
     const beat = tidy(quantize(n.tick * beatsPerTick) - leadOffset);
+    if (beat < pickupFloor - 1e-9) { intro++; continue; }
     if (beat < 0) pickups++;
     drumHits.push({ lane, beat, vel: Math.max(0.01, Math.min(1, n.vel / 127)) });
   }
   if (unmappedGm.size > 0) {
-    warnings.push(`drums: dropped ${unmappedGm.size} unmapped percussion note${unmappedGm.size > 1 ? 's' : ''} (GM ${[...unmappedGm].sort((a, b) => a - b).join(', ')})`);
+    const hits = [...unmappedGm.values()].reduce((s, c) => s + c, 0);
+    warnings.push(`drums: dropped ${unmappedGm.size} unmapped percussion note${unmappedGm.size > 1 ? 's' : ''} (GM ${[...unmappedGm.keys()].sort((a, b) => a - b).join(', ')}; ${hits} hit${hits > 1 ? 's' : ''})`);
   }
   if (pickups > 0) {
     warnings.push(`drums: kept ${pickups} pickup hit${pickups > 1 ? 's' : ''} before the downbeat (the lead-in fill)`);
+  }
+  if (intro > 0) {
+    warnings.push(`drums: dropped ${intro} hit${intro > 1 ? 's' : ''} more than the roll-in (${(-pickupFloor).toFixed(1)} beats) before the lead — an intro the belt doesn't play`);
   }
 
   // --- step 5c: plugin part notes, lead-aligned + quantized like the drums ---
@@ -341,6 +367,9 @@ export function convertToSong(parsed, opts = {}) {
   }
   if (Object.keys(parts).length > 0) {
     song.parts = parts;
+    // no curator placed this room: let the stations make way for a wide belt wall and the
+    // director re-aim a blocked station shot (main.js; hand-authored songs keep their framing)
+    song.staging = 'auto';
     song.sub += ` + ${Object.keys(parts).join(', ')}`;
   }
 

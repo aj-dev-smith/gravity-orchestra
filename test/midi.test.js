@@ -23,6 +23,13 @@ function simpleMidi(notes, ppq = 480) {
 // parse — header + format
 // ---------------------------------------------------------------------------
 
+// A file with NO program changes now routes by musical ROLE by default (orchestra.js
+// orchestrateByRole — the room plays, not just the belts). The tests below that pin the
+// classic BELT mechanics on program-less sketches (lock rule across alto/bass belts, busiest-3
+// pruning, role-by-mean, lead zeroing of a bass belt, the track count) run them on the legacy
+// path, which stays reachable as { route: 'legacy' } (≡ { orchestra: false }).
+const LEGACY = { route: 'legacy' };
+
 describe('parseMidi — header', () => {
   it('returns correct format and ppq', () => {
     const bytes = simpleMidi([{ tick: 0, type: 'on', note: 60, vel: 80 }]);
@@ -486,7 +493,7 @@ describe('convertToSong — lock rule', () => {
         ]},
       ],
     });
-    const { song } = convertToSong(parseMidi(bytes));
+    const { song } = convertToSong(parseMidi(bytes), LEGACY);
     const melodyTotal = sumBeats(song.melody);
     expect(song.bass).toBeDefined();
     const bassTotal = sumBeats(song.bass.notes) + (song.bass.delay || 0);
@@ -516,7 +523,7 @@ describe('convertToSong — lock rule', () => {
         ]},
       ],
     });
-    const { song } = convertToSong(parseMidi(bytes));
+    const { song } = convertToSong(parseMidi(bytes), LEGACY);
     const melodyTotal = sumBeats(song.melody);
     if (song.alto) {
       const altoTotal = sumBeats(song.alto.notes) + (song.alto.delay || 0);
@@ -618,7 +625,7 @@ describe('convertToSong — track pruning', () => {
         makeTrack(36, 2), // fewest — should be dropped
       ],
     });
-    const { song, warnings } = convertToSong(parseMidi(bytes));
+    const { song, warnings } = convertToSong(parseMidi(bytes), LEGACY);
     // at most melody + alto + bass
     const trackCount = 1 + (song.alto ? 1 : 0) + (song.bass ? 1 : 0);
     expect(trackCount).toBeLessThanOrEqual(3);
@@ -640,7 +647,7 @@ describe('convertToSong — role assignment', () => {
         { events: [{ tick: 0, type: 'on', note: 72, vel: 80 }] }, // melody register
       ],
     });
-    const { song } = convertToSong(parseMidi(bytes));
+    const { song } = convertToSong(parseMidi(bytes), LEGACY);
     // melody should be the high note (midi 72 = C6 before possible octave shift)
     const melodyMidi = song.melody[0][0];
     expect(melodyMidi.charCodeAt(0)).toBeGreaterThanOrEqual('A'.charCodeAt(0));
@@ -696,7 +703,7 @@ describe('convertToSong — lead onset zeroing', () => {
         ]},
       ],
     });
-    const { song, warnings } = convertToSong(parseMidi(bytes));
+    const { song, warnings } = convertToSong(parseMidi(bytes), LEGACY);
     expect(warnings.some(w => /before the lead/i.test(w))).toBe(true);
     // bass should still be present with the remaining notes
     if (song.bass) {
@@ -1003,7 +1010,7 @@ describe('convertToSong — label', () => {
         { events: [{ tick: 0, type: 'on', note: 48, vel: 80 }] },
       ],
     });
-    const { song } = convertToSong(parseMidi(bytes));
+    const { song } = convertToSong(parseMidi(bytes), LEGACY);
     expect(song.sub).toMatch(/MIDI import/);
     expect(song.sub).toMatch(/2/);
   });
@@ -1056,7 +1063,7 @@ describe('integration — realistic 2-track MIDI conversion', () => {
     expect(parsed.ppq).toBe(ppq);
     expect(parsed.tracks.length).toBe(2);
 
-    const { song, warnings } = convertToSong(parsed);
+    const { song, warnings } = convertToSong(parsed, LEGACY);
 
     // shape checks
     expect(song.melody.length).toBe(8);
@@ -1105,7 +1112,7 @@ describe('integration — realistic 2-track MIDI conversion', () => {
 // ---------------------------------------------------------------------------
 
 // a melody on ch0 (beats 0..3) plus a kick/snare/hat groove on ch9, and one
-// unmapped percussion note (GM 60, not in the registry) that must be dropped.
+// unmapped percussion note (GM 76, a wood block: no kit piece reads as it) that must be dropped.
 function drumMidi() {
   const Q = 480; // ticks per beat
   return buildMidi({
@@ -1133,8 +1140,8 @@ function drumMidi() {
         { tick: 2.5 * Q, type: 'on', note: 42, vel: 60,  channel: 9 },
         { tick: 3 * Q,   type: 'on', note: 42, vel: 100, channel: 9 },
         { tick: 3.5 * Q, type: 'on', note: 42, vel: 60,  channel: 9 },
-        // unmapped percussion (GM 60) → dropped + warned
-        { tick: 0, type: 'on', note: 60, vel: 100, channel: 9 },
+        // unmapped percussion (GM 76, hi wood block) → dropped + warned
+        { tick: 0, type: 'on', note: 76, vel: 100, channel: 9 },
       ] },
     ],
   });
@@ -1174,7 +1181,7 @@ describe('convertToSong — drum lanes from channel 9', () => {
   });
 
   it('warns about the unmapped percussion note', () => {
-    expect(warnings.some(w => /unmapped/.test(w) && /60/.test(w))).toBe(true);
+    expect(warnings.some(w => /unmapped/.test(w) && /76/.test(w))).toBe(true);
   });
 
   it('mentions drums in the sub line', () => {

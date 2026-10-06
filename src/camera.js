@@ -137,11 +137,12 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
     camsEl.style.display = 'flex';
     const multi = curTracks.length > 1;
     ['auto', ...(stations.length ? ['stage'] : []), 'fixed', 'free',
-     ...(multi ? ['all', ...curTracks.map(t => t.role)] : []), ...stations.map(st => st.key)].forEach(m => {
+     ...(multi ? ['all', ...curTracks.map(t => t.role)] : []), ...stations.map(st => st.id)].forEach(m => {
       const b = document.createElement('button');
+      const st = stations.find(x => x.id === m);
       b.className = 'camb' + (mode === m ? ' on' : '');
-      if (mode === m) b.style.color = CAMCOLORS[m] || stations.find(st => st.key === m)?.color || '#cfd6e6';
-      b.textContent = m.toUpperCase();
+      if (mode === m) b.style.color = (st ? st.color : CAMCOLORS[m]) || '#cfd6e6';
+      b.textContent = (st ? st.label : m).toUpperCase();
       b.addEventListener('click', () => { mode = m; renderButtons(); });
       camsEl.appendChild(b);
     });
@@ -160,10 +161,17 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
      on the director — it is the show; songs without keep the free-look default. */
   function syncStations(list, wide, { auto = true, openWide = false, openUntil: openT = 0, blockers: bl = [] } = {}){
     const had = stations.length;
-    stations = list; stage = wide; blockers = bl;
+    // a station whose key is also a belt role ('bass': the string-bass machine vs the bass
+    // BELT) gets its own id, or one would shadow the other in the director's candidates and
+    // the button row (two identical BASS buttons, the bass belt never filmed)
+    stations = list.map(st => {
+      const clash = curTracks.some(t => t.role === st.key);
+      return { ...st, id: clash ? `inst:${st.key}` : st.key, label: clash ? (st.label || `${st.key} machine`) : st.key };
+    });
+    list = stations; stage = wide; blockers = bl;
     if (auto && list.length && !had && mode === DEFAULT_MODE) mode = 'auto';
     if (!list.length && mode === 'stage') mode = DEFAULT_MODE;
-    if (!FIXED_OK.has(mode) && !curTracks.some(t => t.role === mode) && !list.some(st => st.key === mode)) mode = 'auto';
+    if (!FIXED_OK.has(mode) && !curTracks.some(t => t.role === mode) && !list.some(st => st.id === mode)) mode = 'auto';
     autoWant = openWide ? 'stage' : 'all'; lastCut = -99;   // a full room opens on the wide reveal…
     openUntil = openWide ? openT : -Infinity;                 // …held until songTime passes openT (count-in + downbeat)
     renderButtons();
@@ -216,15 +224,17 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
         const ensemble = (sc._ensemble ?? 0) >= ENSEMBLE_N && !sc._skim && !sc._forceSoon && time - stageOff > ENSEMBLE_REST;
         const cand = { stage: Math.max(STAGE_PULL, ensemble ? ENSEMBLE_S : 0) };
         if (marblePts.length) cand[want] = want === 'all' ? 1.25 : Math.min(Math.max(score, 1.4) * 1.05, 1.9);
-        stations.forEach(st => { cand[st.key] = sc[st.key] ?? 0; });
+        stations.forEach(st => { cand[st.id] = sc[st.key] ?? 0; });
         const held = time - lastCut;
-        if (sc._script && (sc._script === 'stage' || stations.some(st => st.key === sc._script) ||
-            (marblePts.length && tracks.some(t => t.role === sc._script)))){   // the song's SCRIPTED story beat
-          if (autoWant !== sc._script){ autoWant = sc._script; lastCut = time; cutNow = true; }
+        const idOf = k => stations.find(st => st.key === k)?.id;   // director cues name stations by key
+        const scr = sc._script && (idOf(sc._script) ?? sc._script), force = sc._force && idOf(sc._force);
+        if (scr && (scr === 'stage' || stations.some(st => st.id === scr) ||
+            (marblePts.length && tracks.some(t => t.role === scr)))){   // the song's SCRIPTED story beat
+          if (autoWant !== scr){ autoWant = scr; lastCut = time; cutNow = true; }
         } else if (sc._skim){                                 // the money shot: the lead's skim, no matter the hold
           if (autoWant !== 'lead'){ autoWant = 'lead'; lastCut = time; cutNow = true; }
-        } else if (sc._force && stations.some(st => st.key === sc._force)){   // a station's ENTRANCE: cut on it
-          if (autoWant !== sc._force && time - lastCut > FORCE_HOLD){ autoWant = sc._force; lastCut = time; cutNow = true; }
+        } else if (force){                                    // a station's ENTRANCE: cut on it
+          if (autoWant !== force && time - lastCut > FORCE_HOLD){ autoWant = force; lastCut = time; cutNow = true; }
         } else if (sc._seam){                                 // the loop seam: breathe wide, re-open on the newborn's fall
           if (autoWant !== 'stage'){ autoWant = 'stage'; lastCut = time; cutNow = true; }
         } else {
@@ -236,7 +246,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
       }
       effMode = autoWant;
     }
-    const shot0 = effMode === 'stage' ? stage : stations.find(st => st.key === effMode);
+    const shot0 = effMode === 'stage' ? stage : stations.find(st => st.id === effMode);
     const shot = (camera.aspect < .9 && shot0?.portrait) || shot0;   // a shot may carry its own portrait framing
 
     // hold a fixed stage view, follow the chosen marble, or frame them all

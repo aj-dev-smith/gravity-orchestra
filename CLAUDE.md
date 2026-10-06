@@ -65,7 +65,12 @@ on. Treat it as live.
                      of truth for the song validator, audio, render, future MIDI import.
     src/midi/        MIDI import: parse.js (type-0/1 → tracks, FAITHFUL — keeps every
                      channel incl. 9, with velocity) + convert.js (→ song JSON, quantized,
-                     lock-rule-correct; channel 9 → drum lanes via drumByGm — see §6).
+                     lock-rule-correct; channel 9 → drum lanes via drumByGm — see §6)
+                     + orchestra.js (who plays what: by GM program, or — when a file's
+                     programs say nothing — by musical ROLE: line / chords / low / sparkle;
+                     a one-track two-hand piano is split into melody / left hand / chords;
+                     opts.route 'legacy' keeps the classic belts-only import). parse.js
+                     takes the beat-weighted MEDIAN tempo of the map, not the first event.
     src/share.js     song ⇄ deflate→base64url share links
     src/record.js    canvas captureStream + MediaRecorder → "one perfect loop" video
     src/songs/*.js   one module per song (the comments are sacred), aggregated by index.js
@@ -185,7 +190,8 @@ swaps "next pad" for the target; a drum swaps in a stationary drum. Future instr
 is part of the instrument too — we design the *sound of each hit* per instrument (§5).
 
 Status: drums are implemented (kick/snare/hat + a **five-tom set** voiced + rendered — one
-floor tom; GM 41's low floor tom is merged onto it via `GM_MERGE` in drumkit.js;
+floor tom; GM 41's low floor tom is merged onto it via `GM_MERGE` in drumkit.js, as are the
+other kick/snare (35/40/37), pedal hat + shakers (→ hat), extra cymbals and hand drums (→ toms);
 clap/crash/ride reserved in the registry, voiced as fallbacks). Toms are **pitched** — each
 carries a `tone` (Hz) in the registry and a real membrane voice (downward bend + stick
 attack), so a descending fill reads and sounds as a tonal cascade (this is what makes an
@@ -387,7 +393,11 @@ state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machi
 - MIDI import now routes **channel 9 → drum lanes**, but a **percussion-only file is rejected**
   (no melodic spine to drive loop length / timeline-zero / camera); unmapped GM notes are
   dropped (warned in console, not surfaced in-UI). Pickup fills are kept as negative beats and
-  render in the roll-in; a pickup longer than the roll-in (`~ROLL_T/BEAT` beats) can clip.
+  render in the roll-in; hits earlier than the roll-in (`ROLL_T/BEAT` beats) are dropped+warned
+  (they'd wrap mod the loop onto the groove). Full-length songs still import as ONE giant loop
+  (solve budgets keep a contiguous window per machine) — phrase detection is the open lever.
+  Imported rooms are `staging: 'auto'`: stations step around a wide belt wall and blocked
+  station shots re-aim (main.js / stations.js placeStation); hand-authored rooms are untouched.
 - Every song now opens with a **`LEAD_IN` count-in** (`main.js`, default 2.4 s): `songTime`
   starts negative, so the machine runs solo before the marble spawns (and the pickup fill plays
   ahead of the downbeat). It's a feel knob — one const; tune freely.

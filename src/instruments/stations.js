@@ -46,3 +46,28 @@ export const STATIONS = {
 export function stationFor(key, i = 0){
   return STATIONS[key] || { x: -10 + 10 * i, y: 0, z: 28, yaw: 0, w: 9, d: 7 };
 }
+
+/* PLACEMENT around a belt wall of any width. STATIONS are offsets from the wall's centre,
+   laid out for a wall ≤ ~±12.6 u — but the wall is the SUM of its bays (each up to ±13 u:
+   crane.js X_MAX), so a three-belt MIDI import can be 85 u wide and swallow the wings (the
+   station buried in the wall, its director shot a close-up of a gold rail). A station whose
+   footprint (its yawed w × d, plus a margin M) overlaps the wall's box slides straight OUT
+   along x on its own side to clear the wall's edge; if the room's side wall stops it first,
+   it steps BACK (a back-tier station, z < 0) or FORWARD (a mid-tier one) in z until clear.
+   Pure: wall = { min: {x, z}, max: {x, z} } (world; a THREE.Box3 works), room = { HW, BACK,
+   FRONT }. A rigid render-time move — nothing solved changes. Returns world { x, z }. */
+export function placeStation(st, cx, wall, room, M = 1.5){
+  let x = cx + st.x, z = st.z;
+  if (!wall || !(wall.max.x >= wall.min.x)) return { x, z };
+  const c = Math.abs(Math.cos(st.yaw)), sn = Math.abs(Math.sin(st.yaw));
+  const ex = st.w / 2 * c + st.d / 2 * sn, ez = st.w / 2 * sn + st.d / 2 * c;
+  const hit = (x, z) => x + ex > wall.min.x - M && x - ex < wall.max.x + M && z + ez > wall.min.z - M && z - ez < wall.max.z + M;
+  if (!hit(x, z)) return { x, z };
+  const side = Math.sign(st.x);
+  if (side){
+    const lim = room.HW - ex - .5;
+    x = Math.max(-lim, Math.min(lim, side < 0 ? Math.min(x, wall.min.x - M - ex) : Math.max(x, wall.max.x + M + ex)));
+  }
+  if (hit(x, z)) z = st.z < 0 ? Math.max(room.BACK + ez + .5, wall.min.z - M - ez) : Math.min(room.FRONT - ez - .5, wall.max.z + M + ez);
+  return { x, z };
+}

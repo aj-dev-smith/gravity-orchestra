@@ -13,7 +13,7 @@ import { makeMarbleDrums, KIT_SOLO, KIT_ROOM, kitAnchor } from './marbledrums.js
 import { makeCameraRig } from './camera.js';
 import { makeRoomHost } from './rooms/index.js';
 import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
-import { stationFor } from './instruments/stations.js';
+import { stationFor, placeStation } from './instruments/stations.js';
 import { eventTimes, wrapP } from './instruments/clock.js';
 import { normalizeHit } from './drumkit.js';
 import { encodeSong, decodeSong } from './share.js';
@@ -379,6 +379,11 @@ function buildWorld(keyName){
     tr.stage.add(tr.machine.group);                     // under the stage → inherits the bay placement for free
   });
 
+  // the belt wall's world footprint (every bay's machine): stations keep out of it
+  world.updateMatrixWorld(true);
+  const wallBox = new THREE.Box3();
+  tracks.forEach(tr => wallBox.union(new THREE.Box3().setFromObject(tr.machine.group)));
+
   // FIXED-cam framing: x-centre + half-width of the whole WALL (world x = base.x + origin.x)
   let minX = Infinity, maxX = -Infinity;
   tracks.forEach(tr => tr.padObjs.forEach(po => {
@@ -403,7 +408,11 @@ function buildWorld(keyName){
     if (!part || !part.length) return;
     const st = stationFor(rig.I.key, i);
     const station = new THREE.Group();
-    station.position.set(stageView.cx + st.x, st.y, st.z);
+    // an import has no curator: its stations make way for a wide wall (stations.js). A
+    // hand-authored room keeps exactly the placement its author framed.
+    const at = S.staging === 'auto' ? placeStation(st, stageView.cx, wallBox, ROOM) : { x: stageView.cx + st.x, z: st.z };
+    station.position.set(at.x, st.y, at.z);
+    rig.moved = Math.hypot(at.x - stageView.cx - st.x, at.z - st.z);   // (dev probe: how far the wall pushed it)
     station.rotation.y = st.yaw;
     station.add(rig.inst.build(part, { rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T, start: -LEAD_IN,
       station: st, floorY: ROOM.FLOOR - st.y, ceilY: ROOM.CEIL - st.y, loopBeats: S.melody.reduce((a, n) => a + n[1], 0) }));
@@ -538,7 +547,7 @@ function syncDirector(S, view){
   instLive.forEach(rig => {
     // a song may re-frame a station's shot for its room (song.director.shots.<key> = {x, up, dist})
     const st = rig.station, h = rig.I.lookHeight ?? 3, c = { ...(rig.I.camera || {}), ...(S.director?.shots?.[rig.I.key] || {}) };
-    shots.push({ key: rig.I.key, color: rig.I.color,
+    shots.push({ key: rig.I.key, color: rig.I.color, label: rig.I.label, station: st,
       aim: st.localToWorld(new THREE.Vector3(0, h, 0)),
       eye: st.localToWorld(new THREE.Vector3(c.x ?? 0, h + (c.up ?? 5), c.dist ?? 15)) });
     cues.push({ key: rig.I.key, cue: rig.cue, weight: (rig.I.directorWeight ?? 1) * dirWeight(S, rig.I.key) });
@@ -617,6 +626,19 @@ function syncDirector(S, view){
     : { aim: new THREE.Vector3(view.cx, 4, 2), eye: new THREE.Vector3(view.cx + 4, 15, 39) };
   // a narrow (portrait) frame pulls each station shot back along its own line (camera.js);
   // fitMax caps that pull so the eye never leaves the room box
+  // a station shot must SEE its station: if the line from its eye to its aim runs through
+  // the belt wall or another station (a wide wall reaches the wings), lift the eye / pull it
+  // back along its line until the view is clear (still inside the room) — auto-staged
+  // (imported) songs only; `blocked` is recorded for every song (the __dev.shots probe)
+  const solid = [...tracks.map(t => t.machine.group), ...instLive.map(r => r.station), ...(drumGroup ? [drumGroup] : [])]
+    .map(o => ({ o, b: new THREE.Box3().setFromObject(o) })).filter(x => !x.b.isEmpty());
+  shots.forEach(sh => {
+    const others = solid.filter(x => x.o !== sh.station).map(x => x.b);
+    sh.blocked = sightBlocked(sh.aim, sh.eye, others);
+    if (sh.blocked && S.staging === 'auto') sh.eye = clearEye(sh.aim, sh.eye, others) || sh.eye;   // (curated shots stay as framed)
+    delete sh.station;
+  });
+  lastShots = shots;
   shots.forEach(sh => { sh.fitMax = roomFit(sh.aim, sh.eye); });
   // the opening reveal holds through the count-in and the first two beats (songTime-based,
   // so a page idling in auto before the play tap can't spend it)
@@ -625,6 +647,31 @@ function syncDirector(S, view){
   const blockers = [...instLive.map(r => r.station), ...(drumGroup ? [drumGroup] : []), ...tracks.map(t => t.machine.group)]
     .map(o => new THREE.Box3().setFromObject(o)).filter(b => !b.isEmpty());
   cam.syncStations(shots, wide, { auto: !soloKey, openWide: full && !soloKey, openUntil: ROLL_T + 2 * BEAT, blockers });
+}
+let lastShots = [];
+const _sray = new THREE.Ray(), _sbox = new THREE.Box3(), _shit = new THREE.Vector3();
+/** Does the sight line eye → aim pass through (or start inside) any box? (Boxes shrunk .6:
+    a grazed corner is fine; a box holding the AIM is the subject itself — skipped.) */
+function sightBlocked(aim, eye, boxes){
+  const len = eye.distanceTo(aim); if (len < 1e-3) return false;
+  _sray.origin.copy(eye); _sray.direction.copy(aim).sub(eye).divideScalar(len);
+  for (const b of boxes){
+    _sbox.copy(b).expandByScalar(-.6);
+    if (_sbox.isEmpty() || _sbox.containsPoint(aim)) continue;
+    if (_sbox.containsPoint(eye)) return true;
+    if (_sray.intersectBox(_sbox, _shit) && _shit.distanceTo(eye) < len) return true;
+  }
+  return false;
+}
+/** The nearest clear eye: lift it (a crane shot over the wall) and/or pull it back along its
+    own line, inside the room. null if nothing clears. */
+function clearEye(aim, eye, boxes){
+  const pad = 1.5, inRoom = p => Math.abs(p.x) <= ROOM.HW - pad && p.y <= ROOM.CEIL - pad && p.z >= ROOM.BACK + pad && p.z <= ROOM.FRONT - pad;
+  for (const up of [0, 3, 6, 10, 15, 21]) for (const back of [1, 1.25, 1.5, .8]){
+    const e = eye.clone().sub(aim).multiplyScalar(back).add(aim); e.y += up;
+    if (inRoom(e) && !sightBlocked(aim, e, boxes)) return e;
+  }
+  return null;
 }
 function roomFit(aim, eye, pad = 1.5){
   const d = eye.clone().sub(aim); let k = Infinity;
@@ -1169,6 +1216,10 @@ if (new URLSearchParams(location.search).has('debug')){
     song(k){ sel.value = k; sel.dispatchEvent(new Event('change')); },
     station(key, dist, up){ return lookAtStation(key, dist, up); },
     instruments: () => instLive.map(r => r.I.key),
+    moved: () => Object.fromEntries(instLive.map(r => [r.I.key, +r.moved.toFixed(2)])),
+    // the director's station shots as built: eye/aim (world) and whether the default eye was
+    // blocked (then re-placed by clearEye) — the layout probe's ground truth
+    shots: () => lastShots.map(sh => ({ key: sh.key, blocked: sh.blocked, eye: sh.eye.toArray().map(v => +v.toFixed(1)), aim: sh.aim.toArray().map(v => +v.toFixed(1)) })),
     cam(m){ cam.mode = m; }, get shot(){ return cam.shot; },
     // room layout probe: world-space XZ boxes of every station, the drum machine and the belt bays
     boxes(deep){

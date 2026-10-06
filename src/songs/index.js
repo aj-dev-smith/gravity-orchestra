@@ -1,3 +1,4 @@
+import daybreakEngine from './daybreak-engine.js';
 import furElise from './fur-elise.js';
 import odeToJoy from './ode-to-joy.js';
 import canonInD from './canon-in-d.js';
@@ -10,6 +11,7 @@ import diesIrae from './dies-irae.js';
 import backbeat from './backbeat.js';
 
 export const SONGS = {
+  'daybreak-engine': daybreakEngine,
   'fur-elise': furElise,
   'ode-to-joy': odeToJoy,
   'canon-in-d': canonInD,

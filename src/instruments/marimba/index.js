@@ -45,6 +45,8 @@ export default {
   label: 'Marimba',
   wet: false,
   lookHeight: 3.8,
+  color: '#ff8a5a',                 // director button / shot tint: lacquered rosewood amber
+  directorWeight: 1.2,              // (its part is trimmed ×.38 in the mix — cue weights are velocities)
   voice,
   // two baked velocity layers per played note (soft + hard/bright), only the ones used
   voiceIds(part){

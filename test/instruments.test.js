@@ -78,7 +78,9 @@ describe.each(INSTRUMENTS.map(I => [I.key, I]))('instrument "%s" contract', (key
       expect(sr).toBeGreaterThanOrEqual(8000);
       expect(samples.length).toBeLessThan(sr * 6);
       let peak = 0;
-      for (const x of samples){ expect(Number.isFinite(x)).toBe(true); peak = Math.max(peak, Math.abs(x)); }
+      let finite = true;                         // plain loop — one expect per sample took minutes
+      for (let n = 0; n < samples.length; n++){ const x = samples[n]; if (!Number.isFinite(x)) finite = false; else if (Math.abs(x) > peak) peak = Math.abs(x); }
+      expect(finite, id).toBe(true);
       expect(peak, id).toBeGreaterThan(.01);
       expect(peak, id).toBeLessThanOrEqual(1);
     }

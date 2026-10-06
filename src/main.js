@@ -8,7 +8,7 @@ import { G, UP, UPY, ROLL_T, DESCENT, solveLaunch, arcPos, arcVel, padOffset, be
 import * as audio from './audio.js';
 import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } from './juice.js';
 import { makeConveyorShop, BELT_DEPTH } from './conveyor.js';
-import { makeMarbleDrums } from './marbledrums.js';
+import { makeMarbleDrums, KIT_SOLO, KIT_ROOM } from './marbledrums.js';
 import { makeCameraRig } from './camera.js';
 import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
 import { stationFor } from './instruments/stations.js';
@@ -29,6 +29,8 @@ import { recSupported, startRecording } from './record.js';
 /* ---- mutable song state, filled by buildWorld() ---- */
 let BEAT = .7, SCALE = [];
 let tracks = [], LOOP_T = 0, world = null;
+let drumGroup = null;                                   // the drum machine's group (dev layout probe)
+let kitSlot = KIT_SOLO;                                 // where the drum machine stands this song (marbledrums.js)
 const FIXED_ZMAX = 30;                                  // FIXED cam: cap the pull-back. Past ~30 the FogExp2 eats
                                                         // the chrome to black; better to let a very wide field
                                                         // overflow the frame edges than fade the whole scene out.
@@ -364,7 +366,7 @@ function buildWorld(keyName){
   if (recState !== 'idle') abortRec();                  // a rebuilt world invalidates the take
   const S = SONGS[keyName];
   BEAT = 60 / S.bpm; SCALE = S.scale;
-  document.getElementById('songsub').textContent = S.sub + ' — falling';
+  document.getElementById('songsub').textContent = S.sub;
 
   if (world){
     scene.remove(world);
@@ -424,7 +426,10 @@ function buildWorld(keyName){
   // marble drums: built song-level, placed right of the wall, added under world (so it
   // disposes with the world on the next song change). Aligned to the lead's timeline;
   // `start` arms every ball on its magnet for the count-in.
-  world.add(drumKit.build(S.drums, { rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T, cx: stageView.cx, start: -LEAD_IN }));
+  // the kit moves to the front-right tier when the room is full of plugin stations
+  kitSlot = S.parts && Object.keys(S.parts).some(k => S.parts[k]?.length) ? KIT_ROOM : KIT_SOLO;
+  drumGroup = drumKit.build(S.drums, { rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T, cx: stageView.cx, start: -LEAD_IN, slot: kitSlot });
+  world.add(drumGroup);
 
   // instrument plugins: each part builds inside its station (render-time placement only)
   const voices = [];
@@ -447,6 +452,9 @@ function buildWorld(keyName){
     ids.forEach(id => voices.push({ key: `inst:${rig.I.key}:${id}`, wet: !!rig.I.wet, render: () => rig.I.voice(id) }));
   });
 
+  // a full room is deep: thin the haze so the back tier still reads from the wide shot
+  // (FogExp2 .026 at ~50 u ≈ 18 % visible; .016 ≈ 45 %)
+  scene.fog.density = instLive.length ? .016 : .026;
   audio.setBeat(BEAT);
   cam.syncTracks(tracks, stageView);                    // reframe + rebuild the cam-button row for the new song
   syncDirector(S, stageView);
@@ -506,7 +514,7 @@ function drumStrike(hit){
 let cues = [];                                          // [{key, cue:[{t,w}], weight}]
 function syncDirector(S, view){
   const shots = [], P = ROLL_T + LOOP_T;
-  cues = [];
+  cues = []; entrances = [];
   instLive.forEach(rig => {
     const st = rig.station, h = rig.I.lookHeight ?? 3, c = rig.I.camera || {};
     shots.push({ key: rig.I.key, color: rig.I.color,
@@ -515,17 +523,107 @@ function syncDirector(S, view){
     cues.push({ key: rig.I.key, cue: rig.cue, weight: rig.I.directorWeight ?? 1 });
   });
   if (S.drums){
-    const kx = view.cx + 14;                            // marbledrums.js KIT_X / KIT_Z
-    shots.push({ key: 'drums', color: '#ff8a3d', aim: new THREE.Vector3(kx, 3.6, 2.5), eye: new THREE.Vector3(kx - 2, 8.5, 18) });
+    const kx = view.cx + kitSlot.x, kz = kitSlot.z;     // the kit's slot this song (marbledrums.js)
+    // eye a touch right of the kit's centre + aim raised: keeps the belt wall's edge
+    // rail (a bloom streak at the old angle) out of the top-left of the frame
+    shots.push({ key: 'drums', color: '#ff8a3d', aim: new THREE.Vector3(kx, 4.2, kz - 2.5), eye: new THREE.Vector3(kx + 1, 8.5, kz + 13) });
     const cue = [];
     Object.entries(S.drums).forEach(([lane, hits]) => hits.map(normalizeHit).forEach(h =>
       cue.push({ t: wrapP(ROLL_T + h.beat * BEAT, P), w: h.vel * (lane === 'kick' || lane === 'crash' ? 1 : .45) })));
-    cues.push({ key: 'drums', cue, weight: .8 });
+    cues.push({ key: 'drums', cue, weight: .7 });          // dense lanes: damped, or the kit hogs the groove
   }
-  const wide = { aim: new THREE.Vector3(view.cx, 4, 2), eye: new THREE.Vector3(view.cx + 4, 15, 39) };
-  cam.syncStations(shots, wide, { auto: !soloKey });   // ?solo dev demos stay in free-look
+  // ENTRANCES: a station that starts PLAYING (≥ 3 hits in the next 4 beats) after a long
+  // rest (≥ 12 beats, wrapping the seam) is a story beat — the marimba coming in, the
+  // bells' first climax chords — so it pulls the camera ×3 (a chord's simultaneous hits
+  // all count). A lone toll after a rest isn't an entrance.
+  for (const c of cues){
+    const ts = [...new Set(c.cue.map(e => +e.t.toFixed(3)))].sort((a, b) => a - b);
+    if (ts.length < 2) continue;
+    const run = t => c.cue.filter(e => wrapP(e.t - t + 1e-3, P) <= 4 * BEAT + 2e-3).length >= 3;
+    const ent = new Set(ts.filter((t, i) => wrapP(t - ts[(i - 1 + ts.length) % ts.length], P) >= 12 * BEAT - 1e-3 && run(t)));
+    c.cue = c.cue.map(e => ent.has(+e.t.toFixed(3)) ? { ...e, w: e.w * 3 } : e);
+    ent.forEach(t => entrances.push({ t, key: c.key }));
+  }
+  // ENSEMBLE MOMENTS (pure song data, solved up front): every instant where ≥ 2 voices
+  // land together, with how many DISTINCT machines (stations + the lead belt) hit within
+  // ±.15 s. The director goes WIDE for the big ones (the whole room on one downbeat) and
+  // the room's exposure flares with them. Plus the lead's SKIM windows (≥ 4 consecutive
+  // notes of ≤ .15 s): the money shot, where the director must stay on the belt.
+  const lead = tracks[0], ev = [];
+  cues.forEach(c => c.cue.forEach(e => ev.push({ t: e.t, key: c.key })));
+  lead.pads.forEach(pd => ev.push({ t: wrapP(lead.rollT + pd.t, P), key: 'lead' }));
+  ev.sort((a, b) => a.t - b.t);
+  moments = [];
+  for (let i = 0; i < ev.length; i++){
+    if (i && ev[i].t - ev[i - 1].t < .02) continue;     // one moment per instant
+    const keys = new Set();
+    for (const e of ev) if (Math.abs(wrapP(e.t - ev[i].t + P / 2, P) - P / 2) <= .15) keys.add(e.key);
+    if (keys.size >= 2) moments.push({ t: ev[i].t, n: keys.size });
+  }
+  skims = [];
+  for (let i = 0; i < lead.pads.length; ){
+    let j = i; while (j < lead.pads.length && lead.pads[j].dt <= .15) j++;
+    if (j - i >= 4){                                    // …held through a LOB that follows within 2 notes
+      let k = j - 1;                                    // (the skim → launch → soaring arc is one gesture)
+      for (let q = j; q < Math.min(j + 3, lead.pads.length); q++) if (lead.pads[q].dt >= 1.5){ k = q; break; }
+      const early = k > j - 1 ? ENSEMBLE_AHEAD + .1 : 0;   // release before the lob lands, so a wide on it can be earned
+      skims.push([wrapP(lead.rollT + lead.pads[i].t - .6, P), lead.pads[k].t - lead.pads[i].t + .6 + lead.pads[k].dt - early]);
+    }
+    i = Math.max(j, i + 1);
+  }
+  seamFrom = lead.rollT + lead.total - .7;              // the engine's loop seam (no music, no lead marble), entered just after the last note lands
+  // the wide STAGE shot. A full room (instrument plugins on stage): a LOW front-left
+  // three-quarter view (the angle the room reads as a machine-hall, not a floor plan) —
+  // bowls + drums in the foreground, the belt and the back tier behind — and the song
+  // OPENS on it (the reveal). Belt + drums only: the closer view that frames just those two.
+  const full = instLive.length > 0;
+  const wide = full
+    ? { aim: new THREE.Vector3(view.cx + 1, 2, -3), eye: new THREE.Vector3(view.cx - 6, 22, 39), fitMax: 1,
+        // a phone held upright can't fit the room's width — so it looks down the room's
+        // DIAGONAL from the front-right corner: drums up front, the belt, the back-left wing
+        portrait: { aim: new THREE.Vector3(view.cx - 12, 0, -8), eye: new THREE.Vector3(view.cx + 34, 18, 39), fitMax: 1 } }
+    : { aim: new THREE.Vector3(view.cx, 4, 2), eye: new THREE.Vector3(view.cx + 4, 15, 39) };
+  // a narrow (portrait) frame pulls each station shot back along its own line (camera.js);
+  // fitMax caps that pull so the eye never leaves the room box
+  shots.forEach(sh => { sh.fitMax = roomFit(sh.aim, sh.eye); });
+  // the opening reveal holds through the count-in and the first two beats (songTime-based,
+  // so a page idling in auto before the play tap can't spend it)
+  cam.syncStations(shots, wide, { auto: !soloKey, openWide: full && !soloKey, openUntil: ROLL_T + 2 * BEAT });
+}
+function roomFit(aim, eye, pad = 1.5){
+  const d = eye.clone().sub(aim); let k = Infinity;
+  const lim = (a, v, lo, hi) => { if (v > 1e-6) k = Math.min(k, (hi - a) / v); else if (v < -1e-6) k = Math.min(k, (lo - a) / v); };
+  lim(aim.x, d.x, -ROOM.HW + pad, ROOM.HW - pad);
+  lim(aim.y, d.y, ROOM.FLOOR + pad, ROOM.CEIL - pad);
+  lim(aim.z, d.z, ROOM.BACK + pad, ROOM.FRONT - pad);
+  return Math.max(1, k);
 }
 const DIRECTOR_AHEAD = 2.2;                             // seconds of look-ahead
+const ENSEMBLE_AHEAD = .9;                              // the wide cut lands just ahead of the big downbeat
+let moments = [], skims = [], entrances = [], seamFrom = Infinity;   // filled by syncDirector (static song data)
+let ensFlare = 0, lastNow = 0;                          // the room's exposure flare on ensemble moments
+/* Room-wide director cues, every frame: the ensemble size about to land (→ the wide
+   shot), whether the lead is in/near a skim (→ stay on the belt), whether we're in the
+   loop seam (→ breathe wide), and the exposure flare as a big moment passes. */
+function roomCues(out){
+  const P = ROLL_T + LOOP_T, now = wrapP(songTime, P);
+  let ens = 0;
+  const passed = wrapP(now - lastNow, P);
+  for (const m of moments){
+    const d = wrapP(m.t - now, P);
+    if (d < ENSEMBLE_AHEAD) ens = Math.max(ens, m.n);
+    if (!skipStrikes && passed < .5 && m.n >= 5 && wrapP(m.t - lastNow, P) <= passed)
+      ensFlare = Math.max(ensFlare, (m.n - 4) / 3);     // 5 → .33 … 7 → 1
+  }
+  lastNow = now;
+  out._ensemble = ens;
+  out._force = entrances.find(e => wrapP(e.t - now, P) < .35)?.key;   // an entrance cuts on its downbeat
+  out._forceSoon = entrances.some(e => wrapP(e.t - now, P) < ENSEMBLE_AHEAD + .5);
+  out._skim = skims.some(([t0, len]) => wrapP(now - t0, P) < len);   // (t0 already leads the run by .6 s)
+  out._seam = songTime > 0 && (now >= seamFrom || now < ROLL_T - .2);
+  out._seamSoon = now >= seamFrom - 1.5;                // no fresh cut just before the seam's wide (a flicker)
+  return out;
+}
 function stationScores(){
   const P = ROLL_T + LOOP_T, now = wrapP(songTime, P), out = {};
   for (const c of cues){
@@ -536,7 +634,7 @@ function stationScores(){
     }
     out[c.key] = Math.sqrt(sum) * c.weight;             // sqrt: a dense run beats a lone hit, but not by 10×
   }
-  return out;
+  return roomCues(out);
 }
 
 /* Frame the free camera on an instrument's station: from out front of it (its local
@@ -737,7 +835,7 @@ function animate(){
       const pre = (active && idx === active.r.nextIdx) ? active.r.prog*active.r.prog : 0;
       po.rim.material.opacity = .08 + po.flash*.5 + pre*.3;
       po.rim.scale.setScalar(1 + pre*.22 + po.flash*.12);
-      po.body.material.emissive.setHSL(po.hue, .7, po.flash*.32 + pre*.07);
+      po.body.material.emissive.setHSL(po.hue, .7, .06 + po.flash*.32 + pre*.07);   // a lit floor: the hero never goes dark
       po.beltY = STAGE_Y - .12 + DESCENT * c;           // un-nudged belt height — the bracket spine roots here
       // entrance/exit unfold: at the screen edges the pad lies flat & flush on the belt,
       // then telescopes out to rest depth and tips up into catch position — sequenced
@@ -769,11 +867,12 @@ function animate(){
 
   // exposure pop
   expoKick *= (1 - dt*6);
-  renderer.toneMappingExposure = 1.15 + expoKick*.12;
+  ensFlare *= Math.exp(-dt / .6);                       // the room's flare on an ensemble downbeat (~.6 s decay)
+  renderer.toneMappingExposure = 1.15 + expoKick*.12 + ensFlare*.2;
 
   // CAMERA: the rig decides the pose (director / fixed / free-fly / follow) from the
   // live marbles. main just hands it the frame's state; physics stays untouched.
-  cam.update({ dt, time: clock.elapsedTime, tracks, marblePts, leadRender, reduceMotion, started,
+  cam.update({ dt, time: clock.elapsedTime, songTime, tracks, marblePts, leadRender, reduceMotion, started,
                stationScores: cues.length ? stationScores() : null });
 
   if (convDbgOn) convDebug(leadRender ? leadRender.y : cam.target.y, camera.position.y);
@@ -887,12 +986,12 @@ const subEl = document.getElementById('songsub');
 addEventListener('dragover', e => e.preventDefault());
 addEventListener('dragenter', () => { subEl.textContent = 'drop a .mid — the solver does the rest'; });
 addEventListener('dragleave', e => {
-  if (!e.relatedTarget) subEl.textContent = SONGS[sel.value].sub + ' — falling';
+  if (!e.relatedTarget) subEl.textContent = SONGS[sel.value].sub;
 });
 addEventListener('drop', async e => {
   e.preventDefault();
   const file = [...(e.dataTransfer?.files || [])].find(f => /\.midi?$/i.test(f.name));
-  if (!file){ subEl.textContent = SONGS[sel.value].sub + ' — falling'; return; }
+  if (!file){ subEl.textContent = SONGS[sel.value].sub; return; }
   try {
     const parsed = parseMidi(new Uint8Array(await file.arrayBuffer()));
     const { song, warnings } = convertToSong(parsed, {label: file.name.replace(/\.midi?$/i, '')});
@@ -902,7 +1001,7 @@ addEventListener('drop', async e => {
     audio.showState();
     if (warnings.length){
       console.warn('cascade midi import:\n  ' + warnings.join('\n  '));
-      subEl.textContent = `${song.sub} · ${warnings.length} import note(s) in console — falling`;
+      subEl.textContent = `${song.sub} · ${warnings.length} import note(s) in console`;
     }
   } catch(err){
     subEl.textContent = `couldn't read ${file.name}: ${err.message}`;
@@ -964,6 +1063,20 @@ if (new URLSearchParams(location.search).has('debug')){
     station(key, dist, up){ return lookAtStation(key, dist, up); },
     instruments: () => instLive.map(r => r.I.key),
     cam(m){ cam.mode = m; }, get shot(){ return cam.shot; },
+    // room layout probe: world-space XZ boxes of every station, the drum machine and the belt bays
+    boxes(deep){
+      const bx = o => { const b = new THREE.Box3().setFromObject(o); return b.isEmpty() ? null : [b.min, b.max].map(v => [+v.x.toFixed(1), +v.y.toFixed(1), +v.z.toFixed(1)]); };
+      const out = {};
+      instLive.forEach(r => out[r.I.key] = bx(r.station));
+      if (drumGroup) out.drums = bx(drumGroup);
+      if (deep && drumGroup) drumGroup.children.forEach((c, i) => out[`drums.${i}:${c.type}`] = bx(c));
+      tracks.forEach(tr => out['belt:' + tr.role] = bx(tr.machine.group));
+      return out;
+    },
+    director(){ const B = t => +((t - ROLL_T) / BEAT).toFixed(2);   // the room director's static cues, in beats
+      return { entrances: entrances.map(e => [e.key, B(e.t)]), wide: moments.filter(m => m.n >= 7).map(m => B(m.t)),
+               skims: skims.map(([t0, len]) => [B(t0), +(len / BEAT).toFixed(2)]), seamFrom: B(seamFrom) }; },
+    orbitMax(d){ cam.orbit.maxDistance = d; cam.orbit.maxPolarAngle = Math.PI; },
   };
   dbg = { update(T){
     if (!held) bar.value = Math.round(T / (ROLL_T + LOOP_T) * 1000);

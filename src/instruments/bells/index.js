@@ -40,8 +40,10 @@ export default {
   key: 'bells',
   label: 'Tubular Bells',
   wet: true,
-  lookHeight: 7.6,
-  camera: { dist: 17, up: 2.2 },
+  lookHeight: 8.4,
+  camera: { dist: 14, up: 6 },      // up + back: the whole gantry, no empty floor in the lower third
+  color: '#ffc86a',                 // cathedral gold
+  directorWeight: 1.6,              // sparse but the biggest moments in a song — let them win the cut
 
   voice: id => bellVoice(id),
 
@@ -357,8 +359,8 @@ function freeze(group){
 function buildTube(len, glowC, envMap){
   const geo = new THREE.CylinderGeometry(TUBE_R, TUBE_R, len, 28, 48, false);
   geo.translate(0, -HANG - len / 2, 0);                  // local y: 0 at the eyelet, top cap at −HANG
-  const mat = new THREE.MeshStandardMaterial({ color: 0xf2d9a2, metalness: 1, roughness: .13, envMap, envMapIntensity: 1.6,
-    emissive: glowC.clone(), emissiveIntensity: .1 });
+  const mat = new THREE.MeshStandardMaterial({ color: 0xf2d9a2, metalness: 1, roughness: .13, envMap, envMapIntensity: 2.4,
+    emissive: glowC.clone(), emissiveIntensity: .22 });   // a resting gleam: polished brass, not cardboard
   const u = { uAge: { value: 99 }, uAmp: { value: 0 }, uGap: { value: 1 }, uLen: { value: len }, uGlow: { value: glowC.clone() } };
   const f = x => x.toFixed(4);
   mat.onBeforeCompile = sh => {

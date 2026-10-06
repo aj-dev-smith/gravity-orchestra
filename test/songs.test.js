@@ -23,6 +23,7 @@ function sumBeats(notes) {
 // ---------------------------------------------------------------------------
 
 const EXPECTED_KEYS = [
+  'daybreak-engine',
   'fur-elise',
   'ode-to-joy',
   'canon-in-d',
@@ -36,7 +37,7 @@ const EXPECTED_KEYS = [
 ];
 
 describe('SONGS catalogue', () => {
-  it('has exactly the 10 expected keys in order', () => {
+  it('has exactly the 11 expected keys in order', () => {
     expect(Object.keys(SONGS)).toEqual(EXPECTED_KEYS);
   });
 });

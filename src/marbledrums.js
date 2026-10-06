@@ -31,8 +31,14 @@ import { normalizeHit } from './drumkit.js';
 const DT_MAX    = 1.2;      // longest flown gap (s) → magnet height H = |G|·DT_MAX²/8 ≈ 2.6
 const EDGE_W    = .25;      // strike-edge window (s): a strike fires once if we land within it
 const RISER_TOP = 1.5;      // deck height (world y) — shared with the room/floor staging
-const KIT_X     = 14.0;     // the station sits right of the melody belt, clear of it…
-const KIT_Z     = 5.0;      // …and in front of the wall
+/* The kit's slot (x relative to the belt wall's centre, z toward the audience). It has
+   two homes: beside the belt when it is the only other machine (KIT_SOLO — right of the
+   belt, clear of it, in front of the wall), and the FRONT-RIGHT of the amphitheater when
+   the room is full of instrument plugins (KIT_ROOM — see src/instruments/stations.js,
+   where the tiers are laid out around it). main picks one per song and reads it back for
+   the director's drums shot. */
+export const KIT_SOLO = { x: 14, z: 5 };
+export const KIT_ROOM = { x: 11, z: 19 };
 const ARC_R     = 11;       // amphitheater radius: the row curves toward the camera at the wings
 const GAP       = .55;      // clear air between neighbouring heads along the arc
 
@@ -77,12 +83,12 @@ export function makeMarbleDrums({ envMap, glowTex }){
 
   /* Rebuild for a song. spec = song.drums; {rollT, beat, P, cx, start}. Returns the
      group for the caller to put under `world` (disposed on the next song change). */
-  function build(spec, { rollT, beat, P, cx, start: s0 = -Infinity }){
+  function build(spec, { rollT, beat, P, cx, start: s0 = -Infinity, slot = KIT_SOLO }){
     const group = new THREE.Group();
     lanes = []; start = s0; lights = [];
     if (!spec) return group;
 
-    const K = new THREE.Vector3(cx + KIT_X, RISER_TOP, KIT_Z);
+    const K = new THREE.Vector3(cx + slot.x, RISER_TOP, slot.z);
     const chrome = new THREE.MeshStandardMaterial({ color: 0xd8dde8, metalness: 1, roughness: .16, envMap, envMapIntensity: 1.3 });
     const dark   = new THREE.MeshStandardMaterial({ color: 0x232733, metalness: .7, roughness: .45, envMap });
     group.add(buildDeck(K, dark));

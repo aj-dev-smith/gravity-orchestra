@@ -51,7 +51,12 @@ on. Treat it as live.
     src/marbledrums.js  the MARBLE DRUM MACHINE (render subsystem): one ball per drum,
                      dribbling on its own head; pistons + electromagnets. Math lives in
                      engine.js (dribbleLane/dribbleAt/dribblePiston), tested in dribble.test.js.
-    src/drums.js     SUPERSEDED juggling kit — no longer imported; delete when convenient.
+    src/instruments/ INSTRUMENT PLUGINS — one folder per instrument, auto-registered by a
+                     Vite glob (adding one edits NO shared file). README.md = the contract.
+                     clock.js (shared lane clock / strike edge / event parsing), stations.js
+                     (render-time placement: origin + yaw + footprint). Each <key>/ has
+                     solve.js (pure) + voice.js (pure DSP) + index.js (render) and
+                     test/inst-<key>.test.js. Shipped: marimba, bells, bass, musicbox, bowls.
     src/drumkit.js   the drum REGISTRY: canonical name ↔ GM note ↔ mix gain. One source
                      of truth for the song validator, audio, render, future MIDI import.
     src/midi/        MIDI import: parse.js (type-0/1 → tracks, FAITHFUL — keeps every
@@ -69,6 +74,8 @@ on. Treat it as live.
                      abstractions + the human-curation-over-auto-layout decision)
 
     npm run dev            # vite dev server (add --host to reach a phone on the LAN)
+                           #   ?solo=<instrument> = that plugin's own demo, camera on its station
+    node scripts/shot.mjs  # headless screenshots (own browser per call — parallel-agent safe)
     npm test               # vitest — run after ANY song or engine edit
     npm run build          # → dist/  (hashed assets; what deploy.sh ships)
     npm run build:single   # → marble-cascade.html  (self-contained viral artifact)
@@ -159,6 +166,13 @@ nothing more. The unifying runtime primitive is a **ball spawner** — mortal ba
    `engine.js` dribble* + `marbledrums.js` + `drumkit.js`. (History: spouts → bell →
    Doc-Ock → golf club → juggling all drowned in feed plumbing; parked on `juggling-wip`.)
 
+3. **INSTRUMENT PLUGINS** (`src/instruments/`, §4b) — the extensibility bet cashed in: five
+   more instruments built in parallel by separate agents against one contract, each a
+   different honest mechanism: **marimba** (dribble on bars, node-point plungers), **bells**
+   (latched pendulum strikers + motorised catcher), **bass** (winched magnets drop heavy balls
+   onto strings), **musicbox** (pinned cylinder = one revolution per loop, the cylinder IS the
+   score), **bowls** (SUSTAINED — a marble orbits the rim for the note's duration).
+
 **The generalization to hold onto:** a hit = **a target + a launch solve**. The melody
 swaps "next pad" for the target; a drum swaps in a stationary drum. Future instruments
 (lob / shoot / drop) swap only those two terms and stay just as solved-up-front. Audio
@@ -171,6 +185,27 @@ carries a `tone` (Hz) in the registry and a real membrane voice (downward bend +
 attack), so a descending fill reads and sounds as a tonal cascade (this is what makes an
 imported intro tom roll land). **Mountain King** carries a hand-authored `drums` block; any
 song can get one, and **MIDI import now generates drums from channel 9** (§6).
+
+### 4b. The plugin seam (read `src/instruments/README.md` before building an instrument)
+
+- Song data: `song.parts.<key> = [[beat, note, vel?, durBeats?], …]` — absolute beats, pinned
+  like drums (no lock rule), validated in `test/instruments.test.js`.
+- Descriptor: `{key, label, wet, voice(id) → {samples, sr}, make({envMap, glowTex, THREE}) →
+  {build(part, timing) → Group, update(songTime, P, dt, {started, skipStrikes, onStrike})},
+  demo}` + optional staging hints `color / camera / lookHeight / directorWeight`.
+- main.js runs ONE generic loop: build each part inside its station group, update per frame,
+  route `onStrike({note, vel, pos, color, dur, shake})` → sparks + a SHARED constant-size
+  strike-light pool + `audio.playVoice('inst:<key>:<note>', vel, {dur})`.
+- Audio: one pure `voice()` render feeds BOTH the live path (AudioBuffer, gain = vel, `dur`
+  release) and the iOS `<audio>` bank (WAV) — iOS-war internals untouched. On the sample path
+  sustained voices ring their full render (no `dur` release; el.volume is ignored anyway).
+- **Room director** (camera.js + main `syncDirector`/`stationScores`): each station + the drums
+  gets a shot; the song data is scanned AHEAD each frame and the camera cuts to what's about to
+  play (min hold, boredom decay, hard cut on far jumps). Songs with stations open on `auto`;
+  others keep free-look. `stage` = the wide shot.
+- Lessons that made five parallel builds work: design FOR marbles (no feed plumbing — each lane
+  owns its own ball/striker); park long gaps at the apex; lossy bounces with a visible energy
+  source; honesty tests (lands on the beat, at rest at contact, no penetration) before render.
 
 ---
 

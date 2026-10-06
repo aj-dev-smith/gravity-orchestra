@@ -277,6 +277,8 @@ export default {
   label: 'Singing Bowls',
   wet: true,
   lookHeight: 1.8,
+  color: '#b07bff',                 // deep violet → aurora aqua
+  directorWeight: 2.3,              // a pad: few strikes, long notes — boost it so it gets seen
 
   voice(id){ return bowlVoice(id); },
 

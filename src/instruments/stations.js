@@ -16,18 +16,28 @@
    here, so instruments never hardcode world positions (the drums'
    KIT_X/KIT_Z lesson) and never collide.
 
-   Layout: a horseshoe opening toward the camera (+z), the melody belt
-   at the centre-back (x≈0, z≈0), the marble drums at x≈+14 (their own
-   hardcoded slot, left as-is). x is RELATIVE to the belt wall's centre.
-   yaw turns each station to face the middle of the horseshoe.
+   Layout: a tiered AMPHITHEATER opening toward the camera (+z), the
+   melody belt at the centre-back (x≈0, z≈0; x is RELATIVE to the belt
+   wall's centre). Each wing steps down in height as it comes forward,
+   so from the wide stage shot (high, dead centre, z≈40) every station
+   reads over the one in front of it:
+       left wing                       right wing
+       back   marimba  (riser, gantry)  bells    (tall gantry)
+       mid    string bass               music box (lid to the wing wall)
+       front  singing bowls (low)       marble drums (KIT_ROOM in
+                                          marbledrums.js — not a plugin)
+   Footprints never overlap each other or the belt wall (|z| ≤ 2.5 for
+   x within ±12.6 at its widest). yaw turns each station toward the
+   middle of the room; the director's station shots look straight down
+   each station's own +z, so a yaw is also its camera angle.
    ============================================================ */
 
 export const STATIONS = {
-  marimba:  { x: -15,  y: 1.5, z:  6,  yaw:  .30, w: 13, d: 7 },   // left of the belt, mirror of the drums
-  bass:     { x: -30,  y: 0.0, z: -4,  yaw:  .75, w: 12, d: 8 },   // far left wing
-  bells:    { x:  31,  y: 0.0, z: -4,  yaw: -.75, w: 11, d: 7 },   // far right wing
-  bowls:    { x: -20,  y: -.5, z: 19,  yaw:  .95, w: 10, d: 9 },   // front-left, low
-  musicbox: { x:  20,  y: -.5, z: 19,  yaw: -.95, w: 10, d: 9 },   // front-right, low
+  marimba:  { x: -25,  y: 1.5, z: -10.5, yaw:  .75, w: 13, d: 7 },   // back-left wing, on its riser
+  bells:    { x:  26,  y: 0.0, z: -10, yaw: -.6,  w: 11, d: 7 },   // back-right wing: the tall gantry
+  bass:     { x: -20,  y: 0.0, z:  3.6, yaw: 1.15, w: 12, d: 8 },   // mid-left, turned to look across the room (its shot clears the marimba)
+  bowls:    { x: -13,  y: -.5, z: 18,  yaw:  .8,  w: 10, d: 9 },   // front-left, low
+  musicbox: { x:  25,  y: -.5, z:  3.2, yaw: -.9,  w: 10, d: 9 },   // mid-right, behind the drums, turned to the middle
 };
 
 /* Fallback for an instrument with no named slot: park it out front, in a row. */

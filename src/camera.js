@@ -26,7 +26,13 @@ const FIXED_OK = new Set(['all', 'auto', 'fixed', 'free', 'stage']);
    the director cuts there before it happens — the same "sees the future" trick the
    track director uses. Cuts hold ≥ MIN_HOLD; a shot held past BORED loses its pull,
    so the film keeps moving round the room. A far jump is a hard CUT, a near one glides. */
-const MIN_HOLD = 2.6, BORED = 7, SWITCH = 1.15, HARD_CUT = 12, STAGE_PULL = .9;   // modes that survive a song change
+const MIN_HOLD = 2.6, BORED = 7, SWITCH = 1.15, HARD_CUT = 12, STAGE_PULL = .9;
+/* Room-mode extras (all fed by main's look-ahead over the song data):
+     ENSEMBLE_N  — when ≥ this many machines land on one downbeat, go WIDE (ENSEMBLE_S)
+     SKIM_S      — the lead's 16th-note skim is the money shot: hold the belt
+     the loop seam (no music, no lead marble) breathes wide, never the empty-wall shot. */
+const ENSEMBLE_N = 7, ENSEMBLE_S = 2.6, ENSEMBLE_REST = 4, SKIM_S = 2.8;   // REST: s off the wide before it re-earns one
+const _Y = new THREE.Vector3(0, 1, 0);
 
 /* Keyboard fly: key → [right, up, forward] screen-space contribution. */
 const KEY_PAN = 0.65;                                         // pan units = KEY_PAN · distance · dt (scales with zoom)
@@ -49,7 +55,8 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
   let stageView = { cx: 0, halfW: 8 };                        // x-centre + half-width of the field (FIXED framing)
   let curTracks = [];                                         // last-built tracks, for the button row
   let stations = [], stage = null;                            // [{key, eye, aim, color}] + the wide {eye, aim}
-  let cutNow = false;
+  let cutNow = false, openUntil = -Infinity, stageOff = -99;
+  const _ideal = new THREE.Vector3(), _aim = new THREE.Vector3(), _focus = new THREE.Vector3();
 
   const camTarget = new THREE.Vector3(0, stageY + .6, 0);     // the static band centre
   const camPos = new THREE.Vector3(4.5, stageY + 3.4, 9.5);
@@ -135,13 +142,14 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
   /* Called by buildWorld after syncTracks: the song's instrument stations (world-space
      eye + aim per station) and the wide STAGE shot. A song that brings stations opens
      on the director — it is the show; songs without keep the free-look default. */
-  function syncStations(list, wide, { auto = true } = {}){
+  function syncStations(list, wide, { auto = true, openWide = false, openUntil: openT = 0 } = {}){
     const had = stations.length;
     stations = list; stage = wide;
     if (auto && list.length && !had && mode === DEFAULT_MODE) mode = 'auto';
     if (!list.length && mode === 'stage') mode = DEFAULT_MODE;
     if (!FIXED_OK.has(mode) && !curTracks.some(t => t.role === mode) && !list.some(st => st.key === mode)) mode = 'auto';
-    autoWant = 'all'; lastCut = -99;
+    autoWant = openWide ? 'stage' : 'all'; lastCut = -99;   // a full room opens on the wide reveal…
+    openUntil = openWide ? openT : -Infinity;                 // …held until songTime passes openT (count-in + downbeat)
     renderButtons();
   }
 
@@ -150,7 +158,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
   /* The per-frame pose. Mutates `camera`; leaves `camTarget` as the live aim (read
      by the debug HUD). marblePts = [{p, w, role}] of the live balls; leadRender is
      the lead ball's render position (or null). */
-  function update({ dt, time, tracks, marblePts, reduceMotion, started, stationScores }){
+  function update({ dt, time, songTime = Infinity, tracks, marblePts, reduceMotion, started, stationScores }){
     // FREE-LOOK vs DIRECTOR. The orbit camera owns the pose only in 'free' (and only
     // after the play gesture). Entering, we seed its target from the live aim; while
     // active we shadow camPos/camTarget off the live camera, so the moment the user
@@ -182,22 +190,39 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
         if (want !== autoWant && time - lastCut > 2.2){
           autoWant = want; lastCut = time;
         }
+      } else if (songTime < openUntil){                      // the opening reveal: hold the wide
+        autoWant = 'stage'; lastCut = time - MIN_HOLD;        // (and let the first real cut land at once)
       } else {                                                // the room director: tracks vs stations vs wide
-        const cand = { stage: STAGE_PULL, [want]: want === 'all' ? 1.0 : Math.max(score, 1.4) };
-        stations.forEach(st => { cand[st.key] = stationScores?.[st.key] ?? 0; });
+        const sc = stationScores || {};
+        // the belt competes like a station: a long arc no longer outranks a busy machine
+        // (raw dt in seconds used to win ~a third of the film on a dark wall)
+        if (autoWant === 'stage') stageOff = time;
+        const ensemble = (sc._ensemble ?? 0) >= ENSEMBLE_N && !sc._skim && !sc._forceSoon && time - stageOff > ENSEMBLE_REST;
+        const cand = { stage: Math.max(STAGE_PULL, ensemble ? ENSEMBLE_S : 0) };
+        if (marblePts.length) cand[want] = want === 'all' ? 1.25 : Math.min(Math.max(score, 1.4) * 1.05, 1.9);
+        stations.forEach(st => { cand[st.key] = sc[st.key] ?? 0; });
         const held = time - lastCut;
-        const cur = (cand[autoWant] ?? 0) * (held > BORED ? .45 : 1);
-        let best = autoWant, bestS = -1;
-        for (const k in cand) if (k !== autoWant && cand[k] > bestS){ best = k; bestS = cand[k]; }
-        if (held > MIN_HOLD && bestS > cur * SWITCH){ autoWant = best; lastCut = time; cutNow = true; }
+        if (sc._skim){                                        // the money shot: the lead's skim, no matter the hold
+          if (autoWant !== 'lead'){ autoWant = 'lead'; lastCut = time; cutNow = true; }
+        } else if (sc._force && stations.some(st => st.key === sc._force)){   // a station's ENTRANCE: cut on it
+          if (autoWant !== sc._force){ autoWant = sc._force; lastCut = time; cutNow = true; }
+        } else if (sc._seam){                                 // the loop seam: breathe wide, re-open on the newborn's fall
+          if (autoWant !== 'stage'){ autoWant = 'stage'; lastCut = time; cutNow = true; }
+        } else {
+          const cur = (cand[autoWant] ?? 0) * (held > BORED ? .45 : 1);
+          let best = autoWant, bestS = -1;
+          for (const k in cand) if (k !== autoWant && cand[k] > bestS){ best = k; bestS = cand[k]; }
+          if (held > MIN_HOLD && !sc._seamSoon && bestS > cur * SWITCH){ autoWant = best; lastCut = time; cutNow = true; }
+        }
       }
       effMode = autoWant;
     }
-    const shot = effMode === 'stage' ? stage : stations.find(st => st.key === effMode);
+    const shot0 = effMode === 'stage' ? stage : stations.find(st => st.key === effMode);
+    const shot = (camera.aspect < .9 && shot0?.portrait) || shot0;   // a shot may carry its own portrait framing
 
     // hold a fixed stage view, follow the chosen marble, or frame them all
     const sway = (reduceMotion || mode === 'fixed') ? 0 : Math.sin(time*.21);
-    let ideal, aim;
+    let ideal = _ideal, aim = _aim;
     if (mode === 'fixed'){
       // STATIONARY WORLD CAM: a held pose that frames the whole pad field — no chase,
       // no sway, no shake. Glides into place once (shared lerp below) then holds dead still.
@@ -205,15 +230,18 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
       const zFit = (stageView.halfW + margin) /
         (Math.tan(THREE.MathUtils.degToRad(camera.fov/2)) * Math.min(camera.aspect, 1.7));
       const z = THREE.MathUtils.clamp(zFit, 16, fixedZMax);   // fit the width, but never pull back into the fog
-      ideal = new THREE.Vector3(stageView.cx + z*0.22, stageY + 5, z);   // gentle 3/4, slightly above the band
-      aim   = new THREE.Vector3(stageView.cx, stageY + 1.5, 0);
+      ideal.set(stageView.cx + z*0.22, stageY + 5, z);         // gentle 3/4, slightly above the band
+      aim.set(stageView.cx, stageY + 1.5, 0);
     } else if (shot){
-      // a STATION shot: its own eye → aim, with a slow orbit drift so a held shot breathes
-      aim = shot.aim.clone();
-      ideal = shot.eye.clone().sub(aim).applyAxisAngle(new THREE.Vector3(0, 1, 0), sway * .12).add(aim);
+      // a STATION shot: its own eye → aim, with a slow orbit drift so a held shot breathes.
+      // Aspect-aware like FIXED: a narrow (portrait) frame pulls the eye back along its
+      // own line so the station still fits side to side.
+      const fit = Math.min(shot.fitMax ?? Infinity, Math.pow(Math.max(1, 1.5 / camera.aspect), .6));   // fitMax: the eye can't leave the room
+      aim.copy(shot.aim);
+      ideal.copy(shot.eye).sub(aim).multiplyScalar(fit).applyAxisAngle(_Y, sway * .12).add(aim);
     } else {
       const followed = effMode !== 'all' ? marblePts.find(m => m.role === effMode) : null;
-      const focus = new THREE.Vector3();
+      const focus = _focus.set(0, 0, 0);
       let back = Math.max(1, 1.3 / Math.min(camera.aspect, 1.3));
       if (!marblePts.length){
         focus.set(0, stageY, 0);                              // pre-start (or between balls): frame the band
@@ -228,11 +256,15 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
         marblePts.forEach(m => spread = Math.max(spread, m.p.distanceTo(focus)));
         back *= (1 + Math.min(spread * .075, .7));
       }
-      // VERTICAL IS PINNED: the band is static now, so the camera never cranes up/down.
-      // x/z still follow the marble (with sway + spread-dolly); height is locked to the stage plane.
-      ideal = focus.clone().add(new THREE.Vector3((4.5 + sway*2.2)*back, 0, (9.5 - sway*1.4)*back));
-      ideal.y = stageY + 3.4;                                 // constant eye height — no spread-driven bob
-      aim = focus.clone(); aim.y = stageY + .6;               // look at the band centre, not the bobbing marble
+      // VERTICAL IS (MOSTLY) PINNED: the band is static, so the camera doesn't bob with
+      // every bounce. x/z follow the marble (with sway + spread-dolly). In a full ROOM the
+      // follow sits further back and gives a PARTIAL vertical follow above the band (lift),
+      // so the top of a tall arc (apex ~8 u) stays in frame; the shared lerp smooths it.
+      const room = stations.length > 0;
+      ideal.copy(focus); ideal.x += (4.5 + sway*2.2)*back; ideal.z += ((room ? 13 : 9.5) - sway*1.4)*back;
+      const lift = room && marblePts.length ? Math.max(0, focus.y - stageY - 2.5) : 0;
+      ideal.y = stageY + 3.4 + lift*.4;                       // eye height: the band plane (+ a share of the lift)
+      aim.copy(focus); aim.y = stageY + .6 + lift*.6;         // look at the band centre, not the bobbing marble
     }
     if (cutNow && camPos.distanceTo(ideal) > HARD_CUT){ camPos.copy(ideal); camTarget.copy(aim); }
     cutNow = false;

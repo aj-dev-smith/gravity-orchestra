@@ -102,15 +102,18 @@ function buildBeltWall(track, style, canvas, { chrome, envMap, bandY, reach }){
   // under the bloom threshold so the belt stays a backdrop, never a light source.
   const mat = new THREE.MeshStandardMaterial({ map: tex, color: style.tint,
     metalness: .3, roughness: .7, envMap,
-    emissive: new THREE.Color(style.tint), emissiveMap: tex, emissiveIntensity: .45 });
+    emissive: new THREE.Color(style.tint), emissiveMap: tex, emissiveIntensity: .6 });
   const plane = new THREE.Mesh(geo, mat);
   plane.position.set(cx, bandY, BELT_DEPTH);
 
   const group = new THREE.Group().add(plane);
   // side frame: two thin chrome posts at the field edges, full height, just in front of the belt
   const postGeo = new THREE.BoxGeometry(POST_W, height, POST_W);
+  // own, satin-finished copy of the chrome: a flat mirror face the full height of the
+  // room catches one hot patch of the env and blooms into a white streak across shots
+  const postMat = chrome.clone(); postMat.roughness = .38; postMat.envMapIntensity = .7;
   for (const side of [-1, 1]){
-    const post = new THREE.Mesh(postGeo, chrome);      // chrome is shared → exempt from disposal
+    const post = new THREE.Mesh(postGeo, postMat);
     post.position.set(cx + side * (width / 2), bandY, BELT_DEPTH + .25);
     group.add(post);
   }
@@ -118,7 +121,7 @@ function buildBeltWall(track, style, canvas, { chrome, envMap, bandY, reach }){
   return {
     group,
     scroll(d){ tex.offset.y -= d / SLAT_WORLD; },       // slats travel UP with the rising pads (verify sign live)
-    dispose(){ geo.dispose(); postGeo.dispose(); tex.dispose(); },
+    dispose(){ geo.dispose(); postGeo.dispose(); postMat.dispose(); tex.dispose(); },
   };
 }
 

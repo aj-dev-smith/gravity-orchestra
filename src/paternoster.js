@@ -62,6 +62,22 @@ function merge(list){
   list.forEach(g => g.dispose()); flat.forEach(g => g.dispose());
   return out;
 }
+/* bake still meshes (direct children of group) into one mesh per material — same look, one draw */
+function bakeStill(group, list){
+  const by = new Map();
+  for (const o of list){
+    const k = o.material.uuid + '|' + ('uv' in o.geometry.attributes) + '|' + ('normal' in o.geometry.attributes);
+    (by.get(k) || by.set(k, []).get(k)).push(o);
+  }
+  for (const objs of by.values()){
+    if (objs.length < 2) continue;
+    const geo = merge(objs.map(o => { o.updateMatrix(); return o.geometry.clone().applyMatrix4(o.matrix); }));
+    if (!geo) continue;
+    const m = new THREE.Mesh(geo, objs[0].material); m.name = 'merged-static';
+    objs.forEach(o => group.remove(o));
+    group.add(m);
+  }
+}
 const ZAXIS = new THREE.Vector3(0, 0, 1), YAXIS = new THREE.Vector3(0, 1, 0), XAXIS = new THREE.Vector3(1, 0, 0);
 const _n = new THREE.Vector3(), _hub = new THREE.Vector3(), _a = new THREE.Vector3(), _d = new THREE.Vector3();
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(1, 1, 1);
@@ -215,20 +231,25 @@ export function makePaternosterShop({ envMap, beltSpeed, bandY, floorY }){
     }
     mesh(braceGeo, M.gun, cx, B - CROWN - 1.2, gzc);     // tie the columns under the bottom housing
 
+    // PERF: everything built so far except the spinning shaft parts is the machine's still FRAME
+    // (housings, ribs, columns, shafts, bearings…, ~60 meshes) — bake it into one mesh per material
+    { const turning = new Set(spin.map(([m]) => m)); bakeStill(group, group.children.filter(o => o.isMesh && !turning.has(o))); }
+
     /* ---------- the two roller chains: an instanced loop around each sprocket pair ---------- */
     const linkGeo = keep(linkGeometry(pitch));
     const chains = new THREE.InstancedMesh(linkGeo, M.chain, 2 * NL);
     chains.frustumCulled = false;
     group.add(chains);
-    const chainAt = (s) => {                            // arclength → (y, z, φ) on the loop; front strand rises
+    const _ca = [0, 0, 0];                               // (out-param: no per-link allocation, ~300 links × 60 fps)
+    const chainAt = (s, o = _ca) => {                    // arclength → (y, z, φ) on the loop; front strand rises
       s = ((s % Lc) + Lc) % Lc;
-      if (s < H) return [yB + s, CZ, 0];
+      if (s < H){ o[0] = yB + s; o[1] = CZ; o[2] = 0; return o; }
       s -= H;
-      if (s < Math.PI * RC){ const t = s / RC; return [yT + RC * Math.sin(t), CZ - RC + RC * Math.cos(t), -t]; }
+      if (s < Math.PI * RC){ const t = s / RC; o[0] = yT + RC * Math.sin(t); o[1] = CZ - RC + RC * Math.cos(t); o[2] = -t; return o; }
       s -= Math.PI * RC;
-      if (s < H) return [yT - s, CZ - 2 * RC, Math.PI];
+      if (s < H){ o[0] = yT - s; o[1] = CZ - 2 * RC; o[2] = Math.PI; return o; }
       const t = (s - H) / RC;
-      return [yB - RC * Math.sin(t), CZ - RC - RC * Math.cos(t), Math.PI - t];
+      o[0] = yB - RC * Math.sin(t); o[1] = CZ - RC - RC * Math.cos(t); o[2] = Math.PI - t; return o;
     };
 
     /* ---------- the MAGNET CRANE (top housing): a rail across the window, a carriage that
@@ -313,8 +334,8 @@ export function makePaternosterShop({ envMap, beltSpeed, bandY, floorY }){
         for (let c = 0; c < 2; c++){
           const x = c ? xR : xL;
           for (let i = 0; i < NL; i++){
-            const [y, z, phi] = chainAt(i * pitch + st);
-            _p.set(x, y, z); _q.setFromAxisAngle(XAXIS, phi);
+            const c3 = chainAt(i * pitch + st);
+            _p.set(x, c3[0], c3[1]); _q.setFromAxisAngle(XAXIS, c3[2]);
             chains.setMatrixAt(c * NL + i, _m.compose(_p, _q, _s));
           }
         }

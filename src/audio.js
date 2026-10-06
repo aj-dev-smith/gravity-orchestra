@@ -155,6 +155,7 @@ const SILENT_URL = (() => {
 let bank = {}, primed = false;
 const bankKey = (note, bass) => note + (bass ? '|b' : '');
 export function rebuildBank(tracks, drumLanes = [], voices = []){
+  bankStat = { t0: performance.now(), n: 0, wavBytes: 0, floatBytes: 0, byKind: {} };
   Object.values(bank).forEach(a => {
     try { a.pause(); } catch(e){}
     if (a.dataset.real) URL.revokeObjectURL(a.dataset.real);
@@ -173,18 +174,50 @@ export function rebuildBank(tracks, drumLanes = [], voices = []){
       wanted.set(v.key, {voice: v.key});
     } catch(e){ console.warn('cascade: voice render failed', v.key, e); }
   });
+  voiceSrc.forEach(v => { bankStat.floatBytes += v.samples.byteLength; });
+  const gen = ++bankGen, todo = [];
   wanted.forEach((spec, k) => {
     const a = document.createElement('audio');
     a.setAttribute('playsinline',''); a.preload = 'auto';
-    a.dataset.real = URL.createObjectURL(
-      spec.voice ? encodeWav(voiceSrc.get(spec.voice).samples, voiceSrc.get(spec.voice).sr) :
-      spec.drum ? renderDrumWav(spec.drum) : renderNoteWav(noteHz(spec.note), spec.bass));
+    if (spec.voice) spec.src = voiceSrc.get(spec.voice);  // (this song's buffer, even if the bank moves on)
+    wavSpec.set(a, spec); todo.push(a);                  // the WAV itself is encoded LAZILY (realSrc)
     a.src = SILENT_URL;                                  // real sample swapped in after unlock
     a.addEventListener('error', () => stateEl.textContent = 'audio: sample blocked');
     document.body.appendChild(a);
     bank[k] = a;
   });
+  bankStat.ms = Math.round(performance.now() - bankStat.t0);
+  /* PERF: encoding every WAV used to block the song build (≈130 WAVs / 25 MB on a full room —
+     ~½ s on a laptop, seconds on a phone). The elements, keys and silent priming src exist NOW,
+     exactly as before; only the real WAV bytes are made later — in idle slices, or on the spot
+     the moment the unlock swap asks for one (realSrc). The §5 unlock dance is unchanged. */
+  const idle = typeof requestIdleCallback === 'function' ? cb => requestIdleCallback(cb, { timeout: 1000 }) : cb => setTimeout(cb, 16);
+  const step = () => {
+    if (gen !== bankGen) return;                         // a newer bank replaced this one
+    const t0 = performance.now();
+    while (todo.length && performance.now() - t0 < 6) realSrc(todo.shift());
+    if (todo.length) idle(step); else bankStat.lazyDoneMs = Math.round(performance.now() - bankStat.t0);
+  };
+  idle(step);
 }
+let bankGen = 0;
+const wavSpec = new WeakMap();                           // <audio> → what its real WAV is, until it is made
+/* the element's real sample URL, encoding it now if the idle pass hasn't reached it yet */
+function realSrc(a){
+  if (a.dataset.real) return a.dataset.real;
+  const spec = wavSpec.get(a);
+  if (!spec) return SILENT_URL;
+  const wav = spec.voice ? encodeWav(spec.src.samples, spec.src.sr) :
+    spec.drum ? renderDrumWav(spec.drum) : renderNoteWav(noteHz(spec.note), spec.bass);
+  const kind = spec.voice ? spec.voice.split(':').slice(0, 2).join(':') : spec.drum ? 'drum' : 'belt';
+  if (bankStat){ bankStat.n++; bankStat.wavBytes += wav.size; bankStat.byKind[kind] = (bankStat.byKind[kind] || 0) + wav.size; }
+  wavSpec.delete(a);
+  return a.dataset.real = URL.createObjectURL(wav);
+}
+/* dev probe (__dev.bank): the iOS sample bank this song built — element count, WAV blob
+   bytes (per voice family), the Float32 voice sources kept for the live path, build ms */
+let bankStat = null;
+export const bankStats = () => bankStat && { ...bankStat, t0: undefined };
 export function primeSamples(){                          // gesture-unlocks every element
   if (primed) return;
   primed = true;
@@ -193,7 +226,7 @@ export function primeSamples(){                          // gesture-unlocks ever
     const pr = a.play();                                 // pure silence — inaudible everywhere
     if (pr && pr.then) pr.then(() => {
       a.pause();
-      a.src = a.dataset.real; a.load();                  // unlock survives the src swap
+      a.src = realSrc(a); a.load();                      // unlock survives the src swap (realSrc: the lazily-made WAV)
     }).catch(() => { primed = false; });                 // still silent; the next tap retries
   });
 }

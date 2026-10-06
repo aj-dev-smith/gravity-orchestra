@@ -2,6 +2,8 @@ import * as THREE from "three";
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { makePerfGovernor } from './perfgov.js';
+import { singlePassFlats } from './perftune.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { SONGS } from './songs/index.js';
 import { G, UP, UPY, ROLL_T, DESCENT, solveLaunch, arcPos, arcVel, padOffset, beltPhase, deployPose, PAD_R, padRadius, layoutPads } from './engine.js';
@@ -21,7 +23,7 @@ import { parseMidi } from './midi/parse.js';
 import { convertToSong } from './midi/convert.js';
 import { recSupported, startRecording } from './record.js';
 import { spatialize } from './spatial.js';
-import { mergeStatic } from './mergestatic.js';
+import { mergeStatic, watchFrozen, pruneFrozen, frozenStats } from './mergestatic.js';
 /* ============================================================
    CASCADE — melody-driven marble run, now multi-track.
    A song is one or more tracks of [note, beats-until-next-hit].
@@ -70,7 +72,7 @@ const recEl = document.getElementById('rec');
 const hueOf = n => Math.max(0, SCALE.indexOf(n.replace(/\d/,''))) / Math.max(1, SCALE.length);
 
 /* ---------------- renderer / scene ---------------- */
-const renderer = new THREE.WebGLRenderer({antialias:true});
+const renderer = new THREE.WebGLRenderer({antialias:false});
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;     // applied by OutputPass at the end of the chain
@@ -78,6 +80,7 @@ renderer.toneMappingExposure = 1.15;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
+scene.matrixAutoUpdate = false;                         // the scene root never moves (PERF: no forced whole-tree matrix pass)
 const _pbRay = new THREE.Raycaster(), _pbDir = new THREE.Vector3();
 scene.background = new THREE.Color(0x07060e);
 scene.fog = new THREE.FogExp2(0x07060e, 0.026);
@@ -149,8 +152,14 @@ const ROOM = rooms.frame;                                 // the instrument legs
 /* --- post chain: render → bloom → tonemap/sRGB out ---
    Real bloom on the emissive cores; the sprite halos stay as the soft
    wide base (bloom alone is too tight to replace their reach). */
-const composer = new EffectComposer(renderer);
+/* ANTIALIASING lives HERE, not on the canvas: the scene is drawn into the composer's target, so
+   a multisampled canvas (antialias:true) only ever smoothed the final full-screen quad — pure cost.
+   A 1× screen gets a 4× MSAA scene target (crisp rails + chains); a ≥1.5× screen (phones, retina)
+   is dense enough that its pixels hide the stair-steps, and skips the multisample bandwidth. */
+const MSAA = Math.min(devicePixelRatio, 2) < 1.5 ? 4 : 0;
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: MSAA }));
 composer.setPixelRatio(Math.min(devicePixelRatio, 2));
+composer.setSize(innerWidth, innerHeight);
 composer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), .12, .3, .9);
 /* halos predate bloom and were tuned to BE the glow — with real bloom they
@@ -158,6 +167,16 @@ const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), .1
 const HALO_A = .12, EMI = 1.2;
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
+/* PERF GOVERNOR (src/perfgov.js): a device that can't hold the frame at its pixel ratio steps
+   down a ladder of ratios (bloom chain a notch coarser on the last rungs); a fast one never moves */
+let bloomScale = 1;
+const _bloomSize = bloom.setSize.bind(bloom);
+bloom.setSize = (w, h) => _bloomSize(Math.max(1, Math.round(w * bloomScale)), Math.max(1, Math.round(h * bloomScale)));
+const gov = makePerfGovernor({ maxPR: Math.min(devicePixelRatio, 2), msaa: MSAA, apply(q){
+  bloomScale = q.bloomScale;
+  for (const rt of [composer.renderTarget1, composer.renderTarget2]) if (rt.samples !== q.msaa){ rt.samples = q.msaa; rt.dispose(); }
+  renderer.setPixelRatio(q.pr); composer.setPixelRatio(q.pr);   // (both re-size their targets)
+  rooms.resize(innerWidth, innerHeight, q.pr); } });
 
 const chrome = new THREE.MeshStandardMaterial({color:0xd8dde8, metalness:1, roughness:.12, envMap, envMapIntensity:1.4});
 
@@ -407,7 +426,8 @@ function buildWorld(keyName){
       }
     });
   }
-  world = new THREE.Group(); scene.add(world);
+  world = new THREE.Group(); world.matrixAutoUpdate = false; scene.add(world);   // (never moves: lets still stations skip matrix work)
+  pruneFrozen();
   Object.values(rigPool).flat().forEach(checkinRig);   // recall every marble from the old song
 
   // Each track now builds in its OWN local frame (zBase = 0 — the z-weave still
@@ -439,7 +459,7 @@ function buildWorld(keyName){
   });
   const wallW = cursor - GAP;                           // centre the whole wall on x=0
   tracks.forEach(tr => {
-    tr.origin.x -= wallW/2; tr.stage.position.copy(tr.origin); world.add(tr.stage);
+    tr.origin.x -= wallW/2; tr.stage.position.copy(tr.origin); tr.stage.name = 'belt:' + tr.role; world.add(tr.stage);
     tr.machine = shop.buildMachine(tr);                 // visible belt machine, in the track's local frame
     tr.machine.group.visible = machinesOn;
     tr.stage.add(tr.machine.group);                     // under the stage → inherits the bay placement for free
@@ -486,7 +506,7 @@ function buildWorld(keyName){
     const part = S.parts?.[rig.I.key];
     if (!part || !part.length) return;
     const st = stationFor(rig.I.key, i);
-    const station = new THREE.Group();
+    const station = new THREE.Group(); station.name = rig.I.key;   // (names: perf/debug probes)
     // a HUNG station (the ricochet chandelier) is a crown over the belt: centred on the wall,
     // its LOWEST part (plate, stem, the knot's wire) HANG_CLEAR above the paternoster's top
     // housing — never across the strike band, never reading as resting on the housing
@@ -551,10 +571,12 @@ function buildWorld(keyName){
   if (!NO_MERGE){
     const times = Array.from({ length: 48 }, (_, k) => -LEAD_IN + (k + .37) / 48 * (P0 + LEAD_IN));
     mergeStats = { merged: 0, removed: 0 };
-    const add = r => { mergeStats.merged += r.merged; mergeStats.removed += r.removed; };
+    mergeStats.frozen = 0;
+    const add = r => { mergeStats.merged += r.merged; mergeStats.removed += r.removed; mergeStats.frozen += r.frozen || 0; };
     const RUN = { started: true, skipStrikes: true, onStrike(){} };   // (started: the LIVE pose — !started is the armed hold)
-    instLive.forEach(r => { add(mergeStatic(r.station, t => r.inst.update(t, P0, 0, RUN), times)); r.inst.update(-LEAD_IN, P0, 0, POSE0); });
-    if (drumGroup){ add(mergeStatic(drumGroup, t => drumKit.update(t, P0, 0, RUN), times)); drumKit.update(-LEAD_IN, P0, 0, POSE0); }
+    // (the last arg re-poses for the count-in; parts still across the sweep AND that pose stop auto-updating their matrices)
+    instLive.forEach(r => add(mergeStatic(r.station, t => r.inst.update(t, P0, 0, RUN), times, () => r.inst.update(-LEAD_IN, P0, 0, POSE0))));
+    if (drumGroup) add(mergeStatic(drumGroup, t => drumKit.update(t, P0, 0, RUN), times, () => drumKit.update(-LEAD_IN, P0, 0, POSE0)));
   }
 
   // a full room is deep: thin the haze so the back tier still reads from the wide shot
@@ -579,6 +601,8 @@ function buildWorld(keyName){
   syncDirector(S, stageView);
   fadeMats = collectFadeMats(world); fadeWarm = 3;
   audio.rebuildBank(tracks, S.drums ? Object.keys(S.drums) : [], voices);
+  gov.hold(90);                                         // a rebuild's hitch + compiles are not the device's pace
+  singlePassFlats(scene);                               // PERF (perftune.js): no 2-pass draw for flat/additive see-through parts
   // start in the loop's TAIL: songTime < 0 means no ball has spawned yet (li stays
   // -1), so the machine + any tail/pickup drums play as a count-in, then the marble
   // spawns at songTime 0 and rolls into the downbeat. skipStrikes guards the first
@@ -1044,7 +1068,12 @@ function instStrike(rig, hit){
 }
 
 /* ---------------- timeline ---------------- */
-const clock = new THREE.Clock(); clock.autoStart = false;
+/* the song clock: THREE.Timer (THREE.Clock is deprecated) wearing Clock's old contract —
+   getDelta() is 0 until start(), and start() re-zeroes elapsedTime */
+const clock = (() => { const tm = new THREE.Timer(); let on = false, el = 0;
+  return { start(){ tm.reset(); on = true; el = 0; },
+           getDelta(){ if (!on) return 0; const d = tm.update().getDelta(); el += d; return d; },
+           get elapsedTime(){ return el; } }; })();
 let started = false;
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -1138,6 +1167,7 @@ function spawnBall(tr, birthT){
 
 function animate(){
   requestAnimationFrame(animate);
+  const frameT0 = performance.now();
   const dt = Math.min(clock.getDelta(), .05);
   songTime += dt * playRate;
   const P = ROLL_T + LOOP_T;                             // loop period (per song)
@@ -1296,11 +1326,13 @@ function animate(){
   else {
     // (re-collected every ~2 s: a plugin that makes or swaps a glow material after build — an
     //  async solve, a material swap — joins the gate instead of drawing dark forever)
-    if (++fadeTick % 120 === 0) fadeMats = collectFadeMats(world);
+    if (++fadeTick % 120 === 0){ fadeMats = collectFadeMats(world); singlePassFlats(scene); }   // (+ late-built rooms/parts)
     for (let i = 0; i < fadeMats.length; i++){ const m = fadeMats[i]; m.visible = m.opacity > .002; }
   }
   if (convDbgOn) convDebug(leadRender ? leadRender.y : cam.target.y, camera.position.y);
+  watchFrozen();                                        // re-check a slice of the frozen still parts (mergestatic.js)
   composer.render();
+  gov.frame(frameT0, started && playRate > 0 && document.visibilityState === 'visible');   // adaptive resolution (perfgov.js)
 }
 animate();
 setTimeout(() => rooms.prewarm(camera), 1200);    // build + compile the other rooms in idle time (no first-swap stall)
@@ -1522,9 +1554,10 @@ if (new URLSearchParams(location.search).has('debug')){
     orbitMax(d){ cam.orbit.maxDistance = d; cam.orbit.maxPolarAngle = Math.PI; },
     room(k){ return k === undefined ? rooms.key : rooms.set(k); },
     audioProbe: () => audio.probe(),                   // mix-bus gain reduction + reverb-return peak
+    bank: () => audio.bankStats(),                     // iOS sample bank: count, WAV bytes, build ms
     // perf probe: draw calls / triangles per FRAME (summed over every composer pass, averaged
     // over n frames), live lights, compiled programs, and the scene's mesh count
-    get scene(){ return scene; }, set perfOff(v){ perfOff = !!v; },
+    get scene(){ return scene; }, get renderer(){ return renderer; }, gov, set perfOff(v){ perfOff = !!v; },
     scores: () => cues.length ? stationScores() : null,
     // occlusion probe: for every director shot (+ the wide), cast a 5×3 grid of rays from the
     // eye through the frame's middle and report which OTHER machine is hit before the subject
@@ -1547,7 +1580,7 @@ if (new URLSearchParams(location.search).has('debug')){
       if (lastWide?.eye) test('stage', lastWide.eye, lastWide.aim);
       return out;
     },
-    get layout(){ return lastLayout; }, get wide(){ return lastWide; }, get merge(){ return mergeStats; },
+    get layout(){ return lastLayout; }, get wide(){ return lastWide; }, get merge(){ return mergeStats; }, frozen: () => frozenStats(),
     hang: () => instLive.filter(r => r.slot.hang).map(r => ({ key: r.I.key, wallTop: +stageWall.max.y.toFixed(2), low: +hangLow(r.station).toFixed(2), y: +r.station.position.y.toFixed(2) })),
     renderInfo(n = 10){
       return new Promise(res => {

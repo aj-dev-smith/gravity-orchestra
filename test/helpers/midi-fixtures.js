@@ -93,17 +93,22 @@ export function roomTour(){
 }
 
 /* ---------------------------------------------------------------------------
-   CANON IN D (Pachelbel, public domain) — 66 bpm, four turns of the ground.
-   Violin I (belt lead) · Violin II in canon two bars behind (belt alto) ·
-   contrabass on the ground (string bass) · harp arpeggios (marimba) · slow-strings
-   pad (bowls) · celesta sparkle (music box) · a tubular bell on each turn ·
-   a soft kit in the last two turns.
+   CANON IN D (Pachelbel, public domain) — 66 bpm, six turns of the ground + a
+   cadence bar. The real thing is a canon for THREE violins over a ground bass, so:
+   Violin I (belt lead) · Violin II two bars behind (alto belt) · Violin III four bars
+   behind (bass belt) — three marbles chasing one tune · contrabass on the ground
+   (string bass) · harp arpeggios (marimba) · slow-strings pad (bowls) · celesta
+   sparkle (music box) · a tubular bell on every turn · a soft kit from turn 3, with
+   tom fills into turn 5 and back round the loop. Turn 5 is the 16th-note variation
+   (flat, fast skims on the belt), turn 6 the leaping arpeggios (tall arcs). Then the
+   CADENCE: the whole room lands on D major at beat 48 and breathes before the loop.
    --------------------------------------------------------------------------- */
 export function canonInD(){
   // the ground: D A Bm F#m G D G A — one chord per beat, 8 beats per turn
   const ROOT = [50, 45, 47, 42, 43, 50, 43, 45];           // D3 A2 B2 F#2 G2 D3 G2 A2
   const THIRD = [4, 4, 3, 3, 4, 4, 4, 4];
   const GROUND = [38, 33, 35, 30, 31, 26, 31, 33];        // D2 A1 B1 F#1 G1 D1 G1 A1
+  const s16 = ns => ns.map(m => [m, .25]);
   const V = [
     [[78,1],[76,1],[74,1],[73,1],[71,1],[69,1],[71,1],[73,1]],                          // F# E D C# B A B C#
     [[74,1],[73,1],[71,1],[69,1],[67,1],[66,1],[67,1],[64,1]],                          // D C# B A G F# G E
@@ -111,46 +116,61 @@ export function canonInD(){
      [62,.5],[59,.5],[62,.5],[69,.5],[67,.5],[71,.5],[69,.5],[67,.5]],                  // D F# A G F# D F# E D B D A G B A G
     [[74,.5],[73,.5],[74,.5],[62,.5],[61,.5],[69,.5],[64,.5],[66,.5],
      [62,.5],[74,.5],[73,.5],[71,.5],[73,.5],[78,.5],[81,.5],[83,.5]],                  // D C# D D C# A E F# D D C# B C# F# A B
+    s16([81,79,78,76, 78,76,74,73, 74,73,71,69, 71,69,67,66,                           // the 16th-note variation:
+         67,66,64,62, 64,66,67,69, 71,73,74,76, 78,76,74,73]),                          // stepwise cascades down, then up
+    [[74,.5],[78,.5],[73,.5],[76,.5],[71,.5],[74,.5],[69,.5],[73,.5],                   // leaping arpeggios
+     [67,.5],[71,.5],[74,.5],[78,.5],[79,.5],[83,.5],[81,.5],[79,.5]],
   ];
-  const TURNS = 4, L = 8;
+  const TURNS = 6, L = 8, END = TURNS * L;               // the cadence bar starts at beat 48
 
-  const v1 = track('Violin I', 40, 0, ev => V.forEach((t, i) => line(ev, i * L, t, 0, 92)),
-                   [{ tick: 0, type: 'tempo', uspq: uspq(66) }]);
-  const v2 = track('Violin II', 40, 1, ev => V.slice(0, 3).forEach((t, i) => line(ev, (i + 1) * L, t, 1, 78)));
-  const cb = track('Contrabass', 43, 2, ev => {
-    for (let k = 0; k < TURNS; k++) GROUND.forEach((m, j) => note(ev, k * L + j, m, 1, j % 2 ? 90 : 112, 2));
+  const violin = (name, ch, delayTurns, vel) => track(name, 40, ch, ev => {
+    V.slice(0, TURNS - delayTurns).forEach((t, i) => line(ev, (i + delayTurns) * L, t, ch, vel));
+    note(ev, END, [86, 78, 74][delayTurns], 3.5, vel + 8, ch);                     // D6 / F#5 / D5: the cadence chord
+  }, ch === 0 ? [{ tick: 0, type: 'tempo', uspq: uspq(66) }] : []);
+  const v1 = violin('Violin I', 0, 0, 92), v2 = violin('Violin II', 1, 1, 80), v3 = violin('Violin III', 2, 2, 72);
+  const cb = track('Contrabass', 43, 3, ev => {
+    for (let k = 0; k < TURNS; k++) GROUND.forEach((m, j) => note(ev, k * L + j, m, 1, j % 2 ? 90 : 112, 3));
+    note(ev, END, 26, 2, 120, 3); note(ev, END + 2, 38, 1.5, 96, 3);              // D1 … D2
   });
-  const harp = track('Harp', 46, 3, ev => {
+  const harp = track('Harp', 46, 4, ev => {
     for (let k = 1; k < TURNS; k++) ROOT.forEach((r, j) => {
-      const pat = k === 1 ? [r, r + 7] : [r, r + 7, r + 12, r + 12 + THIRD[j]];
-      pat.forEach((m, q) => note(ev, k * L + j + q / pat.length, m, 1 / pat.length, q ? 70 : 92, 3));
+      const pat = k === 1 ? [r, r + 7] : k === 4 ? [r, r + 7, r + 12, r + 12 + THIRD[j], r + 19, r + 12 + THIRD[j]] : [r, r + 7, r + 12, r + 12 + THIRD[j]];
+      pat.forEach((m, q) => note(ev, k * L + j + q / pat.length, m, 1 / pat.length, q ? 70 : 92, 4));
     });
+    [50, 57, 62, 66, 69, 74].forEach((m, q) => note(ev, END + q / 6, m, 3, 96 - q * 4, 4));   // a rolled D chord
   });
-  const pad = track('Slow Strings', 49, 4, ev => {
+  const pad = track('Slow Strings', 49, 5, ev => {
     for (let k = 0; k < TURNS; k++) for (let j = 0; j < L; j += 2){
       const r = ROOT[j] < 45 ? ROOT[j] + 12 : ROOT[j];
-      for (const m of [r, r + THIRD[j], r + 7]) note(ev, k * L + j, m, 2, 64, 4);
+      for (const m of [r, r + THIRD[j], r + 7]) note(ev, k * L + j, m, 2, 64, 5);
     }
+    for (const m of [50, 54, 57, 62]) note(ev, END, m, 3.5, 72, 5);
   });
-  const celesta = track('Celesta', 8, 5, ev => {
+  const celesta = track('Celesta', 8, 6, ev => {
     for (let k = 2; k < TURNS; k++) ROOT.forEach((r, j) => {
-      note(ev, k * L + j + .5, r + 36 + THIRD[j], .5, k === 3 ? 90 : 70, 5);
-      if (k === 3 && j % 2) note(ev, k * L + j + .75, r + 43, .25, 70, 5);
+      note(ev, k * L + j + .5, r + 36 + THIRD[j], .5, k >= 3 ? 90 : 70, 6);
+      if (k >= 3 && j % 2) note(ev, k * L + j + .75, r + 43, .25, 70, 6);
     });
+    [[.5, 90], [1, 93], [1.5, 98]].forEach(([b, m]) => note(ev, END + b, m, .5, 84, 6));   // F# A D sparkle
   });
-  const bells = track('Tubular Bells', 14, 6, ev => {
-    [74, 69, 74, 69].forEach((m, k) => note(ev, k * L, m, 4, 112, 6));
-    note(ev, 3 * L + 4, 78, 2, 90, 6);
+  const bells = track('Tubular Bells', 14, 7, ev => {
+    for (let k = 0; k < TURNS; k++) note(ev, k * L, k % 2 ? 69 : 74, 4, 112, 7);
+    note(ev, 3 * L + 4, 78, 2, 90, 7);
+    note(ev, END, 74, 4, 120, 7);
   });
   const drums = track('Drums', null, 9, ev => {
     for (let b = 2 * L; b < TURNS * L; b++){
+      if (b === 4 * L - 1) continue;                                                     // the fill bar's last beat
       if (b % 2 === 0) note(ev, b, 36, .25, 100, 9); else note(ev, b, 38, .25, 70, 9);
       note(ev, b, 51, .25, 60, 9); note(ev, b + .5, 42, .25, 45, 9);
     }
-    note(ev, 2 * L, 49, 1, 105, 9);
+    [50, 48, 47, 45].forEach((m, k) => note(ev, 4 * L - 1 + k / 4, m, .25, 85 + k * 8, 9));   // fill into the 16ths
+    for (const t of [2 * L, 4 * L]) note(ev, t, 49, 1, 105, 9);
+    note(ev, END, 36, .25, 110, 9); note(ev, END, 49, 1, 115, 9);                      // the landing
+    [47, 45, 43].forEach((m, k) => note(ev, END + 3 + k / 3, m, .25, 80 + k * 10, 9));   // a tom pickup back into the top
   });
 
-  return buildMidi({ format: 1, ppq: PPQ, tracks: [v1, v2, cb, harp, pad, celesta, bells, drums] });
+  return buildMidi({ format: 1, ppq: PPQ, tracks: [v1, v2, v3, cb, harp, pad, celesta, bells, drums] });
 }
 
 /* ---------------------------------------------------------------------------
@@ -178,3 +198,53 @@ export function nightMallets(){
 }
 
 export const FIXTURES = { 'room-tour': roomTour, 'canon-in-d': canonInD, 'night-mallets': nightMallets };
+
+/* ---------------------------------------------------------------------------
+   GOLDEN INPUTS — files the orchestra must import EXACTLY as the classic importer
+   (a69c84a) did: program-less sketches + a piano-only file. Their a69c84a outputs are
+   committed in test/fixtures/midi-golden-a69c84a.json (made by
+   scripts/make-midi-golden.mjs against `git show a69c84a:src/midi/*`). Not written
+   to public/. Each ends on a SHORT last note — that's what the loop length guards.
+   --------------------------------------------------------------------------- */
+function sketchTrio(){
+  const lead = track('Lead', null, 0, ev => {
+    const seq = [[76,1],[74,.5],[72,.5],[71,1],[69,1],[72,1.5],[74,.5],[76,2],
+                 [77,1],[76,1],[74,1],[72,1],[71,.5],[72,.5],[74,1],[67,2],
+                 [69,1],[71,1],[72,1],[74,1],[76,1.5],[77,.5],[79,1],[81,1],
+                 [79,.5],[77,.5],[76,.5],[74,.5],[72,1],[71,1],[72,3.5],[74,.5]];
+    line(ev, 0, seq, 0, 96);
+  }, [{ tick: 0, type: 'tempo', uspq: uspq(112) }]);
+  const comp = track('Comp', null, 1, ev => {
+    for (let b = 0; b < 32; b += 2) for (const m of [60, 64, 67].map(x => x + (b % 8 < 4 ? 0 : -3))) note(ev, b, m, 2, 70, 1);
+  });
+  const low = track('Low', null, 2, ev => {
+    for (let b = 1; b < 32; b++) note(ev, b, [48, 43, 45, 41][(b >> 2) % 4] + (b % 2 ? 0 : 7), 1, 88, 2);
+  });
+  const drums = track('Kit', null, 9, ev => {
+    note(ev, -0, 49, 1, 110, 9);
+    for (let b = 0; b < 32; b++){ note(ev, b, b % 2 ? 38 : 36, .25, 100, 9); note(ev, b + .5, 42, .25, 60, 9); }
+  });
+  return buildMidi({ format: 1, ppq: PPQ, tracks: [lead, comp, low, drums] });
+}
+function pianoSolo(){                       // Tetris-shaped: one piano track, pc 0, chords, ends on an eighth
+  const t = track('Piano', 0, 0, ev => {
+    let b = 0;
+    for (let bar = 0; bar < 17; bar++){
+      const top = [76, 71, 72, 74, 72, 71, 69, 69][bar % 8];
+      for (const [d, m] of [[1, top], [.5, top - 5], [.5, top - 4], [1, top - 2], [.5, top - 4], [.5, top - 5]]){
+        note(ev, b, m, d, 92, 0);
+        if (d === 1) note(ev, b, m - 12, d, 70, 0);       // left-hand octave under the beat
+        b += d;
+      }
+    }
+  }, [{ tick: 0, type: 'tempo', uspq: uspq(120) }]);
+  return buildMidi({ format: 1, ppq: PPQ, tracks: [t] });
+}
+function sketchFormat0(){
+  const ev = [{ tick: 0, type: 'tempo', uspq: uspq(96) }];
+  line(ev, 2, [[67,1],[69,1],[71,1],[72,1],[74,2],[72,.5],[71,.5],[69,2],[67,.5]], 0, 90);
+  line(ev, 0, [[43,2],[48,2],[50,2],[43,2],[48,2],[43,1]], 1, 80);
+  for (let b = 0; b < 12; b++) note(ev, b, 42, .25, 50, 9);
+  return buildMidi({ format: 0, ppq: PPQ, tracks: [{ events: ev }] });
+}
+export const GOLDEN_INPUTS = { 'sketch-trio': sketchTrio, 'piano-solo': pianoSolo, 'sketch-format0': sketchFormat0 };

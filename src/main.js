@@ -877,7 +877,7 @@ shareEl.addEventListener('click', async () => {
 });
 (async () => {                                          // boot: a share link IS the song
   const m = location.hash.match(/^#s=(.+)$/);
-  if (!m) return;
+  if (!m || new URLSearchParams(location.search).has('midi')) return;   // ?midi= wins (it loads the song)
   try { registerSong('shared', await decodeSong(m[1])); }
   catch(e){ console.warn('cascade: ignoring bad share link —', e.message); }
 })();

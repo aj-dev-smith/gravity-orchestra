@@ -3,9 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseMidi } from '../src/midi/parse.js';
 import { convertToSong } from '../src/midi/convert.js';
-import { routeProgram, shapePart, orchestrate, PART_SPEC, PICKUP_BEATS, GM_NAMES } from '../src/midi/orchestra.js';
+import { routeProgram, shapePart, orchestrate, polyphony, twinsFor, PART_SPEC, PICKUP_BEATS, GM_NAMES,
+         ROLL_T as ORCH_ROLL_T, MB_MIN_ANGLE, MB_TWINS } from '../src/midi/orchestra.js';
 import { buildMidi } from './helpers/midi-builder.js';
-import { FIXTURES } from './helpers/midi-fixtures.js';
+import { FIXTURES, GOLDEN_INPUTS } from './helpers/midi-fixtures.js';
+import GOLDEN from './fixtures/midi-golden-a69c84a.json';
 import { INSTRUMENTS } from '../src/instruments/index.js';
 import { eventTimes, lanesByNote } from '../src/instruments/clock.js';
 import { ROLL_T, noteNum } from '../src/engine.js';
@@ -13,7 +15,8 @@ import { makeLanes, ballAt } from '../src/instruments/marimba/solve.js';
 import { bellLane, bellAt } from '../src/instruments/bells/solve.js';
 import { solveLane, poseAt } from '../src/instruments/bass/solve.js';
 import { bowlGeom, bowlLane, bowlAt } from '../src/instruments/bowls/solve.js';
-import { buildComb, tineAt } from '../src/instruments/musicbox/solve.js';
+import { buildComb, tineAt, splitTwins, GEOM } from '../src/instruments/musicbox/solve.js';
+import { solveLane as bassSolve, TC, E as BASS_E, V_MIN, winchT } from '../src/instruments/bass/solve.js';
 
 const NOTE_RE = /^[A-G]#?\d$/;
 const PPQ = 480;
@@ -106,8 +109,8 @@ describe('routeProgram — GM program → room instrument', () => {
     bells: [14],
     bass: [32, 33, 34, 35, 36, 37, 38, 39, 43, 47],
     bowls: [88, 89, 90, 91, 92, 93, 94, 95, 96, 99],
-    sustain: [16, 19, 21, 40, 41, 42, 44, 48, 49, 50, 52, 53],
-    belt: [0, 1, 4, 6, 24, 25, 30, 56, 60, 65, 68, 73, 80, 81, 104, 107, 110],
+    sustain: [16, 19, 20, 40, 41, 42, 44, 48, 49, 50, 52, 53],
+    belt: [0, 1, 4, 6, 21, 22, 23, 24, 25, 30, 56, 60, 65, 68, 73, 80, 81, 104, 107, 110],   // 21–23: accordion / harmonica = reed melody
   };
   for (const [dest, progs] of Object.entries(cases)){
     it(`${dest} ← ${progs.join(', ')}`, () => { for (const p of progs) expect(routeProgram(p), `${p} ${GM_NAMES[p]}`).toBe(dest); });
@@ -124,11 +127,24 @@ describe('routeProgram — GM program → room instrument', () => {
 // convert — orchestra routing
 // ---------------------------------------------------------------------------
 describe('convertToSong — legacy behaviour without program changes', () => {
-  it('a file with no program changes imports exactly as the classic belts (no parts)', () => {
+  // GOLDEN: the classic importer's own output (a69c84a, before the orchestra existed),
+  // regenerated only by scripts/make-midi-golden.mjs — never by the code under test
+  for (const name of Object.keys(GOLDEN_INPUTS)){
+    it(`golden "${name}" imports exactly as a69c84a did (song + warnings)`, () => {
+      const r = convertToSong(parseMidi(GOLDEN_INPUTS[name]()), { label: name });
+      expect(r.song).toEqual(GOLDEN[name].song);
+      expect(r.warnings).toEqual(GOLDEN[name].warnings);
+    });
+  }
+  it('the golden files really exercise the seam: they end on a short last note', () => {
+    expect(GOLDEN['piano-solo'].song.melody.at(-1)[1]).toBeGreaterThanOrEqual(1);   // the loop keeps its breath
+    expect(GOLDEN['sketch-trio'].song.drums).toBeDefined();
+  });
+
+  it('a file with no program changes imports as the classic belts (no parts)', () => {
     const bytes = file(trk('a', null, 0, scale8(72)), trk('b', null, 1, [[0, 48, 4], [0, 52, 4], [4, 50, 4], [4, 53, 4]]));
-    const a = convert(bytes), b = convert(bytes, { orchestra: false });
+    const a = convert(bytes);
     expect(a.song.parts).toBeUndefined();
-    expect(a.song).toEqual(b.song);
     expect(a.song.bass).toBeDefined();                       // chordal track stays a (top-note) belt
   });
 
@@ -176,8 +192,8 @@ describe('convertToSong — orchestra routing', () => {
       trk('Extra', 0, 4, scale8(55, 4)),
     ));
     expect(song.alto).toBeDefined(); expect(song.bass).toBeDefined();
-    expect(warnings.some(w => /"Comp" is chordal/.test(w))).toBe(true);
-    expect(warnings.some(w => /dropped track "Extra" from the belts/.test(w))).toBe(true);
+    expect(warnings.some(w => /"Comp" .*plays on the marimba \(chordal/.test(w))).toBe(true);
+    expect(warnings.some(w => /"Extra" .*plays on the marimba \(no belt left/.test(w))).toBe(true);
     const mar = song.parts.marimba.map(e => e[0]);
     expect(mar.filter(b => b === 0).length).toBeGreaterThanOrEqual(2);              // chords survive
   });
@@ -388,12 +404,18 @@ describe('fixture specifics', () => {
     expect(sumBeats(song.melody)).toBe(64);
   });
 
-  it('canon: Violin I leads, Violin II is a belt in canon, the ground is on the string bass', () => {
-    const { song } = convertToSong(parseMidi(FIXTURES['canon-in-d']()));
+  it('canon: a TRIPLE canon on three belts (Violin I leads, II two bars behind, III four), the ground on the string bass', () => {
+    const { song, warnings } = convertToSong(parseMidi(FIXTURES['canon-in-d']()));
     expect(song.melody.slice(0, 4).map(n => n[0])).toEqual(['F#5', 'E5', 'D5', 'C#5']);
-    expect((song.alto || song.bass).delay).toBe(8);
+    expect(song.alto.delay).toBe(8);
+    expect(song.bass.delay).toBe(16);
+    expect(song.alto.notes.slice(0, 4).map(n => n[0])).toEqual(['F#5', 'E5', 'D5', 'C#5']);   // the SAME tune, chasing
+    expect(song.bass.notes.slice(0, 4).map(n => n[0])).toEqual(['F#5', 'E5', 'D5', 'C#5']);
     expect(song.parts.bass.slice(0, 4).map(e => e[1])).toEqual(['D3', 'A2', 'B2', 'F#2']);
-    expect(sumBeats(song.melody)).toBe(32);                // the loop ends with the phrase, no dead bar
+    expect(sumBeats(song.melody)).toBe(52);                // six turns + the cadence bar
+    expect(song.melody.at(-1)).toEqual(['D6', 4]);         // the lead lands on D and takes the tallest arc home
+    for (const k of ['marimba', 'bells', 'bass', 'bowls']) expect(song.parts[k].some(e => e[0] === 48), k).toBe(true);
+    expect(warnings.filter(w => /dropped|thinned/.test(w))).toEqual([]);   // nothing lost
   });
 
   it('night mallets (format 0, no lead program): the vibraphone is doubled on the belt', () => {
@@ -409,5 +431,157 @@ describe('orchestrate — direct', () => {
     const r = orchestrate([{ name: 'ch0', notes }], { ppq: 480, bpm: 100 });
     expect(r.parts[0].name).toBe('Marimba');
     expect(r.belt.length).toBe(1);                          // promoted spine
+  });
+});
+
+// ---------------------------------------------------------------------------
+// polish: lead choice, overflow, harmony coverage, loop-aware machines
+// ---------------------------------------------------------------------------
+describe('the lead must enter early and last (Star Wars / Piano Man regressions)', () => {
+  // a chordal brass section carries the tune from beat 0; a sparse, high flute enters late
+  const brass = trk('Brass', 61, 0, Array.from({ length: 48 }, (_, i) => [i, [67, 72, 74, 79][i % 4], 1]).flatMap(([b, m]) => [[b, m], [b, m - 4]]));
+  const horn = trk('Horn', 60, 1, Array.from({ length: 40 }, (_, i) => [i + .5, 60 + (i % 3), .5]));
+  const flute = trk('Flute', 73, 2, Array.from({ length: 12 }, (_, i) => [24 + i * .5, 88 + (i % 4)]));
+  const bass = trk('Bass', 33, 3, Array.from({ length: 12 }, (_, i) => [34 + i, 40]));
+
+  it('a chordal brass lead from beat 0 keeps the lead over a late, high flute; the loop is not shortened', () => {
+    const { song } = convert(file(brass, horn, flute, bass));
+    expect(song.melody[0][0]).toBe('G4');                 // brass top line
+    expect(sumBeats(song.melody)).toBe(48);
+    expect(song.parts.bass.length).toBeGreaterThan(0);
+  });
+
+  it('an early lead that STOPS halfway loses to one that lasts', () => {
+    const early = trk('Choir', 52, 0, Array.from({ length: 16 }, (_, i) => [i * 2, 84, 2]));      // 0..30, high
+    const piano = trk('Piano', 0, 1, Array.from({ length: 128 }, (_, i) => [i, 60 + (i % 5)]));   // 0..127
+    const { song } = convert(file(early, piano));
+    expect(song.melody.length).toBe(128);
+  });
+
+  it('harmonica / accordion are melody (belt), not bowls', () => {
+    const harm = trk('Harmonica', 22, 1, Array.from({ length: 16 }, (_, i) => [i, 72 + (i % 3)]).flatMap(([b, m]) => [[b, m], ...(b % 4 ? [] : [[b, m - 5]])]));
+    const { song } = convert(file(trk('Piano', 0, 0, scale8(76, 16)), harm));
+    expect(song.parts?.bowls).toBeUndefined();
+    expect(song.bass || song.alto).toBeDefined();
+  });
+
+  it('octave doublings are one line, not chords', () => {
+    const q = t => t / 480;
+    const oct = Array.from({ length: 16 }, (_, i) => [60 + i % 5, 72 + i % 5].map(m => ({ midi: m, tick: i * 480, dur: 400 }))).flat();
+    expect(polyphony(oct, q)).toBe(0);
+    const triad = Array.from({ length: 16 }, (_, i) => [60, 64, 67].map(m => ({ midi: m, tick: i * 480, dur: 400 }))).flat();
+    expect(polyphony(triad, q)).toBe(1);
+  });
+});
+
+describe('overflow: the marimba is not a dumping ground', () => {
+  it('keeps at most 2 guest (non-mallet) voices, names repeated tracks by channel, routes spare lines by register', () => {
+    const chordal = (name, ch, base) => trk(name, 0, ch, Array.from({ length: 16 }, (_, i) => [i, base + i % 3, 1]).flatMap(([b, m]) => [[b, m], [b, m + 4], [b, m + 7]]));
+    const { song, warnings } = convert(file(
+      trk('Lead', 0, 0, scale8(79, 16)),
+      chordal('Piano', 1, 60), chordal('Piano', 2, 55), chordal('Piano', 3, 62),
+      trk('Alto', 0, 4, scale8(67, 16)), trk('Tenor', 0, 5, scale8(62, 16)),
+      trk('Low line', 0, 6, Array.from({ length: 16 }, (_, i) => [i, 40 + (i % 4)])),
+      trk('High line', 0, 7, Array.from({ length: 16 }, (_, i) => [i + .5, 84 + (i % 4)])),
+    ));
+    expect(warnings.filter(w => /plays on the marimba/.test(w)).length).toBe(2);
+    expect(warnings.some(w => /dropped "Piano \(ch\d\)".*marimba already plays/.test(w))).toBe(true);
+    expect(song.parts.bass.length).toBe(16);               // the spare LOW line found the free string bass
+    expect(song.parts.musicbox.length).toBe(16);           // the spare HIGH line found the free music box
+  });
+
+  it('a doubled track merges instead of taking a slot', () => {
+    const m = Array.from({ length: 16 }, (_, i) => [i * .5, 60 + (i % 7)]);
+    const { song, warnings } = convert(file(trk('Lead', 0, 0, scale8(76, 16)), trk('Mar A', 12, 1, m), trk('Mar B', 12, 2, m)));
+    expect(warnings.some(w => /"Mar B" doubles "Mar A"/.test(w))).toBe(true);
+    expect(song.parts.marimba.length).toBe(16);
+  });
+
+  it('each voice is octave-shaped on its own before merging (a low and a high voice both land in range, intervals kept)', () => {
+    const { part } = shapePart('marimba', [
+      ...[0, 1, 2].map(b => ({ beat: b, midi: 36 + b * 2, vel: .8, dur: null, voice: 0 })),
+      ...[0, 1, 2].map(b => ({ beat: b + .5, midi: 96 + b * 2, vel: .8, dur: null, voice: 1 })),
+    ], { bpm: 100, loopBeats: 4 });
+    const lo = part.filter(e => e[0] % 1 === 0).map(e => noteNum(e[1])), hi = part.filter(e => e[0] % 1).map(e => noteNum(e[1]));
+    expect(lo[1] - lo[0]).toBe(2); expect(hi[1] - hi[0]).toBe(2);
+    expect(Math.abs(lo[0] - 66)).toBeLessThan(12); expect(Math.abs(hi[0] - 66)).toBeLessThan(12);
+  });
+});
+
+describe('pitch caps cover the harmony first', () => {
+  // diatonic material over 3 octaves: 15+ distinct pitches, 7 pitch classes
+  const diatonic = [];
+  const D = [0, 2, 4, 5, 7, 9, 11];
+  for (let i = 0; i < 60; i++) diatonic.push({ beat: i * .5, midi: 40 + 12 * (i % 3) + D[(i * 3) % 7], vel: .8, dur: 1 });
+  for (const key of ['bass', 'bowls']){
+    it(`${key}: a diatonic part with ${new Set(diatonic.map(n => n.midi)).size} pitches loses 0 notes (all fold by octave)`, () => {
+      const { part, warnings } = shapePart(key, diatonic, { bpm: 60, loopBeats: 32 });
+      const pcs = new Set(part.map(e => noteNum(e[1]) % 12));
+      expect(pcs.size).toBe(7);
+      expect(warnings.some(w => /dropped/.test(w))).toBe(false);
+      expect(new Set(part.map(e => noteNum(e[1]))).size).toBeLessThanOrEqual(8);
+    });
+  }
+});
+
+describe('string bass: the groove survives, and every lane solves', () => {
+  it('repeated eighths at 200 bpm (.15 s) are kept', () => {
+    const notes = Array.from({ length: 64 }, (_, i) => ({ beat: i * .5, midi: 40, vel: .9, dur: .4 }));
+    const { part } = shapePart('bass', notes, { bpm: 200, loopBeats: 32 });
+    expect(part.length).toBe(64);
+  });
+  it('PART_SPEC.bass.gap is the solver\'s real floor: Tc + e·V_MIN/g + winch + V_MIN/g fits in it', () => {
+    const g = 14.5, gap = PART_SPEC.bass.gap;
+    const need = Math.min(TC, .4 * gap) + BASS_E * V_MIN / g + winchT(V_MIN ** 2 / (2 * g) - (BASS_E * V_MIN) ** 2 / (2 * g)) + V_MIN / g;
+    expect(need).toBeLessThanOrEqual(gap);
+    expect(need).toBeGreaterThan(gap - .02);                // …and it isn't needlessly strict
+  });
+  it('a song-length part is capped at the solve budget (with a warning)', () => {
+    const notes = Array.from({ length: 900 }, (_, i) => ({ beat: i * .5, midi: 40 + (i % 5), vel: i % 2 ? .6 : .9, dur: .4 }));
+    const { part, warnings } = shapePart('bass', notes, { bpm: 120, loopBeats: 452 });
+    expect(part.length).toBe(PART_SPEC.bass.maxEvents);
+    expect(warnings.some(w => /solve budget/.test(w))).toBe(true);
+  });
+});
+
+describe('music box: pins fit the once-per-loop cylinder at any loop length', () => {
+  it('mirrored constants match the engine + the comb', () => {
+    expect(ORCH_ROLL_T).toBe(ROLL_T);
+    expect(MB_MIN_ANGLE).toBe(GEOM.MIN_ANGLE);
+    for (const ts of [[0, .1, .2, .3, 5, 9], [0, 2, 4, 6], [0, .5, 3, 3.5, 10]]) expect(twinsFor(ts, 20, 1)).toBe(splitTwins(ts, 20, 1).length);
+    expect(twinsFor([0, .1, .2, .3, .4, .5], 20, 1)).toBe(0);           // can't fit 4 twins → 0 (splitTwins would overlap)
+    expect(MB_TWINS).toBe(splitTwins(Array.from({ length: 40 }, (_, i) => i * .01), 20, 5).length);
+  });
+  for (const loopBeats of [16, 64, 256]){
+    it(`alternating C6/G6 eighths over ${loopBeats} beats: no pin collisions, comb within budget`, () => {
+      const bpm = 120, beat = 60 / bpm, notes = [];
+      for (let b = 0; b < loopBeats; b += .5) notes.push({ beat: b, midi: 84 + ((b * 2) % 2) * 7, vel: .8, dur: .5 });
+      for (let b = 0; b < loopBeats; b += 4) for (const m of [86, 88, 89, 91]) notes.push({ beat: b + .25, midi: m, vel: .6, dur: .25 });
+      const { part, warnings } = shapePart('musicbox', notes, { bpm, loopBeats });
+      const P = ROLL_T + loopBeats * beat;
+      const { lanes, omega } = buildComb(part, { rollT: ROLL_T, beat, P });
+      const minGap = GEOM.MIN_ANGLE / omega;
+      let bad = 0;
+      for (const l of lanes){ const s = l.L.s; if (s.length > 1) for (let i = 0; i < s.length; i++) if ((i + 1 < s.length ? s[i + 1] : s[0] + P) - s[i] < minGap - 1e-9) bad++; }
+      expect(bad).toBe(0);
+      expect(lanes.length).toBeLessThanOrEqual(PART_SPEC.musicbox.tines);
+      expect(part.length).toBeGreaterThan(0);
+      if (loopBeats >= 256) expect(warnings.some(w => /thinned \d+ pins/.test(w))).toBe(true);
+    });
+  }
+});
+
+describe('the loop seam', () => {
+  it('bells: the gap across the seam (incl. the roll-in) honours the part-wide spacing', () => {
+    const { part } = shapePart('bells', [0, 2, 4, 7.9].map((b, i) => ({ beat: b, midi: 60 + i * 2, vel: .9, dur: 1 })), { bpm: 120, loopBeats: 8, rollT: 0 });
+    const on = part.map(e => e[0]);
+    expect((on[0] + 8 - on.at(-1)) * .5).toBeGreaterThanOrEqual(.2);
+  });
+  it('a pickup never lands on the song\'s own last bar (only a FREE tail takes it)', () => {
+    const busy = shapePart('marimba', [{ beat: -1, midi: 60, vel: .8 }, { beat: 0, midi: 64, vel: .8 }, { beat: 7.5, midi: 67, vel: .8 }], { bpm: 100, loopBeats: 8 });
+    expect(busy.part.map(e => e[0])).toEqual([0, 7.5]);
+    expect(busy.warnings.some(w => /loop tail already plays/.test(w))).toBe(true);
+    const free = shapePart('marimba', [{ beat: -1, midi: 60, vel: .8 }, { beat: 0, midi: 64, vel: .8 }, { beat: 5, midi: 67, vel: .8 }], { bpm: 100, loopBeats: 8 });
+    expect(free.part.map(e => e[0])).toEqual([0, 5, 7]);
   });
 });

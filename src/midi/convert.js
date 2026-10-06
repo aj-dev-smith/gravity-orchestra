@@ -97,7 +97,7 @@ export function convertToSong(parsed, opts = {}) {
 
   // --- step 3: keep at most 3 tracks (busiest by onset count) ---
   let kept = monoTracks;
-  if (monoTracks.length > 3) {
+  if (!orchestra && monoTracks.length > 3) {
     const sorted = [...monoTracks].sort((a, b) => b.onsets.length - a.onsets.length);
     kept = sorted.slice(0, 3);
     for (const dropped of sorted.slice(3)) {
@@ -114,7 +114,10 @@ export function convertToSong(parsed, opts = {}) {
     const mean = t.onsets.reduce((s, n) => s + n.midi, 0) / t.onsets.length;
     return { ...t, mean };
   });
-  withMean.sort((a, b) => b.mean - a.mean); // highest first
+  // legacy: the highest mean leads. Orchestra mode: orchestrate() already chose the lead
+  // (it must enter early and last — see orchestra.js) and put it first; the rest by mean.
+  if (orchestra) withMean.splice(1, Infinity, ...withMean.slice(1).sort((a, b) => b.mean - a.mean));
+  else withMean.sort((a, b) => b.mean - a.mean); // highest first
 
   let lead, alto, bass;
   if (withMean.length === 1) {
@@ -158,6 +161,7 @@ export function convertToSong(parsed, opts = {}) {
     const list = (partNotes[p.key] ||= []);
     for (const n of p.notes) {
       list.push({
+        voice: p.voice, src: p.name,
         beat: tidy(quantize(n.tick * beatsPerTick) - leadOffset),
         midi: n.midi,
         vel: Math.max(0.01, Math.min(1, n.vel / 127)),
@@ -205,10 +209,10 @@ export function convertToSong(parsed, opts = {}) {
   if (bass) bass.onsets = shiftMidi(bass.onsets, 48, 71, 'bass');
 
   // --- step 7: loop length and beat intervals ---
-  // loopBeats = max of all tracks' last note END, rounded up to 4-beat bar. A note's end
-  // is onset + its real length when the file released it, else onset + 1 (a beat's grace)
-  // — so a phrase ending in an eighth at beat 31.5 loops at 32, not 36.
-  const endOf = n => n.onset + (n.dur == null ? 1 : Math.max(1 / 12, quantize(n.dur * beatsPerTick)));
+  // loopBeats = max of all tracks' last onset + 1 (a beat's grace — the seam keeps a
+  // breath), rounded up to a 4-beat bar. (Deliberately NOT the note's real release: that
+  // changed every existing import's loop — golden-tested in test/midi-orchestra.)
+  const endOf = n => n.onset + 1;
   let maxEnd = endOf(lead.onsets[lead.onsets.length - 1]);
   if (alto && alto.onsets.length > 0) {
     maxEnd = Math.max(maxEnd, endOf(alto.onsets[alto.onsets.length - 1]));

@@ -420,6 +420,11 @@ function buildWorld(keyName){
   // (FogExp2 .026 at ~50 u ≈ 18 % visible; .016 ≈ 45 %)
   scene.fog.density = instLive.length ? .016 : .026;
   rooms.suggest(S.room);                                // a song may name its room (data); a viewer's pick wins
+  // the song's weather for the room (data): storm = beats that flash lightning, sky = [[beat,
+  // 'night'|'dawn'], …] — the room reads them as pure fns of songTime (a room may ignore them)
+  rooms.cue({ storm: Array.isArray(S.storm) ? S.storm.filter(Number.isFinite) : null,
+              sky: Array.isArray(S.sky) ? S.sky.filter(c => Array.isArray(c) && Number.isFinite(c[0]) && typeof c[1] === 'string') : null,
+              rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T });
   // anchor points for the room (the Void grows a plinth + light pillar under each)
   rooms.place([
     { x: stageView.cx, z: -2.25, w: wallW + 4, d: 6, yaw: 0, y: STAGE_Y - 9.6 },   // the paternoster bays (housing bottom)
@@ -518,9 +523,10 @@ function drumStrike(hit){
 let cues = [];                                          // [{key, cue:[{t,w}], weight}]
 function syncDirector(S, view){
   const shots = [], P = ROLL_T + LOOP_T;
-  cues = []; entrances = [];
+  cues = []; entrances = []; script = [];
   instLive.forEach(rig => {
-    const st = rig.station, h = rig.I.lookHeight ?? 3, c = rig.I.camera || {};
+    // a song may re-frame a station's shot for its room (song.director.shots.<key> = {x, up, dist})
+    const st = rig.station, h = rig.I.lookHeight ?? 3, c = { ...(rig.I.camera || {}), ...(S.director?.shots?.[rig.I.key] || {}) };
     shots.push({ key: rig.I.key, color: rig.I.color,
       aim: st.localToWorld(new THREE.Vector3(0, h, 0)),
       eye: st.localToWorld(new THREE.Vector3(c.x ?? 0, h + (c.up ?? 5), c.dist ?? 15)) });
@@ -576,6 +582,17 @@ function syncDirector(S, view){
     i = Math.max(j, i + 1);
   }
   seamFrom = lead.rollT + lead.total - .7;              // the engine's loop seam (no music, no lead marble), entered just after the last note lands
+  // SCRIPTED CUTS (song.director.at = [[beat, shot, holdBeats?], …]): the story beats a
+  // density vote can't see — a moonlit establishing shot, the soloist, the dawn bell. shot =
+  // 'stage', a station key, or a belt role ('lead'/'alto'/'bass'); unknown keys are dropped.
+  // Held for holdBeats (≥ .35 s), then the director votes again from there.
+  const known = new Set(['stage', ...shots.map(sh => sh.key), ...tracks.map(t => t.role)]);
+  for (const c of (Array.isArray(S.director?.at) ? S.director.at : []))
+    if (Array.isArray(c) && Number.isFinite(c[0]) && known.has(c[1]))
+      script.push({ t: wrapP(ROLL_T + c[0] * BEAT, P), key: c[1], hold: Math.max(.35, (Number.isFinite(c[2]) ? c[2] : 0) * BEAT) });
+  // a script owns its moment: an entrance landing within ±.6 s of a scripted cut would only
+  // flash a shot in front of it (the 0.2 s flicker), so it yields
+  if (script.length) entrances = entrances.filter(e => !script.some(c => Math.abs(wrapP(e.t - c.t + P / 2, P) - P / 2) < .6));
   // the wide STAGE shot. A full room (instrument plugins on stage): a LOW front-left
   // three-quarter view (the angle the room reads as a machine-hall, not a floor plan) —
   // bowls + drums in the foreground, the belt and the back tier behind — and the song
@@ -592,7 +609,11 @@ function syncDirector(S, view){
   shots.forEach(sh => { sh.fitMax = roomFit(sh.aim, sh.eye); });
   // the opening reveal holds through the count-in and the first two beats (songTime-based,
   // so a page idling in auto before the play tap can't spend it)
-  cam.syncStations(shots, wide, { auto: !soloKey, openWide: full && !soloKey, openUntil: ROLL_T + 2 * BEAT });
+  // what a gliding move must not fly through: every station + the drum machine + the belt
+  // bays, as world boxes (a move whose eye path crosses one becomes a hard cut — camera.js)
+  const blockers = [...instLive.map(r => r.station), ...(drumGroup ? [drumGroup] : []), ...tracks.map(t => t.machine.group)]
+    .map(o => new THREE.Box3().setFromObject(o)).filter(b => !b.isEmpty());
+  cam.syncStations(shots, wide, { auto: !soloKey, openWide: full && !soloKey, openUntil: ROLL_T + 2 * BEAT, blockers });
 }
 function roomFit(aim, eye, pad = 1.5){
   const d = eye.clone().sub(aim); let k = Infinity;
@@ -608,7 +629,7 @@ function roomFit(aim, eye, pad = 1.5){
 function dirWeight(S, key){ const w = S.director?.[key]; return Number.isFinite(w) ? Math.max(0, Math.min(4, w)) : 1; }
 const DIRECTOR_AHEAD = 2.2;                             // seconds of look-ahead
 const ENSEMBLE_AHEAD = .9;                              // the wide cut lands just ahead of the big downbeat
-let moments = [], skims = [], entrances = [], seamFrom = Infinity;   // filled by syncDirector (static song data)
+let moments = [], skims = [], entrances = [], script = [], seamFrom = Infinity;   // filled by syncDirector (static song data)
 let ensFlare = 0, lastNow = 0;                          // the room's exposure flare on ensemble moments
 /* Room-wide director cues, every frame: the ensemble size about to land (→ the wide
    shot), whether the lead is in/near a skim (→ stay on the belt), whether we're in the
@@ -625,6 +646,7 @@ function roomCues(out){
   }
   lastNow = now;
   out._ensemble = ens;
+  out._script = script.find(c => wrapP(now - c.t + .12, P) < c.hold + .12)?.key;   // a scripted cut (lands .12 s early)
   out._force = entrances.find(e => wrapP(e.t - now, P) < .35)?.key;   // an entrance cuts on its downbeat
   out._forceSoon = entrances.some(e => wrapP(e.t - now, P) < ENSEMBLE_AHEAD + .5);
   out._skim = skims.some(([t0, len]) => wrapP(now - t0, P) < len);   // (t0 already leads the run by .6 s)
@@ -923,7 +945,7 @@ function animate(){
   cam.update({ dt, time: clock.elapsedTime, songTime, tracks, marblePts, leadRender, reduceMotion, started,
                stationScores: cues.length ? stationScores() : null });
 
-  rooms.update(dt, songTime, camera, expoKick);         // room ambience (pure fn of songTime + the music's kick)
+  rooms.update(dt, songTime, camera, expoKick + ensFlare);   // room ambience (pure fn of songTime + the music's kick)
   if (convDbgOn) convDebug(leadRender ? leadRender.y : cam.target.y, camera.position.y);
   composer.render();
 }
@@ -1142,6 +1164,7 @@ if (new URLSearchParams(location.search).has('debug')){
     },
     director(){ const B = t => +((t - ROLL_T) / BEAT).toFixed(2);   // the room director's static cues, in beats
       return { entrances: entrances.map(e => [e.key, B(e.t)]), wide: moments.filter(m => m.n >= 7).map(m => B(m.t)),
+               script: script.map(c => [c.key, B(c.t), +(c.hold / BEAT).toFixed(2)]),
                skims: skims.map(([t0, len]) => [B(t0), +(len / BEAT).toFixed(2)]), seamFrom: B(seamFrom) }; },
     orbitMax(d){ cam.orbit.maxDistance = d; cam.orbit.maxPolarAngle = Math.PI; },
     room(k){ return k === undefined ? rooms.key : rooms.set(k); },

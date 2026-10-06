@@ -275,7 +275,7 @@ export function padRadius(notes, role){
    duration); every bit of extra room for fast runs comes out of the horizontal
    axis. radOf(note) → world radius (pure fn of the note); the horizontal step
    is widened until neighbours clear by (r_i + r_{i+1})·clear. */
-export function layoutPads(melody, { zBase, isBass, delayBeats = 0, beat, radOf, clear = CLEAR }){
+export function layoutPads(melody, { zBase, isBass, delayBeats = 0, beat, radOf, clear = CLEAR, hopOver = Infinity, xMax = Infinity }){
   const pads = []; let t = 0;
   let p = new THREE.Vector3(0, -DESCENT * delayBeats * beat, zBase), dir = isBass ? -1 : 1;
   melody.forEach(([note, beats], i) => {
@@ -288,7 +288,11 @@ export function layoutPads(melody, { zBase, isBass, delayBeats = 0, beat, radOf,
     const z = Math.sin(i * (isBass ? 1.1 : 1.3)) * (isBass ? 1.0 : 1.4);
     const need = next ? (radOf(note) + radOf(next[0])) * clear : 0;
     const xMin = Math.sqrt(Math.max(0, need*need - y*y - z*z));   // widen x until they clear
-    const x = dir * Math.max(0.9 + dt * 2.0, xMin);
+    // a gap longer than hopOver is a CRANE HOP (crane.js): the magnet carries the marble
+    // across, so the step stops growing with dt (a 30 s note no longer spans the room)
+    const step = dt > hopOver ? 0.9 + 2.0 * Math.min(Math.max(dt - hopOver, .5), hopOver) : 0.9 + dt * 2.0;
+    let x = dir * Math.max(step, xMin);
+    if (Math.abs(p.x + x) > xMax){ dir *= -1; x = -x; }   // fold back early: a long track can't wander off the bay
     p = p.clone().add(new THREE.Vector3(x, y, z));
   });
   // The weave folds x back every 4 notes, so a pad can still drift near a

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { SONGS } from '../src/songs/index.js';
-import { padRadius, layoutPads } from '../src/engine.js';
+import { padRadius, layoutPads, G } from '../src/engine.js';
+import { hopLayout } from '../src/crane.js';
 
 /* ---------------------------------------------------------------------------
    PAD OVERLAP GUARANTEE
@@ -28,7 +29,7 @@ function tracksOf(song) {
 // guarantee is proven against the real geometry — not a reimplementation.
 function padsFor(track, bpm) {
   const radOf = padRadius(track.notes, track.role);
-  const pads = layoutPads(track.notes, {
+  const pads = layoutPads(track.notes, { ...hopLayout(-G.y),
     zBase: track.zBase, isBass: track.role === 'bass',
     delayBeats: track.delay, beat: 60 / bpm, radOf,
   });

@@ -233,7 +233,8 @@ export function makePaternosterShop({ envMap, beltSpeed, bandY, floorY }){
 
     /* ---------- the MAGNET CRANE (top housing): a rail across the window, a carriage that
        runs along it, a telescoping jib out through the open front, a winch cable and the
-       electromagnet. Every pose is craneAt(plan, songTime) — the same pure fn main uses
+       electromagnet. It flies every CRANE HOP of the voice (long notes + the loop seam):
+       loaded, it rides the LANE just above the lip in front of the housing. Every pose is craneAt(plan, songTime) — the same pure fn main uses
        for the marble, so the ball and its magnet can never disagree. ---------- */
     let crane = null;
     if (track.crane){
@@ -263,7 +264,7 @@ export function makePaternosterShop({ envMap, beltSpeed, bandY, floorY }){
       crane = (t) => {
         const m = craneAt(pl, t);
         const fy = c0 + m.y;                             // magnet FACE (the marble's top) in local y
-        const recoil = m.sinceRelease >= 0 && m.sinceRelease < .5 ? .05 * Math.exp(-m.sinceRelease * 10) * Math.sin(m.sinceRelease * 40) : 0;
+        const recoil = !m.loaded && m.sinceRelease >= 0 && m.sinceRelease < .5 ? .05 * Math.exp(-m.sinceRelease * 10) * Math.sin(m.sinceRelease * 40) : 0;
         face.position.set(m.x, fy + .025 + recoil, m.z);
         mag.position.set(m.x, fy + recoil, m.z);
         coil.position.set(m.x, fy + .07 + recoil, m.z);
@@ -275,10 +276,10 @@ export function makePaternosterShop({ envMap, beltSpeed, bandY, floorY }){
         cable.position.set(m.x, top + len / 2, m.z); cable.scale.y = len;
         drum.rotation.x = -len / .11;                    // the winch drum pays out the cable it shows
         // coil: energises as the marble arrives, CLACKS bright on docking, holds, ICE discharge on release
+        // (one magnet serves every CRANE HOP of the voice: each dock clacks, each release discharges)
         let on = m.coil;
-        if (m.sinceDock >= 0 && m.sinceRelease > m.sinceDock) on = 1 + 2.4 * Math.exp(-Math.max(0, m.sinceDock) * 8);
-        if (m.phase === 'armed') on = 1;
-        const dis = m.phase !== 'armed' && m.sinceDock < 0 ? Math.exp(-m.sinceRelease * 18) : 0;
+        if (m.loaded) on = m.phase === 'armed' ? 1 : 1 + 2.4 * Math.exp(-Math.max(0, m.sinceDock) * 8);
+        const dis = !m.loaded && m.sinceRelease >= 0 ? Math.exp(-m.sinceRelease * 18) : 0;
         _c.copy(HOT).lerp(ICE, Math.min(1, dis * 1.4));
         coilMat.emissive.copy(_c);
         coilMat.emissiveIntensity = .15 + 3.2 * on + 4 * dis;

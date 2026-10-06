@@ -31,6 +31,8 @@
        centre, HUNG: the RICOCHET chandelier — a crown over the belt,
               its lowest plate clear above the paternoster's top housing,
               so the wide shot reads it ABOVE the strike band, never across it.
+       front, HUNG: the VOLLEY court — two walls trading one marble, flown
+              over the front of the stage above the sightline to the band.
    yaw turns each station toward the middle of the room; the director's
    station shots look straight down each station's own +z, so a yaw is
    also its camera angle.
@@ -58,6 +60,10 @@ export const STATIONS = {
   turntable: { x:  0,  y: -1.0, z: 12.5, yaw: 0, w: 14, d: 14 },  // front-centre, low: the stage camera looks down onto the spinning record
   // a CHANDELIER hung over the belt: x/z follow the belt wall's centre, y its top (see HANG)
   ricochet: { x:   0,  y: 16,  z:  0,  yaw:  0,   w: 16, d: 16, hang: true },
+  // a flying COURT hung over the FRONT of the stage, in front of the chandelier (its deck clears
+  // the ricochet's canopy disc by z): above the audience's sightline to the strike band, so the
+  // marble is traded over the audience's heads. Hung — it takes no floor (a full room has none left)
+  volley:   { x: -24,  y: 16,  z: -4,   yaw: .45, w: 20, d: 10, hang: true },
 };
 
 /* the drum machine is not a plugin, but it stands in the same amphitheater: its slot

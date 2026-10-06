@@ -26,6 +26,7 @@ import { recSupported, startRecording } from './record.js';
 import { spatialize } from './spatial.js';
 import { mergeStatic, watchFrozen, pruneFrozen, frozenStats } from './mergestatic.js';
 import { makeEditor } from './editor/index.js';
+import { makeFollow, solveShots as solveShotsIn, resolveRoom, solidBox, roomSolids } from './shotrig.js';
 /* ============================================================
    CASCADE — melody-driven marble run, now multi-track.
    A song is one or more tracks of [note, beats-until-next-hit].
@@ -40,7 +41,7 @@ let tracks = [], LOOP_T = 0, world = null;
 let drumGroup = null;                                   // the drum machine's group (dev layout probe)
 let stageWall = new THREE.Box3();                       // the belt machines' world box this song (staging + the wide fit)
 let curBuild = null;                                    // this song's staging inputs (stage edit re-anchors from them: restage)
-let lastLayout = null, lastWide = null, lastShots = [];                                  // dev: the last room solve (__dev.layout)
+let lastLayout = null, lastWide = null, lastShots = [], devMarbles = [], lastSolve = null;                                  // dev: the last room solve (__dev.layout)
 let kitSlot = KIT_SOLO;                                 // where the drum machine stands this song (marbledrums.js)
 const FIXED_ZMAX = 30;                                  // FIXED cam: cap the pull-back. Past ~30 the FogExp2 eats
                                                         // the chrome to black; better to let a very wide field
@@ -552,8 +553,8 @@ function buildWorld(keyName){
   });
 
   // the SOLVE: floor stations + the kit (a hung station floats over everyone — not in it)
-  let tops = {};
-  const relBox = (o, ox, oz, key) => { const b = visBox(o); if (b.isEmpty()) return null; tops[key] = b.max.y;
+  let tops = {}, bots = {};
+  const relBox = (o, ox, oz, key) => { const b = visBox(o); if (b.isEmpty()) return null; tops[key] = b.max.y; bots[key] = b.min.y;
     return [b.min.x - ox, b.max.x - ox, b.min.z - oz, b.max.z - oz]; };
   const items = [];
   instLive.forEach(r => { if (r.slot.hang) return;
@@ -565,7 +566,7 @@ function buildWorld(keyName){
     const solved = layoutStations(items,
       [wallBox.min.x, wallBox.max.x, wallBox.min.z, wallBox.max.z],
       { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 }, { cx: stageView.cx, bandY: STAGE_Y - 1.5, eyeY: 20 });   // (band − 1.5: the pads rising INTO the band read too)
-    lastLayout = { items: items.map(({ key, x, z, box, top }) => ({ key, x, z, box, top })), wall: wallBox.clone(), solved };
+    lastLayout = { items: items.map(({ key, x, z, box, top }) => ({ key, x, z, box, top, y0: bots[key] })), wall: wallBox.clone(), solved, cx: stageView.cx, bandY: STAGE_Y - 1.5 };
     items.forEach(it => {
       const { x, z } = solved[it.key];
       if (it.rig){ it.rig.station.position.x = x; it.rig.station.position.z = z; it.rig.station.updateMatrixWorld(true); }
@@ -751,7 +752,7 @@ function syncDirector(S, view){
     const under = rig.slot.hang && !c.overDeck;
     const eyeY = under ? hangLow(st) - st.position.y + .6 : h + (c.up ?? 5);
     const hk = under ? 1.15 : 1;                         // (and from a step further back: the canopy stays in frame)
-    shots.push({ key: ck, color: rig.I.color, self: st,
+    shots.push({ key: ck, owner: rig.I.key, color: rig.I.color, self: st,
       aim: st.localToWorld(new THREE.Vector3(0, h + (rig.slot.hang ? 1 : 0), 0)),
       eye: st.localToWorld(new THREE.Vector3(c.x ?? 0, eyeY, (c.dist ?? 15) * hk)) });
     cues.push({ key: ck, cue: rig.cue, weight: (rig.I.directorWeight ?? 1) * dirWeight(S, rig.I.key) });
@@ -761,7 +762,7 @@ function syncDirector(S, view){
     // eye a touch right of the kit's centre + aim raised: keeps the belt wall's edge
     // rail (a bloom streak at the old angle) out of the top-left of the frame
     // (the eye rides ABOVE the kit's magnet rail: from rail height the chrome bar slices the frame)
-    shots.push({ key: 'drums', color: '#ff8a3d', self: drumGroup, aim: new THREE.Vector3(kx, 3.6, kz - 2.5), eye: new THREE.Vector3(kx + 1, 11.5, kz + 12.5) });
+    shots.push({ key: 'drums', owner: 'drums', color: '#ff8a3d', self: drumGroup, aim: new THREE.Vector3(kx, 3.6, kz - 2.5), eye: new THREE.Vector3(kx + 1, 11.5, kz + 12.5) });
     const cue = [];
     Object.entries(S.drums).forEach(([lane, hits]) => hits.map(normalizeHit).forEach(h =>
       cue.push({ t: wrapP(ROLL_T + h.beat * BEAT, P), w: h.vel * (lane === 'kick' || lane === 'crash' ? 1 : .45) })));
@@ -853,41 +854,31 @@ function syncDirector(S, view){
         portrait: { ...searchWide(stageFrame(true), PORTRAIT_DIRS, .5, .92, PORTRAIT_INSET), fov: WIDE_FOV, fitMax: 1 } }
     : { aim: new THREE.Vector3(view.cx, 4, 2), eye: new THREE.Vector3(view.cx + 4, 15, 39) };
   lastWide = wide;
-  // a narrow (portrait) frame pulls each station shot back along its own line (camera.js);
-  // fitMax caps that pull so the eye never leaves the room box
-  shots.forEach(sh => { unblockShot(sh); sh.fitMax = roomFit(sh.aim, sh.eye); delete sh.self; });
+  // every station's eye is SOLVED from its designer's preferred framing (shotsolve.js); a narrow
+  // (portrait) frame pulls each station shot back along its own line (camera.js) — fitMax caps
+  // that pull so the eye never leaves the room box, nor walks back into another machine
+  const follow = solveShots(shots);
   // the opening reveal holds through the count-in and the first two beats (songTime-based,
   // so a page idling in auto before the play tap can't spend it)
   lastShots = shots;
-  cam.syncStations(shots, wide, { auto: !soloKey, openWide: full && !soloKey, openUntil: ROLL_T + 2 * BEAT });
+  cam.syncStations(shots, wide, { auto: !soloKey, openWide: full && !soloKey, openUntil: ROLL_T + 2 * BEAT, follow, bounds: eyeRoom() });
 }
-/* A station shot must SEE its station: cast a 5×3 grid of rays from the eye through the frame's
-   middle; if another machine is hit first on more than a couple, swing the eye about the aim
-   (±20°, ±40°), then lift it — the first clear pose wins (else the least blocked). The staging
-   solve keeps footprints apart, but on a crowded floor a neighbour can still stand in the line. */
-const _ubRay = new THREE.Raycaster();
-function shotBlocked(eye, aim, self){
-  const fwd = aim.clone().sub(eye).normalize(), R = new THREE.Vector3().crossVectors(fwd, _Yup).normalize(), U = new THREE.Vector3().crossVectors(R, fwd);
-  const dist = eye.distanceTo(aim), top = o => { while (o.parent && o.parent !== world) o = o.parent; return o; };
-  let n = 0; _ubRay.camera = camera;
-  for (const sx of [-.3, -.15, 0, .15, .3]) for (const sy of [-.15, 0, .15]){
-    _ubRay.set(eye, fwd.clone().addScaledVector(R, sx).addScaledVector(U, sy).normalize()); _ubRay.far = dist * .9;
-    const h = _ubRay.intersectObject(world, true).find(i => (i.object.isMesh || i.object.isInstancedMesh) && drawn(i.object));
-    if (h && top(h.object) !== self) n++;
-  }
-  return n;
+/* SOLVED SHOT EYES (src/shotrig.js over the pure shotsolve.js): each station's hand-tuned framing
+   is only its PREFERRED eye — the solve keeps the first candidate that stays in the room, stands in
+   clear air and SEES its station past every other machine AND the room's standing geometry (the
+   real meshes, raycast); the belt's follow offsets are solved the same way, both aspect classes. */
+const eyeRoom = () => ({ x0: -ROOM.HW + 1.5, x1: ROOM.HW - 1.5, y0: ROOM.FLOOR + 1.5, y1: ROOM.CEIL - 1.5, z0: ROOM.BACK + 1.5, z1: ROOM.FRONT - 1.5 });
+const followRig = makeFollow();
+let solvedRoom = null;
+function shotCtx(){
+  const w = stageWall;
+  return { world, roomGroup: rooms.group, belts: new Set(tracks.map(t => t.stage)), stageY: STAGE_Y, room: eyeRoom(), camera, drawn,
+           wall: w.isEmpty() ? null : [w.min.x, w.max.x, w.min.y, w.max.y, w.min.z, w.max.z], follow: followRig };
 }
-function unblockShot(sh){
-  if (!sh.self || shotBlocked(sh.eye, sh.aim, sh.self) <= 2) return;
-  const off = sh.eye.clone().sub(sh.aim);
-  let best = null;
-  for (const lift of [0, 4, 8]) for (const a of [20, -20, 40, -40, 0]){
-    const e = off.clone().applyAxisAngle(_Yup, THREE.MathUtils.degToRad(a)).add(sh.aim); e.y += lift;
-    const n = shotBlocked(e, sh.aim, sh.self);
-    if (!best || n < best.n) best = { e, n };
-    if (n <= 1) break;
-  }
-  if (best) sh.eye = best.e;
+function solveShots(shots){
+  solvedRoom = rooms.key;
+  lastSolve = { ...solveShotsIn(shots, shotCtx()), follow: followRig };
+  return followRig;
 }
 /* The points the WIDE shot must hold: the belt wall (band → top housing), a hung station's
    plates + canopy, every floor station from its deck up — and the front row only from its
@@ -985,14 +976,6 @@ function fitShot(pts, dir, aspect, fill = .94, fov = camera.fov, inset = 0){
   return { aim, eye: aim.clone().addScaledVector(dir, D * Math.max(.3, k)), k };
 }
 const _Yup = new THREE.Vector3(0, 1, 0);
-function roomFit(aim, eye, pad = 1.5){
-  const d = eye.clone().sub(aim); let k = Infinity;
-  const lim = (a, v, lo, hi) => { if (v > 1e-6) k = Math.min(k, (hi - a) / v); else if (v < -1e-6) k = Math.min(k, (lo - a) / v); };
-  lim(aim.x, d.x, -ROOM.HW + pad, ROOM.HW - pad);
-  lim(aim.y, d.y, ROOM.FLOOR + pad, ROOM.CEIL - pad);
-  lim(aim.z, d.z, ROOM.BACK + pad, ROOM.FRONT - pad);
-  return Math.max(1, k);
-}
 /* song.director — optional per-station pull for THIS song ({ bowls: 2.2 }): sparse,
    sustained machines (a bowl struck once a bar) score low on hit density, so a song
    that showcases one says so in its data. Clamped; absent → 1. */
@@ -1314,11 +1297,11 @@ function animate(){
       if (started && trailTick > .022 && playRate && fade < .5 && show > .5)
         spawnTrail(rpos, rig.glow, tr.isBass);
 
-      if (!active && !hidden){ active = {r, rpos}; }                // first live one we hit is the youngest
+      if (!active && !hidden){ active = {r, rpos, show}; }                // first live one we hit is the youngest
     }
     tr.active = active;
     if (active){
-      marblePts.push({p: active.rpos.clone(), w: tr.role === 'lead' ? 1.7 : 1, role: tr.role});
+      marblePts.push({p: active.rpos.clone(), w: tr.role === 'lead' ? 1.7 : 1, role: tr.role, vis: active.show > .5});
       tr._st = {dt: active.r.curDt, next: active.r.nextDt, prog: active.r.prog};
       if (tr.role === 'lead') leadRender = active.rpos;
     } else tr._st = null;
@@ -1374,9 +1357,11 @@ function animate(){
   //  flare — run in every mode)
   const auto = cam.mode === 'auto';
   const sc = cues.length ? (auto ? stationScores() : roomCues(_cueOut)) : null;
+  devMarbles = marblePts;                               // (dev: __dev.marbles — the staging audit's frame check)
   cam.update({ dt, time: clock.elapsedTime, songTime, tracks, marblePts, leadRender, reduceMotion, started,
                stationScores: auto ? sc : null });
 
+  if (solvedRoom !== null && rooms.key !== solvedRoom){ solvedRoom = rooms.key; lastSolve = { ...resolveRoom(lastShots, shotCtx()), follow: followRig }; }   // the room changed: re-check every eye against it
   rooms.update(dt, songTime, camera, expoKick + ensFlare);         // room ambience (pure fn of songTime + the music's kick)
   // PERF: an additive glow at opacity 0 still costs a full draw call. Every machine keeps
   // dozens of flash halos parked dark between strikes (~260 in a full room), so skip them
@@ -1650,6 +1635,13 @@ if (new URLSearchParams(location.search).has('debug')){
     },
     get layout(){ return lastLayout; }, get wide(){ return lastWide; }, get merge(){ return mergeStats; }, frozen: () => frozenStats(),
     get editor(){ return editor; },                    // creation tools: .openMap() .toggleEdit() .stage.state() .stage.select(k)
+    // staging-audit handles (scripts/staging-audit.mjs): the live camera, the song's world, the live marbles
+    get three(){ return THREE; }, get camera(){ return camera; }, get world(){ return world; }, get marbles(){ return devMarbles; }, get P(){ return ROLL_T + LOOP_T; },
+    get shots(){ return lastShots.map(s => ({ key: s.key, owner: s.owner, eye: s.eye.toArray(), aim: s.aim.toArray(), pref: s.pref?.toArray(), rays: s.rays, fg: s.fg, fitMax: s.fitMax, portrait: s.portrait?.eye.toArray() })); },
+    get solve(){ const f = lastSolve?.follow; return lastSolve && { ms: lastSolve.ms, split: lastSolve.split, kept: lastSolve.kept, solids: lastSolve.solids, room: solvedRoom, follow: lastShots.length && f?.land ? { land: f.land, portrait: f.portrait, rays: f.rays } : null }; },
+    get follow(){ return followRig; }, shotCtx: () => shotCtx(),
+    roomSolids: () => roomSolids(rooms.group).map(s => s.box),   // the room's standing geometry, as the shot solve sees it
+    hung: () => instLive.filter(r => r.slot.hang).map(r => ({ key: r.I.key, box: solidBox(r.station, drawn) })),   // (solid: the merged cable/glow batches aren't bulk)
     hang: () => instLive.filter(r => r.slot.hang).map(r => ({ key: r.I.key, wallTop: +stageWall.max.y.toFixed(2), low: +hangLow(r.station).toFixed(2), y: +r.station.position.y.toFixed(2) })),
     renderInfo(n = 10){
       return new Promise(res => {

@@ -1,5 +1,6 @@
 import { noteHz } from './engine.js';
 import { GM_DRUMS } from './drumkit.js';
+import { PAN_COMP, AIR_HZ, ROOM_MIN, widthFor } from './spatial.js';
 
 /* ---------------- audio: raw Web Audio, zero dependencies ----------------
    iOS WebKit bug: a context created before the first user gesture can report
@@ -15,6 +16,8 @@ let audioReady = false;
 let ctx = null, master = null, rebuilds = 0;
 let eDL = null, eDR = null;
 let busOut = null, recDest = null;                     // recording tap (additive seam, not war logic)
+let mixOut = null, glue = null, limiter = null;        // MIX BUS (post-everything): glue → limiter → ceiling clipper
+let revIn = null, revOut = null;                       // room reverb send/return (synchronous IR)
 let noiseBuf = null;                                   // white-noise buffer for drum voices (per-context)
 let beat = .7;                                         // fed by setBeat() on every song build
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
@@ -61,12 +64,13 @@ function buildAudio(){                                 // MUST be called from a 
   const wet = ctx.createGain(); wet.gain.value = .25;
   master.connect(eDL); eDL.connect(eDR); eDR.connect(fb); fb.connect(eDL);
   eDL.connect(wet); eDR.connect(wet); wet.connect(out);
-  out.connect(ctx.destination);
-  busOut = out; recDest = null;                        // rebuilt context → old recording tap is dead
+  const bus = buildMixBus(out);                        // INSERTED: room reverb + glue + limiter (see MIX)
+  bus.connect(ctx.destination);
+  busOut = out; mixOut = bus; recDest = null;          // rebuilt context → old recording tap is dead
   noiseBuf = null;                                     // …and the old noise buffer belongs to the dead ctx
   if (isIOS){                                          // also feed a real media element
     const msd = ctx.createMediaStreamDestination();
-    out.connect(msd);
+    bus.connect(msd);                                  // (post-limiter, so it never clips either)
     audioEl.srcObject = msd.stream;
     audioEl.play().catch(()=>{});
   }
@@ -75,10 +79,10 @@ function buildAudio(){                                 // MUST be called from a 
   audioReady = true;
   // watchdog: report a zombie clock; rebuilds must happen inside a tap
   const born = performance.now();
-  const probe = setInterval(() => {
-    if (!ctx) return clearInterval(probe);
-    if (ctx.currentTime > .05){ clearInterval(probe); showState(); return; }
-    if (performance.now() - born > 900){ clearInterval(probe); showState(' · ctx dead, using samples'); }
+  const zombieWatch = setInterval(() => {
+    if (!ctx) return clearInterval(zombieWatch);
+    if (ctx.currentTime > .05){ clearInterval(zombieWatch); showState(); return; }
+    if (performance.now() - born > 900){ clearInterval(zombieWatch); showState(' · ctx dead, using samples'); }
   }, 200);
   showState();
 }
@@ -194,9 +198,9 @@ export function primeSamples(){                          // gesture-unlocks ever
   });
 }
 let lastPath = '';
-export function playNote(note, bass){
+export function playNote(note, bass, sp){            // sp = {pan, gain, shelf, room} (src/spatial.js), live path only
   if (ctx && ctx.state === 'running' && ctx.currentTime > .05){
-    pluck(note, bass); lastPath = 'webaudio'; return;
+    pluck(note, bass, sp); lastPath = 'webaudio'; return;
   }
   const a = bank[bankKey(note, bass)];
   if (a){
@@ -208,9 +212,9 @@ export function playNote(note, bass){
 
 /* Drum trigger — webaudio when the live context is awake, else the baked sample.
    vel 0..1 → amplitude on the live path; the iOS sample plays full (see §3). */
-export function playDrum(name, vel = 1){
+export function playDrum(name, vel = 1, sp){
   if (ctx && ctx.state === 'running' && ctx.currentTime > .05){
-    hitDrum(name, vel); lastPath = 'webaudio'; return;
+    hitDrum(name, vel, sp); lastPath = 'webaudio'; return;
   }
   const a = bank['drum:' + name];
   if (a){
@@ -240,14 +244,16 @@ function voiceBuffer(key){
   }
   return b;
 }
-export function playVoice(key, vel = 1, { dur = 0 } = {}){
+const voiceHz = key => { const m = /:([A-G]#?\d)$/.exec(key); try { return m ? noteHz(m[1]) : 0; } catch(e){ return 0; } };
+export function playVoice(key, vel = 1, { dur = 0, sp } = {}){
   if (ctx && ctx.state === 'running' && ctx.currentTime > .05){
     const buf = voiceBuffer(key);
     if (!buf) return;
     const t = ctx.currentTime;
     const src = ctx.createBufferSource(); src.buffer = buf;
-    const g = ctx.createGain(); g.gain.setValueAtTime(Math.max(.05, Math.min(1, vel)), t);
-    src.connect(g); g.connect(voiceSrc.get(key).wet ? master : (busOut || master));
+    const g = ctx.createGain(); g.gain.setValueAtTime(Math.max(.05, Math.min(1, vel)) * MIX.voiceTrim, t);
+    const wetV = voiceSrc.get(key).wet;                 // wet: the echo AND the room reverb send
+    src.connect(g); g.connect(place([wetV ? master : (busOut || master)], sp, wetV ? MIX.send.wet : MIX.send.voice, voiceHz(key)));
     src.start(t);
     if (dur > 0 && dur < buf.duration){                  // sustained voice: release at the note's end
       g.gain.setTargetAtTime(.0001, t + dur, .12);
@@ -263,9 +269,10 @@ export function playVoice(key, vel = 1, { dur = 0 } = {}){
   }
 }
 
-function pluck(note, bass){
+function pluck(note, bass, sp){
   if (!ctx) return;
   const f = noteHz(note), t = ctx.currentTime;
+  const dst = place([master], sp, MIX.send.belt, bass ? f * .5 : f);       // SPATIAL: pan/air/distance (+ room send), then the echo
   const dur = bass ? 2.6 : 1.6;
   const g = ctx.createGain();
   g.gain.setValueAtTime(.0001, t);
@@ -274,7 +281,7 @@ function pluck(note, bass){
   const o1 = ctx.createOscillator(); o1.type = bass ? 'sine' : 'triangle'; o1.frequency.value = f;
   const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * (bass ? 2.002 : 2.004);
   const g2 = ctx.createGain(); g2.gain.value = bass ? .3 : .3;
-  o1.connect(g); o2.connect(g2); g2.connect(g); g.connect(master);
+  o1.connect(g); o2.connect(g2); g2.connect(g); g.connect(dst);
   o1.start(t); o2.start(t); o1.stop(t+dur+.1); o2.stop(t+dur+.1);
   if (bass){                                            // sub-octave depth
     const o3 = ctx.createOscillator(); o3.type = 'sine'; o3.frequency.value = f*.5;
@@ -292,7 +299,140 @@ function pluck(note, bass){
   const kg = ctx.createGain();
   kg.gain.setValueAtTime(bass ? .03 : .05, t);
   kg.gain.exponentialRampToValueAtTime(.0001, t + .03);
-  k.connect(kg); kg.connect(master); k.start(t); k.stop(t + .05);
+  k.connect(kg); kg.connect(dst); k.start(t); k.stop(t + .05);
+}
+
+/* ---- MIX BUS + SPATIAL PLACEMENT (live path only) ----
+   Inserted AFTER the existing graph, never inside it:
+       master ─┬─────────────► out (busOut: dry drums/voices land here too)
+               └► echo ──────►  │      revIn ─► convolver ─► revOut ─┘
+                                ▼
+     out ─► trim ─► glue comp ─► limiter ─► makeup ─► ceiling clipper = mixOut ─► destination
+                                                                       ├─► iOS MediaStreamDestination
+                                                                       └─► recording tap (captureStream)
+   The LAST stage is a WaveShaper soft clipper whose curve tops out at MIX.ceiling: a
+   true per-sample, per-channel peak guarantee (the compressors aren't brickwall and add
+   their own makeup gain; the limiter does the work, the clipper only catches strays).
+   So speakers, the iOS media-element mirror and recordings all get the same mix that
+   cannot exceed the ceiling. The iOS <audio> SAMPLE path can't pan or be bussed — untouched.
+   The reverb IR is computed SYNCHRONOUSLY right here (§5 round 1 was an ASYNC IR leaving
+   the convolver silent; a buffer assigned in the same tick is there before any note).
+   LEVEL CHECKS: measure per-channel SAMPLE peaks (ScriptProcessor/worklet tap on mixOut).
+   A stereo AnalyserNode downmixes L+R and under-reads panned peaks. */
+export const MIX = {
+  voiceTrim: .5,              // plugin voices render peak-normalized (~.8) — sit them with the belt
+  busTrim: .55,               // into the glue: the full orchestra sums to ~+14 dBFS untrimmed
+  glue:  { threshold: -15, knee: 12, ratio: 2,   attack: .012, release: .22 },   // gentle, slow-ish
+  limit: { threshold: -6,  knee: 0,  ratio: 20,  attack: .001, release: .08 },   // brick-ish catch
+  makeup: 1.0,                // post-limiter level into the clipper (the comps already add makeup)
+  ceiling: .891,              // −1 dBFS: the clipper's hard top; linear below KNEE·ceiling
+  knee: .8,
+  revSecs: 2.2, revReturn: .6,                  // room reverb: tail length, return level
+  send: { belt: .3,  drum: .1, voice: .25, wet: 1 },   // reverb sends per voice family (× spatial `room`)
+};
+function ceilingCurve(top, knee){                      // odd, monotone, |y| ≤ top for every input
+  const N = 4097, c = new Float32Array(N), k = top * knee;
+  for (let i = 0; i < N; i++){
+    const x = i / (N - 1) * 2 - 1, ax = Math.abs(x);
+    const y = ax <= k ? ax : k + (top - k) * Math.tanh((ax - k) / (top - k));
+    c[i] = Math.sign(x) * y;
+  }
+  return c;
+}
+function buildMixBus(out){
+  const trim = ctx.createGain(); trim.gain.value = MIX.busTrim;
+  glue = ctx.createDynamicsCompressor();
+  limiter = ctx.createDynamicsCompressor();
+  for (const [node, k] of [[glue, MIX.glue], [limiter, MIX.limit]])
+    for (const p of ['threshold', 'knee', 'ratio', 'attack', 'release']) node[p].value = k[p];
+  const makeup = ctx.createGain(); makeup.gain.value = MIX.makeup;
+  const clip = ctx.createWaveShaper(); clip.curve = ceilingCurve(MIX.ceiling, MIX.knee); clip.oversample = 'none';
+  out.connect(trim); trim.connect(glue); glue.connect(limiter); limiter.connect(makeup); makeup.connect(clip);
+  // room reverb: send → convolver (sync IR) → return into the bus (so it's glued + recorded too)
+  revIn = ctx.createGain();
+  revOut = ctx.createGain(); revOut.gain.value = MIX.revReturn;
+  try {
+    const conv = ctx.createConvolver();
+    conv.buffer = roomIR(ctx, MIX.revSecs);             // synchronous — never an empty convolver
+    revIn.connect(conv); conv.connect(revOut); revOut.connect(out);
+  } catch(e){ revIn = null; /* no convolver → no sends at all; the dry mix is unaffected */ }
+  revProbe = null; revMax = 0;
+  return clip;
+}
+/* A small, dark room: stereo decorrelated noise, ~12 ms pre-delay, a few early
+   reflections, an exponential tail (−60 dB at `secs`) that darkens as it decays
+   (a one-pole lowpass whose cutoff falls with time). Pure arithmetic, same tick. */
+function roomIR(c, secs){
+  const sr = c.sampleRate, N = Math.max(1, (sr * secs) | 0), pre = (sr * .012) | 0;
+  const b = c.createBuffer(2, N, sr);
+  for (let ch = 0; ch < 2; ch++){
+    const d = b.getChannelData(ch);
+    let seed = 0x9e3779b9 ^ (ch * 0x85ebca6b), y = 0;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296) * 2 - 1;
+    for (let n = pre; n < N; n++){
+      const t = (n - pre) / sr;
+      const a = .55 - .4 * Math.min(1, t / secs);       // lowpass coefficient: bright → dark
+      y += a * (rnd() - y);
+      d[n] = y * Math.exp(-6.9 * t / secs);
+    }
+    [.019, .027, .041, .053].forEach((tt, i) => {        // early reflections (L/R offset)
+      const n = pre + ((tt + ch * .0037 * (i + 1)) * sr | 0);
+      if (n < N) d[n] += (.5 - .08 * i) * (i % 2 ? -1 : 1);
+    });
+  }
+  return b;
+}
+/* Per-voice placement: [air shelf] → [panner ×PAN_COMP] ─┬─ distance gain ─► each dst
+                                                          └─ send·room ─────► revIn
+   sp = {pan, gain, shelf, room} from src/spatial.js; neutral fields add no node. The
+   reverb send is tapped BEFORE the distance gain: the room's reverberant field stays
+   put while the direct sound falls off, so far voices read wetter (how ears judge
+   distance). PAN_COMP (√2) makes the mono→StereoPanner equal-power law match the old
+   mono upmix (1.0 per side at centre), so pan 0 ≡ no panner — no level step either way.
+   `hz` (the voice's fundamental, if known) narrows the pan for low voices (widthFor).
+   No StereoPannerNode (very old WebKit) → no pan, everything else still works. */
+function place(dsts, sp, send = 0, hz = 0){
+  dsts = dsts.filter(Boolean);
+  const wet = send > 0 && revIn ? send * (sp && sp.room != null ? sp.room : ROOM_MIN) : 0;
+  if (!sp && !wet && dsts.length === 1) return dsts[0];
+  let head = null, tail = null;
+  const add = n => { if (tail) tail.connect(n); else head = n; tail = n; };
+  if (sp && sp.shelf < 0){
+    const f = ctx.createBiquadFilter(); f.type = 'highshelf';
+    f.frequency.value = AIR_HZ; f.gain.value = Math.max(-24, sp.shelf); add(f);
+  }
+  const pan = sp && sp.pan ? sp.pan * widthFor(hz) : 0;   // lows sit near centre (spatial.js widthFor)
+  if (pan && ctx.createStereoPanner){
+    const p = ctx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, pan)); add(p);
+    const c = ctx.createGain(); c.gain.value = PAN_COMP; add(c);
+  }
+  if (!tail) add(ctx.createGain());                      // unity split point
+  let direct = tail;
+  if (sp && sp.gain != null && Math.abs(sp.gain - 1) > 1e-3){
+    direct = ctx.createGain(); direct.gain.value = Math.max(0, sp.gain); tail.connect(direct);
+  }
+  dsts.forEach(d => direct.connect(d));
+  if (wet){ const s = ctx.createGain(); s.gain.value = wet; tail.connect(s); s.connect(revIn); }
+  return head;
+}
+/* dev meter (window.__dev.audioProbe): compressor gain reduction + the reverb-return
+   PEAK SINCE THE LAST CALL (a running max, sampled every 30 ms once the probe is first
+   asked for) — proof the convolver actually makes sound. Dev-only; costs nothing until used. */
+let revProbe = null, revMax = 0;
+export function probe(){
+  if (!ctx || !revOut) return null;
+  if (!revProbe){
+    const an = revProbe = ctx.createAnalyser(); an.fftSize = 2048; revOut.connect(an);
+    const a = new Float32Array(an.fftSize);
+    const tick = setInterval(() => {
+      if (revProbe !== an) return clearInterval(tick);  // context rebuilt → a new probe takes over
+      an.getFloatTimeDomainData(a);
+      for (const x of a) revMax = Math.max(revMax, Math.abs(x));
+    }, 30);
+  }
+  const r = { revPeak: +revMax.toFixed(4), glueDb: +glue.reduction.toFixed(1), limDb: +limiter.reduction.toFixed(1) };
+  revMax = 0;
+  return r;
 }
 
 /* ---- PERCUSSION (live Web Audio) — noise-based voices, routed DRY to busOut so
@@ -305,9 +445,10 @@ function getNoise(){                                    // one white-noise buffe
   for (let i = 0; i < N; i++) d[i] = Math.random() * 2 - 1;
   return noiseBuf;
 }
-function hitDrum(name, vel){
+const DRUM_HZ = { kick: 60, snare: 250 };                // pan-width pitch (toms use their registry tone)
+function hitDrum(name, vel, sp){
   if (!ctx) return;
-  const dst = busOut || master;                        // dry bus (no echo); master is a safe fallback
+  const dst = place([busOut || master], sp, MIX.send.drum, DRUM_HZ[name] || GM_DRUMS[name]?.tone || 0);   // dry bus (no echo) + a touch of room; master = fallback
   const t = ctx.currentTime;
   const amp = (GM_DRUMS[name]?.gain ?? .7) * (.35 + .65 * vel);
   if (name === 'kick'){
@@ -436,10 +577,10 @@ function encodeWav(s, sr){
 
 /* --- small API for the controls/mute handler --- */
 export const isReady = () => audioReady;
-/* lazy tap on the post-echo mix for MediaRecorder; null if no live context */
+/* lazy tap on the final (post-echo, post-limiter) mix for MediaRecorder; null if no live context */
 export function captureStream(){
   if (!ctx || !busOut || ctx.state !== 'running') return null;
-  if (!recDest){ recDest = ctx.createMediaStreamDestination(); busOut.connect(recDest); }
+  if (!recDest){ recDest = ctx.createMediaStreamDestination(); (mixOut || busOut).connect(recDest); }   // post-limiter
   return recDest.stream;
 }
 export function resumeOrBuild(){ if (!ctx) buildAudio(); else ctx.resume().catch(()=>{}); }

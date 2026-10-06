@@ -20,6 +20,7 @@ import { encodeSong, decodeSong } from './share.js';
 import { parseMidi } from './midi/parse.js';
 import { convertToSong } from './midi/convert.js';
 import { recSupported, startRecording } from './record.js';
+import { spatialize } from './spatial.js';
 /* ============================================================
    CASCADE — melody-driven marble run, now multi-track.
    A song is one or more tracks of [note, beats-until-next-hit].
@@ -459,6 +460,17 @@ function planTrackCrane(tr){
   aim(tr.padObjs[0], new THREE.Vector3(0, G.y * tr.crane.Tf - DESCENT, 0), tr.arcs[0]);
 }
 
+/* SPATIAL AUDIO: where a strike sounds = where it is relative to the CAMERA at that
+   instant (src/spatial.js: pan by FRAME position, distance relative to the shot's focus,
+   farther = wetter). Audio-only — as the director cuts, the next strike follows the shot. */
+const _spv = new THREE.Vector3();
+function placeAt(worldPos){
+  camera.updateMatrixWorld();
+  _spv.copy(worldPos).applyMatrix4(camera.matrixWorldInverse);
+  const tanH = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * camera.aspect;
+  return spatialize(_spv.x, _spv.y, _spv.z, { tanH, focus: camera.position.distanceTo(cam.target) });
+}
+
 const noteEl = document.getElementById('note');
 function strike(tr, i, rig){
   const pad = tr.pads[i], po = tr.padObjs[i];
@@ -478,7 +490,7 @@ function strike(tr, i, rig){
     expoKick = 1;
   }
   if (audio.isReady() && !muted){
-    try { audio.playNote(pad.note, tr.deep); } catch(e){ /* audio must never break the run */ }
+    try { audio.playNote(pad.note, tr.deep, placeAt(padR)); } catch(e){ /* audio must never break the run */ }
   }
 }
 
@@ -494,7 +506,7 @@ function drumStrike(hit){
     expoKick = Math.max(expoKick, .8 * v);
   }
   if (audio.isReady() && !muted){
-    try { audio.playDrum(hit.lane, hit.vel ?? 1); } catch(e){ /* audio must never break the run */ }
+    try { audio.playDrum(hit.lane, hit.vel ?? 1, placeAt(c)); } catch(e){ /* audio must never break the run */ }
   }
 }
 
@@ -677,7 +689,7 @@ function instStrike(rig, hit){
   if (hit.shake) cam.addShake(hit.shake * v);
   if (audio.isReady() && !muted){
     const beat = (wrapP(songTime, ROLL_T + LOOP_T) - ROLL_T) / BEAT;   // loop-local beat (song.mix envelope)
-    try { audio.playVoice(`inst:${rig.I.key}:${hit.note}`, v * (rig.mix ? rig.mix.at(beat) : 1), { dur: hit.dur || 0 }); } catch(e){ /* audio must never break the run */ }
+    try { audio.playVoice(`inst:${rig.I.key}:${hit.note}`, v * (rig.mix ? rig.mix.at(beat) : 1), { dur: hit.dur || 0, sp: placeAt(p) }); } catch(e){ /* audio must never break the run */ }
   }
 }
 
@@ -1133,6 +1145,7 @@ if (new URLSearchParams(location.search).has('debug')){
                skims: skims.map(([t0, len]) => [B(t0), +(len / BEAT).toFixed(2)]), seamFrom: B(seamFrom) }; },
     orbitMax(d){ cam.orbit.maxDistance = d; cam.orbit.maxPolarAngle = Math.PI; },
     room(k){ return k === undefined ? rooms.key : rooms.set(k); },
+    audioProbe: () => audio.probe(),                   // mix-bus gain reduction + reverb-return peak
   };
   dbg = { update(T){
     if (!held) bar.value = Math.round(T / (ROLL_T + LOOP_T) * 1000);

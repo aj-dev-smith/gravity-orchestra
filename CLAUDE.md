@@ -260,7 +260,32 @@ both already in this ledger: iOS drum samples play full-velocity; a dense hat ru
 its own tail (one `<audio>` element per drum). The webaudio path has neither.
 
 Also: `MediaStreamDestination → <audio>.srcObject` is a parallel iOS output; the recording
-tap (`captureStream`) hangs off the post-echo mix. `navigator.wakeLock` keeps the screen on.
+tap (`captureStream`) hangs off the final mix. `navigator.wakeLock` keeps the screen on.
+
+**Spatial audio + mix bus (live path only — the war's internals are untouched, nodes were
+only INSERTED).** Every live voice takes an optional placement `sp = {pan, gain, shelf, room}`
+(`playNote(note, deep, sp)`, `playDrum(name, vel, sp)`, `playVoice(key, vel, {dur, sp})`).
+main.js's `placeAt(worldPos)` projects the strike into CAMERA space at strike time (plus the
+shot: `tanH` from fov·aspect, `focus` = eye→aim distance) and `src/spatial.js` (pure, tested)
+maps it: **pan by FRAME position** (screen x → `PAN_MAX·tanh(PAN_K·sx)`; frame edge ≈ ±.51,
+off-screen leans softly to ±`PAN_MAX` .62 — no pile-up at a cap), narrowed for low voices by
+`widthFor(hz)` (bass/kick sit near centre — lows don't localize); **distance relative to the
+shot** (`d/focus`: the framed subject is always full level/full band; past `NEAR`×focus a gentle
+rolloff floored at `MIN_GAIN`, an air high-shelf of a few dB at 7 kHz, and a rising reverb send
+`room` — farther = wetter). As the director cuts, the next strike follows the shot. Pan law:
+StereoPanner on a mono voice is equal-power (.707/side at centre), so `place()` adds ×`PAN_COMP`
+√2 — centre = the old mono upmix, panning costs no level. Graph tail: `out → busTrim → glue →
+limiter → makeup → ceiling clipper = mixOut → destination / iOS MediaStreamDestination /
+recording tap`. The LAST stage is a WaveShaper whose curve tops out at `MIX.ceiling` (.891 =
+−1 dBFS): a per-sample, per-channel guarantee (the compressors aren't brickwall and add their own
+makeup). Knobs in `MIX` (audio.js): `voiceTrim`, `busTrim`, `glue`, `limit`, `makeup`, `ceiling`/
+`knee`, `revSecs`/`revReturn`, and per-family reverb `send` (belt/drum/voice/wet). The reverb is a
+ConvolverNode with its IR computed **synchronously** in `roomIR()` (round 1 was an ASYNC IR
+leaving the convolver silent; a same-tick buffer can't be). **Level checks must use a
+per-channel SAMPLE-peak meter** (ScriptProcessor/worklet tap) — a stereo AnalyserNode downmixes
+L+R and under-reads panned peaks. `?debug` → `__dev.audioProbe()` reports glue/limiter reduction
++ the reverb-return peak since the last call. The iOS `<audio>` sample path can't pan/bus — it
+plays exactly as before (centred, un-limited).
 
 ---
 

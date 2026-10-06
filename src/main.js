@@ -8,6 +8,7 @@ import { G, UP, UPY, ROLL_T, DESCENT, solveLaunch, arcPos, arcVel, padOffset, be
 import * as audio from './audio.js';
 import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } from './juice.js';
 import { makeConveyorShop, BELT_DEPTH } from './conveyor.js';
+import { makePaternosterShop, makeToneBarParts, PT } from './paternoster.js';
 import { makeMarbleDrums } from './marbledrums.js';
 import { makeCameraRig } from './camera.js';
 import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
@@ -189,7 +190,12 @@ const padGeo  = new THREE.CylinderGeometry(.5,.56,.13,28);
 /* The visible belt machine. beltSpeed = DESCENT is the honesty hook: pads rise at
    DESCENT, slats scroll at DESCENT → slip-free, no state. reach=16 covers the ±14
    cull band for every song. Built per track in buildWorld, lives under tr.stage. */
-const shop = makeConveyorShop({ chrome, envMap, beltSpeed: DESCENT, bandY: STAGE_Y, reach: BELT_REACH, cull: PAD_CULL, floorY: ROOM.FLOOR });
+/* ?machine=paternoster — PROTOTYPE body swap: open roller chains + tone-plates instead of
+   the belt wall (src/paternoster.js). Same pads, same timing; render-time only. */
+const PATERNOSTER = new URLSearchParams(location.search).get('machine') === 'paternoster';
+const shop = PATERNOSTER
+  ? makePaternosterShop({ envMap, beltSpeed: DESCENT, bandY: STAGE_Y, floorY: ROOM.FLOOR })
+  : makeConveyorShop({ chrome, envMap, beltSpeed: DESCENT, bandY: STAGE_Y, reach: BELT_REACH, cull: PAD_CULL, floorY: ROOM.FLOOR });
 let machinesOn = true;                                  // key M toggles the whole machine for A/B
 
 /* The marble drum machine — one immortal ball per drum, dribbling on its own head,
@@ -335,6 +341,7 @@ function buildTrack(melody, zBase, role, delayBeats = 0, deep = false){
   // No rail, no landing pool: on the conveyor the marble is born dropping in
   // above pad 0 and dies plunging out the bottom (see ballPos / the ball loop).
 
+  const bar = PATERNOSTER ? makeToneBarParts({ envMap }) : null;   // tone-plate parts, per track
   // pads: normal bisects incoming & outgoing velocity
   const padObjs = pads.map((pad, i) => {
     const prev = (i-1+pads.length) % pads.length;
@@ -345,12 +352,23 @@ function buildTrack(melody, zBase, role, delayBeats = 0, deep = false){
     g.position.copy(pad.pos).y -= .12;
     g.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), n);
     g.scale.setScalar(radOf(pad.note) / PAD_R);          // same source of truth as the layout
-    const body = new THREE.Mesh(padGeo, new THREE.MeshStandardMaterial({
+    let body, rim;
+    if (bar){                                           // PATERNOSTER: a tuned steel tone-plate, glowing hue frame
+      body = new THREE.Mesh(bar.barGeo, new THREE.MeshStandardMaterial({
+        color: isBass ? 0xb4c0da : 0xe2e7f0, metalness:.7, roughness:.24, envMap, envMapIntensity:1.7}));
+      rim = new THREE.Mesh(bar.rimGeo, new THREE.MeshBasicMaterial({
+        color: new THREE.Color().setHSL(hueOf(pad.note), .8, .55),
+        transparent:true, opacity:.18, depthWrite:false}));
+      rim.position.y = .062;
+      g.add(new THREE.Mesh(bar.pinGeo, bar.brass));
+    } else {
+    body = new THREE.Mesh(padGeo, new THREE.MeshStandardMaterial({
       color: isBass ? 0x7e8db0 : 0x9aa6bd, metalness:1, roughness:.18, envMap, envMapIntensity:1.2}));
-    const rim = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
+    rim = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
       color: new THREE.Color().setHSL(hueOf(pad.note), .8, .55),
       transparent:true, opacity:.18}));
     rim.rotation.x = Math.PI/2; rim.position.y = .09;
+    }
     g.add(body, rim); stage.add(g);
     return {g, rim, body, flash:0, hue:hueOf(pad.note),
             base: g.position.clone(), n: n.clone(), qN: g.quaternion.clone(),
@@ -397,7 +415,7 @@ function buildWorld(keyName){
   // tr.origin is a real placement transform (the seed of user-placed instruments).
   // Sliding a track in x is a rigid translation; gravity is vertical, so the solved
   // physics is untouched — we add tr.origin only at render time. Common wall ⇒ z=0,y=0.
-  const GAP = 3;
+  const GAP = PATERNOSTER ? PT.GAP : 3;
   let cursor = 0;
   tracks.forEach(tr => {
     const xs = tr.padObjs.map(po => po.base.x);
@@ -668,9 +686,9 @@ function animate(){
 
   let leadRender = null;
   const marblePts = [];
-  const cullDist = Math.min(PAD_CULL, DESCENT * P * .5 - .5);  // ride to the drum; never past the half-period
+  const cullDist = Math.min(PATERNOSTER ? PT.CULL : PAD_CULL, DESCENT * P * .5 - .5);  // ride to the drum; never past the half-period
   const cullC = cullDist / DESCENT;                      // …same edge, in belt-phase units
-  const innerC = cullC * .64;                            // fully deployed within this band — strike zone never animates
+  const innerC = PATERNOSTER ? PT.INNER / DESCENT : cullC * .64;   // fully deployed within this band — strike zone never animates
                                                          // (higher = a tighter, snappier unfold nearer the edge)
   tracks.forEach(tr => {
     // ---- mortal balls: render each, strike on the youngest, recycle the dead ----
@@ -735,7 +753,7 @@ function animate(){
       po.g.visible = true;
       po.flash *= (1 - dt*4);
       const pre = (active && idx === active.r.nextIdx) ? active.r.prog*active.r.prog : 0;
-      po.rim.material.opacity = .08 + po.flash*.5 + pre*.3;
+      po.rim.material.opacity = (PATERNOSTER ? .3 : .08) + po.flash*.5 + pre*.3;   // tone-plates wear a lit hue frame
       po.rim.scale.setScalar(1 + pre*.22 + po.flash*.12);
       po.body.material.emissive.setHSL(po.hue, .7, po.flash*.32 + pre*.07);
       po.beltY = STAGE_Y - .12 + DESCENT * c;           // un-nudged belt height — the bracket spine roots here
@@ -745,13 +763,13 @@ function animate(){
       const dep = reduceMotion ? FULL_DEPLOY : deployPose(c, innerC, cullC);
       po.g.quaternion.copy(Q_FLAT).slerp(po.qN, dep.tilt);
       _qn.copy(UPY).applyQuaternion(po.g.quaternion);   // live normal (for the flipper nudge as it unfolds)
-      const z = THREE.MathUtils.lerp(BELT_DEPTH + .15, po.base.z, dep.extend);   // belt-flush → rest depth
+      const z = THREE.MathUtils.lerp(PATERNOSTER ? PT.STOW_Z : BELT_DEPTH + .15, po.base.z, dep.extend);   // belt-flush → rest depth
       po.g.position.set(po.base.x, po.beltY, z)
         .addScaledVector(_qn, padOffset(started ? c : 0, po.amp));
     });
 
     // ---- the visible machine: scroll the belt in lock-step with the rising pads ----
-    if (machinesOn) tr.machine.update(reduceMotion ? 0 : dt);
+    if (machinesOn) tr.machine.update(reduceMotion ? 0 : dt, songTime);
   });
 
   // ---- marble drums: one ball per drum, dribbling its solved arcs ----

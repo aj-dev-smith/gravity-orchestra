@@ -7,8 +7,8 @@ import { SONGS } from './songs/index.js';
 import { G, UP, UPY, ROLL_T, DESCENT, solveLaunch, arcPos, arcVel, padOffset, beltPhase, deployPose, PAD_R, padRadius, layoutPads } from './engine.js';
 import * as audio from './audio.js';
 import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } from './juice.js';
-import { makePaternosterShop, makeToneBarParts, PT } from './paternoster.js';
-import { planCrane, craneBall } from './crane.js';
+import { makePaternosterShop, makeToneBarParts, PT, BAR } from './paternoster.js';
+import { planCrane, plateField, plateEdge, plateDeploy, craneBall, segAt, hopLayout } from './crane.js';
 import { makeMarbleDrums, KIT_SOLO, KIT_ROOM, kitAnchor } from './marbledrums.js';
 import { makeCameraRig } from './camera.js';
 import { makeRoomHost } from './rooms/index.js';
@@ -298,7 +298,8 @@ function buildTrack(melody, zBase, role, delayBeats = 0, deep = false){
   // hue carries pitch class; this adds the octave hue throws away. Same note → same size.
   const radOf = padRadius(melody, role);                // world radius, layout-invariant
   // layout spaces pads apart so fast runs clear — gravity & vertical drop untouched.
-  const pads = layoutPads(melody, {zBase, isBass, delayBeats, beat: BEAT, radOf});
+  // (a gap too long for a free arc is a CRANE HOP — crane.js — so its step stops growing with dt)
+  const pads = layoutPads(melody, {zBase, isBass, delayBeats, beat: BEAT, radOf, ...hopLayout(-G.y)});
   const total = pads.reduce((s, p) => s + p.dt, 0);
   const arcs = [];
   for (let i = 0; i < pads.length; i++){
@@ -560,6 +561,11 @@ function buildWorld(keyName){
   // (FogExp2 .026 at ~50 u ≈ 18 % visible; .016 ≈ 45 %)
   scene.fog.density = instLive.length ? .016 : .026;
   rooms.suggest(S.room);                                // a song may name its room (data); a viewer's pick wins
+  // the song's weather for the room (data): storm = beats that flash lightning, sky = [[beat,
+  // 'night'|'dawn'], …] — the room reads them as pure fns of songTime (a room may ignore them)
+  rooms.cue({ storm: Array.isArray(S.storm) ? S.storm.filter(Number.isFinite) : null,
+              sky: Array.isArray(S.sky) ? S.sky.filter(c => Array.isArray(c) && Number.isFinite(c[0]) && typeof c[1] === 'string') : null,
+              rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T });
   // anchor points for the room (the Void grows a plinth + light pillar under each)
   rooms.place([
     { x: stageView.cx, z: -2.25, w: wallW + 4, d: 6, yaw: 0, y: STAGE_Y - 9.6 },   // the paternoster bays (housing bottom)
@@ -582,23 +588,33 @@ function buildWorld(keyName){
   if (started) clock.start();
 }
 
-/* PATERNOSTER: the marble is CONSERVED. Solve the voice's crane (src/crane.js) for this
-   loop period, then re-aim the two pads it touches so their tilt bisects the REAL in/out:
-   the last pad launches straight up to the magnet, pad 0 catches the vertical drop. The
-   arcs themselves are untouched; only these two pads' visual normals follow the new path. */
+/* PATERNOSTER: the marble is CONSERVED, and the MAGNET CRANE flies every gap a free arc
+   can't (src/crane.js): any gap longer than dtFree — and the loop seam — is a CRANE HOP
+   (an APEX KISS — a real arc the magnet takes at its apex and glides level — or straight up
+   to the magnet, carried, dropped onto the next pad on its beat). The plan is choreographed
+   around the voice's own tone-plates (plateField; a plate in the way stows early / unfolds
+   late — its edge is in the plan, the render reads it). Then every pad's tilt is re-aimed to
+   bisect its REAL in/out (the plan's vOut/vIn). The free arcs themselves are untouched. */
 function planTrackCrane(tr){
-  const P = ROLL_T + LOOP_T, n = tr.pads.length, L = tr.pads[n-1], F = tr.pads[0];
-  tr.crane = planCrane({ g: -G.y, P, rollT: tr.rollT, tLast: L.t, r: RIG_OPT[tr.role].r,
-    last: { x: L.pos.x, z: L.pos.z }, first: { x: F.pos.x, z: F.pos.z } });
-  const aim = (po, vin, vout, ampV) => {
-    const nn = vout.clone().normalize().sub(vin.clone().normalize()).normalize();
+  const P = ROLL_T + LOOP_T, n = tr.pads.length, g = -G.y;
+  const padT = tr.pads.map(p => tr.rollT + p.t);
+  const clear = plateField({ padT, P, plate: BAR, stowZ: PT.STOW_Z, inner: PT.INNER, cull: PT.CULL,
+    plates: tr.padObjs.map(po => ({ x: po.base.x, z: po.base.z, s: po.g.scale.x })) });
+  tr.crane = planCrane({ g, P, rollT: tr.rollT, r: RIG_OPT[tr.role].r, clear,
+    pads: tr.pads.map(p => ({ t: p.t, dt: p.dt, x: p.pos.x, z: p.pos.z })) });
+  if (tr.crane.warnings.length) console.warn(`cascade crane (${tr.role}):\n  ` + tr.crane.warnings.join('\n  '));
+  const hopOf = i => tr.crane.hopAt[i] >= 0 ? tr.crane.hops[tr.crane.hopAt[i]] : null;
+  // falling-frame velocities (the band frame minus the belt's DESCENT)
+  // (a hop's launch/arrival are the plan's own: straight up/down, or an apex kiss's ballistic in/out)
+  const vOut = i => { const h = hopOf(i); return h ? new THREE.Vector3(h.vOut.x, h.vOut.y - DESCENT, h.vOut.z) : tr.arcs[i].clone(); };
+  const vIn = i => { const k = (i - 1 + n) % n, h = hopOf(k);
+    return h ? new THREE.Vector3(h.vIn.x, h.vIn.y - DESCENT, h.vIn.z) : arcVel(tr.arcs[k], tr.pads[k].dt); };
+  tr.padObjs.forEach((po, i) => {
+    const vout = vOut(i), nn = vout.clone().normalize().sub(vIn(i).normalize()).normalize();
     if (nn.y < .2) nn.set(0, 1, 0);
     po.n.copy(nn); po.qN.setFromUnitVectors(UPY, nn); po.g.quaternion.copy(po.qN);
-    if (ampV) po.amp = THREE.MathUtils.clamp(ampV.dot(nn) * .07, .05, 1.6);
-  };
-  const up = new THREE.Vector3(0, -G.y * tr.crane.Tr - DESCENT, 0);          // falling-frame launch velocity
-  if (n > 1) aim(tr.padObjs[n-1], arcVel(tr.arcs[n-2], tr.pads[n-2].dt), up, up);
-  aim(tr.padObjs[0], new THREE.Vector3(0, G.y * tr.crane.Tf - DESCENT, 0), tr.arcs[0]);
+    po.amp = THREE.MathUtils.clamp(vout.dot(nn) * .07, .05, 1.6);
+  });
 }
 
 /* SPATIAL AUDIO: where a strike sounds = where it is relative to the CAMERA at that
@@ -659,9 +675,10 @@ function drumStrike(hit){
 let cues = [];                                          // [{key, cue:[{t,w}], weight}]
 function syncDirector(S, view){
   const shots = [], P = ROLL_T + LOOP_T;
-  cues = []; entrances = [];
+  cues = []; entrances = []; script = [];
   instLive.forEach(rig => {
-    const st = rig.station, h = rig.I.lookHeight ?? 3, c = rig.I.camera || {};
+    // a song may re-frame a station's shot for its room (song.director.shots.<key> = {x, up, dist})
+    const st = rig.station, h = rig.I.lookHeight ?? 3, c = { ...(rig.I.camera || {}), ...(S.director?.shots?.[rig.I.key] || {}) };
     const ck = rig.I.cameraKey ?? rig.I.key;            // the shot key (a station may not share a belt role's name)
     // a HUNG station is shot from just under its lowest plate, looking up into it: the air
     // between the sculpture and the belt's housing reads in profile (from above, the plates
@@ -739,6 +756,17 @@ function syncDirector(S, view){
     i = Math.max(j, i + 1);
   }
   seamFrom = lead.rollT + lead.total - .7;              // the engine's loop seam (no music, no lead marble), entered just after the last note lands
+  // SCRIPTED CUTS (song.director.at = [[beat, shot, holdBeats?], …]): the story beats a
+  // density vote can't see — a moonlit establishing shot, the soloist, the dawn bell. shot =
+  // 'stage', a station key, or a belt role ('lead'/'alto'/'bass'); unknown keys are dropped.
+  // Held for holdBeats (≥ .35 s), then the director votes again from there.
+  const known = new Set(['stage', ...shots.map(sh => sh.key), ...tracks.map(t => t.role)]);
+  for (const c of (Array.isArray(S.director?.at) ? S.director.at : []))
+    if (Array.isArray(c) && Number.isFinite(c[0]) && known.has(c[1]))
+      script.push({ t: wrapP(ROLL_T + c[0] * BEAT, P), key: c[1], hold: Math.max(.35, (Number.isFinite(c[2]) ? c[2] : 0) * BEAT) });
+  // a script owns its moment: an entrance landing within ±.6 s of a scripted cut would only
+  // flash a shot in front of it (the 0.2 s flicker), so it yields
+  if (script.length) entrances = entrances.filter(e => !script.some(c => Math.abs(wrapP(e.t - c.t + P / 2, P) - P / 2) < .6));
   // the wide STAGE shot. A full room (instrument plugins on stage): a LOW front-left
   // three-quarter view (the angle the room reads as a machine-hall, not a floor plan) —
   // bowls + drums in the foreground, the belt and the back tier behind — and the song
@@ -905,7 +933,7 @@ function roomFit(aim, eye, pad = 1.5){
 function dirWeight(S, key){ const w = S.director?.[key]; return Number.isFinite(w) ? Math.max(0, Math.min(4, w)) : 1; }
 const DIRECTOR_AHEAD = 2.2;                             // seconds of look-ahead
 const ENSEMBLE_AHEAD = .9;                              // the wide cut lands just ahead of the big downbeat
-let moments = [], skims = [], entrances = [], seamFrom = Infinity;   // filled by syncDirector (static song data)
+let moments = [], skims = [], entrances = [], script = [], seamFrom = Infinity;   // filled by syncDirector (static song data)
 let ensFlare = 0, lastNow = 0;                          // the room's exposure flare on ensemble moments
 /* Room-wide director cues, every frame: the ensemble size about to land (→ the wide
    shot), whether the lead is in/near a skim (→ stay on the belt), whether we're in the
@@ -930,6 +958,7 @@ function roomCues(out){
   }
   lastNow = now;
   out._ensemble = ens;
+  out._script = script.find(c => wrapP(now - c.t + .12, P) < c.hold + .12)?.key;   // a scripted cut (lands .12 s early)
   _forceKeys.length = 0;
   let forcedWithin = Infinity, soon = false;
   for (const e of entrances){
@@ -1050,15 +1079,19 @@ if (!reduceMotion){ clock.start(); started = true; }
    strike when idx advances. Positions are WORLD (un-lifted); the +UP marble lift
    off the pad is baked in on the arc segments. */
 function ballPos(tr, tau, birthT = 0){
-  if (tr.crane){                                        // PATERNOSTER: hang / drop / rise / ride the magnet
-    const c = craneBall(tr.crane, tau, birthT);
+  const pl = tr.crane;
+  if (pl){                                              // PATERNOSTER: hang / drop / rise / ride the magnet
+    const c = craneBall(pl, tau, birthT);
     if (c){
       const lift = STAGE_Y + UP.y - DESCENT * tau;      // contact level, minus the render lift main re-adds
-      const tail = c.mode === 'rise' || c.mode === 'docked';
-      return {pos: new THREE.Vector3(c.x, c.y + lift, c.z), vel: new THREE.Vector3(0, c.vy, 0),
-              plunge:false, idx: tail ? tr.pads.length - 1 : -1, nextIdx: tail ? -1 : 0,
-              prog: tail ? 0 : THREE.MathUtils.clamp((tau - tr.crane.rel) / tr.crane.Tf, 0, 1),
-              curDt: 9, nextDt: tail ? 9 : tr.pads[0].dt, crane: c.mode};
+      const h = pl.hops[c.hop], seamTail = h.seam && c.seg >= 0;   // the seam's rise/ride belongs to the old ball
+      const prog = c.seg >= 0 && h.mode === 'kiss' ? THREE.MathUtils.clamp((tau - h.s) / h.gap, 0, 1)   // a kiss reads as one arc
+                 : c.mode === 'rise' ? 0 : THREE.MathUtils.clamp((tau - (c.seg < 0 ? pl.rel0 : h.carryEnd)) /
+                   ((c.seg < 0 ? pl.rollT : h.land) - (c.seg < 0 ? pl.rel0 : h.carryEnd)), 0, 1);
+      return {pos: new THREE.Vector3(c.x, c.y + lift, c.z), vel: new THREE.Vector3(c.vx, c.vy, c.vz),
+              plunge:false, idx: c.seg, nextIdx: c.seg < 0 ? 0 : seamTail ? -1 : h.j,
+              prog: seamTail ? 0 : prog, curDt: c.seg < 0 || seamTail ? 9 : h.gap,
+              nextDt: seamTail ? 9 : tr.pads[c.seg < 0 ? 0 : h.j].dt, crane: c.mode, hop: c.hop};
     }
   }
   if (tau < tr.rollT){                                  // birth: free-FALL onto pad 0 under HONEST gravity
@@ -1076,9 +1109,11 @@ function ballPos(tr, tau, birthT = 0){
             plunge:false, idx:-1, nextIdx:0, prog: THREE.MathUtils.clamp(s/BIRTH_FALL, 0, 1),
             curDt:9, nextDt: tr.pads[0].dt, appear};
   }
-  let at = tau - tr.rollT, i = 0;
-  while (i < tr.pads.length && at >= tr.pads[i].dt){ at -= tr.pads[i].dt; i++; }
-  if (i >= tr.pads.length){                             // tail: ride the last arc down and out
+  // the free solved arc the ball is on: O(log n) lookup of the last struck pad
+  let i, at;
+  if (pl){ i = segAt(pl, tau); at = tau - pl.padT[i]; }
+  else { at = tau - tr.rollT; i = 0; while (i < tr.pads.length && at >= tr.pads[i].dt){ at -= tr.pads[i].dt; i++; } }
+  if (i >= tr.pads.length || (pl && i === tr.pads.length - 1 && at >= tr.pads[i].dt)){   // tail: ride the last arc down and out
     const a = tr.pads[tr.pads.length-1];
     const t2 = a.dt + (tau - (tr.rollT + a.t + a.dt));
     const lastArc = tr.arcs[tr.arcs.length-1];
@@ -1154,13 +1189,13 @@ function animate(){
           spawnBurst(rpos.clone().add(UP), rig.glow, 18, 4.5);
         }
       }
-      if (tr.crane ? tau >= P + tr.crane.rel : (tau > P + FADE_TAIL || fade >= 1)){ checkinRig(rig); tr.balls.splice(bi, 1); continue; }
+      if (tr.crane ? tau >= tr.crane.retireT : (tau > P + FADE_TAIL || fade >= 1)){ checkinRig(rig); tr.balls.splice(bi, 1); continue; }
       // PATERNOSTER hand-off: a newborn stays hidden while its predecessor still rides the magnet
       // (they share one position at the release instant, so only one marble is ever seen)
       const hidden = tr.crane && r.crane === 'hang' &&
-        tr.balls.some(b => b.birthT < ball.birthT && songTime - b.birthT < P + tr.crane.rel);
-      if (tr.crane && r.crane === 'docked' && !ball.docked){   // the CLACK: docking on the electromagnet
-        ball.docked = true;
+        tr.balls.some(b => b.birthT < ball.birthT && songTime - b.birthT < tr.crane.retireT);
+      if (tr.crane && r.crane === 'docked' && ball.dockHop !== r.hop){   // the CLACK: docking on the electromagnet
+        ball.dockHop = r.hop;
         if (!skipStrikes){
           spawnBurst(rpos.clone().add(new THREE.Vector3(0, RIG_OPT[tr.role].r, 0)), new THREE.Color(0xff7a3a), 10, 2.2);
           rig.squash = .6; rig.lamp.intensity = 6;
@@ -1209,7 +1244,8 @@ function animate(){
       // entrance/exit unfold: at the screen edges the pad lies flat & flush on the belt,
       // then telescopes out to rest depth and tips up into catch position — sequenced
       // (extend → tilt) and confined to the edges, so the strike zone stays rock-solid.
-      const dep = reduceMotion ? FULL_DEPLOY : deployPose(c, innerC, cullC);
+      // (a plate the crane needs out of the way unfolds later / stows sooner — its own edge, planned)
+      const dep = reduceMotion ? FULL_DEPLOY : (tr.crane ? plateDeploy(c, innerC, Math.min(cullC, plateEdge(tr.crane, idx, c))) : deployPose(c, innerC, cullC));
       po.g.quaternion.copy(Q_FLAT).slerp(po.qN, dep.tilt);
       _qn.copy(UPY).applyQuaternion(po.g.quaternion);   // live normal (for the flipper nudge as it unfolds)
       const z = THREE.MathUtils.lerp(PT.STOW_Z, po.base.z, dep.extend);   // belt-flush → rest depth
@@ -1248,7 +1284,7 @@ function animate(){
   cam.update({ dt, time: clock.elapsedTime, songTime, tracks, marblePts, leadRender, reduceMotion, started,
                stationScores: auto ? sc : null });
 
-  rooms.update(dt, songTime, camera, expoKick);         // room ambience (pure fn of songTime + the music's kick)
+  rooms.update(dt, songTime, camera, expoKick + ensFlare);         // room ambience (pure fn of songTime + the music's kick)
   // PERF: an additive glow at opacity 0 still costs a full draw call. Every machine keeps
   // dozens of flash halos parked dark between strikes (~260 in a full room), so skip them
   // via material.visible — no program change, and the owner's own .visible logic is untouched.
@@ -1481,6 +1517,7 @@ if (new URLSearchParams(location.search).has('debug')){
     },
     director(){ const B = t => +((t - ROLL_T) / BEAT).toFixed(2);   // the room director's static cues, in beats
       return { entrances: entrances.map(e => [e.key, B(e.t)]), wide: moments.filter(m => m.n >= 7).map(m => B(m.t)),
+               script: script.map(c => [c.key, B(c.t), +(c.hold / BEAT).toFixed(2)]),
                skims: skims.map(([t0, len]) => [B(t0), +(len / BEAT).toFixed(2)]), seamFrom: B(seamFrom) }; },
     orbitMax(d){ cam.orbit.maxDistance = d; cam.orbit.maxPolarAngle = Math.PI; },
     room(k){ return k === undefined ? rooms.key : rooms.set(k); },

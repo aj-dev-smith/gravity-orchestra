@@ -257,7 +257,10 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
         // a station's ENTRANCE (several can share a downbeat): cut on the one seen least recently
         const forced = (sc._force || []).filter(k => stations.some(st => st.key === k));
         const force = forced.includes(autoWant) ? autoWant : forced.sort((a, b) => ago(b) - ago(a))[0];
-        if (sc._skim) cut('lead');                            // the money shot: the lead's skim, no matter the hold
+        const scripted = sc._script && (sc._script === 'stage' || stations.some(st => st.key === sc._script) ||
+          (marblePts.length && tracks.some(t => t.role === sc._script)));
+        if (scripted) cut(sc._script);                        // the song's SCRIPTED story beat (song.director.script)
+        else if (sc._skim) cut('lead');                       // the money shot: the lead's skim, no matter the hold
         else if (force) cut(force);
         else if (sc._seam) cut('stage');                      // the loop seam: breathe wide, re-open on the newborn's fall
         else {

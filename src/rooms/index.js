@@ -4,6 +4,7 @@ import grid from './grid.js';
 import cathedral from './cathedral.js';
 import studio from './studio.js';
 import voidRoom from './void.js';
+import graveyard from './graveyard.js';
 /* ============================================================
    ROOM HOST — the one seam main.js talks to. A Room module is
        { key, label, build(scene, {envMap, renderer}) → {
@@ -11,7 +12,8 @@ import voidRoom from './void.js';
            fog: FogExp2, background: Color|Texture,  // atmosphere
            mood?: { ambient:[hex,int], hemi:[sky,ground,int] },   // re-tint the global fills
            place?(anchors),                          // anchor points: where things stand
-           update?(dt, songTime, camera, energy),    // pure-ish ambience; no allocation
+           update?(dt, songTime, camera, energy, cues),   // pure-ish ambience; no allocation.
+                                                     // cues = the song's weather (see cue())
            resize?(w, h, pixelRatio),                // render-target rooms (the studio mirror)
            dispose() } }
    Rooms are built LAZILY on first visit and CACHED (hidden, not destroyed), so
@@ -19,13 +21,16 @@ import voidRoom from './void.js';
    FLOOR is identical in every room (common.js — the floor contract), so a
    swap never rebuilds the song's world or restarts the timeline.
    'off' = no room: the original bare dark void + fog.
-   Choosing: ?room=<key>  >  the viewer's last pick (localStorage)  >  the song's
-   own `room` field (features-as-data; suggest())  >  'grid'. R cycles; on touch
+   Choosing: ?room=<key>  >  a pick made THIS session (R / ROOM)  >  the song's own
+   `room` field (features-as-data; suggest())  >  the viewer's remembered pick
+   (localStorage — it still opens the page and dresses songs that name no room)  >
+   'grid'. So a song staged for its room (the October pack's graveyard) opens there
+   even for a viewer who once pressed R, until they press it again. R cycles; on touch
    devices the ROOM button does the same (it sits UNDER the play veil, so it can
    never swallow the iOS priming tap — same rule as the free cam).
    ============================================================ */
 
-export const ROOMS = [grid, cathedral, studio, voidRoom];
+export const ROOMS = [grid, cathedral, studio, voidRoom, graveyard];
 export const ROOM_KEYS = [...ROOMS.map(r => r.key), 'off'];
 export { STAGE };
 
@@ -71,6 +76,7 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
   }
 
   let userPicked = false;
+  let weather = null;                                         // the current song's {storm, sky, rollT, beat, P}
   function set(k, { announce = false } = {}){
     if (announce) userPicked = true;
     const R = ROOMS.find(r => r.key === k);
@@ -105,7 +111,9 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
   const save = k => { try { localStorage.setItem(LS, k); } catch(e){} };
   const q = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('room') : null;
   const stored = load();
-  const pinned = (q && ROOM_KEYS.includes(q)) ? q : (stored && ROOM_KEYS.includes(stored)) ? stored : null;
+  const urlPick = (q && ROOM_KEYS.includes(q)) ? q : null;
+  const remembered = (stored && ROOM_KEYS.includes(stored)) ? stored : null;
+  const pinned = urlPick ?? remembered;                       // what the page opens on
 
   // ROOM button (touch path to R). z-index below the play veil (#overlay z 10) → inert until play.
   const btn = document.createElement('button');
@@ -163,9 +171,17 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
     get key(){ return key; },
     set, place, prewarm,
     cycle(){ const k = set(ROOM_KEYS[(ROOM_KEYS.indexOf(key) + 1) % ROOM_KEYS.length], { announce: true }); save(k); return k; },
-    /* a song's preferred room (song data `room` field) — only when the viewer hasn't pinned one */
-    suggest(k){ if (!pinned && !userPicked && k && ROOM_KEYS.includes(k) && k !== key) set(k); },
-    update(dt, songTime, camera, energy){ if (cur && cur.update) cur.update(dt, songTime, camera, energy); },
+    /* a song's preferred room (song data `room` field). ?room and a pick made this session
+       win; otherwise the song's room, and a song that names none returns to the viewer's
+       remembered room (or the default) — so one song's staging never leaks into the next. */
+    suggest(k){
+      if (urlPick || userPicked) return;
+      const want = (k && ROOM_KEYS.includes(k)) ? k : (remembered ?? 'grid');
+      if (want !== key) set(want);
+    },
+    /* the song's weather (data): storm beats + sky phases, for rooms that stage them */
+    cue(w){ weather = w; },
+    update(dt, songTime, camera, energy){ if (cur && cur.update) cur.update(dt, songTime, camera, energy, weather); },
     resize(w, h, pr){ for (const b of Object.values(built)) b.resize?.(w, h, pr); },
     dispose(){
       for (const b of Object.values(built)){ scene.remove(b.group); disposeTree(b.group); b.dispose?.(); }

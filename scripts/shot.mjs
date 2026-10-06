@@ -25,7 +25,7 @@ const browser = await puppeteer.launch({ executablePath: exe, headless: 'new',
   defaultViewport: { width: W, height: H } });
 const page = await browser.newPage();
 const errs = [];
-page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') errs.push(`[${m.type()}] ${m.text()}`); });
+page.on('console', m => { if (['error', 'warn', 'warning'].includes(m.type())) errs.push(`[${m.type()}] ${m.text()}`); });
 page.on('pageerror', e => errs.push(`[pageerror] ${e.message}`));
 await page.goto(A.url, { waitUntil: 'networkidle0' });
 await page.waitForFunction(() => window.__dev, { timeout: 15000 });

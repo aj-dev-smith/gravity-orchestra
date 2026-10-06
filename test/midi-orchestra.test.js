@@ -11,7 +11,7 @@ import GOLDEN from './fixtures/midi-golden-a69c84a.json';
 import { INSTRUMENTS } from '../src/instruments/index.js';
 import { eventTimes, lanesByNote } from '../src/instruments/clock.js';
 import { ROLL_T, noteNum } from '../src/engine.js';
-import { makeLanes, ballAt } from '../src/instruments/marimba/solve.js';
+import { solve as marimbaSolve, keyboard as marimbaKeyboard, malletAt as marimbaMallet } from '../src/instruments/marimba/solve.js';
 import { bellLane, bellAt } from '../src/instruments/bells/solve.js';
 import { solveLane, poseAt } from '../src/instruments/bass/solve.js';
 import { bowlGeom, bowlLane, bowlAt } from '../src/instruments/bowls/solve.js';
@@ -364,8 +364,9 @@ describe.each(Object.keys(FIXTURES))('fixture "%s"', name => {
     const P_ = song.parts;
     const ts = Array.from({ length: 160 }, (_, i) => start + i * (P + 3) / 160);
     if (P_.marimba){
-      const lanes = makeLanes(eventTimes(P_.marimba, { rollT: ROLL_T, beat }), P, start);
-      for (const l of lanes) for (const t of ts) finiteDeep(ballAt(l.L ?? l, t, l.start ?? start), `marimba ${l.note}`);
+      const ev = eventTimes(P_.marimba, { rollT: ROLL_T, beat });
+      const plan = marimbaSolve(ev, { P, start, kb: marimbaKeyboard(ev.map(e => e.note), { width: 11.2, x0: -.35 }) });
+      for (let k = 0; k < 4; k++) for (const t of ts) finiteDeep(marimbaMallet(plan, k, t), `marimba mallet ${k}`);
     }
     if (P_.bells){
       for (const [n, evs] of Object.entries(lanesByNote(eventTimes(P_.bells, { rollT: ROLL_T, beat })))){

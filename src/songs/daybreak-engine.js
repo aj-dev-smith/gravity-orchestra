@@ -321,7 +321,10 @@ const bowls = lvl([
 // MARIMBA — enters with the bass at bar 5, ostinato through the climax, a full-keyboard
 // cascade in bar 16 (its spotlight — trimmed less, so it pops), thins to quarters in the
 // breakdown and fades out under the last bars
-const cascade = ['E3', 'F3', 'G3', 'A3', 'A#3', 'C#4', 'D4', 'E4', 'F4', 'G4', 'A4', 'G4', 'E4', 'C#4', 'A3', 'E3'];
+// (it lands E3 → A3, not A3 → E3: the robot marimbist can't hop a mallet from the sharp
+// row (C#4) to the natural row between two 16ths — and A3 → the next bar's A#3 is a
+// chromatic step into the climax)
+const cascade = ['E3', 'F3', 'G3', 'A3', 'A#3', 'C#4', 'D4', 'E4', 'F4', 'G4', 'A4', 'G4', 'E4', 'C#4', 'E3', 'A3'];
 const marimba = [
   ...lvl([
     ...bars(4, 8).flatMap(([b, c]) => marimbaBar(b, c, .85)),
@@ -333,6 +336,8 @@ const marimba = [
     const [lo, mid, hi] = MARIMBA[c], v = .34 - i * .028;
     return [[b, lo, +v.toFixed(3)], [b + 1, mid, +(v * .7).toFixed(3)], [b + 2, hi, +(v * .8).toFixed(3)], [b + 3, mid, +(v * .6).toFixed(3)]];
   }),
+  // …and the last two bars: a whispered D-minor ROLL under the outro (how a marimba holds)
+  [120, MARIMBA.Dm[0], .2, 6], [120, MARIMBA.Dm[2], .18, 6],
 ];
 
 // STRING BASS — wakes with the room (a low D under the intro), enters for real at bar 5,

@@ -76,6 +76,13 @@ const LIGHT_PEAK = 9;       // strike-light intensity at full velocity
 
 const wrapP = (t, P) => ((t % P) + P) % P;
 
+/* Where the kit stands, for staging (rooms' anchor points, the director's drum shot) —
+   one source of truth so a plinth / camera never ends up under nothing if the kit moves.
+   Footprint = the riser sector + the head arc's wings, world units. */
+/* The kit's footprint for room staging (the Void grows a plinth under it): `slot` is the
+   song's KIT_SOLO / KIT_ROOM. */
+export function kitAnchor(cx, slot){ return { x: cx + slot.x, z: slot.z - .5, w: 16, d: 11, yaw: 0, y: RISER_TOP }; }
+
 export function makeMarbleDrums({ envMap, glowTex }){
   let lanes = [];                                       // [{lane, L, style, contact, head, ball, coil, ...}]
   let start = -Infinity;

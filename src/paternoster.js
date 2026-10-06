@@ -12,7 +12,7 @@ const UPY = .26;       // engine UP.y — the marble's contact level above the b
    CARRIER rod slung between the chains, so the room stays visible
    through the machine.
 
-   HONESTY (same contract as conveyor.js): the machine only draws what
+   HONESTY (the contract the original belt wall set): the machine only draws what
    the math implies. Every pad rises at DESCENT, so the chains are a
    pure function of songTime scrolling at DESCENT — slip-free with the
    carriers by construction, no state. The shafts turn at DESCENT / r of

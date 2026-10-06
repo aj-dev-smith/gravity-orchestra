@@ -4,7 +4,7 @@ import { normalizeHit } from './drumkit.js';
 
 /* ============================================================
    MARBLE DRUMS — the drum machine, rebuilt from the ground up.
-   Render subsystem, same DI'd shape as conveyor.js / camera.js.
+   Render subsystem, same DI'd shape as paternoster.js / camera.js.
 
    THE ONE IDEA: one immortal ball per drum, and it only ever
    bounces on THAT drum. The flight between two strikes is the

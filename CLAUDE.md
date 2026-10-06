@@ -44,8 +44,12 @@ on. Treat it as live.
     src/audio.js     dual-path Web Audio + iOS sample fallback (see §5). Melodic voices
                      + percussion voices. Ported VERBATIM from the single-file build.
     src/juice.js     trail / ripple / spark / dust pools, spawnBurst, glowTex
-    src/conveyor.js  the visible belt MACHINE (render subsystem): belt wall, pulleys,
-                     cowls, articulated per-pad mounts. DI'd seam, no engine reach.
+    src/paternoster.js  the visible conveyor MACHINE (render subsystem): open roller chains
+                     on toothed sprockets, tuned tone-plates on brass node cradles, sculpted
+                     housings. Replaced the solid belt WALL (conveyor.js, deleted 2026-10-05).
+    src/crane.js     pure timing for the MAGNET CRANE: the melody marble is CONSERVED — the
+                     last pad lobs it up to a magnet (v=0 at apex), a carriage carries it back
+                     over pad 0, release lands on the next downbeat. test/crane.test.js.
     src/camera.js    the camera RIG (render subsystem): director / fixed / free-fly /
                      follow modes, orbit + WASD/QE keyboard fly. "Sees the future."
     src/marbledrums.js  the MARBLE DRUM MACHINE (render subsystem): one ball per drum,
@@ -321,9 +325,11 @@ Dies Irae (deep canon echo, delay 5). bpm is the single tempo knob; everything r
 - **Bloom** (r184): EffectComposer → UnrealBloom (`.12, .3, .9`) → ACES OutputPass. The
   sprite halos (`HALO_A=.12`) predate bloom and stay as the soft wide base; emissive cores
   (`EMI=1.2`) feed the real bloom. Exposure pops 1.15 + kick on lead strikes.
-- **The visible machine** (`conveyor.js`): belt wall + pulleys + cowls + four-post
-  articulated per-pad mounts, built per track in its local bay frame (`tr.stage`). Key `M`
-  toggles it for A/B. It only draws what the conveyor math already implies (§3).
+- **The visible machine** (`paternoster.js`): two roller chains scrolling at exactly DESCENT
+  on phase-matched sprockets, pad carriers between them, tone-plates that unfold out of the
+  bottom housing and fold into the top one (visible run ≈ band ± 7). The marble is conserved by
+  the magnet crane (`crane.js`) — no more mortal plunge-and-respawn. Key `M` toggles it. It only
+  draws what the conveyor math already implies (§3).
 - **The drum kit** (`drums.js`): stationary drums + chrome spouts + a shared mortal-ball
   pool (re-derived from songTime every frame — time is the only state). Drum heads flex on
   strike; the `drumStrike` hook in main fires sparks + `audio.playDrum`.

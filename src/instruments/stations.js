@@ -28,7 +28,7 @@ export const STATIONS = {
   bells:    { x:  31,  y: 0.0, z: -4,  yaw: -.75, w: 11, d: 7 },   // far right wing
   bowls:    { x: -20,  y: -.5, z: 19,  yaw:  .95, w: 10, d: 9 },   // front-left, low
   musicbox: { x:  20,  y: -.5, z: 19,  yaw: -.95, w: 10, d: 9 },   // front-right, low
-  turntable: { x:  0,  y: -2.5, z: 19, yaw: 0,   w: 14, d: 14 },  // front-centre, LOW: the stage camera looks down onto the spinning record
+  turntable: { x:  0,  y: -1.0, z: 12.5, yaw: 0, w: 14, d: 14 },  // front-centre, low: the stage camera looks down onto the spinning record, clear of the UI
 };
 
 /* Fallback for an instrument with no named slot: park it out front, in a row. */

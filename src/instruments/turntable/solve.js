@@ -24,14 +24,26 @@
      free fall lands on the beat. The seam is always a park, and the count-in
      is the same park: the marble hangs ARMED on the magnet, the carriage
      accelerates from rest to u, and releases it exactly as in steady state.
-   · Pads are tilted to the bounce normal (bisects in/out) and ride a
-     flipper stroke along it (padOffset: 0 at contact) sized by the energy
-     a lossy bounce can't supply: Δv = vout·n − e·vin·n.
-   · RECIRCULATION: a pad only exists for its pass. It slides out flush from
-     under the rear COWL, telescopes up + tips to its normal, strikes, then
-     retracts flush and goes back under the cowl to be re-tuned (hidden).
-   · Fast runs: pads deployed together must clear. Solved like the belt —
-     by GEOMETRY (choose the smallest integer N whose rim speed separates
+   · A frictionless pad can only push along its face normal, so the normal
+     IS the push direction: n ∥ (vout − vin). The marble's speed along the
+     face is kept exactly; only the normal component changes, and a lossy
+     bounce (restitution e) is topped up by the pad MOVING at contact — a
+     flipper stroke along n whose contact speed w is exactly the moving-wall
+     solution  vout·n = e·(vin·n) + (1+e)·w  (w > 0 kicks, w < 0 gives).
+     Offset 0 at contact (the pad is exactly at the contact point).
+   · Each pad is MOUNTED like a machine part: a vertical telescoping POST on a
+     FIXED FOOT in a well in the vinyl, a KNUCKLE on top, and a short ARM along
+     the face normal. The post rises, the knuckle tips the arm to n, the arm
+     strokes along n. Nothing slides through the record (fast-run turnarounds
+     need near-vertical walls — honest frictionless physics — and the knuckle
+     keeps their feet right under them).
+   · RECIRCULATION: a pad only stands up for the end of its pass. It slides
+     out flush from under the rear BRIDGE (cowl) as an inlaid disc, rides
+     flush across the front of the record, then — in front of the audience —
+     telescopes up and tips just in time, strikes, folds flush again and
+     goes back under the bridge to be re-tuned (hidden).
+   · Fast runs: pads on the record together must clear. Solved like the belt
+     — by GEOMETRY (choose the slowest integer N whose rim speed separates
      them), never by shrinking pads.
 
    Local frame (stations.js): +x across, +y up, +z toward the audience.
@@ -39,7 +51,7 @@
    from above (a real record). 2-D strike-plane coords: s = radius along
    the strike ray, y = height.
    ============================================================ */
-import { G, noteNum, PAD_R, pitchSize, padOffset } from '../../engine.js';
+import { G, noteNum, PAD_R, pitchSize } from '../../engine.js';
 import { eventTimes, laneClock, at, wrapP, lastIndex, smooth } from '../clock.js';
 
 export const g = -G.y;
@@ -55,18 +67,24 @@ export const GEOM = {
   PAD_T: .09,       // pad disc thickness
   RM: .24,          // marble radius
   A_S: Math.PI,     // strike azimuth: the ray toward −x (hops read left↔right)
-  A_COWL: -Math.PI / 2,   // the cowl sits at the back (−z)
-  COWL_HALF: .52,   // its half-width (rad)
+  A_COWL: -Math.PI / 2,   // the bridge (cowl) sits at the back (−z)
+  COWL_HALF: .38,   // its half-width (rad)
   DT_MAX: 1.45,     // longest flown gap (s); longer gaps park on the magnet
   PAD_SCALE: .74,   // pad radius = PAD_R·PAD_SCALE·pitchSize
-  CLEAR: 1.1,       // deployed neighbours keep ≥ (ρa+ρb)·CLEAR apart
+  CLEAR: 1.1,       // neighbours on the record keep ≥ (ρa+ρb)·CLEAR apart
   RIM_MIN: 2.4,     // slowest allowed rim speed at the mid ring (u/s)
-  RIM_MAX: 10,      // fastest allowed rim speed at the outer ring (u/s)
-  DEPLOY: .75,      // rad of travel after leaving the cowl to rise + tip
-  RETRACT: .5,      // rad of travel to fold flush before the cowl
+  RIM_MAX: 16,      // fastest allowed rim speed at the outer ring (u/s; a 12" LP at 33⅓ ≈ 0.5 m/s)
+  ARM: .36,         // knuckle → face along n (the stroking arm)
+  RECOIL: .07,      // after contact the arm GIVES (−n) — the face retreats faster than gravity can
+                    // pull a grazing marble back into it on the flat skims (then settles)
+  FOOT: .42,        // the post's foot sits this far under the vinyl (in its well, below the flush knuckle)
+  RISE: .95,        // rad of travel to telescope up + tip (ends READY before the strike line)
+  READY: .55,       // rad (at least) fully up before the strike: the stroke's wind-up happens here
+  STAY: .45,        // rad (at least) fully up after the strike: the follow-through + the marble's exit
+  FOLD: .55,        // rad of travel to fold flush again (before the bridge's entry mouth)
   E: .7,            // restitution marble ↔ pad
-  KICK_K: .07,      // stroke amplitude per unit Δv
-  KICK_MAX: .45,    // stroke clamp (u)
+  STROKE_S: .16,    // stroke time (s): the pad's final swing into contact (see stroke())
+  CLEAR_IN: .04,    // rad: a pad vanishes only once it is fully under the bridge
   SPIN: 2.0,        // seconds the platter takes to spin up in the count-in
   MIN_GAP: .06,     // events closer than this (s) are merged (monophonic chain)
 };
@@ -77,8 +95,12 @@ export const Y_C = Y_S + RM;                            // marble centre at ever
 export const Y_M = Y_C + H_ARC;                         // marble centre when held on the magnet
 /** The tonearm rail along the strike ray: the carriage's travel (s, from the spindle). */
 export const RAIL = { S0: 1.0, S1: 6.4 };
-export const PRE  = 3 * Math.PI / 2 - GEOM.COWL_HALF;   // rad from leaving the cowl to the strike line
-export const POST = Math.PI / 2 - GEOM.COWL_HALF;       // rad from the strike line to the cowl
+export const PRE  = 3 * Math.PI / 2 - GEOM.COWL_HALF;   // rad from the bridge's exit mouth to the strike line
+export const POST = Math.PI / 2 - GEOM.COWL_HALF;       // rad from the strike line to its entry mouth
+/** A stroke of contact speed w (along n) has amplitude A = w·S/3 (the u³ swing, see stroke()). */
+export const strokeAmp = w => w * GEOM.STROKE_S / 3;
+/** The moving-wall bounce: the pad speed along n at contact that turns vin·n into vout·n. */
+export const wallSpeed = (vinN, voutN) => (voutN - GEOM.E * vinN) / (1 + GEOM.E);
 
 /* ---- the count-in spin-up (constant torque, C¹; full speed + score phase at t = 0) ---- */
 export const spinTime = start => (start < 0 ? Math.min(GEOM.SPIN, -start) : 0);
@@ -116,20 +138,25 @@ export function chainEvents(part, { rollT, beat, P }){
 /** Chord between two pads on rings ra, rb whose platter angles differ by dφ. */
 const chord = (ra, rb, dphi) => Math.sqrt(Math.max(0, ra * ra + rb * rb - 2 * ra * rb * Math.cos(dphi)));
 
-/** Every pair of pads that are ever deployed together, with their separation for a given ω.
-    A pad is out for δ ∈ [−PRE, POST]; two pads whose strikes are Δ apart (any loop shift)
-    coexist iff ω·|Δ| < PRE + POST. They ride the platter rigidly, so their distance is the
-    constant chord. Returns the worst clearance ratio (≥ 1 = clear). */
+/** How far past each mouth (rad) a pad's centre travels before it vanishes: far enough to be
+    FULLY under the bridge (its own angular half-width ρ/r, the worst over the record). */
+export const hideMargin = evs => GEOM.CLEAR_IN + Math.max(0, ...evs.map(e => e.rho / e.r));
+
+/** Every pair of pads that are ever on the record together (flush OR up), with their separation
+    for a given ω. A pad is out for δ ∈ [−PRE−m, POST+m]; two pads whose strikes are Δ apart (any
+    loop shift) coexist iff ω·|Δ| < PRE + POST + 2m. They ride the platter rigidly — feet fixed in
+    the vinyl — so the chord is constant: measured between the faces when up and between the feet
+    (= the flush discs), the conservative of the two. Returns the worst ratio (≥ 1 = clear). */
 export function clearance(evs, P, omega){
   let worst = Infinity, pair = null;
-  const W = PRE + POST, n = evs.length;
+  const W = PRE + POST + 2 * hideMargin(evs), n = evs.length;
   for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){
     const d0 = evs[j].s - evs[i].s;
     for (const D of [d0, d0 - P, d0 + P]){
       const dphi = omega * Math.abs(D);
       if (dphi >= W) continue;
       const need = (evs[i].rho + evs[j].rho) * GEOM.CLEAR;
-      const ratio = chord(evs[i].S[0], evs[j].S[0], dphi) / need;
+      const ratio = Math.min(chord(evs[i].S[0], evs[j].S[0], dphi), chord(evs[i].F, evs[j].F, dphi)) / need;
       if (ratio < worst){ worst = ratio; pair = [i, j]; }
     }
   }
@@ -186,21 +213,32 @@ export function buildRecord(part, { rollT, beat, P, start = -Infinity }){
     }
   }
   for (const e of evs){
-    const vo = nrm(e.vOut), vi = nrm(e.vIn);
-    e.nrm = nrm([vo[0] - vi[0], vo[1] - vi[1]]);           // the reflection normal: bisects −in and out
+    // a frictionless face only pushes along its normal: n ∥ the impulse (vout − vin), so the
+    // marble's speed ALONG the face is unchanged by construction
+    e.nrm = nrm([e.vOut[0] - e.vIn[0], e.vOut[1] - e.vIn[1]]);
     e.th = Math.atan2(e.nrm[0], e.nrm[1]);                 // its tilt off vertical, in the strike plane
     e.S = [e.C[0] - RM * e.nrm[0], e.C[1] - RM * e.nrm[1]];
+    // the mount: the knuckle sits ARM back along n from the face; the post stands under it
+    e.F = e.S[0] - Math.sin(e.th) * GEOM.ARM;                       // the foot's radius (fixed on the record)
+    e.KY = e.S[1] - Math.cos(e.th) * GEOM.ARM;                      // the knuckle's height, fully up
+    // the stroke: the pad's own contact speed supplies exactly what the lossy bounce can't
+    e.vinN = -dot(e.vIn, e.nrm); e.voutN = dot(e.vOut, e.nrm);
+    e.w = wallSpeed(e.vinN, e.voutN);
+    e.A = strokeAmp(e.w);
   }
+  R.hide = hideMargin(evs);
   Object.assign(R, chooseOmega(evs, P));              // the spin: slowest integer N that clears
-  // the stroke: what a lossy bounce can't supply, along the normal (catch-capped)
-  for (const e of evs){
-    const vin = -dot(e.vIn, e.nrm), vout = dot(e.vOut, e.nrm);
-    e.vinN = vin; e.voutN = vout;
-    let A = GEOM.KICK_K * (vout - GEOM.E * vin);
-    A = Math.max(-GEOM.KICK_MAX, Math.min(GEOM.KICK_MAX, A));
-    if (A < 0) A = Math.max(A, -.3 * vin * .1);          // a reach-up must stay slower than the ball
-    e.A = A;
-  }
+  // the deploy window (rad from the strike line), at least long enough in TIME for the wind-up
+  // and the follow-through at this ω
+  for (const e of evs) e.ready = Math.max(GEOM.READY, R.omega * (strokeWindow(e.A) + .12));
+  const wind = Math.max(...evs.map(e => e.ready));
+  R.win = {
+    ready: wind,
+    stay: Math.min(POST - .32, Math.max(GEOM.STAY, R.omega * .45)),
+  };
+  R.win.up0 = Math.min(PRE + R.hide - .05, R.win.ready + GEOM.RISE);
+  R.win.dn1 = Math.min(POST - .04, R.win.stay + GEOM.FOLD);
+  for (const e of evs) e.win = { ...R.win, ready: e.ready, up0: Math.min(R.win.up0, e.ready + GEOM.RISE) };
 
   // ---- the count-in: the first strike whose incoming gap is a park, at songTime ≥ 0 ----
   // (the platter is at score phase from t = 0; earlier strikes never happened)
@@ -329,21 +367,31 @@ function glideTo(s0, u0, tA, s1, u1, tB, t){
 }
 
 /* ---- the pads ---- */
-/** Flipper stroke along the normal at c = t − tₛ: a kick (A > 0) retracts then strokes up
-    THROUGH contact (padOffset, 0 at c = 0); a catch (A < 0) reaches up then gives. */
+/** The stroke's wind-up lead (s) for amplitude A (bigger hits telegraph longer). */
+export const strokeWindow = A => .3 + Math.abs(A) * .35 + GEOM.STROKE_S;
+
+/** Flipper stroke along the normal at c = t − tₛ (the belt's padOffset grammar, both signs):
+    wind-up eases the face back by A, then the final STROKE_S swings it −A·(1−u³) into contact —
+    offset exactly 0 at c = 0, moving at exactly w = 3A/STROKE_S (the moving-wall solve) —
+    then the recoil: the arm gives along −n (its speed jumps at the impact — that's what an impact
+    is) under a decaying follow-through wobble. A > 0 kicks (retract, strike up); A < 0 gives
+    (reach up, yield). Returns to rest by c = .6 (continuously: the tail is faded out). */
 export function stroke(c, A){
-  if (A >= 0) return padOffset(c, A);
-  const W = .3 + Math.abs(A) * .35, S = .1;
-  if (c > .6 || c < -W) return 0;
-  if (c >= 0) return A * .33 * Math.sin(c * 16) * Math.exp(-c * 8);
+  const S = GEOM.STROKE_S, W = strokeWindow(A);
+  if (c >= .6 || c < -W) return 0;
+  if (c >= 0){
+    const fade = 1 - smooth(.42, .6, c);
+    return (A * .33 * Math.sin(c * 16) * Math.exp(-c * 8) - GEOM.RECOIL * (1 - Math.exp(-c / .035)) * Math.exp(-c / .14)) * fade;
+  }
   if (c < -S){ const u = (c + W) / (W - S); return -A * u * u; }
   const u = (c + S) / S; return -A * (1 - u * u * u);
 }
 
-/** Deploy envelope at angle-from-strike δ ∈ [−PRE, POST]: {extend, tilt} ∈ [0,1], sequenced
-    (rise first, then tip — and on the way out, level first, then sink). */
-export function deployAt(delta){
-  const uIn = smooth(-PRE, -PRE + GEOM.DEPLOY, delta), uOut = smooth(POST, POST - GEOM.RETRACT, delta);
+/** Deploy envelope at angle-from-strike δ: {extend, tilt} ∈ [0,1]. Flush (0) for most of the
+    pass; over RISE it telescopes up, THEN tips (sequenced), landing fully up READY before the
+    strike line; it stays up STAY after, then levels first and sinks flush over FOLD. */
+export function deployAt(delta, win){
+  const uIn = smooth(-win.up0, -win.ready, delta), uOut = smooth(win.dn1, win.stay, delta);
   const u = Math.min(uIn, uOut);
   return { extend: smooth(0, .55, u), tilt: smooth(.45, 1, u), u };
 }
@@ -354,7 +402,7 @@ export function forActivePads(R, t, fn){
   const { evs, n, P, omega } = R;
   if (!n) return 0;
   const gt = driveTime(Math.max(t, R.start), R.Ts);
-  const lo = gt - POST / omega, hi = gt + PRE / omega;
+  const lo = gt - (POST + R.hide) / omega, hi = gt + (PRE + R.hide) / omega;
   let k = lastIndex(R.L.s, wrapP(lo, P));
   let abs = R.L.s[k] + Math.floor((lo - R.L.s[k]) / P) * P;
   if (abs + P <= lo + 1e-12) abs += P;                     // (float guard)
@@ -373,23 +421,27 @@ export function forActivePads(R, t, fn){
 }
 
 /** A pad's pose at songTime t for its pass striking at absolute `abs`:
-    { top: [x,y,z] (top-face centre, local), n: [x,y,z] (face normal), a (azimuth),
-      extend, tilt, off (stroke), live (its strike is real) }. Pure. */
+    { top: [x,y,z] (top-face centre, local), n: [x,y,z] (face normal = arm axis),
+      foot: [x,y,z] (the post's foot, fixed in the vinyl), knuckle: [x,y,z] (right above it),
+      len (knuckle → face = ARM + stroke), a (azimuth), extend, tilt, off (stroke), live }. Pure.
+    The post telescopes from flush (face level with the vinyl) up to the knuckle height, THEN
+    the knuckle tips the arm to θ; the stroke slides the face along the arm.
+    Fully up: top = Sᵢ = Cᵢ − RM·nᵢ exactly. */
 export function padPose(R, k, abs, t){
   const e = R.evs[k];
   const gt = driveTime(Math.max(t, R.start), R.Ts);
   const delta = R.omega * (gt - abs), a = GEOM.A_S + delta;
   const live = abs >= R.first - 1e-9;
-  const d = live ? deployAt(delta) : { extend: 0, tilt: 0, u: 0 };
-  // tilt: rotate from +y toward the strike normal, in the pad's radial-vertical plane; the
-  // face rides up/in by RM·(1−cos θ, sin θ) as it tips so that, fully deployed, its top-face
-  // centre is exactly Sᵢ = Cᵢ − RM·nᵢ (the marble's centre stays on the ring)
+  const d = live ? deployAt(delta, e.win) : { extend: 0, tilt: 0, u: 0 };
   const th = e.th * d.tilt;
   const ns = Math.sin(th), ny = Math.cos(th);
   const off = live ? stroke(t - abs, e.A) : 0;
+  const len = GEOM.ARM + off;
+  const ky0 = Y_PLAT - GEOM.ARM, ky = ky0 + (e.KY - ky0) * d.extend;
   const ca = Math.cos(a), sa = Math.sin(a);
-  const rs = e.r - RM * ns + ns * off, y = Y_PLAT + LIFT * d.extend + RM * (1 - ny) + ny * off;
-  return { top: [rs * ca, y, rs * sa], n: [ns * ca, ny, ns * sa], a, delta, extend: d.extend, tilt: d.tilt, off, live };
+  const rs = e.F + ns * len, y = ky + ny * len;
+  return { top: [rs * ca, y, rs * sa], n: [ns * ca, ny, ns * sa], foot: [e.F * ca, Y_PLAT - GEOM.FOOT, e.F * sa],
+           knuckle: [e.F * ca, ky, e.F * sa], len, a, delta, extend: d.extend, tilt: d.tilt, off, live };
 }
 
 /** Strike-plane (s, y) → local (x, y, z) on the strike ray. */
@@ -400,7 +452,7 @@ export const toLocal = (s, y) => [s * Math.cos(GEOM.A_S), y, s * Math.sin(GEOM.A
 export function maxActive(R){
   const { n, P, omega } = R;
   if (!n) return 0;
-  const s = R.L.s, W = (PRE + POST) / omega;
+  const s = R.L.s, W = (PRE + POST + 2 * R.hide) / omega;
   let best = 0, j = 0;
   for (let i = 0; i < n; i++){
     if (j < i) j = i;

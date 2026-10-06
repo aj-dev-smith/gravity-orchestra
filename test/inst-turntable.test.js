@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { GEOM, Y_S, Y_C, Y_M, H_ARC, PRE, POST, g, buildRecord, ballAt, carriageAt, padPose, forActivePads,
          stroke, deployAt, driveTime, driveRate, spinTime, maxActive, discDistance, clearance, toLocal,
-         chainEvents, staff, RAIL } from '../src/instruments/turntable/solve.js';
+         chainEvents, staff, RAIL, wallSpeed } from '../src/instruments/turntable/solve.js';
 import TT from '../src/instruments/turntable/index.js';
 import { noteNum } from '../src/engine.js';
 
@@ -12,7 +12,12 @@ const R = buildRecord(TT.demo.part, { rollT: ROLL_T, beat, P, start: START });
 // a stress record: a dense repeat, a chord (monophonic: keeps the top), a big leap, a lone long note
 const stressPart = [[0, 'C5'], [.5, 'C5'], [1, 'C5'], [1, 'E4'], [1.5, 'G3'], [2, 'G5', .6], [3, 'D4'], [9, 'A5', .4]];
 const RS = buildRecord(stressPart, { rollT: ROLL_T, beat, P, start: START });
-const RECS = [['demo', R], ['stress', RS]];
+// a 16th-note run on neighbouring pitches (the dense case spacing must solve by geometry)
+const sixteenths = [];
+['C5', 'D5', 'E5', 'F5', 'G5', 'F5', 'E5', 'D5'].forEach((n, i) => sixteenths.push([4 + i * .25, n, .6]));
+['A4', 'B4', 'C5', 'D5', 'C5', 'B4', 'A4', 'G4'].forEach((n, i) => sixteenths.push([8 + i * .25, n, .6]));
+const R16 = buildRecord(sixteenths.concat([[0, 'C4'], [2, 'G4'], [12, 'C5']]), { rollT: ROLL_T, beat, P, start: START });
+const RECS = [['demo', R], ['stress', RS], ['16ths', R16]];
 
 const wrapPi = a => ((a + Math.PI) % TAU + TAU) % TAU - Math.PI;
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -70,16 +75,25 @@ describe('turntable honesty — every strike', () => {
     }
   });
 
-  it('every bounce is a true reflection about its pad normal, the stroke supplying the lost energy', () => {
+  it('every bounce is a frictionless contact: the impulse is along the pad normal, face speed kept', () => {
     for (const [, Rr] of RECS) for (const e of Rr.evs){
-      const vi = Math.hypot(...e.vIn), vo = Math.hypot(...e.vOut);
-      const a = [e.vIn[0] / vi, e.vIn[1] / vi], b = [e.vOut[0] / vo, e.vOut[1] / vo];
-      // reflection of the incoming direction about n equals the outgoing direction
-      const dn = a[0] * e.nrm[0] + a[1] * e.nrm[1];
-      expect(a[0] - 2 * dn * e.nrm[0]).toBeCloseTo(b[0], 9);
-      expect(a[1] - 2 * dn * e.nrm[1]).toBeCloseTo(b[1], 9);
-      expect(e.vinN).toBeGreaterThan(0); expect(e.voutN).toBeGreaterThan(0);
-      expect(Math.abs(e.A)).toBeLessThanOrEqual(GEOM.KICK_MAX + 1e-12);
+      const dv = [e.vOut[0] - e.vIn[0], e.vOut[1] - e.vIn[1]];
+      expect(dv[0] * e.nrm[1] - dv[1] * e.nrm[0]).toBeCloseTo(0, 9);          // (vout − vin) × n = 0
+      expect(dv[0] * e.nrm[0] + dv[1] * e.nrm[1]).toBeGreaterThan(0);          // a push, not a pull
+      const tIn = e.vIn[0] * e.nrm[1] - e.vIn[1] * e.nrm[0], tOut = e.vOut[0] * e.nrm[1] - e.vOut[1] * e.nrm[0];
+      expect(tOut).toBeCloseTo(tIn, 9);                                          // speed along the face unchanged
+      expect(e.vinN).toBeGreaterThan(0); expect(e.voutN).toBeGreaterThan(0);    // arrives into the face, leaves off it
+    }
+  });
+
+  it('the stroke is the moving-wall solve: the pad\'s own contact speed supplies exactly the lost energy', () => {
+    for (const [, Rr] of RECS) for (const e of Rr.evs){
+      const h = 1e-6, w = (stroke(0, e.A) - stroke(-h, e.A)) / h;              // pad speed along n just before contact
+      expect(w).toBeCloseTo(e.w, 3);
+      // relative-velocity restitution: (vout − w) = e·(vin + w)  ⇔  vout = e·vin + (1+e)·w
+      expect(e.voutN - w).toBeCloseTo(GEOM.E * (e.vinN + w), 3);
+      expect(e.w).toBeCloseTo(wallSpeed(e.vinN, e.voutN), 12);
+      expect(-w).toBeLessThan(e.vinN);                                           // a yielding pad is slower than the ball
     }
   });
 });
@@ -121,7 +135,7 @@ describe('turntable honesty — nothing passes through anything', () => {
     let worst = Infinity, worstPlat = Infinity;
     for (let t = START; t < Rr.first + P; t += 1 / 60){
       const live = [];
-      forActivePads(Rr, t, (k, abs) => { const p = padPose(Rr, k, abs, t); if (p.extend > 0) live.push([k, p]); });
+      forActivePads(Rr, t, (k, abs) => { const p = padPose(Rr, k, abs, t); live.push([k, p]); });   // flush or up
       for (let i = 0; i < live.length; i++){
         const [k, p] = live[i], e = Rr.evs[k];
         if (p.tilt > 0) worstPlat = Math.min(worstPlat, p.top[1] - e.rho * Math.sqrt(1 - p.n[1] * p.n[1]) - GEOM.PAD_T * p.n[1] - GEOM.Y_PLAT);
@@ -183,14 +197,14 @@ describe('turntable continuity — strikes, the loop seam and the count-in', () 
     let worst = 0;
     for (const [k, abs] of strikes(Rr, START - P, Rr.first + 1.2 * P).concat(Rr.evs.map((e, k) => [k, e.s - P]))){
       let prev = null;
-      for (let t = abs - PRE / Rr.omega - .2; t < abs + POST / Rr.omega + .2; t += dt){
+      for (let t = abs - (PRE + Rr.hide) / Rr.omega - .2; t < abs + (POST + Rr.hide) / Rr.omega + .2; t += dt){
         if (t < START) continue;
         const p = padPose(Rr, k, abs, t);
         if (prev) worst = Math.max(worst, len(sub(p.top, prev.top)));
         prev = p;
       }
     }
-    expect(worst / dt).toBeLessThan(GEOM.R_PLAT * 2.5 + 15);   // rim speed + the stroke: finite, no pops
+    expect(worst / dt).toBeLessThan(GEOM.R_PLAT * Rr.omega + 25);   // rim speed + the stroke: finite, no pops
   });
 
   it('ARMED: the marble hangs on the magnet until the release, nothing strikes before start', () => {
@@ -218,18 +232,54 @@ describe('turntable continuity — strikes, the loop seam and the count-in', () 
       expect((driveTime(t + h, Ts) - driveTime(t - h, Ts)) / (2 * h)).toBeCloseTo(driveRate(t, Ts), 4);
   });
 
-  it('a pad is only out between the cowl and the strike line: flush at both edges of its pass', () => {
-    expect(deployAt(-PRE).extend).toBe(0); expect(deployAt(POST).extend).toBe(0);
-    expect(deployAt(0).extend).toBe(1); expect(deployAt(0).tilt).toBe(1);
-    // fully deployed through the whole wind-up (≤ .3 + .35·KICK_MAX s) and the marble's departure
+  it('a pad stands up only just in time: flush at the bridge, flush for most of its pass, fully up through its stroke', () => {
     for (const [, Rr] of RECS){
-      expect(deployAt(-(.3 + .35 * GEOM.KICK_MAX) * Rr.omega).tilt).toBe(1);
-      expect(deployAt(.4 * Rr.omega).tilt).toBe(1);
+      const W = Rr.win;
+      expect(deployAt(-PRE - Rr.hide, W).extend).toBe(0); expect(deployAt(POST + Rr.hide, W).extend).toBe(0);
+      expect(deployAt(0, W).extend).toBe(1); expect(deployAt(0, W).tilt).toBe(1);
+      // up for less than half the visible pass (the rest it rides flush, an inlay in the vinyl)
+      expect(W.up0 / PRE).toBeLessThan(Rr === R16 ? .6 : .45);
+      expect(W.dn1).toBeLessThan(POST);                                          // flush again before the bridge
+      // fully up through every wind-up + the follow-through + the marble's exit
+      for (const e of Rr.evs){
+        const lead = .3 + Math.abs(e.A) * .35 + GEOM.STROKE_S;
+        expect(deployAt(-lead * Rr.omega, e.win).tilt).toBe(1); expect(deployAt(-lead * Rr.omega, e.win).extend).toBe(1);
+        expect(deployAt(-PRE - Rr.hide, e.win).extend).toBe(0);
+      }
+      expect(deployAt(.3 * Rr.omega, W).tilt).toBe(1);
+      // the rise happens in FRONT of the audience (+z half of the record), not behind the bridge
+      expect(Math.sin(GEOM.A_S - W.up0)).toBeGreaterThan(0);
     }
+  });
+
+  for (const [name, Rr] of RECS) it(`${name}: every pad stands on a FIXED foot in the vinyl (nothing slides through the record)`, () => {
+    let worst = 0;
+    for (const [k, abs] of strikes(Rr, Rr.first, Rr.first + P)){
+      const e = Rr.evs[k];
+      for (let t = abs - (PRE + Rr.hide) / Rr.omega; t < abs + (POST + Rr.hide) / Rr.omega; t += 1 / 120){
+        const p = padPose(Rr, k, abs, t);
+        // foot in the platter's own frame: radius F at the pad's own azimuth, under the vinyl
+        expect(Math.hypot(p.foot[0], p.foot[2])).toBeCloseTo(e.F, 9);
+        expect(p.foot[1]).toBeCloseTo(GEOM.Y_PLAT - GEOM.FOOT, 12);
+        // the post is vertical (knuckle right above the foot), the face sits on the arm: top = knuckle + n·len
+        worst = Math.max(worst, Math.abs(p.knuckle[0] - p.foot[0]), Math.abs(p.knuckle[2] - p.foot[2]));
+        for (let a = 0; a < 3; a++) worst = Math.max(worst, Math.abs(p.top[a] - p.knuckle[a] - p.n[a] * p.len));
+        expect(p.knuckle[1]).toBeGreaterThanOrEqual(p.foot[1] - 1e-9);
+        expect(p.len).toBeGreaterThan(.05);                                      // the arm never collapses
+      }
+    }
+    expect(worst).toBeLessThan(1e-9);
   });
 });
 
 describe('turntable edge cases', () => {
+  it('a 16th-note run on neighbouring pitches is spaced by GEOMETRY (a faster spin), never by shrinking', () => {
+    expect(R16.ok).toBe(true);
+    expect(clearance(R16.evs, P, R16.omega).worst).toBeGreaterThanOrEqual(1);
+    expect(R16.omega * GEOM.R_OUT).toBeLessThanOrEqual(GEOM.RIM_MAX + 1e-9);
+    for (const e of R16.evs) expect(e.rho).toBe(R16.staff.padR(e.note));
+  });
+
   it('a one-note part loops on the magnet forever; an empty part is inert', () => {
     const R1 = buildRecord([[3, 'A4']], { rollT: ROLL_T, beat, P, start: START });
     expect(R1.n).toBe(1); expect(R1.evs[0].park).toBe(true);

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { makeEdge, ring, smooth, laneClock, at } from '../clock.js';
 import { noteHz, noteNum } from '../../engine.js';
-import { GEOM, Y_M, buildRecord, ballAt, carriageAt, padPose, forActivePads,
+import { GEOM, Y_M, POST, buildRecord, ballAt, carriageAt, padPose, forActivePads,
          maxActive, driveTime, driveRate, spinTime, toLocal } from './solve.js';
 import { vibesVoice, TREM_HZ } from './voice.js';
 
@@ -13,8 +13,10 @@ import { vibesVoice, TREM_HZ } from './voice.js';
    dots on the rim are its honest speed readout under the amber lamp).
    Concentric glowing GROOVES are a pitch staff (low = outer). Every note
    of the part rides the record on its groove as a pad that slides out
-   flush from under the rear COWL, rises and tips to its bounce normal,
-   and reaches the STRIKE LINE under the tonearm gantry exactly on its
+   flush from under the rear BRIDGE (an inlay in the vinyl, tinted its
+   groove colour), and — just in time, in front of the audience — its
+   post telescopes up, its knuckle tips it to the bounce normal, and it
+   reaches the STRIKE LINE under the tonearm's magnet exactly on its
    beat. One immortal marble hops radially from groove to groove — long
    notes are tall arcs, runs are flat skims — and parks on the tonearm's
    ELECTROMAGNET through long rests (and the count-in), carried at the
@@ -40,11 +42,17 @@ const Y_CAR = Y_COIL + COIL_H + .34;              // carriage body centre
 const Y_RAIL = Y_CAR + .32;                       // rail centre
 const S_PIVOT = 6.62;                             // the gantry mast, out past the platter on the strike ray
 const S_TIP = .7;                                 // rail tip (over the label)
-const MAST_TOP = Y_RAIL + 2.4;
+const ZR = 1.05;                                  // the rail runs this far BEHIND the strike line (−z): from
+                                                  // above and from the front, every contact stays in view;
+                                                  // the carriage reaches over with an L-arm to the magnet
+const MAST_TOP = Y_RAIL + 1.25;
+const TAU = Math.PI * 2;
+const STROBE_N = [180, 183, 216, 222];            // dots per row; row 0 is the one tuned to stand still
 const A_LAMP = .36 * Math.PI, A_IDLER = .25 * Math.PI;   // front-right
 const R_IDLER = .42, R_PULLEY = .16, Y_DRIVE = Y_PLAT - .33;   // the drive rim (sub-platter) under the record
 const R_SUB = R_PLAT - .3, TOP_T = .24;           // sub-platter radius; the record platter's own thickness
 const Z_TREM = 5.25, Y_TREM = -.32;               // the tremolo shaft under the plinth's front edge
+const PAD_BASE = new THREE.Color(0x9aa4ba);
 const hueOf = rank => (((.08 - .53 * rank) % 1) + 1) % 1;   // amber (low) → magenta → violet → ice (high)
 
 const voice = id => vibesVoice(id);
@@ -77,7 +85,7 @@ export default {
         alu:    new THREE.MeshStandardMaterial({ color: 0x9aa3b4, metalness: 1, roughness: .32, envMap }),
         tube:   new THREE.MeshStandardMaterial({ color: 0xffcc66, metalness: 1, roughness: .16, envMap, envMapIntensity: 2.0,
                   side: THREE.DoubleSide }),
-        padTop: new THREE.MeshStandardMaterial({ color: 0xc9d3e6, metalness: 1, roughness: .16, envMap, envMapIntensity: 1.4 }),
+        padTop: new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: .55, roughness: .24, envMap, envMapIntensity: 1.2 }),
         neon:   new THREE.MeshBasicMaterial({ color: SIG.clone().multiplyScalar(1.5) }),
         coil:   new THREE.MeshStandardMaterial({ color: 0x5a3a1c, metalness: .8, roughness: .35, envMap,
                   emissive: new THREE.Color(0xff7a2a), emissiveIntensity: .1 }),
@@ -87,6 +95,7 @@ export default {
         tubeGlow: new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }),
         disc:   new THREE.MeshStandardMaterial({ color: 0xb8c0d0, metalness: 1, roughness: .3, envMap, side: THREE.DoubleSide }),
         well:   new THREE.MeshBasicMaterial({ color: 0x020203 }),
+        slot:   new THREE.MeshBasicMaterial({ color: SIG.clone().multiplyScalar(.4) }),   // the bridge's re-tuning window
       };
 
       // ---- the plinth + pedestal (stands on the room floor) ----
@@ -107,12 +116,9 @@ export default {
       const vinyl = new THREE.Mesh(new THREE.CircleGeometry(R_PLAT, 128).rotateX(-Math.PI / 2),
         new THREE.MeshStandardMaterial({ map: vinylTexture(), color: 0xffffff, metalness: .35, roughness: .32, envMap, envMapIntensity: .9 }));
       vinyl.position.y = -.003; platter.add(vinyl);
-      // strobe band: rows of dots on the rim's upper edge
-      const strobeTex = strobeTexture();
-      const band = new THREE.Mesh(new THREE.CylinderGeometry(R_PLAT + .012, R_PLAT + .012, .2, 180, 1, true),
-        new THREE.MeshStandardMaterial({ map: strobeTex, metalness: .9, roughness: .25, envMap,
-          emissiveMap: strobeTex, emissive: new THREE.Color(0xffd0b0), emissiveIntensity: .08 }));
-      band.position.y = -.11; platter.add(band);
+      // strobe band: four rows of dots on the rim, seen under the mains-flicker lamp (see strobePhase)
+      const strobe = makeStrobe();
+      strobe.mesh.position.y = Y_PLAT - .11; group.add(strobe.mesh);
       // the drive rim (the rubber idler runs on it)
       const driveRim = new THREE.Mesh(new THREE.CylinderGeometry(R_SUB, R_SUB, PLAT_T - TOP_T, 96, 1), M.alu);
       driveRim.position.y = Y_DRIVE - Y_PLAT; platter.add(driveRim);
@@ -140,24 +146,34 @@ export default {
       const laneOf = Object.fromEntries(ringLanes.map(l => [l.note, l]));
       R.evs.forEach(e => { e.lane = laneOf[e.note]; e.col = e.lane.col; });
 
-      // ---- the PADS: a pool of pucks, re-derived every frame ----
-      const padGeo = new THREE.CylinderGeometry(1, 1, GEOM.PAD_T, 36).translate(0, -GEOM.PAD_T / 2, 0);
+      // ---- the PADS: a pool, re-derived every frame. Each = a disc (tinted its groove colour) with a
+      //      glowing rim, on an ARM from a brass KNUCKLE atop a vertical telescoping POST whose foot sits
+      //      in a fixed well (pocket) in the vinyl: flush, the disc IS the pocket's lid ----
+      const padGeo = new THREE.CylinderGeometry(1, 1, GEOM.PAD_T, 40).translate(0, -GEOM.PAD_T / 2, 0);
       const pads = new THREE.InstancedMesh(padGeo, M.padTop, POOL);
-      const rims = new THREE.InstancedMesh(new THREE.TorusGeometry(1, .075, 6, 40).rotateX(Math.PI / 2), M.rim, POOL);
-      const posts = new THREE.InstancedMesh(new THREE.CylinderGeometry(.055, .055, 1, 10).translate(0, .5, 0), M.chrome, POOL);
-      const sleeves = new THREE.InstancedMesh(new THREE.CylinderGeometry(.11, .13, 1, 12).translate(0, .5, 0), M.dark, POOL);
-      const wells = new THREE.InstancedMesh(new THREE.RingGeometry(1.0, 1.12, 36).rotateX(-Math.PI / 2), M.well, POOL);
-      for (const im of [pads, rims, posts, sleeves, wells]){ im.count = 0; im.frustumCulled = false; group.add(im); }
-      rims.setColorAt(0, new THREE.Color());
+      const rims = new THREE.InstancedMesh(new THREE.TorusGeometry(1, .06, 6, 40).rotateX(Math.PI / 2), M.rim, POOL);
+      const posts = new THREE.InstancedMesh(new THREE.CylinderGeometry(.062, .062, 1, 12).translate(0, .5, 0), M.chrome, POOL);
+      const arms = new THREE.InstancedMesh(new THREE.CylinderGeometry(.042, .042, 1, 10).translate(0, .5, 0), M.chrome, POOL);
+      const knuckles = new THREE.InstancedMesh(new THREE.SphereGeometry(.095, 14, 10), M.brass, POOL);
+      const collars = new THREE.InstancedMesh(new THREE.CylinderGeometry(.13, .16, .07, 16).translate(0, .035, 0), M.dark, POOL);
+      const wells = new THREE.InstancedMesh(new THREE.CircleGeometry(1.04, 40).rotateX(-Math.PI / 2), M.well, POOL);
+      const IMS = [pads, rims, posts, arms, knuckles, collars, wells];
+      for (const im of IMS){ im.count = 0; im.frustumCulled = false; group.add(im); }
+      rims.setColorAt(0, new THREE.Color()); pads.setColorAt(0, new THREE.Color());
 
       // ---- the TONEARM GANTRY: mast on the plinth, a rail out over the strike line, a stay ----
       buildGantry(group, M);
       const carriage = new THREE.Group(); group.add(carriage);
-      const car = new THREE.Mesh(new THREE.BoxGeometry(.8, .34, .62), M.alu); car.position.y = Y_CAR; carriage.add(car);
+      const car = new THREE.Mesh(new THREE.BoxGeometry(.8, .34, .62), M.alu); car.position.set(0, Y_CAR, -ZR); carriage.add(car);
       for (const sx of [-1, 1]) for (const sz of [-1, 1]){
         const w = new THREE.Mesh(new THREE.CylinderGeometry(.09, .09, .08, 12).rotateX(Math.PI / 2), M.dark);
-        w.position.set(sx * .26, Y_RAIL - .14, sz * .19); carriage.add(w);
+        w.position.set(sx * .26, Y_RAIL - .14, -ZR + sz * .19); carriage.add(w);
       }
+      // the L-arm: out of the carriage's front face, over to the strike line, then down to the coil
+      const reach = new THREE.Mesh(new THREE.BoxGeometry(.16, .16, ZR + .08), M.alu);
+      reach.position.set(0, Y_CAR - .02, -ZR / 2 + .04); carriage.add(reach);
+      const elbow = new THREE.Mesh(new THREE.SphereGeometry(.11, 12, 8), M.brass);
+      elbow.position.set(0, Y_CAR - .02, 0); carriage.add(elbow);
       const rod = new THREE.Mesh(new THREE.CylinderGeometry(.05, .05, Y_CAR - (Y_COIL + COIL_H), 10), M.chrome);
       rod.position.y = (Y_CAR + Y_COIL + COIL_H) / 2; carriage.add(rod);
       const coil = new THREE.Mesh(new THREE.CylinderGeometry(COIL_R, COIL_R, COIL_H, 24), M.coil);
@@ -172,13 +188,19 @@ export default {
       const cable = new THREE.Mesh(new THREE.BoxGeometry(1, .06, .08), M.rubber);
       group.add(cable);
 
-      // ---- the rear COWL (the bridge pads go under to be re-tuned) ----
+      // ---- the rear BRIDGE (pads ride under it flush, to be re-tuned) ----
       buildCowl(group, M);
       // the STRIKE LINE: a fixed hairline of light on the record under the rail (pads cross it on the beat)
       const laser = new THREE.Mesh(new THREE.PlaneGeometry(R_PLAT - R_LABEL - .2, .035).rotateX(-Math.PI / 2),
         new THREE.MeshBasicMaterial({ color: SIG.clone().multiplyScalar(.9), transparent: true, opacity: .55,
           blending: THREE.AdditiveBlending, depthWrite: false }));
       laser.position.set(-(R_PLAT + R_LABEL + .2) / 2, Y_PLAT + .012, 0); laser.renderOrder = 2; group.add(laser);
+      // the LANDING LANE: a fixed arc of light on the record just before the strike line, re-sized to
+      // the NEXT note's groove — the record carries that note's pad down the lit lane into the beat
+      const LANE = .85, laneMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true,
+        blending: THREE.AdditiveBlending, depthWrite: false });
+      const lane = new THREE.Mesh(new THREE.RingGeometry(1 - .012, 1 + .012, 48, 1, -Math.PI, LANE).rotateX(-Math.PI / 2), laneMat);
+      lane.position.y = Y_PLAT + .01; lane.renderOrder = 2; group.add(lane);
 
       // ---- the drive: motor pulley → rubber idler → platter rim; strobe lamp ----
       const idler = new THREE.Group(), pulley = new THREE.Group();
@@ -219,8 +241,11 @@ export default {
       halo.col.setXYZ(2 + TRAIL_N, 1, .55, .2);                       // magnet
       halo.col.setXYZ(NPT - 1, SIG.r, SIG.g * .7, SIG.b * .5);        // strobe lamp
 
-      S = { R, P, start, Ts, POOL, platter, pads, rims, posts, sleeves, wells, ringLanes, carriage, cable, coil: M.coil,
-            marble, marbleMat: M.marble, halo, NPT, idler, pulley, res, bandMat: band.material,
+      // the bridge's re-tuning window pulses as each pad passes its centre line (a lane clock of
+      // those crossings: every strike's pad crosses POST + COWL_HALF of travel later)
+      const tuneLag = (POST + GEOM.COWL_HALF) / R.omega;
+      S = { lane, laneMat, R, P, start, Ts, POOL, platter, pads, rims, posts, arms, knuckles, collars, wells, IMS, ringLanes, carriage, cable, coil: M.coil,
+            marble, marbleMat: M.marble, halo, NPT, idler, pulley, res, strobe, slotMat: M.slot, tuneLag,
             lampLens: lampLens.position.clone(), edge: makeEdge(EDGE_W),
             m4: new THREE.Matrix4(), q: new THREE.Quaternion(), qi: new THREE.Quaternion(), v: new THREE.Vector3(),
             sc: new THREE.Vector3(), up: new THREE.Vector3(0, 1, 0), nv: new THREE.Vector3(), c: new THREE.Color() };
@@ -249,12 +274,12 @@ export default {
         S.nv.set(b.vs * Math.cos(GEOM.A_S), b.vy, b.vs * Math.sin(GEOM.A_S)).divideScalar(sp);
         S.marble.quaternion.setFromUnitVectors(S.up, S.nv);
       }
-      const st = Math.min(.22, sp * .018) - sq;
+      const st = Math.min(.12, sp * .014) - sq;         // capped: the long drop stays a marble, not a teardrop
       S.marble.scale.set(1 - st * .5, 1 + st, 1 - st * .5);
       const ev = b.i >= 0 ? R.evs[b.i] : null;
       const since = b.i >= 0 ? b.since : Infinity;
       const vel = ev ? ev.vel : 0;
-      S.marbleMat.emissiveIntensity = 1.1 + 2.2 * vel * ring(since, 7);
+      S.marbleMat.emissiveIntensity = Math.min(1.6, 1.05 + .55 * vel * ring(since, 7));   // no white-out at contact
 
       // ---- strike edge: fire once, at the contact ----
       if (started && ev && S.edge.check(b.abs, since, skipStrikes) && onStrike){
@@ -268,7 +293,7 @@ export default {
       const car = carriageAt(R, t);
       S.carriage.position.set(-car.s, 0, 0);
       const cl = 6.62 - car.s;
-      S.cable.position.set(-(car.s + 6.62) / 2, Y_RAIL + .16, .2); S.cable.scale.set(Math.max(.01, cl), 1, 1);
+      S.cable.position.set(-(car.s + 6.62) / 2, Y_RAIL + .16, -ZR + .2); S.cable.scale.set(Math.max(.01, cl), 1, 1);
       let on = .1;
       if (b.mode === 'held') on = .9;
       else if (b.mode === 'hold'){ const docked = b.since - ev.tUp; on = .8 + 2.5 * Math.exp(-docked * 9); }
@@ -278,7 +303,7 @@ export default {
       // ---- the grooves: each flashes when its note sounds ----
       for (const l of S.ringLanes){
         const cc = at(l.L, t, R.first), f = cc.armed ? 0 : ring(cc.since, 2.2);
-        l.mat.color.copy(l.col).multiplyScalar(.15 + 2.2 * f);
+        l.mat.color.copy(l.col).multiplyScalar(.16 + 1.25 * f);
       }
 
       // ---- the pads ----
@@ -292,43 +317,61 @@ export default {
         const e = R.evs[k], p = padPose(R, k, abs, t);
         nv.set(p.n[0], p.n[1], p.n[2]);
         q.setFromUnitVectors(S.up, nv);
-        v.set(p.top[0], p.top[1] + .006, p.top[2]);
+        v.set(p.top[0], p.top[1] + .014, p.top[2]);   // (render lift: a flush disc sits over the groove lines)
         S.pads.setMatrixAt(j, m4.compose(v, q, sc.set(e.rho, 1, e.rho)));
         v.addScaledVector(nv, .004);
         S.rims.setMatrixAt(j, m4.compose(v, q, sc.set(e.rho, e.rho, e.rho)));
-        // the post: straight down from the disc's underside into its sleeve in the platter
-        const ux = p.top[0] - nv.x * GEOM.PAD_T, uy = p.top[1] - nv.y * GEOM.PAD_T, uz = p.top[2] - nv.z * GEOM.PAD_T;
-        const y0 = Y_PLAT - .3, h = Math.max(.001, uy - y0);
-        S.posts.setMatrixAt(j, m4.compose(v.set(ux, y0, uz), qi, sc.set(1, h, 1)));
-        S.sleeves.setMatrixAt(j, m4.compose(v.set(ux, y0, uz), qi, sc.set(1, .3 + .1 * p.extend, 1)));
-        const ca = Math.cos(p.a), sa = Math.sin(p.a);
-        S.wells.setMatrixAt(j, m4.compose(v.set(e.r * ca, Y_PLAT + .002, e.r * sa), qi, sc.set(e.rho, 1, e.rho)));
+        // the mount: post (foot → knuckle, vertical), knuckle, arm (knuckle → disc underside, along n)
+        const [fx, fy, fz] = p.foot, [kx, ky, kz] = p.knuckle;
+        S.posts.setMatrixAt(j, m4.compose(v.set(fx, fy, fz), qi, sc.set(1, Math.max(.001, ky - fy), 1)));
+        S.knuckles.setMatrixAt(j, m4.compose(v.set(kx, ky, kz), qi, sc.set(1, 1, 1)));
+        S.arms.setMatrixAt(j, m4.compose(v.set(kx, ky, kz), q, sc.set(1, Math.max(.001, p.len - GEOM.PAD_T), 1)));
+        const ca = Math.cos(p.a), sa = Math.sin(p.a), up = smooth(0, .08, p.extend);
+        S.collars.setMatrixAt(j, m4.compose(v.set(fx, Y_PLAT - .07 + .07 * up, fz), qi, sc.set(1, 1, 1)));
+        S.wells.setMatrixAt(j, m4.compose(v.set(e.F * ca, Y_PLAT + .002, e.F * sa), qi, sc.set(e.rho, 1, e.rho)));
+        // the disc: its groove's colour (an inlay while flush), brightening as it becomes the target
+        const isNext = k === nextK && Math.abs(abs - nextAbs) < 1e-6;
+        const hot = (isNext ? prog * prog : 0) + (p.live && t >= abs ? e.vel * ring(t - abs, 4) : 0);
+        S.pads.setColorAt(j, c.copy(PAD_BASE).lerp(e.col, .62).multiplyScalar(.55 + .25 * p.extend + .9 * hot));
         // rim glow: dim while it travels, warming with the anticipation (prog²) when it's next,
-        // a flash at its strike that fades as it leaves
-        let gl = .2 + .3 * p.tilt;
-        if (k === nextK && Math.abs(abs - nextAbs) < 1e-6) gl += 2.6 * prog * prog;
-        if (p.live && t >= abs) gl += 3.2 * e.vel * ring(t - abs, 3.5);
-        gl *= .2 + .8 * p.extend;
+        // the contact flash at its strike (on the PAD, not the marble) fading as it leaves
+        let gl = .3 + .35 * p.tilt;
+        if (isNext) gl += 2.2 * prog * prog;
+        if (p.live && t >= abs) gl += 2.8 * e.vel * ring(t - abs, 3.5);
+        gl *= .45 + .55 * p.extend;
         S.rims.setColorAt(j, c.copy(e.col).multiplyScalar(gl));
         j++;
       });
-      for (const im of [S.pads, S.rims, S.posts, S.sleeves, S.wells]){ im.count = j; im.instanceMatrix.needsUpdate = true; }
-      if (S.rims.instanceColor) S.rims.instanceColor.needsUpdate = true;
+      for (const im of S.IMS){ im.count = j; im.instanceMatrix.needsUpdate = true; }
+      {
+        const ne = R.evs[nextK];
+        S.lane.scale.set(ne.r, 1, ne.r);
+        S.laneMat.color.copy(ne.col).multiplyScalar(1.1 * prog * prog);
+      }
+      S.rims.instanceColor.needsUpdate = true; S.pads.instanceColor.needsUpdate = true;
+
+      // ---- the bridge's re-tuning window: a pulse as each pad passes under its centre ----
+      {
+        const cc = at(R.L, gt - S.tuneLag, -Infinity), f = gt - S.tuneLag < R.first ? 0 : ring(cc.since, 4);
+        S.slotMat.color.copy(SIG).multiplyScalar(.35 + 2.2 * f);
+      }
 
       // ---- resonator tubes light with their notes ----
+      const trem = S.res.shaft.rotation.x;
       S.res.lanes.forEach((rl, i) => {
         const l = rl.lane, cc = at(l.L, t, R.first), f = cc.armed ? 0 : ring(cc.since, 1.3);
-        S.res.glow.setColorAt(i, c.copy(l.col).multiplyScalar(.15 + 2.4 * f));
+        const disc = .78 + .22 * Math.cos(2 * trem);           // the butterfly disc opening/closing the mouth
+        S.res.glow.setColorAt(i, c.copy(l.col).multiplyScalar((.12 + 1.6 * f) * disc));
       });
       if (S.res.glow.instanceColor) S.res.glow.instanceColor.needsUpdate = true;
 
-      // ---- the strobe band glows under the lamp once the motor runs ----
-      S.bandMat.emissiveIntensity = .08 + .3 * rate;
+      // ---- the strobe band: what the eye sees under the flickering lamp ----
+      S.strobe.set(t, S.Ts, R.omega);
 
       // ---- halos / trail ----
       const H = S.halo, HP = H.pos.array, HA = H.alpha.array, HS = H.size.array;
       HP[0] = bp[0]; HP[1] = bp[1]; HP[2] = bp[2];
-      HA[0] = .32 + .6 * vel * ring(since, 6); HS[0] = RM * (4.5 + 3.5 * ring(since, 6));
+      HA[0] = .3 + .22 * vel * ring(since, 6); HS[0] = RM * (4.2 - 1.6 * ring(since, 10));   // the halo TIGHTENS at contact
       const spd = Math.min(1, Math.hypot(b.vs, b.vy) / 6);
       for (let k = 0; k < TRAIL_N; k++){
         const pi = 1 + k, tk = t - (k + 1) * TRAIL_DT;
@@ -336,14 +379,14 @@ export default {
         const bk = ballAt(R, tk), pk = toLocal(bk.s, bk.y);
         HP[pi * 3] = pk[0]; HP[pi * 3 + 1] = pk[1]; HP[pi * 3 + 2] = pk[2];
         const f = 1 - (k + 1) / (TRAIL_N + 1);
-        HA[pi] = .6 * f * spd; HS[pi] = RM * 5 * (.4 + .6 * f);
+        HA[pi] = .5 * f * spd * (1 - .5 * smooth(5, 7, Math.abs(bk.vy))); HS[pi] = RM * 4 * (.4 + .6 * f);
       }
-      const cf = 1 + TRAIL_N;                                       // contact flare
+      const cf = 1 + TRAIL_N;                                       // contact flare: the GROOVE under the pad
       if (ev){
-        const cpt = toLocal(ev.S[0], ev.S[1]);
-        HP[cf * 3] = cpt[0]; HP[cf * 3 + 1] = cpt[1] + .03; HP[cf * 3 + 2] = cpt[2];
-        const fa = vel * ring(since, 12);
-        HA[cf] = fa > .01 ? Math.min(1, 1.2 * fa) : 0; HS[cf] = ev.rho * (3 + 5 * (1 - ring(since, 12)));
+        const cpt = toLocal(ev.r, Y_PLAT + .03);
+        HP[cf * 3] = cpt[0]; HP[cf * 3 + 1] = cpt[1]; HP[cf * 3 + 2] = cpt[2];
+        const fa = vel * ring(since, 9);
+        HA[cf] = fa > .01 ? Math.min(.8, .9 * fa) : 0; HS[cf] = ev.rho * (2.5 + 5 * (1 - ring(since, 9)));
         H.col.setXYZ(cf, ev.col.r * 1.4, ev.col.g * 1.4, ev.col.b * 1.4);
       } else HA[cf] = 0;
       const mh = cf + 1;                                            // magnet halo
@@ -423,32 +466,33 @@ function buildPlinth(group, M, floorY){
   }
 }
 
-/* The tonearm gantry: a mast on the plinth beyond the platter rim on the strike ray, a box rail
-   cantilevered over the strike line to the label, a stay from the mast head to the rail tip,
-   and a counterweight behind the mast (a tonearm's silhouette, and what balances the cantilever). */
+/* The tonearm gantry: a mast on the plinth beyond the platter rim, a box rail cantilevered
+   inward PARALLEL to the strike ray but ZR behind it (so it never hides a contact — the carriage's
+   L-arm reaches over to the magnet), a stay from the mast head to the rail tip, and a counterweight
+   behind the mast (a tonearm's silhouette, and what balances the cantilever). */
 function buildGantry(group, M){
-  const x = s => -s;
+  const x = s => -s, z = -ZR;
   const mastH = MAST_TOP - PL.TOP;
   const base = new THREE.Mesh(new THREE.CylinderGeometry(.55, .7, .3, 32), M.dark);
-  base.position.set(x(S_PIVOT), PL.TOP + .15, 0); group.add(base);
-  const mast = new THREE.Mesh(new THREE.CylinderGeometry(.18, .24, mastH, 20), M.chrome);
-  mast.position.set(x(S_PIVOT), PL.TOP + mastH / 2, 0); group.add(mast);
+  base.position.set(x(S_PIVOT), PL.TOP + .15, z); group.add(base);
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(.18, .26, mastH, 20), M.chrome);
+  mast.position.set(x(S_PIVOT), PL.TOP + mastH / 2, z); group.add(mast);
   const gimbal = new THREE.Mesh(new THREE.TorusGeometry(.34, .06, 8, 24), M.brass);
-  gimbal.position.set(x(S_PIVOT), Y_RAIL, 0); group.add(gimbal);
+  gimbal.position.set(x(S_PIVOT), Y_RAIL, z); group.add(gimbal);
   const s0 = S_TIP, s1 = S_PIVOT + .25, L = s1 - s0;
   const rail = new THREE.Mesh(new THREE.BoxGeometry(L, .2, .24), M.alu);
-  rail.position.set(x((s0 + s1) / 2), Y_RAIL, 0); group.add(rail);
+  rail.position.set(x((s0 + s1) / 2), Y_RAIL, z); group.add(rail);
   for (const sz of [-1, 1]){
     const lip = new THREE.Mesh(new THREE.BoxGeometry(L, .04, .05), M.chrome);
-    lip.position.set(x((s0 + s1) / 2), Y_RAIL - .12, sz * .19); group.add(lip);
+    lip.position.set(x((s0 + s1) / 2), Y_RAIL - .12, z + sz * .19); group.add(lip);
   }
   const strip = new THREE.Mesh(new THREE.BoxGeometry(L - 1.2, .025, .05), M.neon);
-  strip.position.set(x((s0 + S_PIVOT) / 2), Y_RAIL + .115, 0); group.add(strip);
+  strip.position.set(x((s0 + S_PIVOT) / 2), Y_RAIL + .115, z); group.add(strip);
   const arm = new THREE.Mesh(new THREE.CylinderGeometry(.07, .07, .7, 10).rotateZ(Math.PI / 2), M.chrome);
-  arm.position.set(x(S_PIVOT + .5), Y_RAIL, 0); group.add(arm);
+  arm.position.set(x(S_PIVOT + .5), Y_RAIL, z); group.add(arm);
   const cw = new THREE.Mesh(new THREE.CylinderGeometry(.34, .34, .36, 28).rotateZ(Math.PI / 2), M.brass);
-  cw.position.set(x(S_PIVOT + .62), Y_RAIL, 0); group.add(cw);
-  const a = new THREE.Vector3(x(S_PIVOT), MAST_TOP - .1, 0), b = new THREE.Vector3(x(S_TIP + .2), Y_RAIL + .1, 0);
+  cw.position.set(x(S_PIVOT + .62), Y_RAIL, z); group.add(cw);
+  const a = new THREE.Vector3(x(S_PIVOT), MAST_TOP - .1, z), b = new THREE.Vector3(x(S_TIP + .2), Y_RAIL + .1, z);
   const sv = b.clone().sub(a);
   const stay = new THREE.Mesh(new THREE.CylinderGeometry(.035, .035, sv.length(), 8), M.chrome);
   stay.position.copy(a).addScaledVector(sv, .5);
@@ -457,41 +501,64 @@ function buildGantry(group, M){
   const head = new THREE.Mesh(new THREE.SphereGeometry(.16, 14, 10), M.brass);
   head.position.copy(a); group.add(head);
   const endCap = new THREE.Mesh(new THREE.BoxGeometry(.16, .3, .34), M.dark);
-  endCap.position.set(x(S_TIP), Y_RAIL, 0); group.add(endCap);
+  endCap.position.set(x(S_TIP), Y_RAIL, z); group.add(endCap);
 }
 
-/* The rear cowl: a low hood over the back sector of the platter (flush pads slide under it),
-   carried on a bracket from the plinth. Amber slot lights mark its two mouths. */
+/* The rear BRIDGE: a hooded tunnel over the back sector of the record. Flush pads ride under
+   its brush curtains; inside (hidden) they're re-tuned. It stands on two legs on the plinth
+   outside the rim, joined by an outer cheek; the hood is cantilevered inward over the record
+   from them. A lit window along its crown pulses as each pad passes under (see update). */
 function buildCowl(group, M){
   const a0 = GEOM.A_COWL - GEOM.COWL_HALF, a1 = GEOM.A_COWL + GEOM.COWL_HALF;
-  const r0 = R_LABEL + .15, r1 = R_PLAT + .2, H = .3, y0 = Y_PLAT + .05;
-  // three.js cylinder theta: x = r·sin θ, z = r·cos θ  ⇒  θ = π/2 − a
-  const th0 = Math.PI / 2 - a1, thL = a1 - a0;
-  const topG = new THREE.RingGeometry(r0, r1, 48, 1, 0, thL).rotateX(-Math.PI / 2);   // vertex azimuth a = −φ, normal +y
-  const top = new THREE.Mesh(topG, M.dark);
-  top.rotation.y = -a1;                                    // a' = a + a1 → [a0, a1]
-  top.position.y = y0 + H; group.add(top);
-  const outer = new THREE.Mesh(new THREE.CylinderGeometry(r1, r1, H, 48, 1, true, th0, thL), M.lacquer);
+  const r0 = R_LABEL + .2, r1 = R_PLAT + .22, H = .5, y0 = Y_PLAT + .03;
+  const th0 = Math.PI / 2 - a1, thL = a1 - a0;            // three.js cylinder theta: x = r·sin θ, z = r·cos θ ⇒ θ = π/2 − a
+  const rm = (r0 + r1) / 2;
+  // the hood: a shallow vault — a flat roof ring plus a raised crown band
+  const roof = new THREE.Mesh(new THREE.RingGeometry(r0, r1, 48, 1, 0, thL).rotateX(-Math.PI / 2), M.lacquer);
+  roof.rotation.y = -a1; roof.position.y = y0 + H; group.add(roof);
+  const crown = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 24, 1, true, th0, thL), M.lacquer);
+  // (the crown is a low curved wall at mid-radius carrying the window)
+  crown.scale.set(rm, .14, rm); crown.position.y = y0 + H + .07; group.add(crown);
+  const crownTop = new THREE.Mesh(new THREE.RingGeometry(rm - .3, rm + .3, 32, 1, 0, thL).rotateX(-Math.PI / 2), M.dark);
+  crownTop.rotation.y = -a1; crownTop.position.y = y0 + H + .14; group.add(crownTop);
+  for (const r of [rm - .3, rm + .3]){
+    const wall = new THREE.Mesh(new THREE.CylinderGeometry(r, r, .14, 32, 1, true, th0, thL), M.alu);
+    wall.position.y = y0 + H + .07; group.add(wall);
+  }
+  // the re-tuning window: a glowing slot along the crown
+  const win = new THREE.Mesh(new THREE.RingGeometry(rm - .1, rm + .1, 32, 1, .06, thL - .12).rotateX(-Math.PI / 2), M.slot);
+  win.rotation.y = -a1; win.position.y = y0 + H + .145; group.add(win);
+  // the cheeks (curved side walls)
+  const outer = new THREE.Mesh(new THREE.CylinderGeometry(r1, r1, H, 48, 1, true, th0, thL), M.alu);
   outer.position.y = y0 + H / 2; group.add(outer);
-  const inner = new THREE.Mesh(new THREE.CylinderGeometry(r0, r0, H, 24, 1, true, th0, thL), M.lacquer);
+  const inner = new THREE.Mesh(new THREE.CylinderGeometry(r0, r0, H, 24, 1, true, th0, thL), M.alu);
   inner.position.y = y0 + H / 2; group.add(inner);
-  // a chrome lip along the hood's outer and inner edges
-  for (const [r, tr] of [[r1, .045], [r0, .035]]){
+  for (const [r, tr] of [[r1, .05], [r0, .04]]){
     const lip = new THREE.Mesh(new THREE.TorusGeometry(r, tr, 6, 48, thL).rotateX(Math.PI / 2), M.chrome);
     lip.rotation.y = -a0; lip.position.y = y0 + H; group.add(lip);
   }
-  const rm = (r0 + r1) / 2;
+  // the mouths: a lintel with an amber lip and a brush curtain down to just above the vinyl
   for (const a of [a0, a1]){
-    const lintel = new THREE.Mesh(new THREE.BoxGeometry(r1 - r0, .1, .08), M.dark);
+    const lintel = new THREE.Mesh(new THREE.BoxGeometry(r1 - r0, .1, .1), M.dark);
     lintel.position.set(rm * Math.cos(a), y0 + H - .05, rm * Math.sin(a)); lintel.rotation.y = -a; group.add(lintel);
     const slot = new THREE.Mesh(new THREE.BoxGeometry(r1 - r0, .03, .03), M.neon);
     slot.position.set(rm * Math.cos(a), y0 + H + .02, rm * Math.sin(a)); slot.rotation.y = -a; group.add(slot);
+    const brush = new THREE.Mesh(new THREE.BoxGeometry(r1 - r0 - .04, H - .1 - .012, .035), M.rubber);
+    brush.position.set(rm * Math.cos(a), Y_PLAT + .012 + (H - .1 - .012) / 2 + (y0 - Y_PLAT), rm * Math.sin(a));
+    brush.rotation.y = -a; group.add(brush);
   }
-  // bracket: a column on the plinth outside the rim, an arm over to the hood
-  const am = GEOM.A_COWL, rb = R_PLAT + .6;
-  const col = new THREE.Mesh(new THREE.BoxGeometry(1.4, y0 + H - PL.TOP + .12, .36), M.dark);
-  col.position.set(rb * Math.cos(am), (PL.TOP + y0 + H + .12) / 2, rb * Math.sin(am)); col.rotation.y = -am + Math.PI / 2;
-  group.add(col);
+  // two legs on the plinth just outside the rim, under the mouths' outer corners, tied by a beam
+  const rl = R_PLAT + .5;
+  for (const a of [a0 + .06, a1 - .06]){
+    const h = y0 + H - PL.TOP;
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(.36, h, .5), M.dark);
+    leg.position.set(rl * Math.cos(a), PL.TOP + h / 2, rl * Math.sin(a)); leg.rotation.y = -a; group.add(leg);
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(.56, .08, .7), M.chrome);
+    foot.position.set(rl * Math.cos(a), PL.TOP + .04, rl * Math.sin(a)); foot.rotation.y = -a; group.add(foot);
+    const knee = new THREE.Mesh(new THREE.BoxGeometry(rl - r1 + .3, .12, .32), M.dark);
+    const rk = (rl + r1) / 2;
+    knee.position.set(rk * Math.cos(a), y0 + H - .06, rk * Math.sin(a)); knee.rotation.y = -a; group.add(knee);
+  }
 }
 
 /* The vibraphone resonators: a rank of tuned tubes (quarter-wave: length ∝ 1/f) hung under the
@@ -503,7 +570,9 @@ function buildResonators(group, M, rings, motorPos){
   const fLo = rings.length ? noteHz(rings[0]) : 220;
   const tubes = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 20, 1, true), M.tube, n);
   const caps = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, .05, 20), M.dark, n);
-  const glow = new THREE.InstancedMesh(new THREE.CylinderGeometry(1.03, 1.03, .1, 20, 1, true), M.tubeGlow, n);
+  // the front APRON hides the rank; a tall window in front of each tube shows its length (∝ 1/f)
+  // and lights with its note, flickering with the tremolo discs behind it
+  const glow = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), M.tubeGlow, n);
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3(), s = new THREE.Vector3();
   const lanes = [];
   const rTube = Math.min(.24, Math.max(.12, sp * .38 || .24));
@@ -513,12 +582,21 @@ function buildResonators(group, M, rings, motorPos){
     const x = x0 + i * sp;
     tubes.setMatrixAt(i, m4.compose(v.set(x, yTop - L / 2, Z_TREM), q, s.set(rTube, L, rTube)));
     caps.setMatrixAt(i, m4.compose(v.set(x, yTop - L, Z_TREM), q, s.set(rTube, 1, rTube)));
-    glow.setMatrixAt(i, m4.compose(v.set(x, yTop - .3, Z_TREM), q, s.set(rTube, 1, rTube)));
+    glow.setMatrixAt(i, m4.compose(v.set(x, yTop - .15 - L * .45, Z_TREM + .47), q, s.set(rTube * 1.1, L * .86, 1)));
     glow.setColorAt(i, new THREE.Color(0x111111));
     lanes.push({ note, x, L });
   });
   if (!rings.length){ tubes.count = caps.count = glow.count = 0; }
   group.add(tubes, caps, glow);
+  const maxL = Math.max(.8, ...lanes.map(l => l.L)), aw = x1 - x0 + 1.3, ah = maxL + .55;
+  const apron = new THREE.Mesh(new THREE.BoxGeometry(aw, ah, .08), M.lacquer);
+  apron.position.set((x0 + x1) / 2, -.02 - ah / 2, Z_TREM + .42); group.add(apron);
+  const apTrim = new THREE.Mesh(new THREE.BoxGeometry(aw, .03, .03), M.neon);
+  apTrim.position.set((x0 + x1) / 2, -.02 - ah, Z_TREM + .47); group.add(apTrim);
+  for (const sx of [-1, 1]){
+    const cheek = new THREE.Mesh(new THREE.BoxGeometry(.08, ah, .9), M.lacquer);
+    cheek.position.set((x0 + x1) / 2 + sx * aw / 2, -.02 - ah / 2, Z_TREM + .0); group.add(cheek);
+  }
   // the shaft (rotates about x) with a disc in each tube mouth
   const shaft = new THREE.Group(); shaft.position.set(0, Y_TREM, Z_TREM); group.add(shaft);
   const sx0 = x0 - .4, sx1 = motorPos.x;
@@ -580,21 +658,47 @@ function vinylTexture(){
   return tex;
 }
 
-/* Strobe dots: four rows of silver dots on black (the real 50/60 Hz × 33/45 rows). */
-function strobeTexture(){
-  const cv = typeof document !== 'undefined' ? document.createElement('canvas') : null;
-  if (!cv) return null;
-  const W = 4096, H = 128; cv.width = W; cv.height = H;
-  const g = cv.getContext('2d');
-  g.fillStyle = '#0a0b0f'; g.fillRect(0, 0, W, H);
-  [180, 183, 216, 222].forEach((n, row) => {
-    const y = 18 + row * 30;
-    g.fillStyle = 'rgba(225,230,240,.95)';
-    for (let i = 0; i < n; i++) g.fillRect(i * W / n, y - 8, W / n * .5, 16);
+/* The STROBE band: four rows of dots on the platter rim, lit by a lamp that flickers at f_L.
+   Row 0 has exactly N₀ = 180 dots for the platter's full speed (f_L = N₀·ω/2π), so under the lamp
+   it STANDS STILL while the record visibly turns — the honest speed readout of a real deck; the
+   other rows (N ≠ N₀) creep at their alias rate. The eye sees each row's dot phase ALIASED to the
+   flashes: apparent speed = f_L·wrap(N·Θ̇/2π/f_L) dots/s (wrap to ±½). Θ̇ ramps 0 → ω in the
+   count-in (constant torque), so the alias integrates in closed form — the dots drift, swing and
+   LOCK as the motor reaches speed. A pure function of songTime. The band itself is static (it's
+   what the light shows you, not the dots' true positions). */
+function strobePhase(t, Ts, c, fL){
+  const wrapH = x => x - Math.round(x), F = X => { const d = X - Math.round(X); return d * d / 2; };
+  if (!(Ts > 0)) return fL * wrapH(c) * t;
+  if (t <= -Ts) return 0;
+  if (t < 0) return fL * Ts / c * F(c * (t + Ts) / Ts);
+  return fL * Ts / c * F(c) + fL * wrapH(c) * t;
+}
+function makeStrobe(){
+  const uPh = new THREE.Vector4();
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uPh: { value: uPh } },
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }`,
+    fragmentShader: `uniform vec4 uPh; varying vec2 vUv;
+      float row(float y0, float n, float ph){
+        float inY = 1. - smoothstep(.07, .095, abs(vUv.y - y0));
+        float x = fract(vUv.x * n + ph);
+        return inY * smoothstep(.02, .1, x) * (1. - smoothstep(.4, .48, x));
+      }
+      void main(){
+        float v = row(.82, ${STROBE_N[0]}., uPh.x) + row(.6, ${STROBE_N[1]}., uPh.y)
+                + row(.38, ${STROBE_N[2]}., uPh.z) + row(.16, ${STROBE_N[3]}., uPh.w);
+        gl_FragColor = vec4(vec3(.018, .02, .028) + vec3(.95, .78, .6) * v * .85, 1.);
+      }`,
   });
-  const tex = new THREE.CanvasTexture(cv);
-  tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
-  return tex;
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(R_PLAT + .014, R_PLAT + .014, .2, 256, 1, true), mat);
+  return {
+    mesh,
+    set(t, Ts, omega){
+      const fL = STROBE_N[0] * omega / TAU;
+      const ph = STROBE_N.map(n => { const p = strobePhase(t, Ts, n / STROBE_N[0], fL); return p - Math.floor(p); });
+      uPh.set(ph[0], ph[1], ph[2], ph[3]);
+    },
+  };
 }
 
 /* The label: deep vermilion with a cream ring and the name (also its own emissive map). */

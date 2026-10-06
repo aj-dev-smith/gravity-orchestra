@@ -37,8 +37,10 @@ export function vibesVoice(note){
   const f = noteHz(note), m = noteNum(note);
   const rank = Math.min(1, Math.max(0, (m - 53) / 36));    // F3 → 0 … F6 → 1
   const tau = 1.05 - .55 * rank;                           // fundamental decay constant (s)
-  const dur = Math.min(3.0, tau * 4.4 + .2);               // ≈ 2.9 s low … 2.4 s high (to ≈ −40 dB)
-  const N = Math.round(dur * SR), out = new Float32Array(N);
+  const dur = Math.min(3.0, tau * 4.4 + .2);               // ≈ 3.0 s low … 2.4 s high (README: keep it ≤ ~3 s)
+  const FADE = .35;                                        // the low bars are still ~−24 dB at 3 s: a long
+                                                           // raised-cosine release, not a click-short cut
+  const N = Math.round(dur * SR), out = new Float32Array(N), knock = new Float32Array(N);
   const nyq = SR * .45, TW = Math.PI * 2;
   const rnd = mulberry32(m * 9301 + 49297);
   const f4 = f * 3.98, f10 = f * 9.9;                      // tuned 4th partial, faint 10th
@@ -57,14 +59,17 @@ export function vibesVoice(note){
     if (f10 < nyq) x += .05 * Math.sin(TW * f10 * s + ph10) * Math.exp(-s / tau10);
     // the mallet: a soft knock (low-passed seeded noise, a few ms)
     lp += .18 * ((rnd() * 2 - 1) - lp);
-    x += 1.4 * lp * Math.exp(-s / .006);
-    const fade = Math.min(1, (N - i) / (SR * .08));
+    const rel = Math.min(1, (N - i) / (SR * FADE)), fade = .5 - .5 * Math.cos(Math.PI * rel);
     out[i] = x * atk * fade;
+    knock[i] = 1.4 * lp * Math.exp(-s / .006) * atk;
   }
+  // level by the BAR (its tone peak), not by the noise knock — even loudness across the range
   let peak = 0;
   for (let i = 0; i < N; i++) peak = Math.max(peak, Math.abs(out[i]));
-  const gn = .8 / (peak || 1);
-  for (let i = 0; i < N; i++) out[i] *= gn;
+  const gn = .74 / (peak || 1);
+  let tot = 0;
+  for (let i = 0; i < N; i++){ out[i] = (out[i] + knock[i] * .6) * gn; tot = Math.max(tot, Math.abs(out[i])); }
+  if (tot > .9) for (let i = 0; i < N; i++) out[i] *= .9 / tot;
   const v = { samples: out, sr: SR };
   cache.set(note, v);
   return v;

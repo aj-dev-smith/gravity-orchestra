@@ -3,6 +3,7 @@
 
 import { GM_DRUMS, drumByGm } from '../drumkit.js';
 import { orchestrate, orchestrateByRole, shapePart, PART_SPEC, ROLL_T } from './orchestra.js';
+import { PHRASE, barGrid, findPhrase } from './phrase.js';
 
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 // stable lane order for the emitted drums block (registry order → consistent
@@ -23,6 +24,31 @@ function tidy(beats) {
   return Math.round(beats * 12000) / 12000;
 }
 
+/** the beat-weighted median tempo over [b0, b1) beats of a tempo map ([{ tick, bpm }]); null if none */
+export function windowBpm(tempos, ppq, b0, b1) {
+  if (!tempos.length) return null;
+  const spans = [];
+  for (let i = 0; i < tempos.length; i++) {
+    const s0 = tempos[i].tick / ppq, s1 = i + 1 < tempos.length ? tempos[i + 1].tick / ppq : Infinity;
+    const w = Math.min(s1, b1) - Math.max(s0, b0);
+    if (w > 0) spans.push({ bpm: tempos[i].bpm, w });
+  }
+  if (!spans.length) return tempos[0].bpm;          // (every change comes after the window)
+  const total = spans.reduce((s, e) => s + e.w, 0);
+  let acc = 0;
+  for (const e of spans.sort((a, b) => a.bpm - b.bpm)) { acc += e.w; if (acc >= total / 2) return e.bpm; }
+  return spans[spans.length - 1].bpm;
+}
+
+const mmss = s => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+
+/* opts.window — WHICH PART of the song becomes the loop (phrase.js):
+     'auto' (default)   songs longer than PHRASE.AUTO_SEC loop their best phrase window
+                        (the chorus / the most-repeated, lead-active, seamless 8–32 bars);
+                        shorter ones (and songs with no loopable window) import whole
+     'full'             the whole song, as ever
+     { fromBar, bars }  this window: 1-based bar number + length in bars (the file's meter)
+   The result carries `phrase` (the window used, or null for the whole song). */
 export function convertToSong(parsed, opts = {}) {
   const { ppq, bpm: rawBpm, tracks: inputTracks } = parsed;
   const warnings = [];
@@ -151,9 +177,41 @@ export function convertToSong(parsed, opts = {}) {
     [lead, alto, bass] = withMean;
   }
 
+  // --- step 4b: PHRASE WINDOW — which bars become the loop (phrase.js) ---
+  // Chosen AFTER routing + roles (both judged on the whole song, so a re-map in the
+  // MAP panel can't move the window under the user), BEFORE timeline zero. The window
+  // is a circle [startBeat, endBeat): it is cut at the lead's first note inside it, and
+  // anything earlier in the window (a pickup, the fill) rotates to the loop's tail.
+  const phrase = pickWindow({ parsed, opts, bpm, lead, melodicTracks, drumNotes, beatsPerTick, warnings });
+  if (phrase && !opts._phrase) {
+    // RE-IMPORT THE WINDOW ALONE: the orchestra must route what plays IN the loop (a voice that
+    // only plays in the bridge can't take a machine from one that plays in the chorus), and
+    // every fit (budgets, ranges, the lead) is judged on the loop's own material. The first pass
+    // only served to find the lead the window is chosen around.
+    const lo = phrase.startBeat - 1e-9, hi = phrase.endBeat - 1e-9;
+    const clipped = { ...parsed, bpm: phrase.bpm, tracks: parsed.tracks
+      .map(tr => ({ ...tr, notes: tr.notes.filter(n => { const b = quantize(n.tick * beatsPerTick); return b >= lo && b < hi; }) }))
+      .filter(tr => tr.notes.length > 0) };
+    return convertToSong(clipped, { ...opts, _phrase: phrase });
+  }
+  if (phrase) {
+    sayPhrase(phrase, warnings);
+    if (phrase.bpm !== phrase.songBpm)
+      warnings.push(`phrase: the loop plays at ${phrase.bpm} bpm — the window's own tempo (the song's dominant tempo is ${phrase.songBpm})`);
+  }
+  const W = phrase ? phrase.endBeat - phrase.startBeat : 0;
+  const inWin = b => !phrase || (b >= phrase.startBeat - 1e-9 && b < phrase.endBeat - 1e-9);
+  if (phrase) {
+    lead = { ...lead, onsets: lead.onsets.filter(n => inWin(n.onset)) };
+    if (alto) alto = { ...alto, onsets: alto.onsets.filter(n => inWin(n.onset)) };
+    if (bass) bass = { ...bass, onsets: bass.onsets.filter(n => inWin(n.onset)) };
+  }
+
   // --- step 5: zero the timeline on the lead ---
   const leadOffset = lead.onsets[0].onset;
-  const shiftOnsets = t => t.onsets.map(n => ({ ...n, onset: n.onset - leadOffset }));
+  // windowed: the circle cut at the lead (pre-lead material wraps to the tail, never < 0)
+  const place = b => { const r = tidy(b - leadOffset); return phrase && r < 0 ? tidy(r + W) : r; };
+  const shiftOnsets = t => t.onsets.map(n => ({ ...n, onset: place(n.onset) })).sort((a, b) => a.onset - b.onset);
 
   // --- step 5b: prepare drum hits (mapped + lead-aligned), pre-loop ---
   // Map each ch9 note to a registry lane and quantize + shift onto the lead's
@@ -169,9 +227,11 @@ export function convertToSong(parsed, opts = {}) {
   const pickupFloor = -ROLL_T * bpm / 60;
   let pickups = 0, intro = 0;
   for (const n of drumNotes) {
+    const q = quantize(n.tick * beatsPerTick);
+    if (!inWin(q)) continue;
     const lane = drumByGm(n.midi);
     if (!lane) { unmappedGm.set(n.midi, (unmappedGm.get(n.midi) || 0) + 1); continue; }
-    const beat = tidy(quantize(n.tick * beatsPerTick) - leadOffset);
+    const beat = place(q);
     if (beat < pickupFloor - 1e-9) { intro++; continue; }
     if (beat < 0) pickups++;
     drumHits.push({ lane, beat, vel: Math.max(0.01, Math.min(1, n.vel / 127)) });
@@ -192,9 +252,11 @@ export function convertToSong(parsed, opts = {}) {
   for (const p of routed) {
     const list = (partNotes[p.key] ||= []);
     for (const n of p.notes) {
+      const q = quantize(n.tick * beatsPerTick);
+      if (!inWin(q)) continue;
       list.push({
         voice: p.voice, src: p.name,
-        beat: tidy(quantize(n.tick * beatsPerTick) - leadOffset),
+        beat: place(q),
         midi: n.midi,
         vel: Math.max(0.01, Math.min(1, n.vel / 127)),
         dur: n.dur == null ? null : Math.max(1 / 12, quantize(n.dur * beatsPerTick)),
@@ -258,7 +320,8 @@ export function convertToSong(parsed, opts = {}) {
   for (const h of drumHits) if (h.beat > 0) maxEnd = Math.max(maxEnd, h.beat + 1 / 12);
   // …and so must every plugin note (pickups wrap to the tail, never extend it)
   for (const list of Object.values(partNotes)) for (const n of list) if (n.beat > 0) maxEnd = Math.max(maxEnd, n.beat + 1 / 12);
-  const loopBeats = Math.ceil(maxEnd / 4) * 4;
+  // a phrase window IS the loop: exactly its bars (every onset is already inside [0, W))
+  const loopBeats = phrase ? tidy(W) : Math.ceil(maxEnd / 4) * 4;
 
   function onsetsToNotes(onsets, role) {
     if (onsets.length === 0) return [];
@@ -315,7 +378,7 @@ export function convertToSong(parsed, opts = {}) {
 
   // track count for sub
   const trackCount = 1 + (alto ? 1 : 0) + (bass ? 1 : 0);
-  const sub = `MIDI import · ${trackCount} track${trackCount > 1 ? 's' : ''}`;
+  let sub = `MIDI import · ${trackCount} track${trackCount > 1 ? 's' : ''}`;
 
   // --- step 11: build song object ---
   const song = { label, sub, bpm, scale, melody: melodyNotes };
@@ -378,6 +441,69 @@ export function convertToSong(parsed, opts = {}) {
     song.staging = 'auto';
     song.sub += ` + ${Object.keys(parts).join(', ')}`;
   }
+  if (phrase) song.sub += ` · looping bars ${phrase.fromBar}–${phrase.fromBar + phrase.bars - 1}${phrase.label ? ` — ${phrase.label}` : ''}`;
 
-  return { song, warnings };
+  return { song, warnings, phrase };
+}
+
+/* step 4b: resolve opts.window → the window (1-based fromBar, bars, startBeat, endBeat, …) or null
+   (the whole song). Warns what it chose and why, in plain words. */
+function sayPhrase(w, warnings) {
+  const a = w.fromBar, b = w.fromBar + w.bars - 1;
+  warnings.push(`phrase: looping bars ${a}–${b} of ${w.totalBars} (${w.bars} bars, ${mmss(w.sec)} of ${mmss(w.songSec)})` +
+                `${w.label ? ` — ${w.label}` : ''}${w.leadFrac != null ? `; the lead plays through ${Math.round(w.leadFrac * 100)}% of it` : ''}` +
+                ` · opts.window 'full' imports the whole song`);
+}
+
+function pickWindow({ parsed, opts, bpm, lead, melodicTracks, drumNotes, beatsPerTick, warnings }) {
+  if (opts._phrase) return { ...opts._phrase };     // the second pass (the window alone): as chosen
+  const want = opts.window ?? 'auto';
+  if (want === 'full') return null;
+  // the song's span (beats) and its bar grid
+  let endTick = 0;
+  for (const tr of melodicTracks) for (const n of tr.notes) endTick = Math.max(endTick, n.tick);
+  for (const n of drumNotes) endTick = Math.max(endTick, n.tick);
+  const grid = barGrid(parsed.timeSigs || [], parsed.ppq, endTick);
+  const songBeats = endTick * beatsPerTick + 1;
+  const songSec = songBeats * 60 / bpm;
+  const totalBars = Math.max(1, Math.floor((endTick * beatsPerTick - grid.origin) / grid.barBeats + 1e-9) + 1);
+  // the detector's view of the song: the lead's line, the other melodic notes, the drums
+  const events = [];
+  for (const n of lead.onsets) events.push({ beat: n.onset, midi: n.midi, vel: .9, dur: n.dur == null ? null : n.dur * beatsPerTick, kind: 'lead' });
+  for (const tr of melodicTracks) for (const n of tr.notes)
+    events.push({ beat: n.tick * beatsPerTick, midi: n.midi, vel: n.vel / 127, dur: n.dur == null ? null : n.dur * beatsPerTick, kind: 'mel' });
+  for (const n of drumNotes) events.push({ beat: n.tick * beatsPerTick, midi: n.midi, vel: n.vel / 127, dur: null, kind: 'drum' });
+
+  if (opts.phraseProbe) opts.phraseProbe({ events, grid, bpm, songSec });   // dev / test hook: the detector's input
+  const finish = w => {
+    w.startBeat = grid.origin + (w.fromBar - 1) * grid.barBeats;
+    w.endBeat = w.startBeat + w.bars * grid.barBeats;
+    // the engine has ONE tempo: a window plays at the tempo IT is written in (a ballad section of a
+    // multi-tempo song must not loop at the rock section's speed) — the beat-weighted median of
+    // the tempo map over the window, like parse's dominant tempo over the song
+    const wb = windowBpm(parsed.tempos || [], parsed.ppq, w.startBeat, w.endBeat);
+    w.bpm = wb && Math.abs(wb - bpm) / bpm > .02 ? Math.max(40, Math.min(220, wb)) : bpm;
+    w.sec = w.bars * grid.barBeats * 60 / w.bpm;
+    w.totalBars = totalBars; w.songSec = songSec; w.barBeats = grid.barBeats; w.songBpm = bpm;
+    return w;
+  };
+  if (typeof want === 'object' && want) {
+    const fromBar = Math.max(1, Math.round(want.fromBar || 1));
+    const bars = Math.max(1, Math.round(want.bars || 1));
+    const w = finish({ fromBar, bars, label: want.label || '', auto: false });
+    if (!lead.onsets.some(n => n.onset >= w.startBeat - 1e-9 && n.onset < w.endBeat - 1e-9)) {
+      warnings.push(`phrase: the lead never plays in bars ${fromBar}–${fromBar + bars - 1} — imported the whole song instead`);
+      return null;
+    }
+    return w;
+  }
+  if (songSec <= PHRASE.AUTO_SEC) return null;      // short songs import whole
+  const best = findPhrase(events, { barBeats: grid.barBeats, origin: grid.origin, bpm });
+  if (!best) {
+    warnings.push(`phrase: no loopable ${PHRASE.LENGTHS[0]}–${PHRASE.LENGTHS[PHRASE.LENGTHS.length - 1]}-bar window keeps the lead playing — imported the whole song (${mmss(songSec)})`);
+    return null;
+  }
+  const w = finish({ fromBar: best.fromBar + 1, bars: best.bars, label: best.label, auto: true,
+                     score: best.score, reps: best.reps, seam: best.seam, leadFrac: best.leadFrac });
+  return w;
 }

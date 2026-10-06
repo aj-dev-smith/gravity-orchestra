@@ -9,11 +9,12 @@ import { targetsFor, machineOf, isLead, LEAD, BELT, DRUMS, OFF } from './mapping
 
 const BELT_COL = { [LEAD]: '#ffb764', [BELT]: '#c08bff', [DRUMS]: '#ff8a3d', [OFF]: '#3a4158' };
 
-export function makeMapPanel({ machines, onPick, onAuto, onClose }){
+export function makeMapPanel({ machines, onPick, onAuto, onWindow = () => {}, onClose }){
   const colorOf = t => BELT_COL[t] || machines.find(m => m.key === machineOf(t))?.color || '#cfd6e6';
   const el = document.createElement('div'); el.className = 'map-panel'; el.hidden = true;
   el.innerHTML = `<header><b>INSTRUMENT MAP</b><button class="x" title="close (Esc)" aria-label="close">×</button></header>
     <p class="mp-song"></p><p class="mp-lede">who plays what — change one and the whole room re-solves</p>
+    <p class="mp-loop" hidden><span class="mp-lt"></span><button data-w="loop" title="loop the song's best phrase (the chorus / its most-repeated, seamless section)">LOOP</button><button data-w="whole" title="import the whole song as one long loop">WHOLE SONG</button></p>
     <div class="mp-rows"></div>
     <footer><span class="mp-status"></span><button class="mp-auto" title="back to the importer's own routing">AUTO</button></footer>
     <p class="mp-strain" hidden></p>
@@ -22,12 +23,21 @@ export function makeMapPanel({ machines, onPick, onAuto, onClose }){
   const rowsEl = el.querySelector('.mp-rows'), statusEl = el.querySelector('.mp-status'), notesEl = el.querySelector('.mp-notes');
   el.querySelector('.x').addEventListener('click', () => onClose());
   el.querySelector('.mp-auto').addEventListener('click', () => onAuto());
+  const loopEl = el.querySelector('.mp-loop');
+  for (const b of loopEl.querySelectorAll('button')) b.addEventListener('click', () => onWindow(b.dataset.w));
   let cur = null;
 
   const strainEl = el.querySelector('.mp-strain');
-  function render({ title, sources, mapping, authored, custom, warnings = [], status = '', busy = false, strain = [], strained = () => false }){
+  function render({ title, loop = null, sources, mapping, authored, custom, warnings = [], status = '', busy = false, strain = [], strained = () => false }){
     cur = { sources, mapping };
     el.querySelector('.mp-song').textContent = title;
+    // the PHRASE LOOP row (a long import loops its best window — or the whole song)
+    loopEl.hidden = !loop;
+    if (loop){
+      const lt = loopEl.querySelector('.mp-lt'); lt.textContent = '';
+      lt.append(loop.mode === 'whole' ? 'whole song · LOOP plays ' : 'looping ', Object.assign(document.createElement('b'), { textContent: loop.text }));
+      for (const b of loopEl.querySelectorAll('button')){ b.classList.toggle('on', b.dataset.w === loop.mode); b.disabled = busy; }
+    }
     el.querySelector('.mp-auto').disabled = !custom || busy;
     el.classList.toggle('busy', busy);
     rowsEl.textContent = '';

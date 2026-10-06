@@ -7,6 +7,7 @@
 //   { tick, type:'vel0', note, channel? }         note-on with vel=0 (encodes as note-off intent)
 //   { tick, type:'name', text }                   track name meta
 //   { tick, type:'tempo', uspq }                  set-tempo meta (microseconds per quarter)
+//   { tick, type:'timesig', num, den }            time-signature meta (den a power of 2)
 //   { tick, type:'cc', cc, val, channel? }        control change
 //   { tick, type:'pb', lsb, msb, channel? }       pitch bend
 //   { tick, type:'pc', program, channel? }        program change
@@ -70,6 +71,12 @@ function buildTrackChunk(events, opts = {}) {
         (uspq >>> 8)  & 0xff,
         uspq          & 0xff,
       ]));
+      lastStatus = -1;
+      continue;
+    }
+
+    if (ev.type === 'timesig') {
+      bytes.push(...encodeMeta(0x58, [ev.num, Math.round(Math.log2(ev.den)), 24, 8]));
       lastStatus = -1;
       continue;
     }

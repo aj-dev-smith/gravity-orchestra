@@ -442,12 +442,17 @@ function strike(tr, i, rig){
   }
 }
 
-/* A drum ball reaching its head: sparks + the percussion voice (the head flash and
-   piston are the machine's own). */
+/* A drum ball reaching its head: sparks + the percussion voice (the head ripple,
+   flash, piston and strike light are the machine's own). The KICK hits the room:
+   the cannonball landing shakes the camera and punches the exposure. */
 function drumStrike(hit){
-  const c = hit.drum.contact;
+  const c = hit.drum.contact, v = hit.vel ?? 1;
   spawnBurst(c.clone().add(UP), new THREE.Color(hit.drum.style.ball),
-             Math.round(5 + 7 * (hit.vel ?? 1)), 3.0);
+             Math.round(5 + 7 * v), 3.0);
+  if (hit.lane === 'kick'){
+    cam.addShake(.05 + .05 * v);
+    expoKick = Math.max(expoKick, .8 * v);
+  }
   if (audio.isReady() && !muted){
     try { audio.playDrum(hit.lane, hit.vel ?? 1); } catch(e){ /* audio must never break the run */ }
   }

@@ -220,10 +220,13 @@ function follow(c, A, room){
 }
 
 /* The lane's first strike at or after `start`, in absolute time (−∞ start → −∞: no count-in). */
-export function firstStrike({ s, P }, start){
+export function firstStrike(L, start){
   if (!isFinite(start)) return -Infinity;
+  if (L._fsStart === start) return L._fs;               // memo: called every frame per trail sample
+  const { s, P } = L;
   let first = Infinity;
   for (const si of s){ const a = si + Math.ceil((start - si) / P) * P; if (a < first) first = a; }
+  L._fsStart = start; L._fs = first;
   return first;
 }
 

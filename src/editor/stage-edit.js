@@ -257,7 +257,8 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     if (!sel.canRotate){ hintEl.textContent = `${sel.label} faces the audience — it moves, it doesn't turn`; return; }
     setYaw(sel, free || !snapOn ? sel.obj.rotation.y + dir * Math.PI / 36 : snapYaw(sel.obj.rotation.y + dir * Math.PI / 12));
     check(); paint();
-    clearTimeout(turn._t); turn._t = setTimeout(() => commit(sel), 350);   // a burst of Q/E taps commits once
+    const p = sel;
+    clearTimeout(turn._t); turn._t = setTimeout(() => commit(p), 350);   // a burst of Q/E taps commits once
   }
   function commit(p){
     if (!p) return;

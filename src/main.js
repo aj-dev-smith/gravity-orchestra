@@ -26,6 +26,7 @@ import { recSupported, startRecording } from './record.js';
 import { spatialize } from './spatial.js';
 import { mergeStatic, watchFrozen, pruneFrozen, frozenStats } from './mergestatic.js';
 import { makeEditor } from './editor/index.js';
+import { planEdit, shotAt } from './directorplan.js';
 import { makeFollow, solveShots as solveShotsIn, resolveRoom, solidBox, roomSolids } from './shotrig.js';
 /* ============================================================
    CASCADE — melody-driven marble run, now multi-track.
@@ -734,13 +735,13 @@ function drumStrike(hit){
 
 /* ---- the room DIRECTOR's inputs: one shot per station (instrument plugins + the
    drum machine) and a wide stage shot, plus each station's CUE — its hits as
-   loop-local times. Every frame stationScores() looks AHEAD through the cue (the
-   song is data, so the camera can see the future) and the rig cuts to whatever is
-   about to play. ---- */
-let cues = [];                                          // [{key, cue:[{t,w}], weight}]
+   loop-local times. The song is data, so the whole loop's EDIT is solved here, once
+   (directorplan.js: what's special about each machine, beat by beat → a shot list);
+   the rig just plays it back as a pure function of songTime. ---- */
+let cues = [];                                          // [{key, owner, cue:[{t,w}]}]
 function syncDirector(S, view){
   const shots = [], P = ROLL_T + LOOP_T;
-  cues = []; entrances = []; script = [];
+  cues = []; script = [];
   instLive.forEach(rig => {
     // a song may re-frame a station's shot for its room (song.director.shots.<key> = {x, up, dist})
     const st = rig.station, h = rig.I.lookHeight ?? 3, c = { ...(rig.I.camera || {}), ...(S.director?.shots?.[rig.I.key] || {}) };
@@ -755,7 +756,7 @@ function syncDirector(S, view){
     shots.push({ key: ck, owner: rig.I.key, color: rig.I.color, self: st,
       aim: st.localToWorld(new THREE.Vector3(0, h + (rig.slot.hang ? 1 : 0), 0)),
       eye: st.localToWorld(new THREE.Vector3(c.x ?? 0, eyeY, (c.dist ?? 15) * hk)) });
-    cues.push({ key: ck, cue: rig.cue, weight: (rig.I.directorWeight ?? 1) * dirWeight(S, rig.I.key) });
+    cues.push({ key: ck, owner: rig.I.key, cue: rig.cue });
   });
   if (S.drums){
     const kx = view.cx + kitSlot.x, kz = kitSlot.z;     // the kit's slot this song (marbledrums.js)
@@ -765,28 +766,11 @@ function syncDirector(S, view){
     shots.push({ key: 'drums', owner: 'drums', color: '#ff8a3d', self: drumGroup, aim: new THREE.Vector3(kx, 3.6, kz - 2.5), eye: new THREE.Vector3(kx + 1, 11.5, kz + 12.5) });
     const cue = [];
     Object.entries(S.drums).forEach(([lane, hits]) => hits.map(normalizeHit).forEach(h =>
-      cue.push({ t: wrapP(ROLL_T + h.beat * BEAT, P), w: h.vel * (lane === 'kick' || lane === 'crash' ? 1 : .45) })));
-    cues.push({ key: 'drums', cue, weight: .7 * dirWeight(S, 'drums') });   // dense lanes: damped, or the kit hogs the groove
+      cue.push({ t: wrapP(ROLL_T + h.beat * BEAT, P), w: h.vel })));
+    cues.push({ key: 'drums', owner: 'drums', cue });
   }
-  // ENTRANCES: a station that starts PLAYING (≥ 3 hits in the next 4 beats) after a long
-  // rest (≥ 12 beats, wrapping the seam) is a story beat — the marimba coming in, the
-  // bells' first climax chords — so it pulls the camera ×3 (a chord's simultaneous hits
-  // all count). A lone toll after a rest isn't an entrance — and neither is a machine's own
-  // pulse: a pad that strikes a chord every 12 beats has rested 12 beats before EVERY chord,
-  // so the rest must also be well past its typical gap (≥ 1.8 × the median).
-  for (const c of cues){
-    const ts = [...new Set(c.cue.map(e => +e.t.toFixed(3)))].sort((a, b) => a - b);
-    if (ts.length < 2) continue;
-    const run = t => c.cue.filter(e => wrapP(e.t - t + 1e-3, P) <= 4 * BEAT + 2e-3).length >= 3;
-    const gaps = ts.map((t, i) => wrapP(t - ts[(i - 1 + ts.length) % ts.length], P));
-    const med = [...gaps].sort((a, b) => a - b)[gaps.length >> 1];
-    const ent = new Set(ts.filter((t, i) => gaps[i] >= Math.max(12 * BEAT - 1e-3, 1.8 * med) && run(t)));
-    c.cue = c.cue.map(e => ent.has(+e.t.toFixed(3)) ? { ...e, w: e.w * 3 } : e);
-    ent.forEach(t => entrances.push({ t, key: c.key }));
-  }
-  // A CHORD is one moment, not N: for the look-ahead score, simultaneous hits on one station
-  // merge into one (the loudest + a little for the rest) — or a pad that strikes 4-note
-  // chords outscores every melodic machine 2:1 and the film ping-pongs back to it all song
+  // A CHORD is one moment, not N: simultaneous hits on one station merge into one (the
+  // loudest + a little for the rest) — or a pad that strikes 4-note chords reads as 4× busy
   for (const c of cues){
     const byT = new Map();
     for (const e of c.cue){ const k = Math.round(e.t * 500); const g = byT.get(k); if (g) g.push(e.w); else byT.set(k, [e.w]); }
@@ -797,9 +781,8 @@ function syncDirector(S, view){
   }
   // ENSEMBLE MOMENTS (pure song data, solved up front): every instant where ≥ 2 voices
   // land together, with how many DISTINCT machines (stations + the lead belt) hit within
-  // ±.15 s. The director goes WIDE for the big ones (the whole room on one downbeat) and
-  // the room's exposure flares with them. Plus the lead's SKIM windows (≥ 4 consecutive
-  // notes of ≤ .15 s): the money shot, where the director must stay on the belt.
+  // ±.15 s. The edit goes WIDE for the big ones (the whole room on one downbeat) and the
+  // room's exposure flares with them.
   const lead = tracks[0], ev = [];
   cues.forEach(c => c.cue.forEach(e => ev.push({ t: e.t, key: c.key })));
   lead.pads.forEach(pd => ev.push({ t: wrapP(lead.rollT + pd.t, P), key: 'lead' }));
@@ -811,29 +794,30 @@ function syncDirector(S, view){
     for (const e of ev) if (Math.abs(wrapP(e.t - ev[i].t + P / 2, P) - P / 2) <= .15) keys.add(e.key);
     if (keys.size >= 2) moments.push({ t: ev[i].t, n: keys.size });
   }
-  skims = [];
-  for (let i = 0; i < lead.pads.length; ){
-    let j = i; while (j < lead.pads.length && lead.pads[j].dt <= .15) j++;
-    if (j - i >= 4){                                    // …held through a LOB that follows within 2 notes
-      let k = j - 1;                                    // (the skim → launch → soaring arc is one gesture)
-      for (let q = j; q < Math.min(j + 3, lead.pads.length); q++) if (lead.pads[q].dt >= 1.5){ k = q; break; }
-      const early = k > j - 1 ? ENSEMBLE_AHEAD + .1 : 0;   // release before the lob lands, so a wide on it can be earned
-      skims.push([wrapP(lead.rollT + lead.pads[i].t - .6, P), lead.pads[k].t - lead.pads[i].t + .6 + lead.pads[k].dt - early]);
-    }
-    i = Math.max(j, i + 1);
-  }
   seamFrom = lead.rollT + lead.total - .7;              // the engine's loop seam (no music, no lead marble), entered just after the last note lands
   // SCRIPTED CUTS (song.director.at = [[beat, shot, holdBeats?], …]): the story beats a
   // density vote can't see — a moonlit establishing shot, the soloist, the dawn bell. shot =
   // 'stage', a station key, or a belt role ('lead'/'alto'/'bass'); unknown keys are dropped.
-  // Held for holdBeats (≥ .35 s), then the director votes again from there.
+  // Held for holdBeats (≥ .35 s): fixed points the solved edit builds around.
   const known = new Set(['stage', ...shots.map(sh => sh.key), ...tracks.map(t => t.role)]);
   for (const c of (Array.isArray(S.director?.at) ? S.director.at : []))
     if (Array.isArray(c) && Number.isFinite(c[0]) && known.has(c[1]))
       script.push({ t: wrapP(ROLL_T + c[0] * BEAT, P), key: c[1], hold: Math.max(.35, (Number.isFinite(c[2]) ? c[2] : 0) * BEAT) });
-  // a script owns its moment: an entrance landing within ±.6 s of a scripted cut would only
-  // flash a shot in front of it (the 0.2 s flicker), so it yields
-  if (script.length) entrances = entrances.filter(e => !script.some(c => Math.abs(wrapP(e.t - c.t + P / 2, P) - P / 2) < .6));
+  // THE EDIT: every machine (the belt is one of them, no protagonist floor) scored beat by beat
+  // for what's SPECIAL — above its own norm, an entrance, a crescendo, a solo — then cut into
+  // shots (≥ 3 s, on the beat, shares capped, every machine that plays seen once a loop).
+  // The belt's hits: every pad, a long lob or a skim counting for more (its own spectacle).
+  const beltHits = [];
+  tracks.forEach(tr => tr.pads.forEach(pd => beltHits.push({ t: wrapP(tr.rollT + pd.t, P),
+    w: .5 + Math.min(1.5, Math.max(0, pd.dt - 1) * .6) + (pd.dt <= .15 ? .4 : 0) })));
+  plan = planEdit(planIn = {
+    voices: [...cues.map(c => ({ key: c.key, hits: c.cue, weight: dirWeight(S, c.owner) })),   // (the song's pull only:
+             // salience is relative to each machine's own norm, so sparse voices need no boost)
+             { key: 'belt', belt: true, hits: beltHits, weight: dirWeight(S, 'belt') }],
+    grid: { t0: ROLL_T, beat: BEAT, end: seamFrom },
+    fixed: script.map(c => ({ t: c.t, len: c.hold, key: c.key })),
+    wides: moments.filter(m => m.n >= ENSEMBLE_N).map(m => m.t),
+  });
   // the wide STAGE shot. A full room (instrument plugins on stage): a LOW front-left
   // three-quarter view (the angle the room reads as a machine-hall, not a floor plan) —
   // bowls + drums in the foreground, the belt and the back tier behind — and the song
@@ -861,7 +845,8 @@ function syncDirector(S, view){
   // the opening reveal holds through the count-in and the first two beats (songTime-based,
   // so a page idling in auto before the play tap can't spend it)
   lastShots = shots;
-  cam.syncStations(shots, wide, { auto: !soloKey, openWide: full && !soloKey, openUntil: ROLL_T + 2 * BEAT, follow, bounds: eyeRoom() });
+  cam.syncStations(shots, wide, { auto: !soloKey, openWide: full && !soloKey, openUntil: ROLL_T + 2 * BEAT, follow, bounds: eyeRoom(),
+                   plan: { at: now => shotAt(plan, wrapP(now, P), seamFrom) } });
 }
 /* SOLVED SHOT EYES (src/shotrig.js over the pure shotsolve.js): each station's hand-tuned framing
    is only its PREFERRED eye — the solve keeps the first candidate that stays in the room, stands in
@@ -976,72 +961,18 @@ function fitShot(pts, dir, aspect, fill = .94, fov = camera.fov, inset = 0){
   return { aim, eye: aim.clone().addScaledVector(dir, D * Math.max(.3, k)), k };
 }
 const _Yup = new THREE.Vector3(0, 1, 0);
-/* song.director — optional per-station pull for THIS song ({ bowls: 2.2 }): sparse,
-   sustained machines (a bowl struck once a bar) score low on hit density, so a song
-   that showcases one says so in its data. Clamped; absent → 1. */
+/* song.director — optional per-machine pull for THIS song ({ bowls: 2.2, belt: .5 }): a hint
+   to the solved edit (applied as √weight) when a song showcases one machine. Clamped; absent → 1. */
 function dirWeight(S, key){ const w = S.director?.[key]; return Number.isFinite(w) ? Math.max(0, Math.min(4, w)) : 1; }
-const DIRECTOR_AHEAD = 2.2;                             // seconds of look-ahead
-const ENSEMBLE_AHEAD = .9;                              // the wide cut lands just ahead of the big downbeat
-let moments = [], skims = [], entrances = [], script = [], seamFrom = Infinity;   // filled by syncDirector (static song data)
+const ENSEMBLE_N = 7;                                   // ≥ this many machines on one downbeat: a WIDE moment for the edit
+let moments = [], script = [], seamFrom = Infinity, plan = null, planIn = null;   // filled by syncDirector (static song data)
 let ensFlare = 0, lastNow = 0;                          // the room's exposure flare on ensemble moments
-/* Room-wide director cues, every frame: the ensemble size about to land (→ the wide
-   shot), whether the lead is in/near a skim (→ stay on the belt), whether we're in the
-   loop seam (→ breathe wide), and the exposure flare as a big moment passes. */
-const _forceKeys = [], _cueOut = {};                   // reused each frame (no per-frame garbage)
-function roomCues(out){
-  const P = ROLL_T + LOOP_T, now = wrapP(songTime, P);
-  let ens = 0;
-  const passed = wrapP(now - lastNow, P);
-  // the MUSIC'S GRID (beats from the downbeat at ROLL_T): did a beat / a bar line pass this
-  // frame, and is a bar line under a beat away — the director cuts on these, not on its timer
-  const bNow = (now - ROLL_T) / BEAT, bLast = (lastNow - ROLL_T) / BEAT;
-  const crossed = passed < .5 && Math.floor(bNow) !== Math.floor(bLast) && now > lastNow;
-  out._onBeat = crossed;
-  out._onBar = crossed && Math.floor(bNow / 4) !== Math.floor(bLast / 4);
-  out._barSoon = (4 - (((bNow % 4) + 4) % 4)) * BEAT <= BEAT + 1e-3;
-  for (const m of moments){
-    const d = wrapP(m.t - now, P);
-    if (d < ENSEMBLE_AHEAD) ens = Math.max(ens, m.n);
-    if (!skipStrikes && passed < .5 && m.n >= 5 && wrapP(m.t - lastNow, P) <= passed)
-      ensFlare = Math.max(ensFlare, (m.n - 4) / 3);     // 5 → .33 … 7 → 1
-  }
+/* The room's exposure FLARE as a big ensemble moment (≥ 5 machines on one downbeat) passes. */
+function roomFlare(){
+  const P = ROLL_T + LOOP_T, now = wrapP(songTime, P), passed = wrapP(now - lastNow, P);
+  if (!skipStrikes && passed < .5) for (const m of moments)
+    if (m.n >= 5 && wrapP(m.t - lastNow, P) <= passed) ensFlare = Math.max(ensFlare, (m.n - 4) / 3);   // 5 → .33 … 7 → 1
   lastNow = now;
-  out._ensemble = ens;
-  out._script = script.find(c => wrapP(now - c.t + .12, P) < c.hold + .12)?.key;   // a scripted cut (lands .12 s early)
-  _forceKeys.length = 0;
-  let forcedWithin = Infinity, soon = false;
-  for (const e of entrances){
-    const d = wrapP(e.t - now, P);
-    if (d < .35) _forceKeys.push(e.key);                // entrances cut on their downbeat
-    if (d < ENSEMBLE_AHEAD + .5) soon = true;
-    forcedWithin = Math.min(forcedWithin, d);
-  }
-  out._force = _forceKeys;
-  out._forceSoon = soon;
-  let skim = false;
-  for (const [t0, len] of skims){
-    if (wrapP(now - t0, P) < len) skim = true;          // (t0 already leads the run by .6 s)
-    else forcedWithin = Math.min(forcedWithin, wrapP(t0 - now, P));
-  }
-  out._skim = skim;
-  out._seam = songTime > 0 && (now >= seamFrom || now < ROLL_T - .2);
-  out._seamSoon = now >= seamFrom - 1.5;                // no fresh cut just before the seam's wide (a flicker)
-  if (!out._seam) forcedWithin = Math.min(forcedWithin, Math.max(0, seamFrom - now));
-  out._forcedWithin = forcedWithin;                     // the next cut the director MUST take — ordinary cuts wait for it
-  return out;
-}
-const _scoreOut = {};
-function stationScores(){
-  const P = ROLL_T + LOOP_T, now = wrapP(songTime, P), out = _scoreOut;
-  for (const c of cues){
-    let sum = 0;
-    for (const e of c.cue){
-      const d = wrapP(e.t - now, P);                    // seconds until this hit (wrapping the seam)
-      if (d < DIRECTOR_AHEAD) sum += e.w * (1 - .6 * d / DIRECTOR_AHEAD);
-    }
-    out[c.key] = Math.sqrt(sum) * c.weight;             // sqrt: a dense run beats a lone hit, but not by 10×
-  }
-  return roomCues(out);
 }
 
 /* Frame the free camera on an instrument's station: from out front of it (its local
@@ -1353,13 +1284,10 @@ function animate(){
 
   // CAMERA: the rig decides the pose (director / fixed / free-fly / follow) from the
   // live marbles. main just hands it the frame's state; physics stays untouched.
-  // (the per-station look-ahead only matters to the director; the room cues — the ensemble
-  //  flare — run in every mode)
-  const auto = cam.mode === 'auto';
-  const sc = cues.length ? (auto ? stationScores() : roomCues(_cueOut)) : null;
+  // (the director's edit was solved at song load; the ensemble flare runs in every mode)
+  if (cues.length) roomFlare();
   devMarbles = marblePts;                               // (dev: __dev.marbles — the staging audit's frame check)
-  cam.update({ dt, time: clock.elapsedTime, songTime, tracks, marblePts, leadRender, reduceMotion, started,
-               stationScores: auto ? sc : null });
+  cam.update({ dt, time: clock.elapsedTime, songTime, tracks, marblePts, leadRender, reduceMotion, started });
 
   if (solvedRoom !== null && rooms.key !== solvedRoom){ solvedRoom = rooms.key; lastSolve = { ...resolveRoom(lastShots, shotCtx()), follow: followRig }; }   // the room changed: re-check every eye against it
   rooms.update(dt, songTime, camera, expoKick + ensFlare);         // room ambience (pure fn of songTime + the music's kick)
@@ -1589,7 +1517,7 @@ if (new URLSearchParams(location.search).has('debug')){
     song(k){ sel.value = k; sel.dispatchEvent(new Event('change')); },
     station(key, dist, up){ return lookAtStation(key, dist, up); },
     instruments: () => instLive.map(r => r.I.key),
-    cam(m){ cam.mode = m; }, get shot(){ return cam.shot; }, get weigh(){ return cam.weigh; },
+    cam(m){ cam.mode = m; }, get shot(){ return cam.shot; },
     // room layout probe: world-space XZ boxes of every station, the drum machine and the belt bays
     boxes(deep){
       const bx = o => { const b = visBox(o, true); return b.isEmpty() ? null : [b.min, b.max].map(v => [+v.x.toFixed(1), +v.y.toFixed(1), +v.z.toFixed(1)]); };
@@ -1601,9 +1529,10 @@ if (new URLSearchParams(location.search).has('debug')){
       return out;
     },
     director(){ const B = t => +((t - ROLL_T) / BEAT).toFixed(2);   // the room director's static cues, in beats
-      return { entrances: entrances.map(e => [e.key, B(e.t)]), wide: moments.filter(m => m.n >= 7).map(m => B(m.t)),
-               script: script.map(c => [c.key, B(c.t), +(c.hold / BEAT).toFixed(2)]),
-               skims: skims.map(([t0, len]) => [B(t0), +(len / BEAT).toFixed(2)]), seamFrom: B(seamFrom) }; },
+      return { cuts: plan ? plan.cuts.map(c => [B(c.t), c.key]) : [], shares: plan ? Object.fromEntries(Object.entries(plan.shares).map(([k, v]) => [k, +v.toFixed(3)])) : {},
+               wide: moments.filter(m => m.n >= ENSEMBLE_N).map(m => B(m.t)),
+               script: script.map(c => [c.key, B(c.t), +(c.hold / BEAT).toFixed(2)]), seamFrom: B(seamFrom) }; },
+    get planIn(){ return planIn; },                   // (dev: the edit solve's inputs — tune directorplan.js offline)
     orbitMax(d){ cam.orbit.maxDistance = d; cam.orbit.maxPolarAngle = Math.PI; },
     room(k){ return k === undefined ? rooms.key : rooms.set(k); },
     audioProbe: () => audio.probe(),                   // mix-bus gain reduction + reverb-return peak
@@ -1611,7 +1540,6 @@ if (new URLSearchParams(location.search).has('debug')){
     // perf probe: draw calls / triangles per FRAME (summed over every composer pass, averaged
     // over n frames), live lights, compiled programs, and the scene's mesh count
     get scene(){ return scene; }, get renderer(){ return renderer; }, gov, set perfOff(v){ perfOff = !!v; },
-    scores: () => cues.length ? stationScores() : null,
     // occlusion probe: for every director shot (+ the wide), cast a 5×3 grid of rays from the
     // eye through the frame's middle and report which OTHER machine is hit before the subject
     occlusion(){

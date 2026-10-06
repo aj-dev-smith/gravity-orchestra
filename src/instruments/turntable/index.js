@@ -64,7 +64,6 @@ export default {
   lookHeight: 3.2,
   camera: { dist: 17, up: 8 },
   color: '#ff6a3d',                 // director button / shot tint: the strobe lamp's warm neon
-  directorWeight: 1.1,              // a monophonic line (one hit at a time) — level with the plucked machines
   voice,
 
   make({ envMap, glowTex }){

@@ -54,7 +54,6 @@ export default {
   lookHeight: 2.8,
   camera: { dist: 11.5, up: 8 },    // a look down onto the pinned drum — comb + gear clear of the HUD
   color: '#8fe9ff',                 // ice-cyan starlight
-  directorWeight: 1.1,              // the intro's solo voice — it should open the film
   voice,
 
   make({ envMap, glowTex }){

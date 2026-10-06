@@ -59,7 +59,6 @@ export default {
   // audience's side: both strike columns face the lens, the net between them, the rail on top
   camera: { dist: 23, up: 8.5, x: 2, overDeck: true },
   color: '#b8ff5a',                                 // electric lime
-  directorWeight: 1.15,                             // one line, traded: the long serves are story beats
   voice: id => steelpanVoice(id),
 
   make({ envMap, glowTex }){

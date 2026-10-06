@@ -36,7 +36,6 @@ export default {
   lookHeight: 3.6,
   camera: { dist: 11, up: 5.5, x: -2 },   // close and a step to the wing side: strings fill the frame, the belt leaves it
   color: '#2fe6c0',                 // cold teal string-light
-  directorWeight: 1.15,             // the groove's floor — its walk-up (bar 12) earns its shot
   cameraKey: 'strings',             // its cam button / director shot key: 'bass' is already the BASS BELT's
 
   voice: id => bassVoice(id),

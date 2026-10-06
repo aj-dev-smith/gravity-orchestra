@@ -204,16 +204,22 @@ song can get one, and **MIDI import now generates drums from channel 9** (§6).
   like drums (no lock rule), validated in `test/instruments.test.js`.
 - Descriptor: `{key, label, wet, voice(id) → {samples, sr}, make({envMap, glowTex, THREE}) →
   {build(part, timing) → Group, update(songTime, P, dt, {started, skipStrikes, onStrike})},
-  demo}` + optional staging hints `color / camera / lookHeight / directorWeight`.
+  demo}` + optional staging hints `color / camera / lookHeight`.
 - main.js runs ONE generic loop: build each part inside its station group, update per frame,
   route `onStrike({note, vel, pos, color, dur, shake})` → sparks + a SHARED constant-size
   strike-light pool + `audio.playVoice('inst:<key>:<note>', vel, {dur})`.
 - Audio: one pure `voice()` render feeds BOTH the live path (AudioBuffer, gain = vel, `dur`
   release) and the iOS `<audio>` bank (WAV) — iOS-war internals untouched. On the sample path
   sustained voices ring their full render (no `dur` release; el.volume is ignored anyway).
-- **Room director** (camera.js + main `syncDirector`/`stationScores`): each station + the drums
-  gets a shot; the song data is scanned AHEAD each frame and the camera cuts to what's about to
-  play (min hold, boredom decay, hard cut on far jumps). Songs with stations open on `auto`;
+- **Room director** (src/directorplan.js, pure + tested; main `syncDirector` → camera.js plays it back):
+  the song is data, so the loop's whole EDIT is solved at song load. Every machine — **the belt is
+  just one of them, no protagonist floor** (AJ: "I don't see the belt as too special") — is scored
+  beat by beat for what's SPECIAL: above its own norm, an entrance after a rest, a crescendo, a
+  solo, rarity; then a 2nd-order DP over the beat grid cuts the shots (≥ 3 s, on beats, bar lines
+  preferred, A-B-A ping-pong priced), share caps (belt .18 / wide .16 / station .24) and coverage
+  (every machine that plays is seen once a loop). Scripts (`song.director.at`) are fixed points;
+  `song.director.<key>` is a √-weighted hint. The camera's shot is a pure function of songTime.
+  `node scripts/director-audit.mjs` prints every song's shares. Songs with stations open on `auto`;
   others keep free-look. `stage` = the wide shot.
 - Lessons that made five parallel builds work: design FOR marbles (no feed plumbing — each lane
   owns its own ball/striker); park long gaps at the apex; lossy bounces with a visible energy

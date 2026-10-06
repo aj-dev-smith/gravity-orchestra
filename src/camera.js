@@ -21,28 +21,12 @@ const CAMCOLORS = {
   all:'#cfd6e6', lead:'#ffaa55', alto:'#c08bff', bass:'#66aaff', stage:'#9fe8ff',
 };
 const FIXED_OK = new Set(['all', 'auto', 'fixed', 'free', 'stage']);
-/* DIRECTOR over STATIONS (instrument plugins + the drum machine): the song data is
-   known, so main scores each station by what it is ABOUT to play (look-ahead) and
-   the director cuts there before it happens — the same "sees the future" trick the
-   track director uses. Cuts hold ≥ MIN_HOLD; a shot held past BORED loses its pull,
-   so the film keeps moving round the room. A far jump is a hard CUT, a near one glides. */
-const MIN_HOLD = 3.0, BORED = 7.5, SWITCH = 1.15, SWITCH_0 = 1.6, HARD_CUT = 12, STAGE_PULL = .9;
-/* The BELT is the protagonist (the PATERNOSTER — it carries the tune): it competes as a
-   station whose pull never drops below BELT_PULL × the room's level (BELT_ROOM × the mean
-   score of the two busiest machines, ≥ 1) while a marble is live, rising with the arc
-   it's about to throw (a long lob is the belt's own spotlight) up to BELT_MAX × that level.
-   ROTATION keeps the film moving round the room instead of ping-ponging two machines:
-     RECENT  — a shot just left is damped (×(1 − RECENT·e^(−ago/RECENT_T))), so a cut
-               doesn't bounce straight back;
-     UNSEEN  — a station off screen for over UNSEEN_0 s is boosted (ramping to ×(1+UNSEEN)
-               over UNSEEN_T s more), so every machine gets its spotlight when it next plays. */
-const BELT_PULL = 1.8, BELT_MAX = 2.7, SHRED_PULL = 2.1, BELT_ROOM = .6;    // ×(room level ≥ 1)
-const RECENT = .45, RECENT_T = 6, UNSEEN = .6, UNSEEN_0 = 14, UNSEEN_T = 26, BELT_UNSEEN_0 = 8;
-/* Room-mode extras (all fed by main's look-ahead over the song data):
-     ENSEMBLE_N  — when ≥ this many machines land on one downbeat, go WIDE (ENSEMBLE_S)
-     SKIM_S      — the lead's 16th-note skim is the money shot: hold the belt
-     the loop seam (no music, no lead marble) breathes wide, never the empty-wall shot. */
-const ENSEMBLE_N = 7, ENSEMBLE_S = 2.6, ENSEMBLE_REST = 4, SKIM_S = 2.8;   // REST: s off the wide before it re-earns one
+/* DIRECTOR over STATIONS (instrument plugins + the drum machine): the song is data, so
+   main solves the loop's whole EDIT at song load (directorplan.js — what's special about
+   each machine, beat by beat → a shot list) and the rig plays it back. A far jump is a
+   hard CUT, a near one glides. Inside a planned belt shot the track director picks the
+   framing (lead / alto / bass / all), switching at most every BELT_HOLD s. */
+const HARD_CUT = 12, BELT_HOLD = 2.2;
 const _Y = new THREE.Vector3(0, 1, 0);
 /* KEEP THE MARBLE IN FRAME: a follow shot (all / lead / alto / bass) pulls its eye back along
    its own line just far enough that every marble it is ABOUT sits inside FIT of the frame — a
@@ -89,10 +73,9 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
   let lastSig = '';                                           // the strip's button set last render (new set → scroll resets)
   let stations = [], stage = null;                            // [{key, eye, aim, color}] + the wide {eye, aim}
   let follow = null, bounds = null;                           // main's SOLVED follow offsets ({land, portrait}) + the eye's room box
-  let cutNow = false, openUntil = -Infinity, stageOff = -99;
-  let lastSeen = {};                                          // director: shot key → time it was last on screen
+  let cutNow = false, openUntil = -Infinity;
+  let plan = null;                                            // director: main's solved edit ({at(songTime) → shot key})
   let allBadUntil = -Infinity, allFailSince = null;                                // director: ALL can't hold every marble on this screen until then
-  let dbgCand = null, dbgRotate = null, dbgFloor = 0;         // the director's last weighing (dev: __dev.weigh)
   const _ideal = new THREE.Vector3(), _aim = new THREE.Vector3(), _focus = new THREE.Vector3();
 
   const camTarget = new THREE.Vector3(0, stageY + .6, 0);     // the static band centre
@@ -210,14 +193,13 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
   /* Called by buildWorld after syncTracks: the song's instrument stations (world-space
      eye + aim per station) and the wide STAGE shot. A song that brings stations opens
      on the director — it is the show; songs without keep the free-look default. */
-  function syncStations(list, wide, { auto = true, openWide = false, openUntil: openT = 0, follow: fol = null, bounds: bnd = null } = {}){
+  function syncStations(list, wide, { auto = true, openWide = false, openUntil: openT = 0, follow: fol = null, bounds: bnd = null, plan: pl = null } = {}){
     const had = stations.length;
-    stations = list; stage = wide; follow = fol; bounds = bnd;
+    stations = list; stage = wide; follow = fol; bounds = bnd; plan = pl;
     if (auto && list.length && !had && mode === DEFAULT_MODE) mode = 'auto';
     if (!list.length && mode === 'stage') mode = DEFAULT_MODE;
     if (!FIXED_OK.has(mode) && !curTracks.some(t => t.role === mode) && !list.some(st => st.key === mode)) mode = 'auto';
     autoWant = openWide ? 'stage' : 'all'; lastCut = -99;   // a full room opens on the wide reveal…
-    lastSeen = {};                                            // a new song: every machine is unseen
     openUntil = openWide ? openT : -Infinity;                 // …held until songTime passes openT (count-in + downbeat)
     renderButtons();
   }
@@ -227,7 +209,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
   /* The per-frame pose. Mutates `camera`; leaves `camTarget` as the live aim (read
      by the debug HUD). marblePts = [{p, w, role}] of the live balls; leadRender is
      the lead ball's render position (or null). */
-  function update({ dt, time, songTime = Infinity, tracks, marblePts, reduceMotion, started, stationScores }){
+  function update({ dt, time, songTime = Infinity, tracks, marblePts, reduceMotion, started }){
     // FREE-LOOK vs DIRECTOR. The orbit camera owns the pose only in 'free' (and only
     // after the play gesture). Entering, we seed its target from the live aim; while
     // active we shadow camPos/camTarget off the live camera, so the moment the user
@@ -270,62 +252,19 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
           autoWant = want; lastCut = time;
         }
       } else if (songTime < openUntil){                      // the opening reveal: hold the wide
-        autoWant = 'stage'; lastCut = time - MIN_HOLD;        // (and let the first real cut land at once)
-      } else {                                                // the room director: tracks vs stations vs wide
-        const sc = stationScores || {};
-        // the belt competes like a station: a long arc no longer outranks a busy machine
-        // (raw dt in seconds used to win ~a third of the film on a dark wall)
-        if (autoWant === 'stage') stageOff = time;
-        const ensemble = (sc._ensemble ?? 0) >= ENSEMBLE_N && !sc._skim && !sc._forceSoon && time - stageOff > ENSEMBLE_REST;
-        const cand = { stage: Math.max(STAGE_PULL, ensemble ? ENSEMBLE_S : 0) };
-        stations.forEach(st => { cand[st.key] = sc[st.key] ?? 0; });
-        // the belt: the protagonist. Its floor is RELATIVE to the room (a dense orchestra scores
-        // every station 2–4; a sparse one under 1) — level with its busiest machines —
-        // and rises with the arc it's about to throw (a long lob is the belt's own spotlight)
-        let top1 = 0, top2 = 0;                               // the two busiest machines set the room's level
-        stations.forEach(st => { const v = sc[st.key] ?? 0; if (v > top1){ top2 = top1; top1 = v; } else if (v > top2) top2 = v; });
-        const floor = Math.max(1, BELT_ROOM * (top1 + top2) / 2);
-        if (marblePts.length) cand[want] = floor * (want === 'all' ? BELT_PULL
-          : score > 1 ? Math.min(BELT_PULL + (score - 1.05) * .6, BELT_MAX) : SHRED_PULL);
-        if (!lastSeen._init){                                 // a new song: the clock of "unseen" starts now
-          lastSeen = { _init: true, _belt: time }; stations.forEach(st => { lastSeen[st.key] = time; });
-        }
-        lastSeen[autoWant] = time;                            // (this frame's shot counts as seen)
-        if (autoWant !== 'stage' && !stations.some(st => st.key === autoWant)) lastSeen._belt = time;
-        const ago = k => time - (lastSeen[k] ?? time);
+        autoWant = 'stage'; lastCut = time - BELT_HOLD;      // (and let the first real cut land at once)
+      } else {                                                // the room director: play back the SOLVED edit
+        // (main's directorplan: the shot for this beat, a pure function of songTime — so the
+        // cut lands on the same beat every loop and scrubbing is exact)
         const isSt = k => stations.some(st => st.key === k);
-        const rotate = (k, v) => k === 'stage' ? v       // (the belt shares one "seen" clock across its roles)
-          : isSt(k) ? v * (1 - RECENT * Math.exp(-ago(k) / RECENT_T)) * (1 + UNSEEN * Math.min(1, Math.max(0, ago(k) - UNSEEN_0) / UNSEEN_T))
-          : v * (1 - .5 * RECENT * Math.exp(-ago('_belt') / RECENT_T))     // the belt: the protagonist grows
-              * (1 + UNSEEN * Math.min(1, Math.max(0, ago('_belt') - BELT_UNSEEN_0) / UNSEEN_T));   // impatient off screen sooner
-        dbgCand = cand; dbgRotate = rotate; dbgFloor = floor;
-        const held = time - lastCut;
-        // an ordinary cut lands ON THE MUSIC: on the next beat — or the next bar line when that
-        // is under a beat away — never on the hold timer's tick; and never just ahead of a
-        // FORCED cut (a skim / an entrance / the seam within MIN_HOLD): hold, then take that one
-        const onGrid = sc._onBar || (sc._onBeat && !sc._barSoon) || sc._onBeat === undefined;
-        const quiet = !((sc._forcedWithin ?? Infinity) < MIN_HOLD);
-        // a marginal challenger can't win the instant the timer lets it: the bar to switch
-        // starts high (SWITCH_0 at MIN_HOLD) and relaxes to SWITCH by the time the shot is BORED
-        const sw = SWITCH + (SWITCH_0 - SWITCH) * Math.max(0, Math.min(1, (BORED - held) / (BORED - MIN_HOLD)));
-        const cut = k => { if (autoWant !== k){ autoWant = k; lastCut = time; cutNow = true; } };
-        // a station's ENTRANCE (several can share a downbeat): cut on the one seen least recently
-        const forced = (sc._force || []).filter(k => stations.some(st => st.key === k));
-        const force = forced.includes(autoWant) ? autoWant : forced.sort((a, b) => ago(b) - ago(a))[0];
-        const scripted = sc._script && (sc._script === 'stage' || stations.some(st => st.key === sc._script) ||
-          (marblePts.length && tracks.some(t => t.role === sc._script)));
-        if (scripted) cut(sc._script);                        // the song's SCRIPTED story beat (song.director.script)
-        else if (sc._skim) cut('lead');                       // the money shot: the lead's skim, no matter the hold
-        else if (force) cut(force);
-        else if (sc._seam) cut('stage');                      // the loop seam: breathe wide, re-open on the newborn's fall
-        else if (autoWant === 'all' && allBad && marblePts.length) cut(want);   // ALL can't hold them here: the lead
-        else {
-          // (on the belt, the incumbent is whichever belt framing is live: its pull is the belt's)
-          const cur = (cand[autoWant] ?? (autoWant !== 'stage' && !isSt(autoWant) && marblePts.length ? cand[want] : 0) ?? 0) * (held > BORED ? .45 : 1);
-          let best = autoWant, bestS = -1;
-          for (const k in cand) if (k !== autoWant){ const v = rotate(k, cand[k]); if (v > bestS){ best = k; bestS = v; } }
-          if (held > MIN_HOLD && quiet && onGrid && bestS > cur * sw) cut(best);
-        }
+        const k = plan ? plan.at(songTime) : 'stage';
+        let pick = k;
+        if (k === 'belt'){                                    // the belt: whichever framing is live (lead / alto / all…)
+          const onBelt = autoWant !== 'stage' && !isSt(autoWant);
+          pick = !marblePts.length ? 'stage'
+            : onBelt && time - lastCut < BELT_HOLD && !(autoWant === 'all' && allBad) ? autoWant : want;
+        } else if (k !== 'stage' && !isSt(k) && !marblePts.length) pick = 'stage';   // a scripted belt role, no marble live
+        if (autoWant !== pick){ autoWant = pick; lastCut = time; cutNow = true; }
       }
       effMode = autoWant;
     }
@@ -473,6 +412,5 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
 
   return { camera, target: camTarget, orbit, update, syncTracks, syncStations, addShake, resize,
            get mode(){ return mode; }, set mode(m){ mode = m; renderButtons(); },
-           get freeFov(){ return freeFov; }, set freeFov(f){ freeFov = f || null; if (f){ camera.fov = f; camera.updateProjectionMatrix(); } }, get shot(){ return autoWant; }, get weigh(){
-             return dbgCand && { cand: dbgCand, floor: dbgFloor, rot: Object.fromEntries(Object.keys(dbgCand).map(k => [k, +dbgRotate(k, dbgCand[k]).toFixed(2)])) }; } };
+           get freeFov(){ return freeFov; }, set freeFov(f){ freeFov = f || null; if (f){ camera.fov = f; camera.updateProjectionMatrix(); } }, get shot(){ return autoWant; } };
 }

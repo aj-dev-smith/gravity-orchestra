@@ -61,7 +61,6 @@ export default {
   lookHeight: 5.1,                  // between the bars and the gantry: the whole performer, mallets mid-frame
   camera: { dist: 10.5, up: 7, x: -4.2 },  // a 3/4 view from the bass end, over the string bass: tongs, heads + bars read; the belts stay out
   color: '#ff8a5a',                 // director button / shot tint: lacquered rosewood amber
-  directorWeight: 1.2,              // (its part is trimmed ×.38 in the mix — cue weights are velocities)
   voice,
   // two baked velocity layers per played note (soft + hard/bright), only the ones a strike
   // can ask for: a hard note's soft layer too (a roll's sustaining strokes are softer, and a

@@ -1,0 +1,76 @@
+import { describe, it, expect } from 'vitest';
+import { planEdit, shotAt, PLAN } from '../src/directorplan.js';
+
+// a synthetic room: 120 bpm (beat .5 s), 96 beats of music from t0 = 1
+const beat = .5, t0 = 1, N = 96, end = t0 + N * beat;
+const at = b => t0 + b * beat;
+const every = (from, to, step, w = .7) => { const h = []; for (let b = from; b < to; b += step) h.push({ t: at(b), w }); return h; };
+const room = () => [
+  { key: 'marimba', hits: every(0, N, .5) },                       // busy all loop (an ostinato)
+  { key: 'bowls', hits: every(0, N, 4) },                          // sparse but present all loop
+  { key: 'drums', hits: [...every(60, 64, .25, .3).map((h, i) => ({ ...h, w: .3 + i * .04 })), { t: at(64), w: .9 }] },   // a lone roll
+  { key: 'bells', hits: [...every(16, 20, 1, .8), ...every(72, 76, 1, .8)] },   // two climaxes
+  { key: 'belt', belt: true, hits: every(0, N, 1) },
+];
+const grid = { t0, beat, end };
+const secs = (p, k) => p.shares[k] * N * beat;
+
+describe('directorplan — the edit, solved up front', () => {
+  it('gives a sparse machine its big moment (the drums\' only roll gets the camera, on it)', () => {
+    const p = planEdit({ voices: room(), grid });
+    expect(p.shares.drums).toBeGreaterThan(0);
+    const drumCut = p.cuts.find(c => c.key === 'drums');
+    expect(drumCut.t).toBeGreaterThanOrEqual(at(56));
+    expect(drumCut.t).toBeLessThanOrEqual(at(64));
+  });
+
+  it('caps every share — the busy machine and the belt never hog the film (the caps fit this room)', () => {
+    const p = planEdit({ voices: room(), grid });
+    expect(p.shares.belt ?? 0).toBeLessThanOrEqual(PLAN.CAP.belt + 1e-9);
+    expect(p.shares.marimba ?? 0).toBeLessThanOrEqual(PLAN.CAP.station + 1e-9);
+    expect(p.shares.stage ?? 0).toBeLessThanOrEqual(PLAN.CAP.stage + 1e-9);
+  });
+
+  it('covers every machine that plays at least once a loop', () => {
+    const p = planEdit({ voices: room(), grid });
+    for (const k of ['marimba', 'bowls', 'drums', 'bells', 'belt']) expect(p.shares[k] ?? 0).toBeGreaterThan(0);
+  });
+
+  it('cuts land on beats, hold ≥ MIN_HOLD (bar the grid end), and never cut to the same shot', () => {
+    const p = planEdit({ voices: room(), grid });
+    p.cuts.forEach((c, i) => {
+      const b = (c.t - t0) / beat;
+      expect(Math.abs(b - Math.round(b))).toBeLessThan(1e-6);
+      const next = p.cuts[i + 1]?.t ?? end;
+      if (i + 1 < p.cuts.length) expect(next - c.t).toBeGreaterThanOrEqual(PLAN.MIN_HOLD - 1e-6);
+      if (i) expect(c.key).not.toBe(p.cuts[i - 1].key);
+    });
+  });
+
+  it('an entrance after a long rest pulls the camera onto it', () => {
+    const voices = [
+      { key: 'strings', hits: every(0, N, 1) },
+      { key: 'musicbox', hits: every(32, N, 1) },                  // comes in at beat 32
+      { key: 'belt', belt: true, hits: every(0, N, 1) },
+    ];
+    const p = planEdit({ voices, grid });
+    expect(shotAt(p, at(33), end)).toBe('musicbox');
+  });
+
+  it('scripted shots are fixed points — held exactly, exempt from the caps', () => {
+    const p = planEdit({ voices: room(), grid, fixed: [{ t: at(8), len: 40 * beat, key: 'lead' }] });
+    for (let b = 8; b < 48; b += 2) expect(shotAt(p, at(b) + .01, end)).toBe('lead');
+  });
+
+  it('a big ensemble downbeat earns the wide', () => {
+    const p = planEdit({ voices: room(), grid, wides: [at(40)] });
+    expect(shotAt(p, at(40) + .01, end)).toBe('stage');
+  });
+
+  it('shotAt: the roll-in and the seam are the wide; is deterministic', () => {
+    const p = planEdit({ voices: room(), grid });
+    expect(shotAt(p, 0, end)).toBe('stage');
+    expect(shotAt(p, end + .1, end)).toBe('stage');
+    expect(planEdit({ voices: room(), grid }).cuts).toEqual(p.cuts);
+  });
+});

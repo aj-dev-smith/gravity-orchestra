@@ -54,7 +54,6 @@ export default {
   // optional STAGING hints (main.js syncDirector / camera.js):
   camera: { dist: 15, up: 5, x: 0 },   // the director's shot: eye at (x, lookHeight+up, dist) local
   color: '#ff8a5a',               // cam-button / shot tint
-  directorWeight: 1,              // × the look-ahead score (sparse voices boost; song.director overrides)
   cameraKey: 'strings',           // the shot / cam-button key when `key` collides with a belt
                                   // role (lead / alto / bass) — the instrument keeps its key
 

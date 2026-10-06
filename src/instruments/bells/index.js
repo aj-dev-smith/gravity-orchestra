@@ -43,7 +43,6 @@ export default {
   lookHeight: 8.4,
   camera: { dist: 14, up: 6 },      // up + back: the whole gantry, no empty floor in the lower third
   color: '#ffc86a',                 // cathedral gold
-  directorWeight: 1.6,              // sparse but the biggest moments in a song — let them win the cut
 
   voice: id => bellVoice(id),
 

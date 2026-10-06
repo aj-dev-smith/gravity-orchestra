@@ -10,6 +10,8 @@ import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } 
 import { makeConveyorShop, BELT_DEPTH } from './conveyor.js';
 import { makeMarbleDrums } from './marbledrums.js';
 import { makeCameraRig } from './camera.js';
+import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
+import { stationFor } from './instruments/stations.js';
 import { encodeSong, decodeSong } from './share.js';
 import { parseMidi } from './midi/parse.js';
 import { convertToSong } from './midi/convert.js';
@@ -192,6 +194,20 @@ let machinesOn = true;                                  // key M toggles the who
    pistons for force, magnets for long rests (src/marbledrums.js). Rebuilt per song
    under `world`; every frame is a pure function of songTime. */
 const drumKit = makeMarbleDrums({ envMap, glowTex });
+
+/* ---- INSTRUMENT PLUGINS (src/instruments/<key>/) — every folder is picked up by
+   the registry; main only runs the generic loop: build the song's part into the
+   instrument's STATION (origin + yaw, render-time placement), update it each frame
+   as a pure fn of songTime, and turn its strikes into sparks + a light + its voice.
+   See src/instruments/README.md for the contract. ---- */
+const instRigs = INSTRUMENTS.map(I => ({ I, inst: I.make({ envMap, glowTex, THREE }), station: null }));
+let instLive = [];                                      // rigs with a part in the current song
+const STRIKE_LIGHTS = 6;                                // shared pool, CONSTANT size → no shader recompiles
+const strikeLights = Array.from({ length: STRIKE_LIGHTS }, () => {
+  const l = new THREE.PointLight(0xffffff, 0, 9, 2); scene.add(l); return { l, age: 9, peak: 0 };
+});
+let strikeLightIdx = 0;
+const _sp = new THREE.Vector3();
 
 /* ---------------- marble rigs (lead = amber, bass = ice-blue) ---------- */
 function makeRig(opt){
@@ -408,9 +424,29 @@ function buildWorld(keyName){
   // `start` arms every ball on its magnet for the count-in.
   world.add(drumKit.build(S.drums, { rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T, cx: stageView.cx, start: -LEAD_IN }));
 
+  // instrument plugins: each part builds inside its station (render-time placement only)
+  const voices = [];
+  instLive = [];
+  instRigs.forEach((rig, i) => {
+    const part = S.parts?.[rig.I.key];
+    if (!part || !part.length) return;
+    const st = stationFor(rig.I.key, i);
+    const station = new THREE.Group();
+    station.position.set(stageView.cx + st.x, st.y, st.z);
+    station.rotation.y = st.yaw;
+    station.add(rig.inst.build(part, { rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T, start: -LEAD_IN,
+      station: st, floorY: ROOM.FLOOR - st.y, loopBeats: S.melody.reduce((a, n) => a + n[1], 0) }));
+    world.add(station);
+    station.updateMatrixWorld(true);
+    rig.station = station;
+    instLive.push(rig);
+    const ids = rig.I.voiceIds ? rig.I.voiceIds(part) : [...new Set(part.map(e => e[1]))];
+    ids.forEach(id => voices.push({ key: `inst:${rig.I.key}:${id}`, wet: !!rig.I.wet, render: () => rig.I.voice(id) }));
+  });
+
   audio.setBeat(BEAT);
   cam.syncTracks(tracks, stageView);                    // reframe + rebuild the cam-button row for the new song
-  audio.rebuildBank(tracks, S.drums ? Object.keys(S.drums) : []);
+  audio.rebuildBank(tracks, S.drums ? Object.keys(S.drums) : [], voices);
   // start in the loop's TAIL: songTime < 0 means no ball has spawned yet (li stays
   // -1), so the machine + any tail/pickup drums play as a count-in, then the marble
   // spawns at songTime 0 and rolls into the downbeat. skipStrikes guards the first
@@ -458,18 +494,62 @@ function drumStrike(hit){
   }
 }
 
+/* Frame the free camera on an instrument's station: from out front of it (its local
+   +z, through the station's yaw), a little above, looking at its middle. dist/up are
+   in world units. Used by ?solo and window.__dev.station(key). */
+function lookAtStation(key, dist = 15, up = 5){
+  const rig = instLive.find(r => r.I.key === key);
+  if (!rig) return false;
+  const st = rig.station, h = rig.I.lookHeight ?? 3;
+  const tgt = st.localToWorld(new THREE.Vector3(0, h, 0));
+  const eye = st.localToWorld(new THREE.Vector3(0, h + up, dist));
+  cam.camera.position.copy(eye); cam.target.copy(tgt); cam.orbit.target.copy(tgt); cam.orbit.update();
+  return true;
+}
+
+/* An instrument plugin's strike: sparks + a shared strike light at the contact (its
+   local pos → world through the station), an optional camera punch, and its voice.
+   hit = { note, vel, pos (Vector3, instrument-local), color, dur (s), shake, sparks } */
+function instStrike(rig, hit){
+  const v = hit.vel ?? 1;
+  const p = rig.station.localToWorld(_sp.copy(hit.pos || new THREE.Vector3()));
+  const col = new THREE.Color(hit.color ?? 0xffffff);
+  if (hit.sparks !== 0) spawnBurst(p.clone(), col, hit.sparks ?? Math.round(4 + 6 * v), 2.6);
+  const L = strikeLights[strikeLightIdx++ % STRIKE_LIGHTS];
+  L.l.color.copy(col); L.l.position.copy(p).add(new THREE.Vector3(0, .6, .4));
+  L.age = 0; L.peak = 8 * (.35 + .65 * v) * (hit.light ?? 1);
+  if (hit.shake) cam.addShake(hit.shake * v);
+  if (audio.isReady() && !muted){
+    try { audio.playVoice(`inst:${rig.I.key}:${hit.note}`, v, { dur: hit.dur || 0 }); } catch(e){ /* audio must never break the run */ }
+  }
+}
+
 /* ---------------- timeline ---------------- */
 const clock = new THREE.Clock(); clock.autoStart = false;
 let started = false;
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const sel = document.getElementById('song');
+/* ?solo=<key> — an instrument's own demo (its descriptor's `demo`), on a minimal low
+   melodic spine (the engine needs one to drive loop length / timeline-zero). Dev tool
+   for building an instrument in isolation; the real songs ignore it. */
+const soloKey = new URLSearchParams(location.search).get('solo');
+const soloI = soloKey && instrumentByKey(soloKey);
+if (soloI && soloI.demo){
+  const { bpm = 100, beats = 16, part, scale } = soloI.demo;
+  SONGS['solo-' + soloKey] = { label: `${soloI.label} (solo)`, sub: 'instrument demo', bpm,
+    scale: scale || ['C','D','E','F','G','A','B'],
+    melody: Array.from({ length: Math.round(beats / 4) }, (_, i) => [i % 2 ? 'G3' : 'C3', 4]),
+    parts: { [soloKey]: part } };
+}
 Object.entries(SONGS).forEach(([k, s]) => {
   const o = document.createElement('option');
   o.value = k; o.textContent = s.label;
   sel.appendChild(o);
 });
+if (soloI && SONGS['solo-' + soloKey]) sel.value = 'solo-' + soloKey;
 buildWorld(sel.value);
+if (soloI) lookAtStation(soloKey);
 /* the machine runs from first paint — only AUDIO waits for a gesture.
    (reduced-motion users keep the old behavior: stillness until they opt in) */
 if (!reduceMotion){ clock.start(); started = true; }
@@ -630,6 +710,11 @@ function animate(){
 
   // ---- marble drums: one ball per drum, dribbling its solved arcs ----
   drumKit.update(songTime, P, dt, { started, skipStrikes, onStrike: drumStrike });
+
+  // ---- instrument plugins: pure fns of songTime, strikes routed through instStrike ----
+  for (const rig of instLive)
+    rig.inst.update(songTime, P, dt, { started, skipStrikes, onStrike: hit => instStrike(rig, hit) });
+  for (const L of strikeLights){ L.age += dt; L.l.intensity = L.peak * Math.exp(-L.age * 11); }
 
   if (trailTick > .022) trailTick = 0;
   trailTick += dt;
@@ -825,10 +910,12 @@ if (new URLSearchParams(location.search).has('debug')){
   document.body.appendChild(box);
   // dev handle for driving the scene from DevTools (look at a station, scrub, slow-mo)
   window.__dev = {
-    look(px, py, pz, tx, ty, tz){ cam.camera.position.set(px, py, pz); cam.orbit.target.set(tx, ty, tz); cam.orbit.update(); },
+    look(px, py, pz, tx, ty, tz){ cam.camera.position.set(px, py, pz); cam.target.set(tx, ty, tz); cam.orbit.target.set(tx, ty, tz); cam.orbit.update(); },
     get t(){ return songTime; }, set t(v){ songTime = v; skipStrikes = true; },
     set rate(r){ playRate = r; },
     song(k){ sel.value = k; sel.dispatchEvent(new Event('change')); },
+    station(key, dist, up){ return lookAtStation(key, dist, up); },
+    instruments: () => instLive.map(r => r.I.key),
   };
   dbg = { update(T){
     if (!held) bar.value = Math.round(T / (ROLL_T + LOOP_T) * 1000);

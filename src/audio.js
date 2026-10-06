@@ -150,7 +150,7 @@ const SILENT_URL = (() => {
 
 let bank = {}, primed = false;
 const bankKey = (note, bass) => note + (bass ? '|b' : '');
-export function rebuildBank(tracks, drumLanes = []){
+export function rebuildBank(tracks, drumLanes = [], voices = []){
   Object.values(bank).forEach(a => {
     try { a.pause(); } catch(e){}
     if (a.dataset.real) URL.revokeObjectURL(a.dataset.real);
@@ -160,10 +160,20 @@ export function rebuildBank(tracks, drumLanes = []){
   const wanted = new Map();
   tracks.forEach(tr => tr.pads.forEach(p => wanted.set(bankKey(p.note, tr.deep), {note:p.note, bass:tr.deep})));
   drumLanes.forEach(name => wanted.set('drum:' + name, {drum:name}));   // one sample per drum lane
+  voiceSrc = new Map(); voiceAB = new Map();
+  voices.forEach(v => {                                  // instrument plugin voices (src/instruments/*)
+    if (voiceSrc.has(v.key)) return;
+    try {
+      const r = v.render();
+      voiceSrc.set(v.key, {samples: r.samples, sr: r.sr, wet: !!v.wet});
+      wanted.set(v.key, {voice: v.key});
+    } catch(e){ console.warn('cascade: voice render failed', v.key, e); }
+  });
   wanted.forEach((spec, k) => {
     const a = document.createElement('audio');
     a.setAttribute('playsinline',''); a.preload = 'auto';
     a.dataset.real = URL.createObjectURL(
+      spec.voice ? encodeWav(voiceSrc.get(spec.voice).samples, voiceSrc.get(spec.voice).sr) :
       spec.drum ? renderDrumWav(spec.drum) : renderNoteWav(noteHz(spec.note), spec.bass));
     a.src = SILENT_URL;                                  // real sample swapped in after unlock
     a.addEventListener('error', () => stateEl.textContent = 'audio: sample blocked');
@@ -203,6 +213,49 @@ export function playDrum(name, vel = 1){
     hitDrum(name, vel); lastPath = 'webaudio'; return;
   }
   const a = bank['drum:' + name];
+  if (a){
+    try { a.currentTime = 0; } catch(e){}
+    a.play().catch(()=>{});
+    lastPath = 'samples';
+  }
+}
+
+/* ---- INSTRUMENT VOICES — the plugin seam (src/instruments/README.md) ----
+   An instrument hands rebuildBank a list of {key, render() → {samples, sr}, wet}.
+   ONE pure render feeds BOTH paths, so the live and iOS voices can't drift apart:
+   · live: the same Float32Array wrapped in an AudioBuffer (cached per context),
+     gain = vel (dynamics live here only), optional `dur` → a release fade (for
+     sustained voices), routed dry to busOut or (wet) through the melody echo;
+   · samples: the same buffer as a WAV in the <audio> bank (peak-normalized; iOS
+     ignores el.volume, so the element plays full — the usual §5 degradation). */
+let voiceSrc = new Map(), voiceAB = new Map(), voiceCtx = null;
+function voiceBuffer(key){
+  if (voiceCtx !== ctx){ voiceAB = new Map(); voiceCtx = ctx; }   // buffers belong to one context
+  let b = voiceAB.get(key);
+  if (!b){
+    const v = voiceSrc.get(key); if (!v) return null;
+    b = ctx.createBuffer(1, v.samples.length, v.sr);
+    b.getChannelData(0).set(v.samples);
+    voiceAB.set(key, b);
+  }
+  return b;
+}
+export function playVoice(key, vel = 1, { dur = 0 } = {}){
+  if (ctx && ctx.state === 'running' && ctx.currentTime > .05){
+    const buf = voiceBuffer(key);
+    if (!buf) return;
+    const t = ctx.currentTime;
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const g = ctx.createGain(); g.gain.setValueAtTime(Math.max(.05, Math.min(1, vel)), t);
+    src.connect(g); g.connect(voiceSrc.get(key).wet ? master : (busOut || master));
+    src.start(t);
+    if (dur > 0 && dur < buf.duration){                  // sustained voice: release at the note's end
+      g.gain.setTargetAtTime(.0001, t + dur, .12);
+      src.stop(t + dur + .8);
+    }
+    lastPath = 'webaudio'; return;
+  }
+  const a = bank[key];
   if (a){
     try { a.currentTime = 0; } catch(e){}
     a.play().catch(()=>{});

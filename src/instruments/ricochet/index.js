@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { eventTimes, makeEdge, wrapP } from '../clock.js';
 import { noteNum, arcPos } from '../../engine.js';
-import { buildOrbit, marbleAt, sinceStrike, wobble, gateLift, BALL_R, PLATE_T, GATE_R, CABLE_R, CLEAR } from './solve.js';
+import { buildOrbit, marbleAt, sinceStrike, wobble, gateLift, powerAt, gatePowerAt, plateWob, BALL_R, PLATE_T, GATE_R, CABLE_R } from './solve.js';
 import { glassVoice, gateClink, relayTock } from './voice.js';
 
 /* ============================================================
@@ -10,18 +10,25 @@ import { glassVoice, gateClink, relayTock } from './voice.js';
 
    A constellation of tuned glass plates hangs in mid-air, each on a
    rigid chrome stem from a smoked-glass canopy. ONE chrome marble
-   ricochets between them forever — every bounce a perfect mirror
-   reflection, so it never gains or loses energy: no motors, no pistons,
-   no magnets in the loop. The canopy hangs just above (H + CEIL_GAP) the
-   marble's ENERGY CEILING H — the height where it would come to rest —
-   so no arc can ever reach it.
+   ricochets between them forever. Every bounce is honestly LOSSY
+   (restitution E_REST) and every plate is POWERED: a loudspeaker-like
+   driver — a fixed chrome bezel carrying a voice COIL, and a glass
+   PISTON that winds back and kicks along its normal at contact at
+   exactly the moving-wall speed that restores the lost energy. The
+   power chain is visible: the canopy's glowing ring is the BUS; as the
+   marble heads for a plate, a charge pulse runs from the ring down that
+   plate's stem, its coil warms (prog², the belt's anticipation grammar)
+   and DISCHARGES as the piston kicks. The canopy hangs just above
+   (H + CEIL_GAP) the marble's ENERGY CEILING H — the height where it
+   would come to rest between kicks — so no arc can ever reach it.
 
    Each note occurrence is its own plate (size = pitch, the engine's
    law; height ≈ pitch, so the sculpture reads as a score); each plate's
    tilt is forced by the two arcs it joins (n = vOut − vIn). The full
-   orbit is drawn as a faint glowing wire — the frozen knot — that
-   brightens just ahead of the marble. Dark obsidian RELAY mirrors carry
-   it across long rests (the loop seam) with a soft, dark tock.
+   orbit can be drawn as a glowing wire — the frozen knot — as an X-RAY
+   of the solve: hidden by default (it has no physical source), key K
+   (or ?knot) toggles it. Dark obsidian RELAY plates (powered the same
+   way) carry it across long rests (the loop seam) with a soft, dark tock.
 
    Count-in: the marble hangs on the one magnet, AT the energy ceiling
    (at rest: exactly the orbit's energy), drops onto a hinged STARTER
@@ -38,6 +45,15 @@ const ICE_HOT  = 0xe8fbff;
 const TRAIL_N  = 9, TRAIL_DT = .016;
 const CANOPY_PAD = .55;              // canopy rim beyond the furthest plate edge
 const ROOM_H = 58;                   // fallback only: main.js passes ceilY (ROOM.CEIL − station.y)
+const PULSE_TRAIL = [0, .05, .1], PULSE_SZ = [.9, .6, .4], PULSE_OP = [1, .55, .25];
+/* energy → glow: injected energy ∝ w², a plate's glow scales by (w/wMax)^.75, floored so a glancing touch still ticks */
+const PW_EXP = .75, PW_MIN = .15;
+
+/* the KNOT x-ray: off by default (no physical source); K toggles it, ?knot starts with it on */
+let knotOn = typeof location !== 'undefined' && /[?&]knot\b/.test(location.search);
+if (typeof addEventListener === 'function') addEventListener('keydown', e => {
+  if ((e.key === 'k' || e.key === 'K') && !/^(input|textarea|select)$/i.test(e.target?.tagName || '')) knotOn = !knotOn;
+});
 
 /* the solve is deterministic: memoise it per (part, loop, count-in) so a song change back is instant */
 const ORBITS = new Map();
@@ -104,11 +120,16 @@ export default {
         const m = new THREE.Mesh(new THREE.TorusGeometry(R, tube, 8, 96).rotateX(Math.PI / 2), mat);
         m.position.y = y; return fz(m), group.add(m), m;
       };
-      const sprite = (color, parent = group) => {
-        const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color, transparent: true, opacity: 0,
-          blending: THREE.AdditiveBlending, depthWrite: false }));
-        parent.add(s); return s;
-      };
+      const spriteM = (color, opacity = 0) => new THREE.SpriteMaterial({ map: glowTex, color, transparent: true, opacity,
+        blending: THREE.AdditiveBlending, depthWrite: false });
+      const sprite = (color, parent = group) => { const s = new THREE.Sprite(spriteM(color)); parent.add(s); return s; };
+      // the charge pulse's beads: three SHARED materials (one per trail slot) for every plate + the gate
+      const beadM = PULSE_TRAIL.map((_, k) => spriteM(new THREE.Color(ICE).multiplyScalar(2.2), PULSE_OP[k]));   // hot enough to bloom
+      const beadsFor = () => beadM.map(m => { const b = new THREE.Sprite(m); b.visible = false; group.add(b); return b; });
+      const pathOf = path => { const segL = path.slice(1).map((q, k) => q.distanceTo(path[k])); return { path, segL, pathL: segL.reduce((a, b) => a + b, 0) }; };
+      // energy injected per kick ∝ w²: the glow is sized by it (the gate's kick counts too)
+      const wMax = Math.max(1e-6, ...orb.kick.map(k => k.w), orb.entry?.kick ? orb.entry.kick.w : 0);
+      const pwOf = w => Math.max(PW_MIN, Math.pow(w / wMax, PW_EXP));
 
       // ---- the canopy: smoked glass at the energy ceiling, a glowing rim, spokes, and three
       //      suspension rods up to the room's ceiling (the whole sculpture HANGS) ----
@@ -154,25 +175,44 @@ export default {
         const body = new THREE.Group(); body.position.copy(orb.c[i]).sub(top);
         body.quaternion.setFromUnitVectors(UP, orb.n[i]); piv.add(body);
         const r = orb.r[i];
+        // the DRIVER: a fixed bezel (inside the audited plate volume) carrying the voice coil on
+        // the back face, and the glass piston that rides along n (local y) inside it. The bezel's
+        // own emissive is the pitch-coloured JEWEL RIM (reads at wide) and it carries the charge.
+        const bezelM = relay
+          ? new THREE.MeshStandardMaterial({ color: 0x232733, metalness: .7, roughness: .45, envMap, emissive: col.clone(), emissiveIntensity: .1 })
+          : new THREE.MeshStandardMaterial({ color: 0xdfe6ef, metalness: 1, roughness: .12, envMap, envMapIntensity: 1.4, emissive: col.clone(), emissiveIntensity: .5 });
+        const coilR = Math.max(.08, .58 * r), coilT = .028;
+        body.add(new THREE.Mesh(mergeGeometries([                                         // bezel + pole piece: one draw
+          new THREE.TorusGeometry(r - PLATE_T / 2, PLATE_T / 2, 8, 48).rotateX(Math.PI / 2),
+          new THREE.CylinderGeometry(coilR * .35, coilR * .35, .02, 16).translate(0, -PLATE_T / 2 + .01, 0),
+        ].map(g => g.index ? g.toNonIndexed() : g)), bezelM));
         const discM = relay
           ? new THREE.MeshStandardMaterial({ color: 0x0a0c14, metalness: .95, roughness: .1, envMap, envMapIntensity: 1.1,
               emissive: col.clone(), emissiveIntensity: .05 })
           : new THREE.MeshStandardMaterial({ color: col.clone().lerp(new THREE.Color(0xffffff), .35), metalness: .65, roughness: .04,
               envMap, envMapIntensity: 2, emissive: col.clone(), emissiveIntensity: .12, transparent: true, opacity: .38 });
-        body.add(new THREE.Mesh(new THREE.CylinderGeometry(r, r, PLATE_T, 40), discM));
-        const rimM = new THREE.MeshBasicMaterial({ color: col.clone() });
-        body.add(new THREE.Mesh(new THREE.TorusGeometry(r, .022, 6, 48).rotateX(Math.PI / 2), rimM));
-        // ring axis: the marble's impulse pushes the plate along −n, so the stem swings that
-        // way first (a × ŷ = n_h ⇒ the plate end moves along −n_h for a positive angle)
-        const nh = V(orb.n[i].x, 0, orb.n[i].z);
-        const axis = nh.lengthSq() > 1e-6 ? new THREE.Vector3().crossVectors(UP, nh.normalize()) : V(1, 0, 0);
-        // the plate end travels ≤ .8·CLEAR (the audit's guaranteed air), so the ringing
-        // can never carry a plate into a passing arc: angle = travel / stem length
-        const wobA = .8 * CLEAR / L;
+        const pist = new THREE.Group(); body.add(pist);
+        // the piston's FRONT face is exactly the solved contact plane (y = PLATE_T/2); it rides inside the bezel
+        const rp = r - PLATE_T * 1.05;
+        pist.add(new THREE.Mesh(new THREE.CylinderGeometry(rp, rp, PLATE_T * .8, 40).translate(0, PLATE_T * .1, 0), discM));
+        const rimM = new THREE.MeshBasicMaterial({ color: col.clone().multiplyScalar(.25) });          // the voice coil
+        body.add(new THREE.Mesh(new THREE.TorusGeometry(coilR, coilT, 6, 40).rotateX(Math.PI / 2).translate(0, -PLATE_T / 2 + coilT, 0), rimM));
+        // the power path: BUS ring → (trace under the canopy) → eye → down the stem → weld → coil
+        const ang = Math.atan2(K.z, K.x);
+        const busP = V((footR - .02) * Math.cos(ang), yC - .07, (footR - .02) * Math.sin(ang));
+        const eyeP = V(K.x, yC - .07, K.z);
+        const coilP = orb.c[i].clone().addScaledVector(orb.n[i], -PLATE_T / 2 + coilT);
+        if (busP.distanceTo(eyeP) > .05) bar(busP, eyeP, .016, dark, 5);
+        const pp = pathOf([busP, eyeP, K.clone(), coilP]);
+        const beads = beadsFor();
+        // the stem's ring (axis + amplitude) is solve.js's plateWob — the very motion the
+        // no-penetration check verified
+        const wob = plateWob(orb, i);
+        const pw = pwOf(orb.kick[i].w);
         const halo = sprite(col);
         const contact = orb.p[i].clone().addScaledVector(orb.n[i], -BALL_R);
         halo.position.copy(contact);
-        return { nd, i, relay, col, colBase: col.clone(), piv, axis, wobA, discM, rimM, halo, contact, r,
+        return { nd, i, relay, col, colBase: col.clone(), piv, wob, discM, rimM, bezelM, halo, contact, r, pist, ...pp, beads, pw,
                  inDt: orb.nodes[(i - 1 + N) % N].dt };
       });
 
@@ -203,7 +243,7 @@ export default {
             gl_FragColor = vec4(uCol * k, 1.0);
           }`,
       }));
-      wire.frustumCulled = false; group.add(wire);
+      wire.frustumCulled = false; wire.visible = knotOn; group.add(wire);
 
       // ---- the marble: chrome, a faint ice glow, a ghost trail re-sampled from the pure fn ----
       const marbleM = new THREE.MeshStandardMaterial({ color: 0xf2f6fb, metalness: 1, roughness: .06, envMap, envMapIntensity: 1.8,
@@ -238,6 +278,7 @@ export default {
         arm.position.copy(armTip).multiplyScalar(.5); arm.quaternion.setFromUnitVectors(UP, armDir); hingeG.add(arm);
         const gateBody = new THREE.Group(); gateBody.position.copy(en.c).sub(hinge);
         gateBody.quaternion.setFromUnitVectors(UP, en.n); hingeG.add(gateBody);
+        const gateBase = gateBody.position.clone();
         const gateM = new THREE.MeshStandardMaterial({ color: 0xe9eef5, metalness: 1, roughness: .05, envMap, envMapIntensity: 1.8,
           emissive: new THREE.Color(ICE), emissiveIntensity: .1 });
         gateBody.add(new THREE.Mesh(new THREE.CylinderGeometry(GATE_R, GATE_R, PLATE_T, 32), gateM));
@@ -261,16 +302,43 @@ export default {
         const latch = new THREE.Mesh(new THREE.BoxGeometry(.1, .08, .2), latchM);
         latch.position.set(pawl.x, pawl.y + .2, pawl.z); latch.quaternion.setFromUnitVectors(V(0, 0, 1), hv); group.add(latch);
         bar(V(hinge.x, hinge.y + .05, hinge.z), V(hinge.x, yC, hinge.z), .045, dark);         // the hinge bracket
-        gate = { hingeG, hv, sign, gateM, latchM, halo: sprite(ICE) };
+        // the gate is powered like every plate: BUS → trace → down the hinge bracket → along the arm → its back face
+        const gAng = Math.atan2(hinge.z, hinge.x);
+        const gBus = V((footR - .02) * Math.cos(gAng), yC - .07, (footR - .02) * Math.sin(gAng));
+        const gTop = V(hinge.x, yC - .07, hinge.z);
+        if (gBus.distanceTo(gTop) > .05) bar(gBus, gTop, .016, dark, 5);
+        const gBack = en.c.clone().addScaledVector(en.n, -PLATE_T / 2);
+        gate = { hingeG, hv, sign, gateM, latchM, halo: sprite(ICE), body: gateBody, base: gateBase, n: en.n.clone(),
+                 ...pathOf([gBus, gTop, hinge.clone(), hinge.clone().add(armTip), gBack]), beads: beadsFor(), pw: pwOf(en.kick.w) };
         gate.halo.position.copy(en.E);
       }
 
       freeze(group);
-      S = { orb, plates, marble, marbleM, mHalo, trail, wireU, magnet, gate, start, edge: makeEdge(.25), gateEdge: makeEdge(.25), P };
+      S = { orb, plates, marble, marbleM, mHalo, trail, wireU, wire, magnet, gate, start, edge: makeEdge(.25), gateEdge: makeEdge(.25), P };
       return group;
     }
 
-    const _p = new THREE.Vector3(), _q = new THREE.Quaternion();
+    const _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _pw = {}, _gw = {};
+    const _H = new THREE.Color(ICE_HOT);
+    /* a point at fraction u ∈ [0,1] along a plate's power path */
+    const pathAt = (pl, u, out) => {
+      let d = Math.max(0, u) * pl.pathL;
+      for (let k = 0; k < pl.segL.length; k++){
+        if (d <= pl.segL[k] || k === pl.segL.length - 1) return out.lerpVectors(pl.path[k], pl.path[k + 1], Math.min(1, d / (pl.segL[k] || 1)));
+        d -= pl.segL[k];
+      }
+      return out;
+    };
+    /* the charge pulse's beads along a power path, sized by the energy it carries */
+    const runBeads = (pl, pulse) => {
+      for (let k = 0; k < pl.beads.length; k++){
+        const b = pl.beads[k], u = pulse - PULSE_TRAIL[k];
+        b.visible = pulse >= 0 && u >= 0;
+        if (!b.visible) continue;
+        pathAt(pl, u, b.position);
+        b.scale.setScalar(PULSE_SZ[k] * (.45 + .55 * pl.pw));
+      }
+    };
     function update(songTime, P, dt, { started, skipStrikes, onStrike }){
       if (!S) return;
       const { orb, plates } = S, en = orb.entry;
@@ -291,21 +359,31 @@ export default {
       if (started && en && t >= en.tE && S.gateEdge.check(en.tE, t - en.tE, skipStrikes))
         onStrike && onStrike({ note: 'gate', vel: .7, pos: en.E.clone(), color: ICE, dur: 0, shake: 0, sparks: 10, light: .9 });
 
-      // ---- plates: flash, rim, halo, the wobble on the hanger ----
+      // ---- plates: the power chain (pulse → coil charge → discharge), the piston's kick,
+      //      flash, halo, the wobble on the hanger ----
       for (const pl of plates){
         const s = sinceStrike(orb, pl.i, t);
         const v = pl.relay ? .45 : pl.nd.vel;
         const fl = isFinite(s) ? v * Math.exp(-s * 5) : 0;
-        pl.discM.emissiveIntensity = (pl.relay ? .05 : .12) + (pl.relay ? 1.2 : 3.2) * fl;
-        pl.rimM.color.copy(pl.colBase).multiplyScalar(.7 + 3.5 * fl);
+        const pw = started ? powerAt(orb, pl.i, t, _pw) : (_pw.pulse = -1, _pw.charge = _pw.flash = _pw.x = 0, _pw);
+        pl.pist.position.y = pw.x;
+        pl.discM.emissiveIntensity = (pl.relay ? .05 : .12) + (pl.relay ? 1.2 : 3.2) * fl + .5 * pw.charge * pl.pw;
+        // the coil + the bezel rim: idle (pitch colour), dark until the pulse lands, then warm as
+        // q² while the marble closes in, white-hot at the discharge — all sized by the energy (pw)
+        const ch = pw.charge * pl.pw, fx = pw.flash * pl.pw, hot = Math.min(1, fx * 1.2);
+        pl.rimM.color.copy(pl.colBase).multiplyScalar(.25 + 2.6 * ch).lerp(_H, hot).multiplyScalar(1 + 2.4 * fx);
+        pl.bezelM.emissive.copy(pl.colBase).lerp(_H, hot);
+        pl.bezelM.emissiveIntensity = (pl.relay ? .1 : .5) + 1.6 * ch + 2.2 * fx;
+        runBeads(pl, pw.pulse);
         pl.halo.material.opacity = Math.min(1, 1.1 * fl);
         pl.halo.scale.setScalar(pl.r * (2.2 + 3 * fl));
-        const w = isFinite(s) ? wobble(s, P, pl.wobA * (.4 + .6 * v)) : 0;
-        pl.piv.quaternion.copy(_q.setFromAxisAngle(pl.axis, w));
+        const w = isFinite(s) ? wobble(s, P, pl.wob.A) : 0;
+        pl.piv.quaternion.copy(_q.setFromAxisAngle(pl.wob.axis, w));
       }
 
       // ---- the knot lights up just ahead of the marble ----
       const inOrbit = m.phase === 'orbit';
+      S.wire.visible = knotOn;
       S.wireU.uOn.value = inOrbit ? 1 : 0;
       S.wireU.uNow.value = wrapP(t, P);
 
@@ -334,7 +412,12 @@ export default {
         const lift = gateLift(orb, t);
         S.gate.hingeG.quaternion.setFromAxisAngle(S.gate.hv, S.gate.sign * lift * Math.PI / 2);
         const sE = en ? t - en.tE : 9;
-        S.gate.gateM.emissiveIntensity = .1 + (sE >= 0 ? 3 * Math.exp(-sE * 7) : 0);
+        // the gate is powered too: a pulse from the bus as the magnet lets go, charge after it lands,
+        // kick + discharge at contact (solve.js gatePowerAt — the plates' grammar)
+        const gp = started ? gatePowerAt(orb, t, _gw) : (_gw.pulse = -1, _gw.charge = _gw.flash = _gw.x = 0, _gw);
+        S.gate.body.position.copy(S.gate.base).addScaledVector(S.gate.n, gp.x);
+        S.gate.gateM.emissiveIntensity = .1 + 1.6 * gp.charge * S.gate.pw + 3 * gp.flash * S.gate.pw;
+        runBeads(S.gate, gp.pulse);
         S.gate.halo.material.opacity = sE >= 0 ? Math.exp(-sE * 6) : 0;
         S.gate.halo.scale.setScalar(1.6);
         S.gate.latchM.emissiveIntensity = lift > 0 ? .05 : .6;                  // armed: lit; released: dark

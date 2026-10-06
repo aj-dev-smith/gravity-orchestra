@@ -26,7 +26,18 @@ const FIXED_OK = new Set(['all', 'auto', 'fixed', 'free', 'stage']);
    the director cuts there before it happens — the same "sees the future" trick the
    track director uses. Cuts hold ≥ MIN_HOLD; a shot held past BORED loses its pull,
    so the film keeps moving round the room. A far jump is a hard CUT, a near one glides. */
-const MIN_HOLD = 2.6, BORED = 7, SWITCH = 1.15, HARD_CUT = 12, STAGE_PULL = .9;
+const MIN_HOLD = 3.0, BORED = 7.5, SWITCH = 1.15, SWITCH_0 = 1.6, HARD_CUT = 12, STAGE_PULL = .9;
+/* The BELT is the protagonist (the PATERNOSTER — it carries the tune): it competes as a
+   station whose pull never drops below BELT_PULL × the room's level (BELT_ROOM × the mean
+   score of the two busiest machines, ≥ 1) while a marble is live, rising with the arc
+   it's about to throw (a long lob is the belt's own spotlight) up to BELT_MAX × that level.
+   ROTATION keeps the film moving round the room instead of ping-ponging two machines:
+     RECENT  — a shot just left is damped (×(1 − RECENT·e^(−ago/RECENT_T))), so a cut
+               doesn't bounce straight back;
+     UNSEEN  — a station off screen for over UNSEEN_0 s is boosted (ramping to ×(1+UNSEEN)
+               over UNSEEN_T s more), so every machine gets its spotlight when it next plays. */
+const BELT_PULL = 1.8, BELT_MAX = 2.7, SHRED_PULL = 2.1, BELT_ROOM = .6;    // ×(room level ≥ 1)
+const RECENT = .45, RECENT_T = 6, UNSEEN = .6, UNSEEN_0 = 14, UNSEEN_T = 26, BELT_UNSEEN_0 = 8;
 /* Room-mode extras (all fed by main's look-ahead over the song data):
      ENSEMBLE_N  — when ≥ this many machines land on one downbeat, go WIDE (ENSEMBLE_S)
      SKIM_S      — the lead's 16th-note skim is the money shot: hold the belt
@@ -43,8 +54,17 @@ const PAN_KEYS = {
   e: [0, 1, 0], q: [0, -1, 0],                               // E lifts the eye up, Q drops it down
 };
 
-export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
-  const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, .1, 200);
+export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = null }){
+  const BASE_FOV = 55;
+  const camera = new THREE.PerspectiveCamera(BASE_FOV, innerWidth/innerHeight, .1, 200);
+  /* a shot may carry its own lens (shot.fov — the room's WIDE is a wider lens: the hall is
+     bigger than any eye position inside it can frame at 55°); every other pose is BASE_FOV.
+     Eased like the pose, snapped on a hard cut. */
+  function lens(want, dt, snap){
+    if (Math.abs(camera.fov - want) < .01) return;
+    camera.fov = snap ? want : camera.fov + (want - camera.fov) * (1 - Math.pow(.0015, dt));
+    camera.updateProjectionMatrix();
+  }
 
   // FREE-look is the default so you can move around the scene; the director ('auto') and
   // the rest are one button-tap away. Free orbit still only engages once `started` (after
@@ -56,6 +76,8 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
   let curTracks = [];                                         // last-built tracks, for the button row
   let stations = [], stage = null;                            // [{key, eye, aim, color}] + the wide {eye, aim}
   let cutNow = false, openUntil = -Infinity, stageOff = -99;
+  let lastSeen = {};                                          // director: shot key → time it was last on screen
+  let dbgCand = null, dbgRotate = null, dbgFloor = 0;         // the director's last weighing (dev: __dev.weigh)
   const _ideal = new THREE.Vector3(), _aim = new THREE.Vector3(), _focus = new THREE.Vector3();
 
   const camTarget = new THREE.Vector3(0, stageY + .6, 0);     // the static band centre
@@ -149,6 +171,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
     if (!list.length && mode === 'stage') mode = DEFAULT_MODE;
     if (!FIXED_OK.has(mode) && !curTracks.some(t => t.role === mode) && !list.some(st => st.key === mode)) mode = 'auto';
     autoWant = openWide ? 'stage' : 'all'; lastCut = -99;   // a full room opens on the wide reveal…
+    lastSeen = {};                                            // a new song: every machine is unseen
     openUntil = openWide ? openT : -Infinity;                 // …held until songTime passes openT (count-in + downbeat)
     renderButtons();
   }
@@ -169,6 +192,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
       if (freeNow) orbit.target.copy(camTarget);              // orbit around whatever we were framing
     }
     if (freeNow){
+      lens(BASE_FOV, dt, false);
       keyboardFly(dt);                                        // WASD / arrows / QE fly the eye + pivot
       orbit.update();
       camPos.copy(camera.position); camTarget.copy(orbit.target);
@@ -199,20 +223,49 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
         if (autoWant === 'stage') stageOff = time;
         const ensemble = (sc._ensemble ?? 0) >= ENSEMBLE_N && !sc._skim && !sc._forceSoon && time - stageOff > ENSEMBLE_REST;
         const cand = { stage: Math.max(STAGE_PULL, ensemble ? ENSEMBLE_S : 0) };
-        if (marblePts.length) cand[want] = want === 'all' ? 1.25 : Math.min(Math.max(score, 1.4) * 1.05, 1.9);
         stations.forEach(st => { cand[st.key] = sc[st.key] ?? 0; });
+        // the belt: the protagonist. Its floor is RELATIVE to the room (a dense orchestra scores
+        // every station 2–4; a sparse one under 1) — level with its busiest machines —
+        // and rises with the arc it's about to throw (a long lob is the belt's own spotlight)
+        let top1 = 0, top2 = 0;                               // the two busiest machines set the room's level
+        stations.forEach(st => { const v = sc[st.key] ?? 0; if (v > top1){ top2 = top1; top1 = v; } else if (v > top2) top2 = v; });
+        const floor = Math.max(1, BELT_ROOM * (top1 + top2) / 2);
+        if (marblePts.length) cand[want] = floor * (want === 'all' ? BELT_PULL
+          : score > 1 ? Math.min(BELT_PULL + (score - 1.05) * .6, BELT_MAX) : SHRED_PULL);
+        if (!lastSeen._init){                                 // a new song: the clock of "unseen" starts now
+          lastSeen = { _init: true, _belt: time }; stations.forEach(st => { lastSeen[st.key] = time; });
+        }
+        lastSeen[autoWant] = time;                            // (this frame's shot counts as seen)
+        if (autoWant !== 'stage' && !stations.some(st => st.key === autoWant)) lastSeen._belt = time;
+        const ago = k => time - (lastSeen[k] ?? time);
+        const isSt = k => stations.some(st => st.key === k);
+        const rotate = (k, v) => k === 'stage' ? v       // (the belt shares one "seen" clock across its roles)
+          : isSt(k) ? v * (1 - RECENT * Math.exp(-ago(k) / RECENT_T)) * (1 + UNSEEN * Math.min(1, Math.max(0, ago(k) - UNSEEN_0) / UNSEEN_T))
+          : v * (1 - .5 * RECENT * Math.exp(-ago('_belt') / RECENT_T))     // the belt: the protagonist grows
+              * (1 + UNSEEN * Math.min(1, Math.max(0, ago('_belt') - BELT_UNSEEN_0) / UNSEEN_T));   // impatient off screen sooner
+        dbgCand = cand; dbgRotate = rotate; dbgFloor = floor;
         const held = time - lastCut;
-        if (sc._skim){                                        // the money shot: the lead's skim, no matter the hold
-          if (autoWant !== 'lead'){ autoWant = 'lead'; lastCut = time; cutNow = true; }
-        } else if (sc._force && stations.some(st => st.key === sc._force)){   // a station's ENTRANCE: cut on it
-          if (autoWant !== sc._force){ autoWant = sc._force; lastCut = time; cutNow = true; }
-        } else if (sc._seam){                                 // the loop seam: breathe wide, re-open on the newborn's fall
-          if (autoWant !== 'stage'){ autoWant = 'stage'; lastCut = time; cutNow = true; }
-        } else {
-          const cur = (cand[autoWant] ?? 0) * (held > BORED ? .45 : 1);
+        // an ordinary cut lands ON THE MUSIC: on the next beat — or the next bar line when that
+        // is under a beat away — never on the hold timer's tick; and never just ahead of a
+        // FORCED cut (a skim / an entrance / the seam within MIN_HOLD): hold, then take that one
+        const onGrid = sc._onBar || (sc._onBeat && !sc._barSoon) || sc._onBeat === undefined;
+        const quiet = !((sc._forcedWithin ?? Infinity) < MIN_HOLD);
+        // a marginal challenger can't win the instant the timer lets it: the bar to switch
+        // starts high (SWITCH_0 at MIN_HOLD) and relaxes to SWITCH by the time the shot is BORED
+        const sw = SWITCH + (SWITCH_0 - SWITCH) * Math.max(0, Math.min(1, (BORED - held) / (BORED - MIN_HOLD)));
+        const cut = k => { if (autoWant !== k){ autoWant = k; lastCut = time; cutNow = true; } };
+        // a station's ENTRANCE (several can share a downbeat): cut on the one seen least recently
+        const forced = (sc._force || []).filter(k => stations.some(st => st.key === k));
+        const force = forced.includes(autoWant) ? autoWant : forced.sort((a, b) => ago(b) - ago(a))[0];
+        if (sc._skim) cut('lead');                            // the money shot: the lead's skim, no matter the hold
+        else if (force) cut(force);
+        else if (sc._seam) cut('stage');                      // the loop seam: breathe wide, re-open on the newborn's fall
+        else {
+          // (on the belt, the incumbent is whichever belt framing is live: its pull is the belt's)
+          const cur = (cand[autoWant] ?? (autoWant !== 'stage' && !isSt(autoWant) && marblePts.length ? cand[want] : 0) ?? 0) * (held > BORED ? .45 : 1);
           let best = autoWant, bestS = -1;
-          for (const k in cand) if (k !== autoWant && cand[k] > bestS){ best = k; bestS = cand[k]; }
-          if (held > MIN_HOLD && !sc._seamSoon && bestS > cur * SWITCH){ autoWant = best; lastCut = time; cutNow = true; }
+          for (const k in cand) if (k !== autoWant){ const v = rotate(k, cand[k]); if (v > bestS){ best = k; bestS = v; } }
+          if (held > MIN_HOLD && quiet && onGrid && bestS > cur * sw) cut(best);
         }
       }
       effMode = autoWant;
@@ -266,7 +319,15 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
       ideal.y = stageY + 3.4 + lift*.4;                       // eye height: the band plane (+ a share of the lift)
       aim.copy(focus); aim.y = stageY + .6 + lift*.6;         // look at the band centre, not the bobbing marble
     }
-    if (cutNow && camPos.distanceTo(ideal) > HARD_CUT){ camPos.copy(ideal); camTarget.copy(aim); }
+    // a director cut GLIDES only when it's short AND the glide's straight line is clear air —
+    // never a dolly through a machine (main's pathBlocked raycasts the world); otherwise CUT
+    // …and a cut that changes LENS is a cut too (a glide keeps its focal length: a dolly that
+    // zooms on the way reads as a lurch, not a move)
+    const fovWant = (mode !== 'fixed' && shot?.fov) || BASE_FOV;
+    const hard = cutNow && (camPos.distanceTo(ideal) > HARD_CUT || Math.abs(camera.fov - fovWant) > 1
+      || !!(pathBlocked && pathBlocked(camPos, ideal)));
+    if (hard){ camPos.copy(ideal); camTarget.copy(aim); }
+    lens(fovWant, dt, hard);
     cutNow = false;
     camPos.lerp(ideal, 1 - Math.pow(.0015, dt));
     camTarget.lerp(aim, 1 - Math.pow(.0008, dt));
@@ -285,5 +346,6 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl }){
   }
 
   return { camera, target: camTarget, orbit, update, syncTracks, syncStations, addShake, resize,
-           get mode(){ return mode; }, set mode(m){ mode = m; renderButtons(); }, get shot(){ return autoWant; } };
+           get mode(){ return mode; }, set mode(m){ mode = m; renderButtons(); }, get shot(){ return autoWant; }, get weigh(){
+             return dbgCand && { cand: dbgCand, floor: dbgFloor, rot: Object.fromEntries(Object.keys(dbgCand).map(k => [k, +dbgRotate(k, dbgCand[k]).toFixed(2)])) }; } };
 }

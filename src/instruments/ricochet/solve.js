@@ -2,11 +2,13 @@
    RICOCHET SCULPTURE — the pure math (no scene, no DOM, no audio).
 
    A new archetype: a FROZEN PATH. One immortal marble chains a
-   monophonic part by ricocheting off a constellation of FIXED, tuned
-   plates hung in the air. No motors, no actuators in the orbit:
-   every bounce is a perfectly elastic MIRROR reflection, so the
-   marble's total energy never changes — visibly perpetual motion that
-   still reads as real, because every arc is honest ballistics.
+   monophonic part by ricocheting off a constellation of tuned plates
+   hung in the air. The ORBIT is solved as if every bounce were a mirror
+   (so the marble's energy between plates is one constant level H), but
+   the bounces are honestly LOSSY: each plate is POWERED — a piston that
+   kicks along its normal at contact and supplies exactly what the
+   restitution loses (see POWERED PLATES at the end). Perpetual motion
+   with a visible energy source; every arc is honest ballistics.
 
    The closed-form solve (everything follows from energy conservation):
      · energy level H (a height): the marble would come to rest there.
@@ -30,8 +32,10 @@
        headings so the polygon CLOSES (Σ d·e^{iφ} = 0) to 1e-12. Every
        candidate is AUDITED exactly; the first clean one wins (a fixed
        number of seeds — never a time budget: deterministic).
-     · each plate's normal is FORCED: n = normalize(vOut − vIn) (a
-       mirror). |vIn| = |vOut| by energy ⇒ reflect(vIn, n) = vOut exactly.
+     · each plate's normal is FORCED: n = normalize(vOut − vIn) — the only
+       direction a frictionless face can push. |vIn| = |vOut| ⇒ the mirror
+       reflect(vIn, n) = vOut; with restitution e the plate's kick speed w
+       makes up the normal loss exactly (solveKicks).
 
    Heights: pitch → a height band (the sculpture reads as a score), then
    relaxed (deterministic gradient descent, analytic gradient) just
@@ -544,6 +548,7 @@ export function buildOrbit(events, { P, start = -Infinity, rOf: rOfIn } = {}){
   const orbit = { nodes, h, H, d, ceilY: H + CEIL_GAP, ...best.geo, X: best.X, audit: best.a, score: best.score, seed: best.seed, tried,
                   footMax: best.footMax, grow: best.grow, L, P };
   orbit.entry = solveEntry(orbit, start);
+  orbit.kick = solveKicks(orbit);                         // powered plates: the energy input (geometry untouched)
   return orbit;
 }
 
@@ -629,4 +634,191 @@ export function gateLift(orb, t){
   if (s <= 0) return 0;
   if (s >= 1) return 1;
   return s * s * (3 - 2 * s);
+}
+
+/* ============================================================
+   POWERED PLATES — where the energy comes from.
+
+   Every bounce is LOSSY (restitution E_REST, like every other marble in
+   the room). The plate makes up the difference by MOVING at contact: a
+   frictionless face only pushes along its normal, and n ∥ (vOut − vIn),
+   so the marble keeps its speed along the face exactly and only the
+   normal component changes — the moving-wall bounce
+       vOut·n = −e·(vIn·n) + (1+e)·w   ⇒   w = (vOut·n + e·vIn·n)/(1+e)
+   (here vOut·n = −vIn·n = a, so w = a·(1−e)/(1+e) > 0: every plate KICKS).
+   The orbit itself — plate positions, arcs, timing, normals — is
+   untouched; only the bounce's interpretation and the plate's motion are new.
+
+   The plate is a loudspeaker driver: a fixed chrome BEZEL (welded to the
+   stem, carrying the voice COIL) and a glass PISTON riding along n inside
+   it. Everything stays inside the audited plate volume at rest. Stroke,
+   along n, offset x(c) at c = t − t_strike (C¹ everywhere):
+       retract (smoothstep, RET) → hold at −A → constant-force strike over S:
+       x = −A(1 − u²)  (x' = 0 at u = 0, x' = 2A/S = w at contact ⇒ A = w·S/2)
+       → contact at x = 0 moving at exactly w (a massive wall keeps its
+         speed through the impact) → settle x = w·c·(1 − c/D)³ (rest, C¹, at D).
+   Windows scale to fit the hops (fast runs make small quick kicks) and are
+   VERIFIED against the one marble over the whole window (never touches the
+   piston except at the contact instant) — shrunk deterministically if not.
+
+   Power chain (timing, pure fns of songTime): the canopy's glowing ring is
+   the BUS. As the marble leaves for plate i (its incoming hop, prog 0 → 1),
+   a charge pulse runs ring → eye → down the stem (prog 0 → PULSE_F); the
+   coil stays dark until it lands, then charges as q² over the rest of the
+   hop (the belt's anticipation grammar, caused), and
+   DISCHARGES as the piston kicks at contact.
+   ============================================================ */
+export const E_REST = .65;                                 // restitution marble ↔ plate
+export const KICK = { S: .18, HOLD: .08, RET: .16, D: .32, FIT: .85 };
+export const PULSE_F = .5;                                 // the pulse reaches the coil at this fraction of the hop
+
+/** The moving-wall solve: wall speed along n that turns vIn·n into vOut·n. */
+export const wallSpeed = (vinN, voutN, e = E_REST) => (voutN + e * vinN) / (1 + e);
+
+/** Piston offset along n at c = t − t_strike (0 outside [−W, D)). */
+export function kickOffset(k, c){
+  if (!k || !(c >= -k.W) || c >= k.D) return 0;
+  if (c >= 0){ const u = 1 - c / k.D; return k.w * c * u * u * u; }
+  const s = c + k.S;
+  if (s >= 0){ const u = s / k.S; return -k.A * (1 - u * u); }
+  if (c >= -k.S - k.hold) return -k.A;
+  const u = (c + k.W) / k.ret; return -k.A * u * u * (3 - 2 * u);
+}
+/** Piston velocity along n (the analytic derivative). */
+export function kickSpeed(k, c){
+  if (!k || !(c >= -k.W) || c >= k.D) return 0;
+  if (c >= 0){ const u = 1 - c / k.D; return k.w * u * u * (u - 3 * c / k.D); }
+  const s = c + k.S;
+  if (s >= 0) return 2 * k.A * s / (k.S * k.S);
+  if (c >= -k.S - k.hold) return 0;
+  const u = (c + k.W) / k.ret; return -k.A * 6 * u * (1 - u) / k.ret;
+}
+
+/** Kick parameters for a wall speed w, scaled to fit inside dtIn / dtOut by λ, μ. */
+export function kickShape(w, dtIn, dtOut, lam = 1, mu = 1){
+  const W0 = KICK.S + KICK.HOLD + KICK.RET;
+  const l = lam * Math.min(1, KICK.FIT * dtIn / W0);
+  const S = KICK.S * l, hold = KICK.HOLD * l, ret = KICK.RET * l;
+  return { w, S, hold, ret, W: S + hold + ret, A: w * S / 2, D: mu * Math.min(KICK.D, KICK.FIT * dtOut) };
+}
+
+/** A struck plate's ring on its rigid stem (index.js renders exactly this): the stem pivots
+    about its canopy clamp `top` around `axis` by wobble(s, P, A). The plate end travels ≤
+    WOB_K·CLEAR (the audit's guaranteed air), scaled by how hard it was struck. */
+export const WOB_K = .8;
+export function plateWob(orb, i){
+  const nd = orb.nodes[i], K = orb.rim[i], n = orb.n[i];
+  const top = V(K.x, orb.ceilY, K.z), L = Math.max(.3, orb.ceilY - K.y);
+  const nh = V(n.x, 0, n.z);
+  // the marble's impulse pushes the plate along −n, so the stem swings that way first
+  const axis = nh.lengthSq() > 1e-6 ? V(0, 1, 0).cross(nh.normalize()) : V(1, 0, 0);
+  const v = nd.relay ? .45 : nd.vel;
+  return { top, axis, A: WOB_K * CLEAR / L * (.4 + .6 * v) };
+}
+
+/** Least air between the marble and a moving disc (centre c0 + n·x(c)) over the kick window
+    around the strike at absolute time abs — the contact instant itself excluded. With `wob`,
+    the post-strike ring of the stem (plateWob) is applied too: the disc AND its normal swing. */
+export function kickClear(orb, k, c0, n, r, abs, step = .002, wob = null){
+  let m = Infinity;
+  const q = V(), cc = V(), nn = V(), rq = new THREE.Quaternion();
+  for (let c = -k.W; c < k.D; c += step){
+    if (Math.abs(c) < 1e-6) continue;
+    const mp = marbleAt(orb, abs + c, q).pos;
+    cc.copy(c0).addScaledVector(n, kickOffset(k, c));
+    nn.copy(n);
+    if (wob && c > 0){
+      rq.setFromAxisAngle(wob.axis, wobble(c, orb.P, wob.A));
+      cc.sub(wob.top).applyQuaternion(rq).add(wob.top);
+      nn.applyQuaternion(rq);
+    }
+    const d = discDist(mp, cc, nn, r) - BALL_R - PLATE_T / 2;
+    if (d < m) m = d;
+  }
+  return m;
+}
+
+/** The steady-state absolute time of node i's strike (≥ one full loop after the downbeat). */
+export function steadyAbs(orb, i){
+  const first = orb.entry ? orb.entry.tFirst : 0, tj = orb.nodes[i].t;
+  return tj + Math.ceil((first + orb.P - tj) / orb.P) * orb.P;
+}
+
+/** Solve every plate's kick (and the starter gate's): exact w, a window that fits, verified clear. */
+export function solveKicks(orb){
+  const { nodes } = orb, N = nodes.length, en = orb.entry;
+  const fit = (w, dtIn, dtOut, test) => {
+    let k = null;
+    for (let r = 0, lam = 1, mu = 1; r < 8; r++, lam *= .7, mu *= .7){
+      k = kickShape(w, dtIn, dtOut, lam, mu);
+      if (test(k) > -1e-9) return k;
+    }
+    return k;                                                 // (never seen; the tests guard it)
+  };
+  const kicks = nodes.map((nd, i) => {
+    const n = orb.n[i], w = wallSpeed(orb.vIn[i].dot(n), orb.v0[i].dot(n));
+    const dtIn = nodes[(i - 1 + N) % N].dt, dtOut = nd.dt;
+    return fit(w, dtIn, dtOut, k => {
+      const wob = plateWob(orb, i);
+      let m = kickClear(orb, k, orb.c[i], n, orb.r[i], steadyAbs(orb, i), .002, wob);
+      if (en && en.j === i) m = Math.min(m, kickClear(orb, k, orb.c[i], n, orb.r[i], en.tFirst, .002, wob));
+      return m;
+    });
+  });
+  if (en){
+    const w = wallSpeed(en.vDrop.dot(en.n), en.vOrb.dot(en.n));
+    en.kick = fit(w, en.fall, en.tau, k => kickClear(orb, k, en.c, en.n, GATE_R, en.tE));
+  }
+  return kicks;
+}
+
+/** The power chain's grammar along one approach, prog ∈ [0,1] (−1 = not approaching):
+    the charge pulse runs bus → coil over prog 0 → PULSE_F; the coil stays DARK until it
+    arrives (no glow before its cause), then charges as q² over the rest (q = 0 → 1),
+    exactly 1 at the strike. Shared by every plate and the starter gate. */
+export function chainAt(prog, out = {}){
+  out.pulse = prog >= 0 && prog < PULSE_F ? prog / PULSE_F : -1;
+  const q = (prog - PULSE_F) / (1 - PULSE_F);
+  out.charge = prog >= PULSE_F ? Math.min(1, q * q) : 0;
+  return out;
+}
+
+/** The incoming hop that powers node i's strike at absolute time abs: the previous node's
+    hop — except the first downbeat, which is reached from the STARTER GATE (en.tE → en.tFirst). */
+export function hopInto(orb, i, abs){
+  const en = orb.entry, N = orb.nodes.length;
+  if (en && i === en.j && Math.abs(abs - en.tFirst) < 1e-6) return en.tFirst - en.tE;
+  return orb.nodes[(i - 1 + N) % N].dt;
+}
+
+/** The power chain for node i at songTime t (pure): the pulse's progress along
+    bus → stem → coil (−1 = not in flight), the coil's charge (dark until the pulse lands,
+    then rising to 1 exactly at the strike), the discharge flash, and the piston offset.
+    Nothing before the downbeat; the first downbeat is powered over the gate → plate hop. */
+export function powerAt(orb, i, t, out = {}){
+  const nd = orb.nodes[i], P = orb.P;
+  const first = orb.entry ? orb.entry.tFirst : -Infinity;
+  const abs = nd.t + Math.ceil((t - nd.t - 1e-9) / P) * P;   // next strike at/after t
+  const dtIn = hopInto(orb, i, abs);
+  const cPre = t - abs;                                     // ∈ (−P, 0]
+  const live = abs >= first - 1e-6;
+  chainAt(live && cPre >= -dtIn ? 1 + cPre / dtIn : -1, out);
+  const s = live && cPre > -1e-9 ? 0 : sinceStrike(orb, i, t);   // AT the strike (float-safe)
+  out.flash = isFinite(s) ? Math.exp(-s * 7) : 0;
+  const k = orb.kick && orb.kick[i];
+  out.x = live && cPre >= -(k ? k.W : 0) ? kickOffset(k, cPre) : isFinite(s) ? kickOffset(k, s) : 0;
+  return out;
+}
+
+/** The starter gate's power chain (pure): its pulse leaves the bus as the magnet lets go
+    (en.tRel) and lands mid-fall; it charges over the rest of the drop, kicks + discharges
+    at the gate strike en.tE. Nothing before the release. */
+export function gatePowerAt(orb, t, out = {}){
+  const en = orb.entry;
+  if (!en){ out.pulse = -1; out.charge = out.flash = out.x = 0; return out; }
+  chainAt(t >= en.tRel && t <= en.tE ? 1 + (t - en.tE) / en.fall : -1, out);
+  const s = t - en.tE;
+  out.flash = s >= 0 ? Math.exp(-s * 7) : 0;
+  out.x = kickOffset(en.kick, s);
+  return out;
 }

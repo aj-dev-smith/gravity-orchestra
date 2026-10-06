@@ -2,8 +2,9 @@
    DAYBREAK ENGINE — an original, written for every machine in the room.
 
    The showcase piece: the melody belt, the marble drum machine and all
-   five instrument plugins (music box, singing bowls, marimba, string
-   bass, tubular bells), arranged so the director has a deliberate
+   seven instrument plugins (music box, singing bowls, marimba, string
+   bass, tubular bells — and, added after the first draft, the TURNTABLE
+   vibes and the RICOCHET glass sculpture), arranged so the director has a deliberate
    spotlight to cut to in every section, and so the loop seam is
    invisible (the piece ends on the dominant and falls back into its
    own first bar).
@@ -17,14 +18,22 @@
         the machine wakes: music box alone, a bowl pad underneath,
         one soft bell toll, a kick heartbeat and a bass note so every
         machine stirs. The lead lobs 3+1 figures — tall, but saving its
-        tallest arc for the climax.
+        tallest arc for the climax. High in the chandelier the RICOCHET
+        glass answers each bar a beat and a half late, an octave up — a
+        quiet ECHO of the lead's long notes (the sculpture wakes too).
      B  ostinato   bars  5–8   beats  16–32   Dm  | Bb  | Gm  | A
         marimba ostinato + string bass enter. Lead moves in halves and
-        quarters. Hi-hat teases in bar 7; a tom fill throws us into…
+        quarters. Hi-hat teases in bar 7 (and the TURNTABLE vibes drop
+        their first three soft notes — the record has been spinning since
+        the count-in); a tom fill throws us into…
      C  groove     bars  9–16  beats  32–64   Dm  | Bb  | F   | C
                                               Dm  | Bb  | Gm  | A
         drums in, crash. The lead states the theme (dotted figures, an
-        eighth-note skim up in bar 12). Bar 16: the lead steps aside
+        eighth-note skim up in bar 12). The TURNTABLE vibes TRADE with it:
+        wherever the lead holds a long note (bars 10, 15) the vibes answer
+        with a quick arpeggio, wherever the lead runs the vibes hold — a
+        call-and-response, never on top of each other. They lay out under
+        the bass walk-up (bar 12) and the marimba cascade (bar 16). Bar 16: the lead steps aside
         (short notes, low arcs) while the marimba throws a 16th-note cascade
         across its whole keyboard — its spotlight — and a tom fill launches…
      D  climax     bars 17–24  beats  64–96   Bb  | C   | Dm  | Dm
@@ -36,12 +45,18 @@
         tallest of the climax, with the bells holding their breath (the ONLY
         whole-bar lob in the piece). Bar 24: the bells peal through the A
         chord under the falling lead run and a tom cascade, landing on C#5
-        (the leading tone).
+        (the leading tone). Above it all the RICOCHET sings a DESCANT in
+        half notes (C6–A6, a third to a sixth over the lead),
+        resting through the 16th skim and returning on the soaring D6 arc
+        (A6 → F6 over it, the vibes walking a Dm arpeggio underneath); the
+        vibes keep trading — answering the lead's held D6, C6 and E6.
      E  breakdown  bars 25–32  beats  96–128  Dm  | Bb  | Gm  | A   (×2)
         a big bell toll, then the drums thin to a half-time kick and
         vanish, the bass walks out on whole notes, the marimba thins to
         quarters and stops — leaving the intro texture (music box + bowls +
-        the heartbeat kick) so beat 128 IS beat 0. The last bowls chord is
+        the heartbeat kick) so beat 128 IS beat 0 — the vibes fade on four
+        lone quarter-notes and park on their magnet, the glass echoes come
+        back over the last four bars exactly as in the intro. The last bowls chord is
         held across the engine's loop seam (~3.8 s of roll-in) so the
         C#5 → D5 that opens the loop never hangs over silence.
 
@@ -53,7 +68,18 @@
                            cascade runs E3–A4) — clear of the bowls' D3 floor
      lead belt     G4–F6   the tune (long notes = tall arcs, runs = flat skims)
      bells         D4–A5   climax 2-note chords + tolls (7 tubes)
+     turntable     G4–A5   vibes counter-line, monophonic: it plays only in the
+                           lead's holes (a trade, never a doubling — songs.test.js
+                           fails any note on a lead onset with the lead's pitch
+                           class, or on the exact pitch the lead holds), 8ths at most
+                           (the record's pads must clear — turntable/solve.js)
      music box     G5–C7   the sparkle above everything
+     ricochet      C#6–A6  glass descant + echoes, monophonic; ≤ A6 (the glass's
+                           8.9× partial must stay under its sample rate's Nyquist).
+                           Each note is its own plate and a long rest is carried
+                           by silent relay mirrors (one per 2.2 s), so the part is
+                           kept to ~24 notes → ~42 plates: the chandelier stays
+                           a compact knot (ricochet/solve.js footFor / escalation)
 
    Every part below is generated from the chart by the helpers at the top;
    accents/ghosts are velocity (dynamics), never geometry.
@@ -74,7 +100,7 @@ const every = (from, to, step) => {
 const r5 = x => +x.toFixed(5);
 
 /* MIX trims (velocity × k) per plugin part — see the header. */
-const MIX = { marimba: .38, bowls: .55, bass: .6, musicbox: .8 };
+const MIX = { marimba: .38, bowls: .55, bass: .6, musicbox: .8, turntable: .62, ricochet: .55 };
 const lvl = (hits, k) => hits.map(([b, n, v, ...d]) => [b, n, +Math.min(1, v * k).toFixed(3), ...d]);
 
 /* ---- the chart: bar index (0-based) → chord name ---- */
@@ -344,10 +370,58 @@ const bells = [
   [96, 'D4', .7], [96, 'D5', .45],                                  // the breakdown toll
 ];
 
+// TURNTABLE (vibes) — the lead's trading partner. Chord tones only, in the lead's holes:
+// arpeggio answers under its held notes, single long tones under its runs.
+const turntable = lvl([
+  [28.5, 'C#5', .35], [29.5, 'A4', .4], [31.5, 'C#5', .45],         // B, bar 8: the first soft notes — off the
+                                                                   //   lead's onsets, a third/sixth under its E5s
+  // C — the groove
+  [32, 'A4', .65], [35.5, 'D5', .4],                               // Dm   (lead runs → hold)
+  [36.5, 'D5', .5], [37, 'F5', .55], [37.5, 'D5', .45], [39.5, 'A#4', .4],   // Bb (lead holds A#5 → answer)
+  [40, 'C5', .55], [42.5, 'A4', .4], [43.5, 'A4', .35],            // F
+  [44, 'G4', .4],                                                  // C    (the bass's walk-up: lay out)
+  [48, 'A4', .6], [50.5, 'F5', .45], [51.5, 'D5', .4],             // Dm
+  [52, 'D5', .55], [54, 'F5', .5],                                 // Bb
+  [56.5, 'D5', .5], [57, 'A#4', .55], [57.5, 'D5', .6], [59, 'D5', .45],     // Gm (lead holds G5 → answer, under it)
+  // (bar 16: the marimba's cascade — lay out)
+  // D — the climax: answer every held lead note
+  [64.5, 'F5', .6], [65, 'D5', .5], [65.5, 'A#4', .5],             // Bb   under the held D6
+  [68.5, 'G5', .55], [69, 'E5', .5],                               // C    under the held C6
+  [76, 'A4', .6], [77, 'F5', .55], [78, 'A5', .6], [79, 'F5', .5], // Dm   walking under the soaring D6 arc
+  [80.5, 'D5', .5], [81, 'F5', .5],                                // Bb
+  [88.5, 'C#5', .55], [89, 'E5', .55], [89.5, 'A5', .6],           // A    under the held E6
+  // E — the breakdown: four lone quarters stepping down under the lead's long notes (chord
+  // tones the lead ISN'T holding), then the magnet holds it across the seam
+  [96, 'F5', .5], [100, 'D5', .4], [104, 'A#4', .35], [108, 'E5', .3],
+], MIX.turntable);
+
+// RICOCHET (glass) — an ECHO of the lead's long notes in the intro (an octave up, a beat
+// and a half late), a DESCANT over the climax, and the intro's echoes again at the end
+// (so the seam is invisible here too). Velocity stays low in the echoes: it's the room's
+// reverb made visible, not a second tune.
+const echo = b0 => [[b0 + 1.5, 'D6', .38], [b0 + 5.5, 'F6', .36], [b0 + 9.5, 'D6', .34], [b0 + 13.5, 'E6', .32], [b0 + 15.5, 'C#6', .3]];
+const ricochet = lvl([
+  ...echo(0),
+  // the descant (C6–A6) in HALF notes — a classic descant, and a sparser knot (every
+  // note is a plate: halves keep the chandelier compact and quick to solve)
+  [64, 'F6', .65], [66, 'D6', .5],                                 // Bb
+  [68, 'G6', .65], [70, 'E6', .5],                                 // C
+  // (the 16th skim: the glass rests — the belt's money shot)
+  [76, 'A6', .75], [78, 'F6', .6],                                 // Dm   over the soaring D6 arc
+  [80, 'F6', .6], [82, 'D6', .5],                                  // Bb
+  [84, 'C6', .55], [86, 'G6', .6],                                 // C    (a sixth over the lead's climb, never on its notes)
+  [88, 'A6', .7], [90, 'E6', .55],                                 // A
+  [92, 'A6', .6], [94, 'E6', .5],                                  // A    (over the peal)
+  ...echo(112),
+], MIX.ricochet);
+
 export default {
   label: 'Daybreak Engine', sub: 'an original · every machine in the room', bpm: 112,
   scale: ['D', 'E', 'F', 'G', 'A', 'A#', 'C', 'C#'],
   melody,
   drums,
-  parts: { musicbox, bowls, marimba, bass, bells },
+  parts: { musicbox, bowls, marimba, bass, bells, turntable, ricochet },
+  // the director's per-song pull (main.js dirWeight): the glass plays few, soft, mix-trimmed
+  // notes — its hit density alone would never earn the chandelier a shot
+  director: { ricochet: 2.6, turntable: 1.3 },
 };

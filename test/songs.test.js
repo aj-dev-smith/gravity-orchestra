@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { SONGS } from '../src/songs/index.js';
+import { buildRecord } from '../src/instruments/turntable/solve.js';
+import { buildOrbit, CLEAR as RICO_CLEAR, FOOT_MAX } from '../src/instruments/ricochet/solve.js';
+import { eventTimes } from '../src/instruments/clock.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -100,4 +103,34 @@ describe.each(Object.entries(SONGS))('song "%s"', (key, song) => {
       expect(trackTotal).toBeCloseTo(melodyTotal, 9);
     });
   }
+});
+
+// Daybreak Engine's late-added TURNTABLE + RICOCHET parts must solve clean on the real loop
+// (the record's pads clear by geometry; the glass knot audits clean and stays compact)
+describe('daybreak-engine: turntable + ricochet parts solve on the real loop', () => {
+  const S = SONGS['daybreak-engine'], ROLL_T = 2.6, beat = 60 / S.bpm;
+  const P = ROLL_T + S.melody.reduce((a, n) => a + n[1], 0) * beat + 1.2;   // main.js: LOOP_T = melody + 1.2
+  it('the turntable record clears every deployed pair', () => {
+    const R = buildRecord(S.parts.turntable, { rollT: ROLL_T, beat, P, start: -2.4 });
+    expect(R.ok).toBe(true);
+  });
+  it('the ricochet orbit is clean and compact', () => {
+    const o = buildOrbit(eventTimes(S.parts.ricochet, { rollT: ROLL_T, beat }), { P, start: -2.4 });
+    expect(o.score).toBeGreaterThanOrEqual(RICO_CLEAR);
+    expect(o.footMax).toBeLessThanOrEqual(FOOT_MAX * 1.12 ** 2 + 1e-9);   // ≤ 2 escalation rounds
+  });
+  // a TRADE, never a doubling: no counter-line note lands on a lead onset with the lead's pitch
+  // class, and the vibes never sit on the exact pitch the lead is holding (two machines, one note)
+  it('turntable + ricochet never double the lead', () => {
+    const NN = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const midi = n => { const m = n.match(/^([A-G]#?)(\d)$/); return NN.indexOf(m[1]) + 12 * (+m[2] + 1); };
+    let t = 0; const lead = S.melody.map(([n, d]) => { const o = [t, midi(n), d]; t += d; return o; });
+    const bad = [];
+    for (const k of ['turntable', 'ricochet']) for (const [b, n] of S.parts[k]){
+      const L = lead.find(([s, , d]) => b >= s - 1e-6 && b < s + d - 1e-6); if (!L) continue;
+      const onset = Math.abs(L[0] - b) < 1e-6, m = midi(n);
+      if ((onset && (m - L[1]) % 12 === 0) || (k === 'turntable' && m === L[1])) bad.push(`${k} ${b}:${n}`);
+    }
+    expect(bad).toEqual([]);
+  });
 });

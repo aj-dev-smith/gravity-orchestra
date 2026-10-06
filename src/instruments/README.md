@@ -51,6 +51,12 @@ export default {
   label: 'Marimba',
   wet: false,                     // true → voice also feeds the melody's echo
   lookHeight: 3,                  // y the station camera aims at (local)
+  // optional STAGING hints (main.js syncDirector / camera.js):
+  camera: { dist: 15, up: 5, x: 0 },   // the director's shot: eye at (x, lookHeight+up, dist) local
+  color: '#ff8a5a',               // cam-button / shot tint
+  directorWeight: 1,              // × the look-ahead score (sparse voices boost; song.director overrides)
+  cameraKey: 'strings',           // the shot / cam-button key when `key` collides with a belt
+                                  // role (lead / alto / bass) — the instrument keeps its key
 
   // PURE DSP, deterministic, no AudioContext: one render feeds BOTH the live
   // Web Audio path (AudioBuffer, gain = vel) and the iOS <audio> fallback (WAV).
@@ -111,6 +117,19 @@ export default {
   signature glow colour.
 - Instance or share geometry when you have many identical parts; ~≤ 150 meshes
   per instrument is a comfortable ceiling.
+- main OWNS two render-time passes over your built group — know them:
+  - **Static merge** (src/mergestatic.js): after build, main poses your station at
+    48 songTimes across the loop; every opaque, plain-material mesh whose world
+    matrix and visibility never change is baked into one mesh per material (your
+    references to it go dead, its MATERIAL is shared so material animation still
+    works). A part that moves only at an instant the sampling could miss, or that
+    you'll toggle/raycast later, sets `mesh.userData.noMerge = true`. Custom shaders
+    (`onBeforeCompile`, ShaderMaterial) and transparent materials are never merged.
+    `userData.frozen = true` (ricochet's own freeze) is the same idea, done in-plugin.
+  - **Fade gate**: every ADDITIVE transparent non-shader material under the world
+    gets `material.visible = opacity > .002` each frame (an idle glow at opacity 0
+    still costs a draw call). Don't drive `material.visible` yourself on those; opt
+    out with `material.userData.noFadeGate = true` (or on the object).
 
 ## Dev loop
 

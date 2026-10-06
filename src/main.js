@@ -13,7 +13,7 @@ import { makeMarbleDrums, KIT_SOLO, KIT_ROOM, kitAnchor } from './marbledrums.js
 import { makeCameraRig } from './camera.js';
 import { makeRoomHost } from './rooms/index.js';
 import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
-import { stationFor } from './instruments/stations.js';
+import { stationFor, layoutStations, HANG_CLEAR } from './instruments/stations.js';
 import { eventTimes, wrapP } from './instruments/clock.js';
 import { normalizeHit } from './drumkit.js';
 import { encodeSong, decodeSong } from './share.js';
@@ -21,6 +21,7 @@ import { parseMidi } from './midi/parse.js';
 import { convertToSong } from './midi/convert.js';
 import { recSupported, startRecording } from './record.js';
 import { spatialize } from './spatial.js';
+import { mergeStatic } from './mergestatic.js';
 /* ============================================================
    CASCADE — melody-driven marble run, now multi-track.
    A song is one or more tracks of [note, beats-until-next-hit].
@@ -33,6 +34,8 @@ import { spatialize } from './spatial.js';
 let BEAT = .7, SCALE = [];
 let tracks = [], LOOP_T = 0, world = null;
 let drumGroup = null;                                   // the drum machine's group (dev layout probe)
+let stageWall = new THREE.Box3();                       // the belt machines' world box this song (staging + the wide fit)
+let lastLayout = null, lastWide = null, lastShots = [];                                  // dev: the last room solve (__dev.layout)
 let kitSlot = KIT_SOLO;                                 // where the drum machine stands this song (marbledrums.js)
 const FIXED_ZMAX = 30;                                  // FIXED cam: cap the pull-back. Past ~30 the FogExp2 eats
                                                         // the chrome to black; better to let a very wide field
@@ -75,6 +78,7 @@ renderer.toneMappingExposure = 1.15;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
+const _pbRay = new THREE.Raycaster(), _pbDir = new THREE.Vector3();
 scene.background = new THREE.Color(0x07060e);
 scene.fog = new THREE.FogExp2(0x07060e, 0.026);
 
@@ -83,7 +87,18 @@ scene.fog = new THREE.FogExp2(0x07060e, 0.026);
    + WASD/QE fly controls, and the per-frame framing. main just feeds it the live
    marbles each frame and the tracks on each song change. */
 const cam = makeCameraRig({ stageY: STAGE_Y, fixedZMax: FIXED_ZMAX,
-                            dom: renderer.domElement, camsEl: document.getElementById('cams') });
+                            dom: renderer.domElement, camsEl: document.getElementById('cams'), pathBlocked });
+/* does the straight line a → b pass through any drawn machine part? (the director asks once
+   per cut: a glide that would dolly through geometry becomes a hard cut) */
+function pathBlocked(a, b){
+  if (!world) return false;
+  const d = _pbDir.subVectors(b, a), L = d.length();
+  if (L < .5) return false;
+  _pbRay.set(a, d.divideScalar(L)); _pbRay.far = L; _pbRay.camera = cam.camera;   // (sprites need a camera)
+  return _pbRay.intersectObject(world, true).some(h => (h.object.isMesh || h.object.isInstancedMesh) && drawn(h.object));
+}
+/* is o actually drawn — itself AND every ancestor visible (a hidden parent hides its children) */
+function drawn(o){ for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; }
 const camera = cam.camera;
 
 const ambient = new THREE.AmbientLight(0x223, 1.6); scene.add(ambient);   // rooms may re-tint (rooms/index.js mood)
@@ -166,7 +181,8 @@ const drumKit = makeMarbleDrums({ envMap, glowTex });
    See src/instruments/README.md for the contract. ---- */
 const instRigs = INSTRUMENTS.map(I => ({ I, inst: I.make({ envMap, glowTex, THREE }), station: null }));
 let instLive = [];                                      // rigs with a part in the current song
-const STRIKE_LIGHTS = 6;                                // shared pool, CONSTANT size → no shader recompiles
+const STRIKE_LIGHTS = 4;                                // shared pool, CONSTANT size → no shader recompiles (each point light is
+                                                        // shaded in EVERY lit fragment: 4 round-robin ~.2 s flashes are plenty)
 const strikeLights = Array.from({ length: STRIKE_LIGHTS }, () => {
   const l = new THREE.PointLight(0xffffff, 0, 9, 2); scene.add(l); return { l, age: 9, peak: 0 };
 });
@@ -324,6 +340,56 @@ function buildTrack(melody, zBase, role, delayBeats = 0, deep = false){
   return {stage, origin:new THREE.Vector3(), pads, arcs, padObjs, role, isBass, deep:voiceDeep, rollT, total, balls:[], active:null};
 }
 
+/* World-space bounds of what is actually DRAWN under `root` (hidden parts — a parked ball,
+   a stowed pad — don't count; sprites/halos don't either). `ignoreRoot`: measure a group
+   even while it is toggled off (the M key hides the belt machines). */
+const _vb = new THREE.Box3();
+function visBox(root, ignoreRoot = false){
+  const out = new THREE.Box3();
+  root.updateWorldMatrix(true, true);                   // parents too: a fresh bay's stage hasn't rendered yet
+  (function walk(o){
+    if (!o.visible && !(ignoreRoot && o === root)) return;
+    if (o.isInstancedMesh){ if (o.count){ o.computeBoundingBox(); out.union(_vb.copy(o.boundingBox).applyMatrix4(o.matrixWorld)); } }
+    else if ((o.isMesh || o.isLine) && o.geometry){
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+      out.union(_vb.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld));
+    }
+    for (const c of o.children) walk(c);
+  })(root);
+  return out;
+}
+/* the underside of a HUNG station: the lowest drawn mesh that isn't anchored to the floor
+   (its footprint ring lies on ROOM.FLOOR — anything whose box reaches that low is floor-marking) */
+function hangLow(root){
+  let low = Infinity;
+  root.updateWorldMatrix(true, true);
+  root.traverse(o => {
+    if (!(o.isMesh || o.isLine) || !o.geometry) return;
+    for (let p = o; p && p !== root; p = p.parent) if (!p.visible) return;
+    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+    _vb.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+    if (_vb.min.y > ROOM.FLOOR + 1) low = Math.min(low, _vb.min.y);
+  });
+  return low;
+}
+/* every ADDITIVE, opacity-driven material under root (glows, flashes, halos, trails) — the
+   ones that are invisible at opacity 0 (shader materials draw by their own uniforms: skipped) */
+let fadeMats = [], fadeWarm = 0, fadeTick = 0, perfOff = false;
+const NO_MERGE = new URLSearchParams(location.search).has('nomerge');
+let mergeStats = null;                                  // dev: what the static merge baked (__dev.merge)
+function collectFadeMats(root){
+  const out = new Set();
+  root.traverse(o => { for (const m of [].concat(o.material || []))
+    if (m.transparent && m.blending === THREE.AdditiveBlending && !m.isShaderMaterial && !m.userData.noFadeGate && !o.userData.noFadeGate) out.add(m); });
+  return [...out];
+}
+function disposeTree(root){
+  root.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    for (const m of [].concat(o.material || [])) if (m !== chrome){ if (m.map) m.map.dispose(); m.dispose(); }
+  });
+}
+
 function buildWorld(keyName){
   if (recState !== 'idle') abortRec();                  // a rebuilt world invalidates the take
   const S = SONGS[keyName];
@@ -386,12 +452,30 @@ function buildWorld(keyName){
   }));
   const stageView = {cx: (minX + maxX) / 2, halfW: Math.max(6, (maxX - minX) / 2)};
 
-  // marble drums: built song-level, placed right of the wall, added under world (so it
-  // disposes with the world on the next song change). Aligned to the lead's timeline;
-  // `start` arms every ball on its magnet for the count-in.
-  // the kit moves to the front-right tier when the room is full of plugin stations
-  kitSlot = S.parts && Object.keys(S.parts).some(k => S.parts[k]?.length) ? KIT_ROOM : KIT_SOLO;
-  drumGroup = drumKit.build(S.drums, { rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T, cx: stageView.cx, start: -LEAD_IN, slot: kitSlot });
+  // ---- STAGING. Everything is built at its BASE slot first, then the room is SOLVED from
+  //      what was really built (stations.js layoutStations: the wings ride out with the
+  //      belt's edges, overlapping footprints are pushed apart) and moved into place — a
+  //      rigid translation of solved worlds, render-time only. ----
+  const wallBox = stageWall.makeEmpty();
+  tracks.forEach(tr => {                                // pose the machine once (its chains + carriers are placed by
+    tr.padObjs.forEach(po => { po.beltY ??= STAGE_Y; }); //  update(), not at build) — the animate loop re-poses it anyway
+    tr.machine.update(0, 0);
+    wallBox.union(visBox(tr.machine.group, true));
+  });
+  const full = !!(S.parts && Object.keys(S.parts).some(k => S.parts[k]?.length));
+  const P0 = ROLL_T + LOOP_T, loopBeats = S.melody.reduce((a, n) => a + n[1], 0);
+
+  // marble drums: built song-level, added under world (so it disposes with the world on the
+  // next song change). Aligned to the lead's timeline; `start` arms every ball on its magnet
+  // for the count-in. The kit moves to the front-right tier when the room is full of plugin
+  // stations; the solve may slide it further (then it is rebuilt there: its contacts are world).
+  kitSlot = full ? KIT_ROOM : KIT_SOLO;
+  // (posed once at the count-in instant: an un-posed ball parked at the origin would make the
+  //  measured footprint reach across the room)
+  const POSE0 = { started: false, skipStrikes: true, onStrike(){} };
+  const buildKit = () => { const g = drumKit.build(S.drums, { rollT: ROLL_T, beat: BEAT, P: P0, cx: stageView.cx, start: -LEAD_IN, slot: kitSlot });
+    drumKit.update(-LEAD_IN, P0, 0, POSE0); return g; };
+  drumGroup = buildKit();
   world.add(drumGroup);
 
   // instrument plugins: each part builds inside its station (render-time placement only)
@@ -402,19 +486,75 @@ function buildWorld(keyName){
     if (!part || !part.length) return;
     const st = stationFor(rig.I.key, i);
     const station = new THREE.Group();
-    station.position.set(stageView.cx + st.x, st.y, st.z);
+    // a HUNG station (the ricochet chandelier) is a crown over the belt: centred on the wall,
+    // its LOWEST part (plate, stem, the knot's wire) HANG_CLEAR above the paternoster's top
+    // housing — never across the strike band, never reading as resting on the housing
+    const hung = st.hang && !wallBox.isEmpty();
+    let y = hung ? wallBox.max.y + HANG_CLEAR : st.y;
+    const z = hung ? (wallBox.min.z + wallBox.max.z) / 2 + st.z : st.z;
+    station.position.set(stageView.cx + st.x, y, z);
     station.rotation.y = st.yaw;
-    station.add(rig.inst.build(part, { rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T, start: -LEAD_IN,
-      station: st, floorY: ROOM.FLOOR - st.y, ceilY: ROOM.CEIL - st.y, loopBeats: S.melody.reduce((a, n) => a + n[1], 0) }));
+    const buildAt = () => rig.inst.build(part, { rollT: ROLL_T, beat: BEAT, P: P0, start: -LEAD_IN,
+      station: st, floorY: ROOM.FLOOR - y, ceilY: ROOM.CEIL - y, loopBeats });
+    let body = buildAt();
+    station.add(body);
     world.add(station);
+    rig.inst.update(-LEAD_IN, P0, 0, POSE0);              // posed at the count-in, before it is measured
     station.updateMatrixWorld(true);
-    rig.station = station;
+    if (hung){                                          // measure the BUILT sculpture's underside…
+      const low = hangLow(station);
+      if (Number.isFinite(low) && Math.abs(wallBox.max.y + HANG_CLEAR - low) > .02){
+        y += wallBox.max.y + HANG_CLEAR - low;          // …and rehang it (rebuilt: its floor ring + ceiling rods are world-anchored)
+        station.remove(body); disposeTree(body);
+        station.position.y = y; station.updateMatrixWorld(true);
+        body = buildAt(); station.add(body); rig.inst.update(-LEAD_IN, P0, 0, POSE0); station.updateMatrixWorld(true);
+      }
+    }
+    rig.station = station; rig.slot = { ...st, y };
     rig.cue = eventTimes(part, { rollT: ROLL_T, beat: BEAT }).map(e => ({ t: e.t, w: e.vel }));
     rig.mix = partMix(S, rig.I.key);
     instLive.push(rig);
     const ids = rig.I.voiceIds ? rig.I.voiceIds(part) : [...new Set(part.map(e => e[1]))];
     ids.forEach(id => voices.push({ key: `inst:${rig.I.key}:${id}`, wet: !!rig.I.wet, render: () => mixRender(rig.I.voice(id), rig.mix.base) }));
   });
+
+  // the SOLVE: floor stations + the kit (a hung station floats over everyone — not in it)
+  let tops = {};
+  const relBox = (o, ox, oz, key) => { const b = visBox(o); if (b.isEmpty()) return null; tops[key] = b.max.y;
+    return [b.min.x - ox, b.max.x - ox, b.min.z - oz, b.max.z - oz]; };
+  const items = [];
+  instLive.forEach(r => { if (r.slot.hang) return;
+    const p = r.station.position, box = relBox(r.station, p.x, p.z, r.I.key);
+    if (box) items.push({ key: r.I.key, x: p.x, z: p.z, box, top: tops[r.I.key], rig: r }); });
+  const kx0 = stageView.cx + kitSlot.x, kz0 = kitSlot.z;
+  if (S.drums){ const box = relBox(drumGroup, kx0, kz0, 'drums'); if (box) items.push({ key: 'drums', x: kx0, z: kz0, box, top: tops.drums }); }
+  if (items.length && !wallBox.isEmpty()){
+    const solved = layoutStations(items,
+      [wallBox.min.x, wallBox.max.x, wallBox.min.z, wallBox.max.z],
+      { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 }, { cx: stageView.cx, bandY: STAGE_Y - 1.5, eyeY: 20 });   // (band − 1.5: the pads rising INTO the band read too)
+    lastLayout = { items: items.map(({ key, x, z, box, top }) => ({ key, x, z, box, top })), wall: wallBox.clone(), solved };
+    items.forEach(it => {
+      const { x, z } = solved[it.key];
+      if (it.rig){ it.rig.station.position.x = x; it.rig.station.position.z = z; it.rig.station.updateMatrixWorld(true); }
+      else if (Math.abs(x - kx0) + Math.abs(z - kz0) > 1e-6){       // the kit moved: rebuild it at its solved slot
+        world.remove(drumGroup); disposeTree(drumGroup);
+        kitSlot = { x: x - stageView.cx, z };
+        drumGroup = buildKit(); world.add(drumGroup);
+      }
+    });
+  }
+
+  // PERF: bake each station's provably-still parts into one mesh per material (mergestatic.js —
+  // posed across the whole loop first: a part that ever moves or blinks is left alone).
+  // ?nomerge skips it (A/B).
+  if (!NO_MERGE){
+    const times = Array.from({ length: 48 }, (_, k) => -LEAD_IN + (k + .37) / 48 * (P0 + LEAD_IN));
+    mergeStats = { merged: 0, removed: 0 };
+    const add = r => { mergeStats.merged += r.merged; mergeStats.removed += r.removed; };
+    const RUN = { started: true, skipStrikes: true, onStrike(){} };   // (started: the LIVE pose — !started is the armed hold)
+    instLive.forEach(r => { add(mergeStatic(r.station, t => r.inst.update(t, P0, 0, RUN), times)); r.inst.update(-LEAD_IN, P0, 0, POSE0); });
+    if (drumGroup){ add(mergeStatic(drumGroup, t => drumKit.update(t, P0, 0, RUN), times)); drumKit.update(-LEAD_IN, P0, 0, POSE0); }
+  }
 
   // a full room is deep: thin the haze so the back tier still reads from the wide shot
   // (FogExp2 .026 at ~50 u ≈ 18 % visible; .016 ≈ 45 %)
@@ -424,13 +564,14 @@ function buildWorld(keyName){
   rooms.place([
     { x: stageView.cx, z: -2.25, w: wallW + 4, d: 6, yaw: 0, y: STAGE_Y - 9.6 },   // the paternoster bays (housing bottom)
     ...(S.drums ? [kitAnchor(stageView.cx, kitSlot)] : []),
-    ...instLive.map(r => ({ x: r.station.position.x, z: r.station.position.z, yaw: r.station.rotation.y,
-      ...(({ w, d, y }) => ({ w, d, y }))(stationFor(r.I.key, instRigs.indexOf(r))) })),
+    ...instLive.filter(r => !r.slot.hang).map(r => ({ x: r.station.position.x, z: r.station.position.z, yaw: r.station.rotation.y,
+      w: r.slot.w, d: r.slot.d, y: r.slot.y })),
   ]);
 
   audio.setBeat(BEAT);
   cam.syncTracks(tracks, stageView);                    // reframe + rebuild the cam-button row for the new song
   syncDirector(S, stageView);
+  fadeMats = collectFadeMats(world); fadeWarm = 3;
   audio.rebuildBank(tracks, S.drums ? Object.keys(S.drums) : [], voices);
   // start in the loop's TAIL: songTime < 0 means no ball has spawned yet (li stays
   // -1), so the machine + any tail/pickup drums play as a count-in, then the marble
@@ -521,16 +662,23 @@ function syncDirector(S, view){
   cues = []; entrances = [];
   instLive.forEach(rig => {
     const st = rig.station, h = rig.I.lookHeight ?? 3, c = rig.I.camera || {};
-    shots.push({ key: rig.I.key, color: rig.I.color,
-      aim: st.localToWorld(new THREE.Vector3(0, h, 0)),
-      eye: st.localToWorld(new THREE.Vector3(c.x ?? 0, h + (c.up ?? 5), c.dist ?? 15)) });
-    cues.push({ key: rig.I.key, cue: rig.cue, weight: (rig.I.directorWeight ?? 1) * dirWeight(S, rig.I.key) });
+    const ck = rig.I.cameraKey ?? rig.I.key;            // the shot key (a station may not share a belt role's name)
+    // a HUNG station is shot from just under its lowest plate, looking up into it: the air
+    // between the sculpture and the belt's housing reads in profile (from above, the plates
+    // would sit visually ON the housing — the clearance foreshortens to nothing)
+    const eyeY = rig.slot.hang ? hangLow(st) - st.position.y + .6 : h + (c.up ?? 5);
+    const hk = rig.slot.hang ? 1.15 : 1;                 // (and from a step further back: the canopy stays in frame)
+    shots.push({ key: ck, color: rig.I.color, self: st,
+      aim: st.localToWorld(new THREE.Vector3(0, h + (rig.slot.hang ? 1 : 0), 0)),
+      eye: st.localToWorld(new THREE.Vector3(c.x ?? 0, eyeY, (c.dist ?? 15) * hk)) });
+    cues.push({ key: ck, cue: rig.cue, weight: (rig.I.directorWeight ?? 1) * dirWeight(S, rig.I.key) });
   });
   if (S.drums){
     const kx = view.cx + kitSlot.x, kz = kitSlot.z;     // the kit's slot this song (marbledrums.js)
     // eye a touch right of the kit's centre + aim raised: keeps the belt wall's edge
     // rail (a bloom streak at the old angle) out of the top-left of the frame
-    shots.push({ key: 'drums', color: '#ff8a3d', aim: new THREE.Vector3(kx, 4.2, kz - 2.5), eye: new THREE.Vector3(kx + 1, 8.5, kz + 13) });
+    // (the eye rides ABOVE the kit's magnet rail: from rail height the chrome bar slices the frame)
+    shots.push({ key: 'drums', color: '#ff8a3d', self: drumGroup, aim: new THREE.Vector3(kx, 3.6, kz - 2.5), eye: new THREE.Vector3(kx + 1, 11.5, kz + 12.5) });
     const cue = [];
     Object.entries(S.drums).forEach(([lane, hits]) => hits.map(normalizeHit).forEach(h =>
       cue.push({ t: wrapP(ROLL_T + h.beat * BEAT, P), w: h.vel * (lane === 'kick' || lane === 'crash' ? 1 : .45) })));
@@ -539,14 +687,29 @@ function syncDirector(S, view){
   // ENTRANCES: a station that starts PLAYING (≥ 3 hits in the next 4 beats) after a long
   // rest (≥ 12 beats, wrapping the seam) is a story beat — the marimba coming in, the
   // bells' first climax chords — so it pulls the camera ×3 (a chord's simultaneous hits
-  // all count). A lone toll after a rest isn't an entrance.
+  // all count). A lone toll after a rest isn't an entrance — and neither is a machine's own
+  // pulse: a pad that strikes a chord every 12 beats has rested 12 beats before EVERY chord,
+  // so the rest must also be well past its typical gap (≥ 1.8 × the median).
   for (const c of cues){
     const ts = [...new Set(c.cue.map(e => +e.t.toFixed(3)))].sort((a, b) => a - b);
     if (ts.length < 2) continue;
     const run = t => c.cue.filter(e => wrapP(e.t - t + 1e-3, P) <= 4 * BEAT + 2e-3).length >= 3;
-    const ent = new Set(ts.filter((t, i) => wrapP(t - ts[(i - 1 + ts.length) % ts.length], P) >= 12 * BEAT - 1e-3 && run(t)));
+    const gaps = ts.map((t, i) => wrapP(t - ts[(i - 1 + ts.length) % ts.length], P));
+    const med = [...gaps].sort((a, b) => a - b)[gaps.length >> 1];
+    const ent = new Set(ts.filter((t, i) => gaps[i] >= Math.max(12 * BEAT - 1e-3, 1.8 * med) && run(t)));
     c.cue = c.cue.map(e => ent.has(+e.t.toFixed(3)) ? { ...e, w: e.w * 3 } : e);
     ent.forEach(t => entrances.push({ t, key: c.key }));
+  }
+  // A CHORD is one moment, not N: for the look-ahead score, simultaneous hits on one station
+  // merge into one (the loudest + a little for the rest) — or a pad that strikes 4-note
+  // chords outscores every melodic machine 2:1 and the film ping-pongs back to it all song
+  for (const c of cues){
+    const byT = new Map();
+    for (const e of c.cue){ const k = Math.round(e.t * 500); const g = byT.get(k); if (g) g.push(e.w); else byT.set(k, [e.w]); }
+    c.cue = [...byT.entries()].sort((a, b) => a[0] - b[0]).map(([k, ws]) => {
+      const mx = Math.max(...ws), sum = ws.reduce((a, b) => a + b, 0);
+      return { t: k / 500, w: mx + .3 * (sum - mx) };
+    });
   }
   // ENSEMBLE MOMENTS (pure song data, solved up front): every instant where ≥ 2 voices
   // land together, with how many DISTINCT machines (stations + the lead belt) hit within
@@ -581,19 +744,153 @@ function syncDirector(S, view){
   // bowls + drums in the foreground, the belt and the back tier behind — and the song
   // OPENS on it (the reveal). Belt + drums only: the closer view that frames just those two.
   const full = instLive.length > 0;
+  // The full room's wide is FITTED to what this song actually staged (stageFrame): the belt,
+  // the chandelier over it, every wing — the front row may crop at the bottom corners (a
+  // foreground frame, the way a concert film shoots past the nearest players).
+  // The direction is SEARCHED (searchWide): the hand-picked angle first, then its neighbours —
+  // the first that keeps every subject in frame with the eye inside the room and the strike
+  // band clear of other machines wins (else the least-cropped, least-blocked one).
   const wide = full
-    ? { aim: new THREE.Vector3(view.cx + 1, 2, -3), eye: new THREE.Vector3(view.cx - 6, 22, 39), fitMax: 1,
-        // a phone held upright can't fit the room's width — so it looks down the room's
-        // DIAGONAL from the front-right corner: drums up front, the belt, the back-left wing
-        portrait: { aim: new THREE.Vector3(view.cx - 12, 0, -8), eye: new THREE.Vector3(view.cx + 34, 18, 39), fitMax: 1 } }
+    ? { ...searchWide(stageFrame(), WIDE_DIRS, 1.6, .94, 0), fov: WIDE_FOV, fitMax: 1,
+        // a phone held upright can't fit the room's width — so it frames the PROTAGONISTS (the
+        // belt band → top housing, the chandelier, the turntable's record) down a diagonal, with
+        // the title/song-select block's height kept clear at the top (PORTRAIT_INSET); the wings
+        // enter from the frame edges as context
+        portrait: { ...searchWide(stageFrame(true), PORTRAIT_DIRS, .5, .92, PORTRAIT_INSET), fov: WIDE_FOV, fitMax: 1 } }
     : { aim: new THREE.Vector3(view.cx, 4, 2), eye: new THREE.Vector3(view.cx + 4, 15, 39) };
+  lastWide = wide;
   // a narrow (portrait) frame pulls each station shot back along its own line (camera.js);
   // fitMax caps that pull so the eye never leaves the room box
-  shots.forEach(sh => { sh.fitMax = roomFit(sh.aim, sh.eye); });
+  shots.forEach(sh => { unblockShot(sh); sh.fitMax = roomFit(sh.aim, sh.eye); delete sh.self; });
   // the opening reveal holds through the count-in and the first two beats (songTime-based,
   // so a page idling in auto before the play tap can't spend it)
+  lastShots = shots;
   cam.syncStations(shots, wide, { auto: !soloKey, openWide: full && !soloKey, openUntil: ROLL_T + 2 * BEAT });
 }
+/* A station shot must SEE its station: cast a 5×3 grid of rays from the eye through the frame's
+   middle; if another machine is hit first on more than a couple, swing the eye about the aim
+   (±20°, ±40°), then lift it — the first clear pose wins (else the least blocked). The staging
+   solve keeps footprints apart, but on a crowded floor a neighbour can still stand in the line. */
+const _ubRay = new THREE.Raycaster();
+function shotBlocked(eye, aim, self){
+  const fwd = aim.clone().sub(eye).normalize(), R = new THREE.Vector3().crossVectors(fwd, _Yup).normalize(), U = new THREE.Vector3().crossVectors(R, fwd);
+  const dist = eye.distanceTo(aim), top = o => { while (o.parent && o.parent !== world) o = o.parent; return o; };
+  let n = 0; _ubRay.camera = camera;
+  for (const sx of [-.3, -.15, 0, .15, .3]) for (const sy of [-.15, 0, .15]){
+    _ubRay.set(eye, fwd.clone().addScaledVector(R, sx).addScaledVector(U, sy).normalize()); _ubRay.far = dist * .9;
+    const h = _ubRay.intersectObject(world, true).find(i => (i.object.isMesh || i.object.isInstancedMesh) && drawn(i.object));
+    if (h && top(h.object) !== self) n++;
+  }
+  return n;
+}
+function unblockShot(sh){
+  if (!sh.self || shotBlocked(sh.eye, sh.aim, sh.self) <= 2) return;
+  const off = sh.eye.clone().sub(sh.aim);
+  let best = null;
+  for (const lift of [0, 4, 8]) for (const a of [20, -20, 40, -40, 0]){
+    const e = off.clone().applyAxisAngle(_Yup, THREE.MathUtils.degToRad(a)).add(sh.aim); e.y += lift;
+    const n = shotBlocked(e, sh.aim, sh.self);
+    if (!best || n < best.n) best = { e, n };
+    if (n <= 1) break;
+  }
+  if (best) sh.eye = best.e;
+}
+/* The points the WIDE shot must hold: the belt wall (band → top housing), a hung station's
+   plates + canopy, every floor station from its deck up — and the front row only from its
+   middle back (they may frame the bottom corners). From the built geometry, per song. */
+function stageFrame(core = false){
+  const pts = [], add = (x0, x1, y0, y1, z0, z1) => { for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) pts.push(new THREE.Vector3(x, y, z)); };
+  if (!stageWall.isEmpty()) add(stageWall.min.x, stageWall.max.x, STAGE_Y - 3, stageWall.max.y, stageWall.min.z, stageWall.max.z);
+  if (core){                                             // portrait: the belt, the hung plates, the record
+    instLive.forEach(r => {
+      if (!r.slot.hang && r.I.key !== 'turntable') return;
+      const b = visBox(r.station), p = r.station.position;
+      if (b.isEmpty()) return;
+      if (r.slot.hang) add(b.min.x, b.max.x, hangLow(r.station), Math.min(b.max.y, p.y + 13), b.min.z, b.max.z);
+      else add(b.min.x, b.max.x, p.y, p.y + 1, b.min.z, (b.min.z + b.max.z) / 2);
+    });
+    return pts;
+  }
+  const front = 13;                                      // a footprint centred past this z is the front row
+  const floorBox = (b, deckY) => {
+    const y0 = Math.max(b.min.y, deckY - 1.5), zc = (b.min.z + b.max.z) / 2;
+    add(b.min.x, b.max.x, y0, b.max.y, b.min.z, zc > front ? zc : b.max.z);
+  };
+  instLive.forEach(r => {
+    const b = visBox(r.station), p = r.station.position;
+    if (b.isEmpty()) return;
+    if (r.slot.hang) add(b.min.x, b.max.x, p.y + 1, Math.min(b.max.y, p.y + 13), b.min.z, b.max.z);   // plates + canopy, not the rods
+    else floorBox(b, p.y);
+  });
+  if (drumGroup){ const b = visBox(drumGroup); if (!b.isEmpty()) floorBox(b, 1); }
+  return pts;
+}
+/* Fit a shot to `pts`: look along −dir (dir = unit aim→eye), centre the points in frame and
+   back off just far enough that all of them fit `fill` of the frame at `aspect` — then pull
+   in so the eye stays inside the room (whatever then falls outside crops). */
+const WIDE_FOV = 68;                                    // the wide's lens (camera.js eases into it)
+const dirOf = (x, y, z) => new THREE.Vector3(x, y, z).normalize();
+/* the wide's candidate directions (unit aim → eye), preferred first: a LOW front-left three-
+   quarter (the hall reads as a machine-hall, not a floor plan), then steeper / squarer */
+const WIDE_DIRS = [[-.15, .43, .89], [-.08, .5, .89], [-.22, .5, .86], [0, .55, .85], [-.15, .62, .8], [.1, .55, .85], [-.3, .58, .8]].map(d => dirOf(...d));
+const PORTRAIT_DIRS = [[.45, .36, .82], [.3, .4, .87], [.6, .33, .74], [.15, .42, .9], [-.2, .42, .89], [.45, .5, .76], [0, .5, .87], [-.4, .42, .82]].map(d => dirOf(...d));
+const PORTRAIT_INSET = .13;                             // the top of a phone frame belongs to the title + song select
+const _occRay = new THREE.Raycaster();
+/* fit each candidate direction; score = how much the room clamp crops (1 − k) + how much of
+   the strike band other machines hide from the eye. First candidate that is clean wins. */
+function searchWide(pts, dirs, aspect, fill, inset){
+  const band = [];
+  if (!stageWall.isEmpty()) for (let i = 0; i <= 6; i++) for (const dy of [0, 2.5])
+    band.push(new THREE.Vector3(THREE.MathUtils.lerp(stageWall.min.x + 1.5, stageWall.max.x - 1.5, i / 6), STAGE_Y + dy, (stageWall.min.z + stageWall.max.z) / 2));
+  const belt = new Set(tracks.map(t => t.stage));
+  const top = o => { while (o.parent && o.parent !== world) o = o.parent; return o; };
+  const shown = o => { for (let p = o; p && p !== world; p = p.parent) if (!p.visible) return false; return true; };
+  let best = null;
+  dirs.forEach((d, i) => {
+    const f = fitShot(pts, d, aspect, fill, WIDE_FOV, inset);
+    let blocked = 0;
+    for (const q of band){
+      const v = q.clone().sub(f.eye), L = v.length();
+      _occRay.set(f.eye, v.divideScalar(L)); _occRay.far = L - .5; _occRay.camera = camera;
+      if (_occRay.intersectObject(world, true).some(h => (h.object.isMesh || h.object.isInstancedMesh) && shown(h.object) && !belt.has(top(h.object)))) blocked++;
+    }
+    const score = (1 - f.k) * 3 + (band.length ? blocked / band.length : 0) * 2 + i * .02;
+    if (!best || score < best.score) best = { ...f, score, dir: i, blocked };
+  });
+  return best;
+}
+function fitShot(pts, dir, aspect, fill = .94, fov = camera.fov, inset = 0){
+  dir = dir.clone();
+  const R = new THREE.Vector3().crossVectors(dir.clone().negate(), _Yup).normalize();
+  const U = new THREE.Vector3().crossVectors(R, dir.clone().negate()).normalize();
+  // (an inset frame: the subject fills the lower 1 − inset of the frame's height)
+  const tanV0 = Math.tan(THREE.MathUtils.degToRad(fov / 2)), tanV = tanV0 * fill * (1 - inset), tanH = tanV0 * fill * aspect;
+  const aim = new THREE.Vector3();
+  pts.forEach(p => aim.add(p)); aim.divideScalar(Math.max(1, pts.length));
+  const q = new THREE.Vector3();
+  let D = 10;
+  for (let it = 0; it < 6; it++){
+    D = 0;
+    for (const p of pts){ q.subVectors(p, aim); const f = q.dot(dir);
+      D = Math.max(D, f + Math.abs(q.dot(R)) / tanH, f + Math.abs(q.dot(U)) / tanV); }
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const p of pts){ q.subVectors(p, aim); const dep = D - q.dot(dir), sx = q.dot(R) / dep, sy = q.dot(U) / dep;
+      x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy); }
+    aim.addScaledVector(R, (x0 + x1) / 2 * D * .9).addScaledVector(U, ((y0 + y1) / 2 + tanV0 * inset) * D * .9);
+  }
+  // keep the eye inside the room box (the smallest room's walls — STAGE), with room for the
+  // director's slow orbit drift (camera.js sways a held shot ±.12 rad about its aim)
+  const pad = 1.5; let k = 1;
+  const lim = (a, v, lo, hi) => { if (v > 1e-6) k = Math.min(k, (hi - a) / v); else if (v < -1e-6) k = Math.min(k, (lo - a) / v); };
+  for (const th of [-.13, 0, .13]){
+    const r = dir.clone().applyAxisAngle(_Yup, th).multiplyScalar(D);
+    lim(aim.x, r.x, -ROOM.HW + pad, ROOM.HW - pad);
+    lim(aim.y, r.y, ROOM.FLOOR + pad, ROOM.CEIL - pad);
+    lim(aim.z, r.z, ROOM.BACK + pad, ROOM.FRONT - pad);
+  }
+  return { aim, eye: aim.clone().addScaledVector(dir, D * Math.max(.3, k)), k };
+}
+const _Yup = new THREE.Vector3(0, 1, 0);
 function roomFit(aim, eye, pad = 1.5){
   const d = eye.clone().sub(aim); let k = Infinity;
   const lim = (a, v, lo, hi) => { if (v > 1e-6) k = Math.min(k, (hi - a) / v); else if (v < -1e-6) k = Math.min(k, (lo - a) / v); };
@@ -613,10 +910,18 @@ let ensFlare = 0, lastNow = 0;                          // the room's exposure f
 /* Room-wide director cues, every frame: the ensemble size about to land (→ the wide
    shot), whether the lead is in/near a skim (→ stay on the belt), whether we're in the
    loop seam (→ breathe wide), and the exposure flare as a big moment passes. */
+const _forceKeys = [], _cueOut = {};                   // reused each frame (no per-frame garbage)
 function roomCues(out){
   const P = ROLL_T + LOOP_T, now = wrapP(songTime, P);
   let ens = 0;
   const passed = wrapP(now - lastNow, P);
+  // the MUSIC'S GRID (beats from the downbeat at ROLL_T): did a beat / a bar line pass this
+  // frame, and is a bar line under a beat away — the director cuts on these, not on its timer
+  const bNow = (now - ROLL_T) / BEAT, bLast = (lastNow - ROLL_T) / BEAT;
+  const crossed = passed < .5 && Math.floor(bNow) !== Math.floor(bLast) && now > lastNow;
+  out._onBeat = crossed;
+  out._onBar = crossed && Math.floor(bNow / 4) !== Math.floor(bLast / 4);
+  out._barSoon = (4 - (((bNow % 4) + 4) % 4)) * BEAT <= BEAT + 1e-3;
   for (const m of moments){
     const d = wrapP(m.t - now, P);
     if (d < ENSEMBLE_AHEAD) ens = Math.max(ens, m.n);
@@ -625,15 +930,31 @@ function roomCues(out){
   }
   lastNow = now;
   out._ensemble = ens;
-  out._force = entrances.find(e => wrapP(e.t - now, P) < .35)?.key;   // an entrance cuts on its downbeat
-  out._forceSoon = entrances.some(e => wrapP(e.t - now, P) < ENSEMBLE_AHEAD + .5);
-  out._skim = skims.some(([t0, len]) => wrapP(now - t0, P) < len);   // (t0 already leads the run by .6 s)
+  _forceKeys.length = 0;
+  let forcedWithin = Infinity, soon = false;
+  for (const e of entrances){
+    const d = wrapP(e.t - now, P);
+    if (d < .35) _forceKeys.push(e.key);                // entrances cut on their downbeat
+    if (d < ENSEMBLE_AHEAD + .5) soon = true;
+    forcedWithin = Math.min(forcedWithin, d);
+  }
+  out._force = _forceKeys;
+  out._forceSoon = soon;
+  let skim = false;
+  for (const [t0, len] of skims){
+    if (wrapP(now - t0, P) < len) skim = true;          // (t0 already leads the run by .6 s)
+    else forcedWithin = Math.min(forcedWithin, wrapP(t0 - now, P));
+  }
+  out._skim = skim;
   out._seam = songTime > 0 && (now >= seamFrom || now < ROLL_T - .2);
   out._seamSoon = now >= seamFrom - 1.5;                // no fresh cut just before the seam's wide (a flicker)
+  if (!out._seam) forcedWithin = Math.min(forcedWithin, Math.max(0, seamFrom - now));
+  out._forcedWithin = forcedWithin;                     // the next cut the director MUST take — ordinary cuts wait for it
   return out;
 }
+const _scoreOut = {};
 function stationScores(){
-  const P = ROLL_T + LOOP_T, now = wrapP(songTime, P), out = {};
+  const P = ROLL_T + LOOP_T, now = wrapP(songTime, P), out = _scoreOut;
   for (const c of cues){
     let sum = 0;
     for (const e of c.cue){
@@ -920,10 +1241,28 @@ function animate(){
 
   // CAMERA: the rig decides the pose (director / fixed / free-fly / follow) from the
   // live marbles. main just hands it the frame's state; physics stays untouched.
+  // (the per-station look-ahead only matters to the director; the room cues — the ensemble
+  //  flare — run in every mode)
+  const auto = cam.mode === 'auto';
+  const sc = cues.length ? (auto ? stationScores() : roomCues(_cueOut)) : null;
   cam.update({ dt, time: clock.elapsedTime, songTime, tracks, marblePts, leadRender, reduceMotion, started,
-               stationScores: cues.length ? stationScores() : null });
+               stationScores: auto ? sc : null });
 
   rooms.update(dt, songTime, camera, expoKick);         // room ambience (pure fn of songTime + the music's kick)
+  // PERF: an additive glow at opacity 0 still costs a full draw call. Every machine keeps
+  // dozens of flash halos parked dark between strikes (~260 in a full room), so skip them
+  // via material.visible — no program change, and the owner's own .visible logic is untouched.
+  // (the first frames after a build draw them all, so every program compiles up front —
+  // never a shader-compile hitch on a machine's first flash)
+  if (perfOff){ for (const m of fadeMats) m.visible = true;   // dev A/B (__dev.perfOff): draw every idle glow, as before
+    scene.children.forEach(c => { if (c.isSprite || (c.isMesh && c.geometry?.type === 'RingGeometry')) c.visible = true; }); }
+  else if (fadeWarm > 0) fadeWarm--;
+  else {
+    // (re-collected every ~2 s: a plugin that makes or swaps a glow material after build — an
+    //  async solve, a material swap — joins the gate instead of drawing dark forever)
+    if (++fadeTick % 120 === 0) fadeMats = collectFadeMats(world);
+    for (let i = 0; i < fadeMats.length; i++){ const m = fadeMats[i]; m.visible = m.opacity > .002; }
+  }
   if (convDbgOn) convDebug(leadRender ? leadRender.y : cam.target.y, camera.position.y);
   composer.render();
 }
@@ -1129,10 +1468,10 @@ if (new URLSearchParams(location.search).has('debug')){
     song(k){ sel.value = k; sel.dispatchEvent(new Event('change')); },
     station(key, dist, up){ return lookAtStation(key, dist, up); },
     instruments: () => instLive.map(r => r.I.key),
-    cam(m){ cam.mode = m; }, get shot(){ return cam.shot; },
+    cam(m){ cam.mode = m; }, get shot(){ return cam.shot; }, get weigh(){ return cam.weigh; },
     // room layout probe: world-space XZ boxes of every station, the drum machine and the belt bays
     boxes(deep){
-      const bx = o => { const b = new THREE.Box3().setFromObject(o); return b.isEmpty() ? null : [b.min, b.max].map(v => [+v.x.toFixed(1), +v.y.toFixed(1), +v.z.toFixed(1)]); };
+      const bx = o => { const b = visBox(o, true); return b.isEmpty() ? null : [b.min, b.max].map(v => [+v.x.toFixed(1), +v.y.toFixed(1), +v.z.toFixed(1)]); };
       const out = {};
       instLive.forEach(r => out[r.I.key] = bx(r.station));
       if (drumGroup) out.drums = bx(drumGroup);
@@ -1146,6 +1485,44 @@ if (new URLSearchParams(location.search).has('debug')){
     orbitMax(d){ cam.orbit.maxDistance = d; cam.orbit.maxPolarAngle = Math.PI; },
     room(k){ return k === undefined ? rooms.key : rooms.set(k); },
     audioProbe: () => audio.probe(),                   // mix-bus gain reduction + reverb-return peak
+    // perf probe: draw calls / triangles per FRAME (summed over every composer pass, averaged
+    // over n frames), live lights, compiled programs, and the scene's mesh count
+    get scene(){ return scene; }, set perfOff(v){ perfOff = !!v; },
+    scores: () => cues.length ? stationScores() : null,
+    // occlusion probe: for every director shot (+ the wide), cast a 5×3 grid of rays from the
+    // eye through the frame's middle and report which OTHER machine is hit before the subject
+    occlusion(){
+      const owner = o => { while (o.parent && o.parent !== world) o = o.parent; return o; };
+      const name = g => g === drumGroup ? 'drums' : instLive.find(r => r.station === g)?.I.key || (tracks.find(t => t.stage === g) ? 'belt:' + tracks.find(t => t.stage === g).role : g.type);
+      const rc = new THREE.Raycaster(), out = {}; rc.camera = camera;
+      const test = (key, eye, aim) => {
+        const fwd = aim.clone().sub(eye).normalize(), R = new THREE.Vector3().crossVectors(fwd, _Yup).normalize(), U = new THREE.Vector3().crossVectors(R, fwd);
+        const dist = eye.distanceTo(aim), hits = {};
+        for (const sx of [-.3, -.15, 0, .15, .3]) for (const sy of [-.15, 0, .15]){
+          const dir = fwd.clone().addScaledVector(R, sx).addScaledVector(U, sy).normalize();
+          rc.set(eye, dir); rc.far = dist * .9;
+          const h = rc.intersectObject(world, true).find(i => i.object.visible && i.object.isMesh);
+          if (h){ const n = name(owner(h.object)); hits[n] = (hits[n] || 0) + 1; }
+        }
+        out[key] = hits;
+      };
+      lastShots.forEach(sh => test(sh.key, sh.eye, sh.aim));
+      if (lastWide?.eye) test('stage', lastWide.eye, lastWide.aim);
+      return out;
+    },
+    get layout(){ return lastLayout; }, get wide(){ return lastWide; }, get merge(){ return mergeStats; },
+    hang: () => instLive.filter(r => r.slot.hang).map(r => ({ key: r.I.key, wallTop: +stageWall.max.y.toFixed(2), low: +hangLow(r.station).toFixed(2), y: +r.station.position.y.toFixed(2) })),
+    renderInfo(n = 10){
+      return new Promise(res => {
+        const I = renderer.info; I.autoReset = false; I.reset();
+        let k = 0; const tick = () => { if (++k < n) return requestAnimationFrame(tick);
+          let meshes = 0, lights = 0; scene.traverseVisible(o => { if (o.isMesh || o.isSprite || o.isPoints || o.isLine) meshes++; if (o.isLight) lights++; });
+          const out = { calls: Math.round(I.render.calls / n), tris: Math.round(I.render.triangles / n), programs: I.programs.length,
+                        geometries: I.memory.geometries, textures: I.memory.textures, visibleObjs: meshes, lights };
+          I.autoReset = true; I.reset(); res(out); };
+        requestAnimationFrame(tick);
+      });
+    },
   };
   dbg = { update(T){
     if (!held) bar.value = Math.round(T / (ROLL_T + LOOP_T) * 1000);

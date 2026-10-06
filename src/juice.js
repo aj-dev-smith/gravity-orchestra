@@ -93,7 +93,9 @@ export function spawnRipple(pos, quaternion, hue, isBass, amp = .8){
 
 /* advance trail fade, ripples, and sparks by one frame */
 export function updateJuice(dt){
-  trail.forEach(s => { s.material.opacity *= (1 - dt*3.2); s.scale.multiplyScalar(1 - dt*.9); });
+  // PERF: a spent sprite/ring is HIDDEN, not drawn at opacity 0 — every pooled puff is its own
+  // draw call, and ~200 idle ones used to be submitted every frame for nothing
+  trail.forEach(s => { s.material.opacity *= (1 - dt*3.2); s.scale.multiplyScalar(1 - dt*.9); s.visible = s.material.opacity > .004; });
   ripples.forEach(r => {
     if (r.life < 1){
       r.life = Math.min(1, r.life + dt*2.4);
@@ -101,7 +103,8 @@ export function updateJuice(dt){
       const s = r.size * (.55 + e*1.1);
       r.mesh.scale.set(s,s,s);
       r.mesh.material.opacity = (1-r.life)*(1-r.life)*r.peak;
-    } else r.mesh.material.opacity = 0;
+      r.mesh.visible = true;
+    } else { r.mesh.material.opacity = 0; r.mesh.visible = false; }
   });
   parts.forEach(p => {
     if (p.life < 1){
@@ -111,6 +114,7 @@ export function updateJuice(dt){
       const o = 1 - p.life;
       p.s.material.opacity = o*o*.9;
       p.s.scale.setScalar(p.s0*(1 + p.life*.5));
-    } else p.s.material.opacity = 0;
+      p.s.visible = true;
+    } else { p.s.material.opacity = 0; p.s.visible = false; }
   });
 }

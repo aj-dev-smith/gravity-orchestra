@@ -39,7 +39,7 @@ export function steelpanVoice(note){
   const N = Math.round(dur * SR), out = new Float32Array(N), tick = new Float32Array(N);
   const nyq = SR * .45, TW = Math.PI * 2;
   const rnd = mulberry32(m * 7919 + 1013);
-  const beat = .6 + 1.6 * rank;                              // the shimmer's beat (Hz): a quicker flutter up high
+  const beat = .3 + .9 * rank;                               // the shimmer's beat (Hz): slow — a pan breathes, it doesn't flutter
   const parts = [                                            // ratio, level, decay ×tau, bloom (s)
     [1, 1, 1, 0],
     [2, .62, .62, .045],                                     // the octave blooms in
@@ -55,7 +55,7 @@ export function steelpanVoice(note){
     parts.forEach(([r, a, k, bloom], j) => {
       const env = Math.exp(-s / (tau * k)) * (bloom ? 1 - Math.exp(-s / bloom) : 1);
       let osc = Math.sin(TW * f * r * s + ph[j]);
-      if (j === 0) osc = .72 * osc + .28 * Math.sin(TW * (f + beat) * s + ph[j]);   // the near-degenerate pair
+      if (j === 0) osc = .89 * osc + .11 * Math.sin(TW * (f + beat) * s + ph[j]);   // the near-degenerate pair (a gentle beat)
       x += a * env * osc;
     });
     // the stick: a short, bright tick (band-passed seeded noise, ~4 ms)
@@ -65,13 +65,14 @@ export function steelpanVoice(note){
     out[i] = x * atk * fade;
     tick[i] = (.6 * lp + .4 * hp) * Math.exp(-s / .004) * atk;
   }
-  let peak = 0;
-  for (let i = 0; i < N; i++) peak = Math.max(peak, Math.abs(out[i]));
-  const gn = .78 / (peak || 1);
+  let peak = 0, tp = 0;
+  for (let i = 0; i < N; i++){ peak = Math.max(peak, Math.abs(out[i])); tp = Math.max(tp, Math.abs(tick[i])); }
+  // the stick sits UNDER the note: its peak is TICK of the tonal peak (measured, not guessed)
+  const TICK = .3, gn = .78 / (peak || 1), tk = tp ? TICK * peak / tp : 0;
   let tot = 0;
-  for (let i = 0; i < N; i++){ out[i] = (out[i] + tick[i] * .5) * gn; tot = Math.max(tot, Math.abs(out[i])); }
+  for (let i = 0; i < N; i++){ out[i] = (out[i] + tick[i] * tk) * gn; tot = Math.max(tot, Math.abs(out[i])); }
   if (tot > .9) for (let i = 0; i < N; i++) out[i] *= .9 / tot;
-  const v = { samples: out, sr: SR };
+  const v = { samples: out, sr: SR, tick: TICK };
   cache.set(note, v);
   return v;
 }

@@ -35,6 +35,7 @@ import { orchestrate, shapePart, PART_SPEC, GM_NAMES, midiToName } from '../midi
 import { convertToSong } from '../midi/convert.js';
 import { noteNum } from '../engine.js';
 import { normalizeHit } from '../drumkit.js';
+import { GEOM as VOLLEY, refineLine as volleyRefine } from '../instruments/volley/solve.js';
 
 export const LEAD = 'lead', BELT = 'belt', DRUMS = 'drums', OFF = 'off';
 export const MAX_HARMONY = 2;                      // alto + bass belts
@@ -54,10 +55,14 @@ const sumBeats = notes => notes.reduce((s, [, b]) => s + b, 0);
    lo/hi/center  the sweet range (MIDI): the whole line octave-shifts toward center, strays fold
    minGap        seconds between successive notes (a hop needs a little air; the ricochet
                  collapses closer events — DT_MIN .06 — so they're thinned here, reported)
-   maxEvents     a pad / plate per note OCCURRENCE: past this the build gets heavy → keep the strongest */
+   maxEvents     a pad / plate per note OCCURRENCE: past this the build gets heavy → keep the strongest
+   refine        (optional) the machine's own honesty pass over the fitted part → { part, warnings } */
 export const LINE_SPEC = {
   turntable: { lo: 50, hi: 91, center: 70, minGap: .08, maxEvents: 192 },
   ricochet:  { lo: 57, hi: 93, center: 76, minGap: .08, maxEvents: 160 },
+  // the volley's walls play a hop no quicker than MIN_HOP (its solver's measured floor), a steel
+  // pan's range; what they still can't play honestly is thinned by the solver itself (refine)
+  volley:    { lo: 55, hi: 88, center: 72, minGap: VOLLEY.MIN_HOP, maxEvents: 160, refine: volleyRefine },
 };
 const LINE_DEFAULT = { lo: 48, hi: 91, center: 70, minGap: .08, maxEvents: 192 };
 
@@ -91,7 +96,11 @@ export function fitLine(key, notes, { bpm, loopBeats, spec = LINE_SPEC[key] || L
     kept = out.filter(n => keep.has(n));
     say(`kept the ${spec.maxEvents} strongest of ${out.length} notes (one pad per note — the build budget)`);
   }
-  return { part: kept.map(n => [tidy(n.beat), midiToName(n.midi), Math.round(Math.max(.05, Math.min(1, n.vel)) * 100) / 100]), warnings };
+  const part = kept.map(n => [tidy(n.beat), midiToName(n.midi), Math.round(Math.max(.05, Math.min(1, n.vel)) * 100) / 100]);
+  if (!spec.refine) return { part, warnings };
+  const r = spec.refine(part, { bpm, loopBeats });
+  r.warnings.forEach(say);
+  return { part: r.part, warnings };
 }
 /** fit material to ANY plugin: the orchestra's own fit when it has a spec, else a line */
 export function fitMachine(key, notes, { bpm, loopBeats }){

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { STATIONS, layoutStations, MARGIN, AUDIENCE } from '../src/instruments/stations.js';
+import { STATIONS, layoutStations, MARGIN, AUDIENCE, hangPlace, WING_REF } from '../src/instruments/stations.js';
 import { KIT_ROOM } from '../src/marbledrums.js';
 import { STAGE } from '../src/rooms/common.js';
 
@@ -19,6 +19,33 @@ const itemsFor = keys => [
 const walls = { '1 bay': [-12, 12, -4.1, 2], '2 bays': [-22, 22, -4.1, 2.3], '3 bays': [-28, 28, -4.1, 2.3] };
 const world = (solved, it) => [solved[it.key].x + it.box[0], solved[it.key].x + it.box[1], solved[it.key].z + it.box[2], solved[it.key].z + it.box[3]];
 const clear = (a, b) => a[1] <= b[0] || b[1] <= a[0] || a[3] <= b[2] || b[3] <= a[2];
+
+describe('hung stations (stations.js hangPlace)', () => {
+  const hungOff = Object.keys(STATIONS).filter(k => STATIONS[k].hang && Math.abs(STATIONS[k].x) > 4);
+  it('an off-centre hung footprint never hangs over the belt and stays in the room, 1–3 bays', () => {
+    expect(hungOff.length).toBeGreaterThan(0);
+    for (const k of hungOff) for (const [name, wall] of Object.entries(walls)){
+      const box = boxOf(STATIONS[k]), at = hangPlace(STATIONS[k], box, wall, ROOM);
+      const b = [at.x + box[0], at.x + box[1], at.z + box[2], at.z + box[3]];
+      expect(clear([b[0] + 3, b[1] - 3, b[2], b[3]], wall), `${k} × ${name} wall`).toBe(true);   // (FORE_GRAZE: a graze over the housing's edge)
+      expect(b[0]).toBeGreaterThanOrEqual(ROOM.x0 - 1e-9); expect(b[1]).toBeLessThanOrEqual(ROOM.x1 + 1e-9);
+      expect(b[3]).toBeLessThanOrEqual(ROOM.z1 + 1e-9);
+      // and it never crowds the centred chandelier
+      const ch = STATIONS.ricochet, cb = boxOf(ch), c = hangPlace(ch, cb, wall, ROOM);
+      expect(clear(b, [c.x + cb[0], c.x + cb[1], c.z + cb[2], c.z + cb[3]]), `${k} × ricochet, ${name}`).toBe(true);
+    }
+  });
+  it('it rides out with its wing (gap to the wall edge kept) while the wing has room; the chandelier stays centred', () => {
+    const v = STATIONS.volley, box = boxOf({ ...v, w: 19.5, d: 11.4 });  // the demo's measured court
+    const one = hangPlace(v, box, [-WING_REF, WING_REF, -4.1, 2], ROOM), wide = hangPlace(v, box, [-12.8, 12.8, -4.1, 2], ROOM);
+    expect(one).toEqual({ x: v.x, z: -1.05 + v.z });
+    expect(wide.x).toBeCloseTo(v.x - (12.8 - WING_REF), 12);           // (the room's wall stops it soon after: then it flies forward)
+    const far = hangPlace(v, box, walls['3 bays'], ROOM);              // no wing room: behind the bays
+    expect(far.z + box[3]).toBeLessThanOrEqual(walls['3 bays'][2] - MARGIN + 1e-9);
+    const ch = hangPlace(STATIONS.ricochet, boxOf(STATIONS.ricochet), walls['3 bays'], ROOM);
+    expect(ch.x).toBe(0); expect(ch.z).toBeCloseTo(-.9, 12);
+  });
+});
 
 describe('room staging (stations.js layoutStations)', () => {
   for (const [name, wall] of Object.entries(walls)) for (const keys of [floorKeys, floorKeys.filter(k => k !== 'turntable')]){

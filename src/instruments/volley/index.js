@@ -6,16 +6,16 @@ import { GEOM, X_RAIL, xOfRank, buildVolley, ballAt, shuttleAt, padPose, forPads
 import { steelpanVoice } from './voice.js';
 
 /* ============================================================
-   VOLLEY — two walls, one marble, traded over the audience's heads.
+   VOLLEY — two walls, one marble, traded across a flying court.
 
-   A flying COURT hangs over the front of the stage (cables to the
-   ceiling, above the audience's sightline to the belt): two slat
-   paternosters face each other across a net, a bridge rail spans their
-   crowns, and one immortal marble is volleyed between them — the
-   phrase on the left wall, the long note that ends it SERVES the
-   marble over the net, the right wall answers. Pitch is height on the
-   wall's staff (glowing ticks on each strike column), pad size is
-   register.
+   A COURT hangs over the left wing (cables to the ceiling; stations.js
+   hangPlace rides it out with the wing, or flies it forward over the
+   front-left past a wide belt): two slat paternosters face each other
+   across a net, a bridge rail spans their crowns, and one immortal
+   marble is volleyed between them — a phrase on one wall, its breath
+   SERVES the marble over the net, the other wall answers. Pitch is
+   height on the wall's staff (glowing ticks on each strike column), pad
+   size is register.
 
    Every pad is manufactured for its strike: it rides its own slat out
    of the back cowl folded edge-on, its boom telescopes into the court,
@@ -31,7 +31,8 @@ import { steelpanVoice } from './voice.js';
    ============================================================ */
 
 const EDGE_W = .25;
-const TRAIL_N = 18, TRAIL_DT = .02;
+const TRAIL_N = 30, TRAIL_DT = .02, TRAIL_HOME = 18;   // a volley's trail is long (the trade reads at wide-shot scale); a dribble's short
+const HALO_MIN_PX = 26, GHOST_MIN_PX = 9;           // the marble never shrinks below a readable glow (device px) in a wide shot
 const SIG = new THREE.Color(0xb8ff5a);              // signature: electric lime (court lines, net cable, rail strip)
 const { XF, RM, Y_M, NET_H, PAD_T, ARM } = GEOM;
 const RS = .3;                                      // chain sprocket radius: court strand at |x| = XF, back strand XF + 2·RS
@@ -54,7 +55,9 @@ export default {
   label: 'Volley',
   wet: true,
   lookHeight: 4.6,
-  camera: { dist: 21, up: 5, x: 6 },                      // (hung: main shoots it from just under its deck, looking in)
+  // shot from ABOVE its deck (overDeck: not from under it like the chandelier), a step to the
+  // audience's side: both strike columns face the lens, the net between them, the rail on top
+  camera: { dist: 23, up: 8.5, x: 2, overDeck: true },
   color: '#b8ff5a',                                 // electric lime
   directorWeight: 1.15,                             // one line, traded: the long serves are story beats
   voice: id => steelpanVoice(id),
@@ -66,7 +69,9 @@ export default {
       const group = new THREE.Group();
       const R = buildVolley(part, { rollT, beat, P, start });
       if (R.warnings.length) console.warn('[volley]', R.warnings.join('; '));
+      if (R.notes.length) console.warn('[volley]', R.notes.join('; '));
       const ZW = R.ZW || GEOM.ZW_MIN;
+      group.userData.halfDepth = ZW + CW + .3;              // the deck's measured half-depth (footprint probes)
       const POOL = Math.max(1, maxPads(R));
 
       // ---- materials (a fixed set) ----
@@ -121,10 +126,12 @@ export default {
       const rims = new THREE.InstancedMesh(new THREE.TorusGeometry(1, .1, 6, 40).rotateX(Math.PI / 2), M.rim, POOL);
       const arms = new THREE.InstancedMesh(new THREE.CylinderGeometry(.04, .04, 1, 10).translate(0, .5, 0), M.chrome, POOL);
       const booms = new THREE.InstancedMesh(new THREE.CylinderGeometry(.055, .055, 1, 10).translate(0, .5, 0), M.chrome, POOL);
+      // a dog-leg boom's riser (shoe low on the slat → under the disc → up to the knuckle): zero length when straight
+      const risers = new THREE.InstancedMesh(new THREE.CylinderGeometry(.05, .05, 1, 10).translate(0, .5, 0), M.chrome, POOL);
       const knuckles = new THREE.InstancedMesh(new THREE.SphereGeometry(.085, 14, 10), M.brass, POOL);
       const shoes = new THREE.InstancedMesh(new THREE.BoxGeometry(.2, .28, .2), M.dark, POOL);
       const slats = new THREE.InstancedMesh(new THREE.CylinderGeometry(.035, .035, 1, 8).translate(0, .5, 0), M.alu, POOL);
-      const IMS = [pads, rims, arms, booms, knuckles, shoes, slats];
+      const IMS = [pads, rims, arms, booms, risers, knuckles, shoes, slats];
       for (const im of IMS){ im.count = 0; im.frustumCulled = false; group.add(im); }
       rims.setColorAt(0, new THREE.Color()); pads.setColorAt(0, new THREE.Color());
 
@@ -134,7 +141,7 @@ export default {
       const lanes = notes.map(note => {
         const rank = (noteNum(note) - st.loN) / st.span;
         const col = new THREE.Color().setHSL(hueOf(rank), .85, .55);
-        const perSide = s => laneClock(R.evs.filter(e => e.note === note && e.side === s).map(e => e.s), P);
+        const perSide = s => laneClock(R.evs.filter(e => e.note === note && e.side === s).map(e => e.s), R.P);
         return { note, rank, col, y: st.yOf(note), L: { '-1': perSide(-1), '1': perSide(1) } };
       });
       const laneOf = Object.fromEntries(lanes.map(l => [l.note, l]));
@@ -170,6 +177,8 @@ export default {
       const NPT = 1 + TRAIL_N + 4;
       const halo = makeHaloCloud(NPT, glowTex);
       group.add(halo.points);
+      halo.minPx.array[0] = HALO_MIN_PX;                              // the marble's own glow
+      for (let i = 1; i <= TRAIL_N; i++) halo.minPx.array[i] = GHOST_MIN_PX;
       for (let i = 0; i < 1 + TRAIL_N; i++) halo.col.setXYZ(i, .8, 1, .55);
       halo.col.setXYZ(2 + TRAIL_N, .7, 1, .35);                       // magnet
       halo.col.setXYZ(NPT - 1, SIG.r, SIG.g, SIG.b);                  // the net cable's flash
@@ -178,9 +187,9 @@ export default {
       // front cowl swallowing a struck pad (its re-tuning window pulses)
       const crossT = [];
       R.evs.forEach((e, i) => { const b = R.evs[(i + 1) % R.n]; if (R.n > 1 && e.side !== b.side && e.u) crossT.push(e.s + (0 - e.C[0]) / e.u); });
-      const netL = laneClock(crossT, P);
-      const intoCowl = s => laneClock(R.evs.filter(e => e.side === s).map(e => e.s + ZW / R.V), P);
-      S = { R, P, start, ZW, POOL, pads, rims, arms, booms, knuckles, shoes, slats, IMS, links, NL, loopLen, sprockets, SPR,
+      const netL = laneClock(crossT, R.P);
+      const intoCowl = s => laneClock(R.evs.filter(e => e.side === s).map(e => e.s + ZW / R.V), R.P);
+      S = { R, P, start, ZW, POOL, pads, rims, arms, booms, risers, knuckles, shoes, slats, IMS, links, NL, loopLen, sprockets, SPR,
             ticks, lanes, shuttle, cable, coil: M.coil, marble, marbleMat: M.marble, halo, NPT, netL, netTop: M.netTop, netMat: M.net,
             cowl: { '-1': { L: intoCowl(-1), mat: M.slotL }, '1': { L: intoCowl(1), mat: M.slotR } },
             edge: makeEdge(EDGE_W),
@@ -270,11 +279,12 @@ export default {
         v.addScaledVector(nv, .004);
         S.rims.setMatrixAt(j, m4.compose(v, q, sc.set(e.rho, e.rho, e.rho)));
         const [kx, ky, kz] = p.knuckle, [hx, hy, hz] = p.shoe;
-        S.arms.setMatrixAt(j, m4.compose(v.set(kx, ky, kz), q, sc.set(1, Math.max(.001, ARM + p.off - PAD_T), 1)));
+        S.arms.setMatrixAt(j, m4.compose(v.set(kx, ky, kz), q, sc.set(1, Math.max(.001, p.arm + p.off - PAD_T), 1)));
         S.knuckles.setMatrixAt(j, m4.compose(v.set(kx, ky, kz), qi, sc.set(1, 1, 1)));
         S.shoes.setMatrixAt(j, m4.compose(v.set(hx, hy, hz), qi, sc.set(1, 1, 1)));
         const bl = Math.abs(kx - hx);
         S.booms.setMatrixAt(j, m4.compose(v.set(hx, hy, hz), q.setFromUnitVectors(S.up, dv.set(-s, 0, 0)), sc.set(1, Math.max(.001, bl), 1)));
+        S.risers.setMatrixAt(j, m4.compose(v.set(kx, hy, kz), qi, sc.set(1, Math.max(.001, ky - hy), 1)));
         S.slats.setMatrixAt(j, m4.compose(v.set(s * XF, Y_CH0, hz), qi, sc.set(1, Y_CH1 - Y_CH0, 1)));
         // the disc: its note's colour, brightening as it becomes the target; the contact flash
         const isNext = k === nextK && Math.abs(abs - nextAbs) < 1e-6;
@@ -306,12 +316,15 @@ export default {
       HP[0] = b.p[0]; HP[1] = b.p[1]; HP[2] = b.p[2];
       HA[0] = .32 + .22 * vel * ring(since, 6); HS[0] = RM * (4.2 - 1.6 * ring(since, 10));
       const spd = Math.min(1, sp / 6);
+      // the trail: long while the marble is crossing the court (the trade is the story), short on a dribble
+      const crossing = b.i >= 0 && ev && R.evs[(b.i + 1) % R.n].side !== ev.side;
+      const NT = crossing || b.mode === 'fall' ? TRAIL_N : TRAIL_HOME;
       for (let k = 0; k < TRAIL_N; k++){
         const pi = 1 + k, tk = t - (k + 1) * TRAIL_DT;
-        if (tk < S.start || spd < .05 || b.mode === 'held' || b.mode === 'hold'){ HA[pi] = 0; continue; }
+        if (k >= NT || tk < S.start || spd < .05 || b.mode === 'held' || b.mode === 'hold'){ HA[pi] = 0; continue; }
         const bk = ballAt(R, tk);
         HP[pi * 3] = bk.p[0]; HP[pi * 3 + 1] = bk.p[1]; HP[pi * 3 + 2] = bk.p[2];
-        const f = 1 - (k + 1) / (TRAIL_N + 1);
+        const f = 1 - (k + 1) / (NT + 1);
         HA[pi] = .5 * f * spd; HS[pi] = RM * 4 * (.4 + .6 * f);
       }
       const cf = 1 + TRAIL_N;                                       // contact flare at the struck face
@@ -422,18 +435,21 @@ function buildWall(group, M, s, ZW){
     bar(new THREE.Vector3(x, Y_BEAM1, z0), new THREE.Vector3(x, Y_BEAM0, z1), .03, M.chrome, group, 6);
   }
   for (const zs of [-1, 1]){
-    // the cowls: a slim housing over the run's ends — just deep enough to swallow a stowed pad
-    // (edge-on discs reach XF − 2ρ − gap into the court) and the slats' turnaround; the chains'
-    // sprockets stay in view outside it
+    // the cowls: a re-tuning BAY over each end of the run — a lacquered screen on the court side
+    // (deep enough to hide a stowed pad from the court: edge-on discs reach XF − 2ρ − gap), a sill
+    // and a lintel, and a thin brushed END PLATE with a grille of lit vents (a pad leaves the run
+    // inside it, so it must stay shut — but it reads as a machined grille, not a dark block)
     const z0 = zs * ZW, z1 = zs * zc, zm = (z0 + z1) / 2, dz = Math.abs(z1 - z0);
     const x0 = inner, x1 = XF + .12, cx = s * (x0 + x1) / 2, cw = x1 - x0, h = Y_BEAM1 - Y_BEAM0, yc = (Y_BEAM0 + Y_BEAM1) / 2;
-    box(cw, h, dz, cx, yc, zm, M.dark, group);
+    box(.06, h, dz, s * (x0 + .03), yc, zm, M.lacquer, group);                       // the court-side screen
+    for (const y of [Y_BEAM0 + .06, Y_BEAM1 - .06]) box(cw, .12, dz, cx, y, zm, M.dark, group);   // sill + lintel
+    box(cw, h, .04, cx, yc, z1, M.dark, group);                                      // the end plate
     // a lit outline on its court face + the re-tuning window (a slot that pulses as a pad slides in)
     for (const z of [z0, z1]) box(.05, h, .05, s * (x0 - .02), yc, z, M.line, group);
     const win = new THREE.Mesh(new THREE.BoxGeometry(.03, h - .9, Math.min(.16, dz * .3)), s < 0 ? M.slotL : M.slotR);
     win.position.set(s * (x0 - .03), yc, zm); win.userData.noMerge = true; group.add(win);
-    // its end face: a column of vents (the re-tuning bay breathes)
-    for (let k = 0; k < 5; k++) box(cw - .5, .05, .03, cx, Y_BEAM0 + .9 + k * (h - 1.8) / 4, z1 + zs * .016, M.column, group);
+    // its end: a grille of lit vent bars (the re-tuning bay breathes)
+    for (let k = 0; k < 7; k++) box(cw - .14, .045, .03, cx, Y_BEAM0 + .45 + k * (h - .9) / 6, z1 + zs * .03, M.line, group);
   }
   // the strike column: two lit posts between the strands
   for (const zs of [-1, 1]) box(.05, Y_CH1 - Y_CH0, .05, s * (XF + RS), (Y_CH0 + Y_CH1) / 2, zs * TICK_Z, M.column, group);
@@ -510,16 +526,20 @@ function makeHaloCloud(n, glowTex){
   const col = new THREE.BufferAttribute(new Float32Array(n * 3), 3).setUsage(THREE.DynamicDrawUsage);
   const alpha = new THREE.BufferAttribute(new Float32Array(n), 1).setUsage(THREE.DynamicDrawUsage);
   const size = new THREE.BufferAttribute(new Float32Array(n), 1).setUsage(THREE.DynamicDrawUsage);
+  const minPx = new THREE.BufferAttribute(new Float32Array(n), 1);     // a floor on the on-screen size (device px)
   geo.setAttribute('position', pos); geo.setAttribute('aColor', col);
-  geo.setAttribute('aAlpha', alpha); geo.setAttribute('aSize', size);
-  const uniforms = { map: { value: glowTex }, uScale: { value: 800 } };
+  geo.setAttribute('aAlpha', alpha); geo.setAttribute('aSize', size); geo.setAttribute('aMinPx', minPx);
+  const uniforms = { map: { value: glowTex }, uScale: { value: 800 }, uPx: { value: 1 } };
   const mat = new THREE.ShaderMaterial({
     uniforms, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    vertexShader: `attribute vec3 aColor; attribute float aAlpha; attribute float aSize;
-      uniform float uScale; varying vec3 vC; varying float vA;
+    vertexShader: `attribute vec3 aColor; attribute float aAlpha; attribute float aSize; attribute float aMinPx;
+      uniform float uScale; uniform float uPx; varying vec3 vC; varying float vA;
       void main(){ vC = aColor; vA = aAlpha;
         vec4 mv = modelViewMatrix * vec4(position, 1.);
-        gl_PointSize = aAlpha > 0. ? aSize * uScale / max(.1, -mv.z) : 0.;
+        float px = aSize * uScale / max(.1, -mv.z), mn = aMinPx * uPx;
+        // held to a readable floor far away: what it loses in size it keeps in light (no brighter)
+        gl_PointSize = aAlpha > 0. ? max(px, mn) : 0.;
+        vA = aAlpha * min(1., (px * px) / max(1e-4, gl_PointSize * gl_PointSize) * 2. + .6);
         gl_Position = projectionMatrix * mv; }`,
     fragmentShader: `uniform sampler2D map; varying vec3 vC; varying float vA;
       void main(){ vec4 t = texture2D(map, gl_PointCoord); gl_FragColor = vec4(vC * t.rgb * t.a * vA, 1.); }`,
@@ -531,6 +551,7 @@ function makeHaloCloud(n, glowTex){
     renderer.getDrawingBufferSize(_v);
     const fov = camera.isPerspectiveCamera ? camera.fov : 50;
     uniforms.uScale.value = _v.y / (2 * Math.tan(fov * Math.PI / 360));
+    uniforms.uPx.value = _v.y / 1080;                                  // the floor scales with the drawing buffer
   };
-  return { points, pos, col, alpha, size };
+  return { points, pos, col, alpha, size, minPx };
 }

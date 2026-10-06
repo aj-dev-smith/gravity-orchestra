@@ -9,6 +9,9 @@ import mountainKing from './mountain-king.js';
 import toccata from './toccata.js';
 import diesIrae from './dies-irae.js';
 import backbeat from './backbeat.js';
+import canonOrchestra from './canon-orchestra.js';
+import carolOfTheBells from './carol-of-the-bells.js';
+import morningMood from './morning-mood.js';
 
 export const SONGS = {
   'daybreak-engine': daybreakEngine,
@@ -22,4 +25,7 @@ export const SONGS = {
   'toccata': toccata,
   'dies-irae': diesIrae,
   'backbeat': backbeat,
+  'canon-orchestra': canonOrchestra,
+  'carol-of-the-bells': carolOfTheBells,
+  'morning-mood': morningMood,
 };

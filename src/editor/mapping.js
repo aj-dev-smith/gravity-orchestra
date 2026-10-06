@@ -10,7 +10,7 @@
    Two kinds of source:
      · a MIDI import — each track × program (a "voice", like the orchestra
        splits them) + the channel-10 percussion. A mapping re-runs
-       convertToSong with a hand ROUTER (opts.route) in place of
+       convertToSong with a hand ROUTER (opts.router) in place of
        orchestrate(); everything downstream (timeline zero, loop, quantize,
        drum lanes, each machine's honest FIT — shapePart) is the importer's own.
      · an authored song — its belt tracks (melody / alto / bass), each
@@ -138,13 +138,13 @@ export function midiSources(parsed){
 }
 
 /** What the importer did on its own, as a mapping: { id: target }. Reads the orchestra's
-    routing (spied through opts.route) — or, for a file the importer kept belts-only
+    routing (spied through opts.router: whatever the AUTO router does — programs or roles) — or, for a file the importer kept belts-only
     (no program changes), the legacy rule: the 3 busiest lines, by register. */
 export function defaultMidiMapping(parsed, opts = {}){
   const sources = midiSources(parsed), map = {};
   for (const s of sources) map[s.id] = s.drums ? DRUMS : OFF;
   let cap = null;
-  try { convertToSong(tagMidi(parsed), { ...opts, route: (t, o) => (cap = orchestrate(t, o)) }); }
+  try { convertToSong(tagMidi(parsed), { ...opts, router: (t, o, auto) => (cap = auto(t, o)) }); }
   catch (e){ return map; }
   if (cap){
     cap.belt.forEach((b, i) => { const id = b.notes[0]?._v; if (id) map[id] = i ? BELT : LEAD; });
@@ -200,7 +200,7 @@ export function applyMidiMapping(parsed, mapping, opts = {}){
     return { belt, parts, warnings };
   };
   const tagged = tagMidi(parsed, { dropDrums: mapping[DRUMS] === OFF });
-  const { song, warnings } = convertToSong(tagged, { ...opts, orchestra: true, route });
+  const { song, warnings } = convertToSong(tagged, { ...opts, orchestra: true, router: route });
   // the LINE machines (no orchestra spec — convert carried their notes into the loop length
   // but can't fit them): fit here, on the lead's timeline exactly as convert aligned the rest
   const loopBeats = sumBeats(song.melody), ppq = parsed.ppq;

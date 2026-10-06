@@ -1,5 +1,5 @@
 // parse.js — zero-dependency MIDI parser (format 0 and 1)
-// returns { format, ppq, bpm, hasPrograms,
+// returns { format, ppq, bpm, tempos, hasPrograms,
 //           tracks: [{ name, notes: [{ midi, tick, channel, vel, dur, program }] }] }
 //   dur      sounding length in ticks (note-on → its note-off, FIFO per channel+key);
 //            null when the file never releases the note
@@ -9,6 +9,11 @@
 //            change comes AFTER its first note (sloppy exports) uses that first one;
 //            a channel with none is GM default 0 (acoustic grand piano).
 //   hasPrograms  true when any non-percussion channel carries a program change
+//   bpm      the DOMINANT tempo: the one in force for the most beats of the song (the
+//            engine has one tempo knob). Not "the first tempo anywhere": a file that opens
+//            on a 200-bpm count-in marker and plays at 118 must import at 118.
+//   tempos   the tempo map, [{ tick, bpm }] ascending (one per tick: the first event at a
+//            tick — the conductor track's — wins)
 //
 // The parser is FAITHFUL: it decodes every sounding note-on (vel > 0) on every
 // channel — including channel 9 (percussion) — and records its velocity. The
@@ -33,7 +38,7 @@ function readUint(buf, pos, len) {
   return v;
 }
 
-// parse a single MTrk chunk; returns { name, notes, bpm, pcs }
+// parse a single MTrk chunk; returns { name, notes, tempos, pcs }
 function parseTrack(buf, start, end) {
   let pos = start;
   let abs = 0;      // absolute tick counter
@@ -46,7 +51,7 @@ function parseTrack(buf, start, end) {
     if (q && q.length) { const i = q.shift(); notes[i].dur = abs - notes[i].tick; }
   };
   let name = '';
-  let bpm = null;
+  const tempos = [];       // { tick, bpm }
 
   while (pos < end) {
     let [delta, p] = readVlq(buf, pos);
@@ -76,7 +81,7 @@ function parseTrack(buf, start, end) {
       } else if (type === 0x51 && len === 3) {
         // set tempo: 3 bytes = microseconds per quarter note
         const uspq = readUint(buf, pos, 3);
-        if (bpm === null) bpm = Math.round((60_000_000 / uspq) * 100) / 100;
+        if (uspq > 0) tempos.push({ tick: abs, bpm: Math.round((60_000_000 / uspq) * 100) / 100 });
       }
       pos += len;
       status = 0; // meta clears running status
@@ -136,7 +141,31 @@ function parseTrack(buf, start, end) {
     }
   }
 
-  return { name, notes, bpm, pcs };
+  return { name, notes, tempos, pcs };
+}
+
+/** The tempo map (one event per tick, first wins) and its dominant bpm: the BEAT-WEIGHTED
+    MEDIAN of the map up to the last note-on — the tempo most of the song plays at, robust
+    to a short count-in marker, a ritardando's many tiny steps, or humanized jitter. 120 if
+    the file has no tempo at all. */
+export function tempoMap(rawTracks) {
+  const all = rawTracks.flatMap((t, ti) => t.tempos.map((e, i) => ({ ...e, k: ti * 1e6 + i })))
+    .sort((a, b) => a.tick - b.tick || a.k - b.k);
+  const tempos = [];
+  for (const e of all) if (!tempos.length || tempos[tempos.length - 1].tick !== e.tick) tempos.push({ tick: e.tick, bpm: e.bpm });
+  if (!tempos.length) return { bpm: 120, tempos };
+  let end = 0;
+  for (const t of rawTracks) for (const n of t.notes) end = Math.max(end, n.tick);
+  const spans = tempos.map((e, i) => {
+    const t1 = i + 1 < tempos.length ? tempos[i + 1].tick : Infinity;
+    return { bpm: e.bpm, w: Math.max(0, Math.min(t1, end + 1) - e.tick) };
+  }).filter(e => e.w > 0);
+  if (!spans.length) return { bpm: tempos[0].bpm, tempos };
+  const total = spans.reduce((s, e) => s + e.w, 0);
+  const byBpm = [...spans].sort((a, b) => a.bpm - b.bpm);
+  let acc = 0, bpm = byBpm[0].bpm;
+  for (const e of byBpm) { acc += e.w; if (acc >= total / 2) { bpm = e.bpm; break; } }
+  return { bpm, tempos };
 }
 
 // stamp every note with the program in effect on its channel at its onset (see header)
@@ -202,17 +231,14 @@ export function parseMidi(bytes) {
     pos = end;
   }
 
-  // first tempo found anywhere
-  let bpm = 120;
-  for (const t of rawTracks) {
-    if (t.bpm !== null) { bpm = t.bpm; break; }
-  }
+  // the dominant tempo (see header)
+  const { bpm, tempos } = tempoMap(rawTracks);
 
   const hasPrograms = assignPrograms(rawTracks);
 
   // format 0: split single track by channel
   if (format === 0) {
-    if (rawTracks.length === 0) return { format, ppq, bpm, hasPrograms, tracks: [] };
+    if (rawTracks.length === 0) return { format, ppq, bpm, tempos, hasPrograms, tracks: [] };
     const src = rawTracks[0].notes;
     const byChannel = new Map();
     for (const n of src) {
@@ -223,7 +249,7 @@ export function parseMidi(bytes) {
     for (const [ch, notes] of [...byChannel.entries()].sort((a, b) => a[0] - b[0])) {
       if (notes.length > 0) tracks.push({ name: `ch${ch}`, notes });
     }
-    return { format, ppq, bpm, hasPrograms, tracks };
+    return { format, ppq, bpm, tempos, hasPrograms, tracks };
   }
 
   // format 1: one logical track per MTrk, drop empty
@@ -231,5 +257,5 @@ export function parseMidi(bytes) {
     .filter(t => t.notes.length > 0)
     .map(t => ({ name: t.name, notes: t.notes }));
 
-  return { format, ppq, bpm, hasPrograms, tracks };
+  return { format, ppq, bpm, tempos, hasPrograms, tracks };
 }

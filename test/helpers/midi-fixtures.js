@@ -197,7 +197,62 @@ export function nightMallets(){
   return buildMidi({ format: 0, ppq: PPQ, tracks: [{ events: ev }] });
 }
 
-export const FIXTURES = { 'room-tour': roomTour, 'canon-in-d': canonInD, 'night-mallets': nightMallets };
+/* ---------------------------------------------------------------------------
+   SKETCH BAND — NO PROGRAM CHANGES (a bare sequencer sketch: GM piano on every channel,
+   like Owl City 'Fireflies'). D major, 104 bpm, 16 bars. Routed by musical ROLE: a
+   melody (belt lead) · a counter-line (turntable) · a sustained pad (bowls) · a low line
+   (string bass) · a high sparkle (music box) · let-ring arpeggios (marimba) · a kit.
+   --------------------------------------------------------------------------- */
+export function sketchBand(){
+  const PROG = ['D', 'Bm', 'G', 'A'];
+  const R = { D: 62, Bm: 59, G: 55, A: 57 }, M3 = { D: 4, Bm: 3, G: 4, A: 4 };
+  const bars = [...PROG, ...PROG, ...PROG, ...PROG];
+  const melody = track('Melody', null, 0, ev => {
+    const A = [[[74,1],[76,.5],[78,.5],[81,2]], [[78,1],[76,1],[74,2]], [[71,.5],[74,.5],[79,1],[78,1],[76,1]], [[76,1],[73,1],[69,2]]];
+    let b = 0; for (let k = 0; k < 4; k++) for (const bar of A) b = line(ev, b, bar, 0, 96);
+  }, [{ tick: 0, type: 'tempo', uspq: uspq(104) }]);
+  const counter = track('Counter', null, 1, ev => bars.forEach((c, i) => {
+    line(ev, i * 4 + 1, [[R[c] + 7, 1], [R[c] + M3[c] + 12 - 12, 1], [R[c] + 12, 1]], 1, 74);
+  }));
+  const pad = track('Pad', null, 2, ev => bars.forEach((c, i) => {
+    for (const m of [R[c] - 12, R[c] - 12 + M3[c], R[c] - 5]) note(ev, i * 4, m, 4, 60, 2);
+  }));
+  const low = track('Low', null, 3, ev => bars.forEach((c, i) => {
+    [0, 0, 7, 5].forEach((d, k) => note(ev, i * 4 + k, R[c] - 24 + d, .9, 100, 3));
+  }));
+  const sparkle = track('Sparkle', null, 4, ev => bars.forEach((c, i) => {
+    if (i % 2) [0, M3[c], 7, 12].forEach((d, k) => note(ev, i * 4 + 2 + k * .5, R[c] + 24 + d, .25, 70, 4));
+  }));
+  const arps = track('Arps', null, 5, ev => bars.forEach((c, i) => {
+    [0, 7, 12, 12 + M3[c], 19, 12 + M3[c], 12, 7].forEach((d, k) => note(ev, i * 4 + k * .5, R[c] - 12 + d, 1.5, k ? 64 : 84, 5));   // let ring
+  }));
+  const kit = track('Kit', null, 9, ev => {
+    for (let b = 0; b < 64; b++){ note(ev, b, b % 2 ? 40 : 35, .25, 100, 9); note(ev, b + .5, 54, .25, 60, 9); }   // the OTHER kick/snare + tambourine
+  });
+  return buildMidi({ format: 1, ppq: PPQ, tracks: [melody, counter, pad, low, sparkle, arps, kit] });
+}
+
+/* ---------------------------------------------------------------------------
+   PIANO HANDS — ONE track, program 0, both hands (Tetris / Zelda-title shaped): a right-
+   hand melody over its own off-beat chords, a left hand walking under it. Split into the
+   top line (belt lead) · the left hand (string bass) · the inner chords (marimba).
+   --------------------------------------------------------------------------- */
+export function pianoHands(){
+  const t = track('Piano', 0, 0, ev => {
+    const MEL = [76, 71, 72, 74, 72, 71, 69, 69, 72, 76, 74, 72, 71, 72, 74, 76];
+    const LH = [45, 52, 40, 47, 45, 52, 41, 48];
+    for (let bar = 0; bar < 16; bar++){
+      const top = MEL[bar];
+      line(ev, bar * 4, [[top, 1], [top - 5, .5], [top - 4, .5], [top - 2, 1], [top - 4, .5], [top - 5, .5]], 0, 96);
+      for (const off of [.5, 1.5, 2.5, 3.5]) for (const d of [7, 10]) note(ev, bar * 4 + off, top - 12 - d + 12 - 5, .4, 60, 0);   // inner chords
+      LH.slice((bar % 2) * 4, (bar % 2) * 4 + 4).forEach((m, k) => note(ev, bar * 4 + k, m, .9, 84, 0));
+    }
+  }, [{ tick: 0, type: 'tempo', uspq: uspq(132) }]);
+  return buildMidi({ format: 1, ppq: PPQ, tracks: [t] });
+}
+
+export const FIXTURES = { 'room-tour': roomTour, 'canon-in-d': canonInD, 'night-mallets': nightMallets,
+                          'sketch-band': sketchBand, 'piano-hands': pianoHands };
 
 /* ---------------------------------------------------------------------------
    GOLDEN INPUTS — files the orchestra must import EXACTLY as the classic importer

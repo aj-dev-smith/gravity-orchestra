@@ -44,9 +44,26 @@ export const GM_DRUMS = {
 /** The set of legal lane names — the song validator checks against this. */
 export const DRUM_NAMES = new Set(Object.keys(GM_DRUMS));
 
-// GM notes MERGED onto another lane — the kit has one floor tom, so the low floor tom
-// (GM 41) plays the existing floor tom instead of spawning a second drum on import.
-const GM_MERGE = { 41: 'floorHigh' };
+// GM notes MERGED onto another lane: the kit has one of each piece, so a GM note that is
+// "another of the same thing" plays the existing drum instead of being dropped on import.
+// (A real-world corpus survey: GM 35 / 40 — the OTHER kick and snare — and the shakers were
+// ~70 % of every dropped hit; whole grooves came in as a hat-only kit.)
+//   41 low floor tom → the one floor tom          35 acoustic bass drum → kick
+//   40 electric snare, 37 side stick → snare      44 pedal hat → hat
+//   52 chinese, 55 splash, 57 crash 2 → crash     53 ride bell, 59 ride 2 → ride
+//   54 tambourine, 69 cabasa, 70 maracas, 82 shaker, 80 mute triangle → hat (a bright
+//   shaken/struck tick on the off-beats — the hat's job); 81 open triangle → hatOpen
+//   hand drums (pitched membranes) → the tom set by register:
+//   60/61 bongos, 65 high timbale → high toms · 62/63 congas → low-mid · 64 low conga,
+//   66 low timbale → low tom
+// Still dropped (warned): woodblocks, claves, cowbell, guiro, whistles, agogo… — no piece
+// in the kit reads as them.
+const GM_MERGE = {
+  41: 'floorHigh', 35: 'kick', 40: 'snare', 37: 'snare', 44: 'hat',
+  52: 'crash', 55: 'crash', 57: 'crash', 53: 'ride', 59: 'ride',
+  54: 'hat', 69: 'hat', 70: 'hat', 82: 'hat', 80: 'hat', 81: 'hatOpen',
+  60: 'tomHigh', 61: 'tomHiMid', 65: 'tomHiMid', 62: 'tomMid', 63: 'tomMid', 64: 'tomLow', 66: 'tomLow',
+};
 
 /** GM note number → canonical drum name (for MIDI channel-9 import). */
 export function drumByGm(gm){

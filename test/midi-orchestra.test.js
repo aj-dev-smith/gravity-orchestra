@@ -12,6 +12,8 @@ import { INSTRUMENTS } from '../src/instruments/index.js';
 import { eventTimes, lanesByNote } from '../src/instruments/clock.js';
 import { ROLL_T, noteNum } from '../src/engine.js';
 import { solve as marimbaSolve, keyboard as marimbaKeyboard, malletAt as marimbaMallet } from '../src/instruments/marimba/solve.js';
+import { buildRecord, ballAt as ttBall } from '../src/instruments/turntable/solve.js';
+import { buildOrbit, marbleAt as ricoMarble } from '../src/instruments/ricochet/solve.js';
 import { bellLane, bellAt } from '../src/instruments/bells/solve.js';
 import { solveLane, poseAt } from '../src/instruments/bass/solve.js';
 import { bowlGeom, bowlLane, bowlAt } from '../src/instruments/bowls/solve.js';
@@ -128,10 +130,15 @@ describe('routeProgram — GM program → room instrument', () => {
 // ---------------------------------------------------------------------------
 describe('convertToSong — legacy behaviour without program changes', () => {
   // GOLDEN: the classic importer's own output (a69c84a, before the orchestra existed),
-  // regenerated only by scripts/make-midi-golden.mjs — never by the code under test
+  // regenerated only by scripts/make-midi-golden.mjs — never by the code under test.
+  // A program-less file now routes by ROLE by default (the room plays — see 'role routing'
+  // below), so the classic output is pinned on the legacy path ({ orchestra: false }) that
+  // keeps it reachable. piano-solo HAS a program (0) and a single line: the default import
+  // must still reproduce it exactly.
   for (const name of Object.keys(GOLDEN_INPUTS)){
     it(`golden "${name}" imports exactly as a69c84a did (song + warnings)`, () => {
-      const r = convertToSong(parseMidi(GOLDEN_INPUTS[name]()), { label: name });
+      const bytes = GOLDEN_INPUTS[name]();
+      const r = convertToSong(parseMidi(bytes), { label: name, ...(parseMidi(bytes).hasPrograms ? {} : { orchestra: false }) });
       expect(r.song).toEqual(GOLDEN[name].song);
       expect(r.warnings).toEqual(GOLDEN[name].warnings);
     });
@@ -141,11 +148,18 @@ describe('convertToSong — legacy behaviour without program changes', () => {
     expect(GOLDEN['sketch-trio'].song.drums).toBeDefined();
   });
 
-  it('a file with no program changes imports as the classic belts (no parts)', () => {
+  it('a file with no program changes: legacy = the classic belts; default = routed by role', () => {
+    // (was: "imports as the classic belts" — the room stood empty for every program-less file,
+    // e.g. Owl City 'Fireflies'. Now the sustained chords sing on the bowls; legacy still reachable.)
     const bytes = file(trk('a', null, 0, scale8(72)), trk('b', null, 1, [[0, 48, 4], [0, 52, 4], [4, 50, 4], [4, 53, 4]]));
-    const a = convert(bytes);
+    const a = convert(bytes, { orchestra: false });
     expect(a.song.parts).toBeUndefined();
     expect(a.song.bass).toBeDefined();                       // chordal track stays a (top-note) belt
+    const b = convert(bytes);
+    expect(b.song.parts.bowls.length).toBe(4);               // 2 s chords: a sustained bed
+    expect(b.song.bass).toBeUndefined();
+    expect(b.song.melody[0][0]).toBe('C5');
+    expect(convert(bytes, { route: 'legacy' }).song).toEqual(a.song);
   });
 
   it('opts.orchestra forces routing on for a program-less (all-piano) file', () => {
@@ -193,7 +207,9 @@ describe('convertToSong — orchestra routing', () => {
     ));
     expect(song.alto).toBeDefined(); expect(song.bass).toBeDefined();
     expect(warnings.some(w => /"Comp" .*plays on the marimba \(chordal/.test(w))).toBe(true);
-    expect(warnings.some(w => /"Extra" .*plays on the marimba \(no belt left/.test(w))).toBe(true);
+    // a spare melodic LINE no longer dumps on the marimba: it finds the free turntable (#9)
+    expect(warnings.some(w => /"Extra" .*plays on the turntable \(a spare melodic line/.test(w))).toBe(true);
+    expect(song.parts.turntable.length).toBe(4);
     const mar = song.parts.marimba.map(e => e[0]);
     expect(mar.filter(b => b === 0).length).toBeGreaterThanOrEqual(2);              // chords survive
   });
@@ -394,6 +410,15 @@ describe.each(Object.keys(FIXTURES))('fixture "%s"', name => {
       const { lanes, omega } = buildComb(P_.musicbox, { rollT: ROLL_T, beat, P });
       for (const l of lanes) for (const t of ts) finiteDeep(tineAt(l, t, start, omega), `musicbox ${l.note}`);
     }
+    if (P_.turntable){
+      const rec = buildRecord(P_.turntable, { rollT: ROLL_T, beat, P, start });
+      expect(rec.ok).toBe(true);                             // every deployed pad pair clears
+      for (const t of ts) finiteDeep(ttBall(rec, t), 'turntable ball');
+    }
+    if (P_.ricochet){
+      const orb = buildOrbit(eventTimes(P_.ricochet, { rollT: ROLL_T, beat }), { P, start });
+      for (const t of ts) finiteDeep(ricoMarble(orb, t), 'ricochet marble');
+    }
   });
 });
 
@@ -459,11 +484,15 @@ describe('the lead must enter early and last (Star Wars / Piano Man regressions)
     expect(song.melody.length).toBe(128);
   });
 
-  it('harmonica / accordion are melody (belt), not bowls', () => {
+  it('harmonica / accordion are melody, not bowls', () => {
     const harm = trk('Harmonica', 22, 1, Array.from({ length: 16 }, (_, i) => [i, 72 + (i % 3)]).flatMap(([b, m]) => [[b, m], ...(b % 4 ? [] : [[b, m - 5]])]));
     const { song } = convert(file(trk('Piano', 0, 0, scale8(76, 16)), harm));
     expect(song.parts?.bowls).toBeUndefined();
-    expect(song.bass || song.alto).toBeDefined();
+    // (was: an alto/bass BELT. Piano + harmonica gives the room nothing by program, so it
+    // routes by role and the second melodic line takes the turntable — still a melody machine)
+    expect(song.parts?.turntable?.length ?? (song.bass || song.alto)?.notes.length).toBeGreaterThan(0);
+    expect(convert(file(trk('Piano', 0, 0, scale8(76, 16)), harm), { route: 'programs' }).song.alto ??
+           convert(file(trk('Piano', 0, 0, scale8(76, 16)), harm), { route: 'programs' }).song.bass).toBeDefined();
   });
 
   it('octave doublings are one line, not chords', () => {

@@ -69,7 +69,7 @@ describe('instrument map — MIDI imports', () => {
     const lead = Object.keys(def).find(k => M.isLead(def[k]));
     expect(() => M.applyMidiMapping(parsed, { ...def, [lead]: 'marimba' })).toThrow(/LEAD/);
   });
-  it('a file with no program changes (the belts-only import — Fireflies): the default is the legacy 3 busiest lines; the map puts the rest on machines', () => {
+  it('a file with no program changes (Fireflies): the default map is what the importer routes BY ROLE (the sparkle line → music box), and the map re-routes on top', () => {
     const bytes = buildMidi({ format: 1, ppq: PPQ, tracks: [
       trk('Lead', null, 0, line(72, 32, .5)), trk('Counter', null, 1, line(64, 16)),
       trk('Bass', null, 2, line(40, 16)), trk('Sparkle', null, 3, line(84, 8, 2)),
@@ -78,10 +78,21 @@ describe('instrument map — MIDI imports', () => {
     const parsed = parseMidi(bytes);
     expect(parsed.hasPrograms).toBe(false);
     const def = M.defaultMidiMapping(parsed);
-    expect(def).toEqual({ t0p0: 'lead', t1p0: 'belt', t2p0: 'belt', t3p0: 'off', drums: 'drums' });
+    // the panel's default IS the importer's own routing (role routing, for no-program files):
+    // every source assigned, nothing invented, and re-applying it reproduces the plain import
     const base = convertToSong(parsed).song;
-    expect(base.parts).toBeUndefined();                       // what the importer did alone: belts only
-    const { song } = M.applyMidiMapping(parsed, { ...def, t3p0: 'musicbox', t1p0: 'turntable', t2p0: 'bass' });
+    expect(Object.values(def).filter(v => v === 'lead' || v.startsWith('lead+')).length).toBe(1);
+    expect(def.drums).toBe('drums');
+    expect(Object.keys(base.parts || {}).length).toBeGreaterThan(0);          // no longer belts-only
+    for (const k of Object.keys(base.parts)) expect(Object.values(def).some(v => v === k || v === 'lead+' + k)).toBe(true);
+    const again = M.applyMidiMapping(parsed, def).song;
+    expect(again.melody).toEqual(base.melody);
+    expect(Object.keys(again.parts || {}).sort()).toEqual(Object.keys(base.parts || {}).sort());
+    // re-route on top: everything but the lead onto machines (a hand map overrides the auto one)
+    const leadId = Object.keys(def).find(k => def[k] === 'lead' || def[k].startsWith('lead+'));
+    const others = ['t0p0', 't1p0', 't2p0', 't3p0'].filter(k => k !== leadId);
+    const hand = { ...def, [leadId]: 'lead', [others[0]]: 'musicbox', [others[1]]: 'turntable', [others[2]]: 'bass' };
+    const { song } = M.applyMidiMapping(parsed, hand);
     checkSong(song);
     expect(Object.keys(song.parts).sort()).toEqual(['bass', 'musicbox', 'turntable']);
     expect(song.alto).toBeUndefined(); expect(song.bass).toBeUndefined();

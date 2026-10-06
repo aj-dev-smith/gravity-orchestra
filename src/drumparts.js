@@ -31,46 +31,46 @@ export const FALLBACK = STYLE.snare;
 export const styleOf = lane => STYLE[lane] || FALLBACK;
 export const isTom = lane => /^(tom|floor)/.test(lane);
 
+/* ---- HARDWARE DIMENSIONS shared by the solve + the look (pure numbers) ---- */
+export const DT_MAX = 1.2;                                // longest flown gap (s) → magnet height
+export const MAG_H  = -G.y * DT_MAX * DT_MAX / 8;         // the max apex: where every magnet's face hangs
+export const HW = { BASKET: .2, ROD_VIS: .22, ROD_IN: .7, SLEEVE: 1.0 };
+/* a magnet's pot top, kit-local (drumlook.buildMagnet: face at the ball's top at the max apex, pot + cap .66) */
+export const magnetTop = p => p.lift + MAG_H + 2 * styleOf(p.key).ball + .66;
+
 /* ---- COMPOSITION (kit-local frame: origin = the deck top at the slot, +x right,
    +z toward the audience). The kick anchors front-centre; snare + hi-hat on the left
-   like a drummer's left hand; the TOMS climb a SPIRAL STAIRCASE behind-right of the
-   kick, PITCH = HEIGHT (a fill is a visible descent toward the audience); crash + ride
-   on booms at the outside. The solo slot puts the belt's bay behind-left of the kit,
-   so everything left of x = −4.5 stays in front of z = −3 (KEEPOUT, tested). ---- */
+   like a drummer's left hand; crash + ride on booms in the back row; the TOMS climb a
+   SPIRAL STAIRCASE round a post behind-right of the kick — the floor tom at its foot
+   beside the kick, the high tom at the top, at the back: PITCH = HEIGHT, a fill is a
+   visible descent toward the audience.
+   THE BACK LINE: in the solo slot the belt bays stand behind the kit (their front face
+   reaches world z ≈ 1.7–2.3 → kit-local z ≈ −3.3…−2.7), so NOTHING of the kit — deck,
+   arch footings, ribs, treads, stands — goes behind BACK (tested against every drum
+   song's measured belt boxes). ---- */
+export const BACK = -2.6;
 export const FIXED = {
-  kick:  { x: 0,    z: .65 },
-  snare: { x: -2.35, z: 1.15 },
-  clap:  { x: -2.3, z: -1.35 },
-  hat:   { x: -4.35, z: .35 },
-  crash: { x: -6.35, z: -1.45 },
-  ride:  { x: 6.55, z: 1.0 },
+  kick:  { x: 0,     z: .65 },
+  snare: { x: -2.4,  z: 1.2 },
+  hat:   { x: -4.45, z: .45 },
+  crash: { x: -5.55, z: -1.5 },
+  ride:  { x: -1.65, z: -1.45 },
+  clap:  { x: 1.95,  z: -1.75 },
 };
+/* boom stands for the cymbals (the stand's foot; the boom reaches over to the cymbal) */
+export const STANDS = { crash: { x: -7.15, z: -.55 }, ride: { x: .35, z: -2.0 } };
+export const TRIPOD = .55;                                // stand tripod reach
 export const SPIRAL = {
-  C: { x: 2.35, z: -2.1 },   // the newel post
+  C: { x: 4.6, z: -1.08 },   // the newel post
   R: 2.6,                    // tom centres sit on this circle
-  phi0: 1.02,                // the FLOOR tom's bearing (rad, 0 = +z toward the audience, + = toward +x)
+  phi0: -.9,                 // the FLOOR tom's bearing (rad, 0 = +z toward the audience, + = toward +x)
   y0: 1.55,                  // floor-tom contact height above the deck
   rise: .66,                 // each step up the stair (one tom higher in pitch)
   gap: .26,                  // clear air between neighbouring tom hoops
+  post: .11,                 // newel post radius
 };
-/* The magnet ARCH — a BANDSHELL: superellipse ribs that rise from the low front rib to
-   the tall back one (the back rib angled in plan to clear the staircase); a rung runs
-   front→back over every magnet, sloping with the shell, and the magnet hangs from it. */
-export const ARCH = { X0: 8.85, p: 4, ribs: 3, front: { top: 6.9, z: 2.85 }, back: { top: 8.7, z0: -3.0, z1: -5.9 } };
-const shape = x => Math.pow(Math.max(0, 1 - Math.pow(Math.min(1, Math.abs(x) / ARCH.X0), ARCH.p)), 1 / ARCH.p);
-export const zBack = x => ARCH.back.z0 + (ARCH.back.z1 - ARCH.back.z0) * (x + ARCH.X0) / (2 * ARCH.X0);
-/* rib k of ARCH.ribs (0 = front … last = back): its plan line z(x) and its height y(x) */
-export function rib(k){
-  const f = k / (ARCH.ribs - 1);
-  const top = ARCH.front.top + (ARCH.back.top - ARCH.front.top) * f;
-  return { f, z: x => ARCH.front.z + (zBack(x) - ARCH.front.z) * f, y: x => top * shape(x) };
-}
-/* the rung over (x, z): its height, sloping front → back (extrapolated past the back rib) */
-export function rungY(x, z){
-  const zf = ARCH.front.z, zb = zBack(x), f = (zf - z) / (zf - zb);
-  return (ARCH.front.top + (ARCH.back.top - ARCH.front.top) * f) * shape(x);
-}
-export const KEEPOUT = { xMax: -4.5, zMax: -3.05 };   // the belt bay's corner in the solo slot
+/* the hi-hat's foot: pedal heel hinge, in front of the stand (kit-local offset from the hat) */
+export const HAT = { OPEN: .28, heelZ: 1.55, pedalL: .7, q: { z: .43, y: .55 }, arm: .45, endY: .69, hook: 1.18 };
 
 /* Toms present → their staircase seats, LOW → HIGH by membrane tone (drumkit.js). Each
    step turns by exactly the angle that keeps neighbouring hoops `gap` apart. */
@@ -112,9 +112,126 @@ export function kitPieces(spec){
     const st = styleOf(p.key);
     if (seats[p.key]){ const s = seats[p.key]; Object.assign(p, { x: s.x, z: s.z, lift: s.y, seat: s }); }
     else if (FIXED[p.key]) Object.assign(p, FIXED[p.key], { lift: st.lift });
-    else { Object.assign(p, { x: -1.2 + 1.5 * extra++, z: 2.2, lift: 1.6 }); }   // an unregistered lane: the front apron
+    else { Object.assign(p, { x: -1.5 * extra++, z: 3.1, lift: 1.6 }); }   // an unregistered lane: the front apron
   }
   return pieces;
+}
+
+/* ---- the STAIRCASE's own geometry (pure): where each tom's step sits, the wedge
+   tread under it (bearings a0..a1, radii rIn..rOut round the post) and the riser that
+   climbs to it from the step below. A tom whose step would sit at deck level stands on
+   the deck on a tripod instead (the floor tom — it is the foot of the stair). ---- */
+export const stepY = (lane, y) => y - styleOf(lane).depth - HW.BASKET - HW.ROD_VIS - HW.SLEEVE * .55;
+export const pieceFloor = p => p.seat ? (stepY(p.key, p.lift) > .3 ? stepY(p.key, p.lift) : 0) : 0;
+export function stairTreads(pieces){
+  const seats = pieces.filter(p => p.seat).sort((a, b) => a.seat.step - b.seat.step);
+  const { C, R, post } = SPIRAL, out = [];
+  seats.forEach((p, k) => {
+    const y = pieceFloor(p);
+    if (!y) return;
+    const prev = seats[k - 1], next = seats[k + 1], r = styleOf(p.key).r, own = Math.asin(Math.min(1, (r + .14) / R));
+    const a0 = prev ? (prev.seat.phi + p.seat.phi) / 2 : p.seat.phi - own;
+    const a1 = next ? (next.seat.phi + p.seat.phi) / 2 : p.seat.phi + own;
+    out.push({ key: p.key, a0, a1, rIn: post + .03, rOut: R + r + .1, y, below: prev ? pieceFloor(prev) : 0, th: .14 });
+  });
+  return out;
+}
+/* plan points sampled round a tread's outline (for footprint + clearance checks) */
+export function treadOutline(t, n = 8){
+  const { C } = SPIRAL, pts = [];
+  for (let k = 0; k <= n; k++){ const a = t.a0 + (t.a1 - t.a0) * k / n;
+    pts.push([C.x + t.rOut * Math.sin(a), C.z + t.rOut * Math.cos(a)]); }
+  for (const a of [t.a0, t.a1]) for (let k = 0; k <= n; k++){ const rr = t.rIn + (t.rOut - t.rIn) * k / n;
+    pts.push([C.x + rr * Math.sin(a), C.z + rr * Math.cos(a)]); }
+  return pts;
+}
+/* a piece's plan reach: its head, or the tripod/legs under it if wider */
+export function pieceReach(p){
+  const r = styleOf(p.key).r;
+  if (styleOf(p.key).kind === 'cymbal') return r;
+  return Math.max(r, pieceFloor(p) ? 0 : p.key === 'kick' ? .9 : .6);
+}
+
+/* ---- the KIT FRAME: everything sized from the kit that is actually built. A kick +
+   snare + hat gets a compact shell and deck; the full kit gets the lot. The magnet
+   SHELL is a BANDSHELL that opens toward the audience: ribs FAN from one pair of
+   footings on the back line (tilts 0 → forward), every point on them a circle of
+   radius ρ(x) = T·shape(x) round the footing axis. A curved RUNG follows that circle
+   out from the back rib over each magnet, the magnet hanging from it on a vertical
+   rod — so there are no bars in front of the kit, only a canopy over it. ---- */
+const SHAPE_P = 4.5;                                      // squarish: tall shoulders over the outer pieces
+export const shape = u => Math.pow(Math.max(0, 1 - Math.pow(Math.min(1, Math.abs(u)), SHAPE_P)), 1 / SHAPE_P);
+export function kitFrame(pieces){
+  const pts = [];                                         // [x, z, reach]
+  for (const p of pieces){
+    pts.push([p.x, p.z, pieceReach(p)]);
+    const S = STANDS[p.key]; if (S) pts.push([S.x, S.z, TRIPOD]);
+    if (p.key === 'hat') pts.push([p.x, p.z + HAT.heelZ + .1, .22]);
+  }
+  for (const t of stairTreads(pieces)) for (const [x, z] of treadOutline(t)) pts.push([x, z, .05]);
+  if (pieces.some(p => p.seat)) pts.push([SPIRAL.C.x, SPIRAL.C.z, .3]);
+  const xL = Math.min(...pts.map(q => q[0] - q[2])), xR = Math.max(...pts.map(q => q[0] + q[2]));
+  const zMin = Math.min(...pts.map(q => q[1] - q[2])), zMax = Math.max(...pts.map(q => q[1] + q[2]));
+  const xc = (xL + xR) / 2, X0 = (xR - xL) / 2 + .9;
+  const zA = Math.max(BACK + .45, zMin - .2);             // the back line the ribs spring from
+  const mags = pieces.map(p => ({ key: p.key, x: p.x, z: p.z, top: magnetTop(p) }));
+  // tall enough that the shell passes over every piece's whole column (its far side,
+  // where the shell has dropped most), magnet pot included
+  let T = 5;
+  for (const p of pieces){
+    const rr = pieceReach(p) + .3;
+    const T0 = Math.hypot(magnetTop(p) + .55, Math.max(0, p.z + rr - zA)) / shape((Math.abs(p.x - xc) + rr) / X0);
+    T = Math.max(T, T0 + .1);
+  }
+  const rho = x => T * shape((x - xc) / X0);
+  const thOf = m => Math.asin(Math.max(-1, Math.min(1, (m.z - zA) / rho(m.x))));
+  const thTop = Math.max(.12, ...mags.map(thOf));
+  const deck = { x0: xc - X0 - .5, x1: xc + X0 + .5, z0: Math.max(BACK, Math.min(zMin, zA - .5)), z1: zMax + .45 };
+  return { xc, X0, zA, T, thTop, rho, thOf, mags, deck,
+           tilts: [0, .45, .8].map(f => f * thTop) };
+}
+/* a point on the shell at x, tilt th (0 = the vertical back rib) */
+export const shellPoint = (F, x, th) => ({ x, y: F.rho(x) * Math.cos(th), z: F.zA + F.rho(x) * Math.sin(th) });
+/* the rungs: one per magnet (merged with any within .35 in x), each a curved arm out
+   along the shell from the back rib (th 0) to just past its farthest magnet */
+export function shellRungs(F){
+  const rungs = [];
+  for (const m of [...F.mags].sort((a, b) => a.x - b.x)){
+    const last = rungs.at(-1);
+    if (last && m.x - last.x0 < .35){ last.ms.push(m); last.x = (last.x0 + m.x) / 2; }
+    else rungs.push({ x0: m.x, x: m.x, ms: [m] });
+  }
+  for (const r of rungs){
+    r.hang = r.ms.map(m => { const th = Math.asin(Math.max(-1, Math.min(1, (m.z - F.zA) / F.rho(r.x)))); return { m, th, ...shellPoint(F, r.x, th) }; });
+    r.th1 = Math.max(...r.hang.map(h => h.th)) + .07;
+  }
+  return rungs;
+}
+/* The deck outline (plan, CCW from the back-left), front corners chamfered */
+export function deckOutline(F){
+  const { x0, x1, z0, z1 } = F.deck, c = .9, b = .35;
+  return [[x0 + b, z0], [x1 - b, z0], [x1, z0 + b], [x1, z1 - c], [x1 - c, z1], [x0 + c, z1], [x0, z1 - c], [x0, z0 + b]];
+}
+
+/* ---- the HI-HAT LINKAGE, the way a real one works: the pedal PRESSED (toe down) =
+   CLOSED, released (toe up) = OPEN. The struck TOP cymbal rides the piston (contact
+   stays honest), so the BOTTOM one is the mover: its pull-tube runs down the stand to a
+   ROCKER at the foot — toe down pulls the rocker's front end down, its back end lifts
+   the tube, the pair closes. An extension SPRING from the rocker's front end to a hook
+   on the stand returns it: stretched while the pedal is held, relaxed (open) at rest.
+   `drop` = how far the tube end sits below its closed height (clutch·OPEN − piston).
+   Kit-local offsets from the hat's (x, z), y above the deck. ---- */
+const LINK = 2 * HAT.q.y - HAT.endY - .13;               // toe-link length: closed (pressed) pedal toe sits at y .13
+export function hatLinkage(drop){
+  const { q, arm, pedalL, heelZ, hook } = HAT;
+  const yEnd = HAT.endY - drop;
+  const sa = Math.max(-1, Math.min(1, (yEnd - q.y) / arm)), ca = Math.sqrt(1 - sa * sa);
+  const end = { z: q.z - arm * ca, y: yEnd };              // the tube end (a slotted pin: z drifts a hair)
+  const toe = { z: q.z + arm * ca, y: q.y - arm * sa };    // the rocker's front end
+  const py = toe.y - LINK;                                  // the pedal toe, hung on a rigid link
+  const pedalAng = Math.asin(Math.max(-1, Math.min(1, (py - .1) / pedalL)));
+  const pedalToe = { z: heelZ - pedalL * Math.cos(pedalAng), y: py };
+  return { alpha: Math.asin(sa), end, toe, pedalToe, pedalAng, spring: hook - toe.y };
 }
 
 /* A piece's dribble lane + per-strike metadata (vel, audio lane, open flag). */

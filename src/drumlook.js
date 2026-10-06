@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { ARCH, rib, rungY, zBack } from './drumparts.js';
+import { HW, SPIRAL, shellPoint, shellRungs, deckOutline } from './drumparts.js';
 
 /* ============================================================
    DRUM LOOK — the materials + geometry builders for the drum
@@ -39,7 +39,9 @@ export function kitMaterials(envMap){
   const trim   = new THREE.MeshStandardMaterial({ color: 0x2a1206, emissive: new THREE.Color(0xff7a2e), emissiveIntensity: 1.1 });
   const reso   = new THREE.MeshStandardMaterial({ color: 0x2b2a2e, metalness: .1, roughness: .7, side: THREE.DoubleSide });
   const felt   = new THREE.MeshStandardMaterial({ color: 0x5a1020, roughness: .95 });
-  return { chrome, dark, iron, copper, trim, reso, felt };
+  const glass  = new THREE.MeshStandardMaterial({ color: 0x2a3348, metalness: .9, roughness: .12, envMap, envMapIntensity: 1.1,
+    transparent: true, opacity: .16, side: THREE.DoubleSide, depthWrite: false });
+  return { chrome, dark, iron, copper, trim, reso, felt, glass };
 }
 
 /* ---- SPARKLE LACQUER: a metal-flake finish under a glass clearcoat. Each flake is a
@@ -48,7 +50,7 @@ export function kitMaterials(envMap){
    the clearcoat keeps the geometric normal — a smooth glossy skin over glitter, which
    is exactly what a sparkle-finish drum is. Strike lights make it twinkle. ---- */
 export function lacquer(st, envMap){
-  const mat = new THREE.MeshPhysicalMaterial({ color: st.shell, metalness: .6, roughness: .34, envMap, envMapIntensity: 1.25,
+  const mat = new THREE.MeshPhysicalMaterial({ color: st.shell, metalness: .35, roughness: .34, envMap, envMapIntensity: 1.25,
     clearcoat: 1, clearcoatRoughness: .05 });
   const u = { uFlake: { value: new THREE.Color(st.flake) } };
   mat.onBeforeCompile = sh => {
@@ -62,7 +64,12 @@ export function lacquer(st, envMap){
         .replace('#include <color_fragment>', `#include <color_fragment>
           vec3 flkC = vFlk * 80.0, flkR = flkHash(floor(flkC));
           float flkM = 1.0 - smoothstep(.22, .34, length(fract(flkC) - .2 - .6 * flkR.zxy));   // a round flake per cell
-          diffuseColor.rgb = mix(diffuseColor.rgb, mix(diffuseColor.rgb * 1.6, uFlake, step(.55, flkR.x)), flkM * .8);`)
+          // under ~a pixel a flake can't be resolved: fade each flake into the finish's AVERAGE
+          // colour (no speckle, no shimmer as the camera moves) — flakes resolve as you get close
+          float flkPx = 1.0 - smoothstep(.35, .9, length(fwidth(flkC)));
+          vec3 flkAvg = mix(diffuseColor.rgb, mix(diffuseColor.rgb * 1.6, uFlake, .45), .16);
+          diffuseColor.rgb = mix(flkAvg, mix(diffuseColor.rgb, mix(diffuseColor.rgb * 1.6, uFlake, step(.55, flkR.x)), flkM * .8), flkPx);
+          flkM *= flkPx;`)
         .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
           normal = normalize(normal + (flkR * 2.0 - 1.0) * .75 * flkM);`);
   };
@@ -79,7 +86,7 @@ export function buildMembrane(st, envMap){
   const geo = new THREE.RingGeometry(0, R, 72, 28);
   geo.rotateX(-Math.PI / 2);
   const mat = new THREE.MeshStandardMaterial({ color: 0xf1ebdf, metalness: 0, roughness: .62, envMap, envMapIntensity: .6,
-    emissive: new THREE.Color(st.glow), emissiveIntensity: .12, side: THREE.DoubleSide, transparent: true, opacity: .93 });
+    emissive: new THREE.Color(st.glow), emissiveIntensity: .04, side: THREE.DoubleSide, transparent: true, opacity: .93 });
   const uniforms = { uAge: { value: 99 }, uAmp: { value: 0 }, uR: { value: R } };
   mat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, uniforms);
@@ -108,7 +115,7 @@ export function buildMembrane(st, envMap){
 /* ---- a DRUM: membrane on top (its top at local y = 0, the contact point), a sparkle
    shell, a dark resonant head underneath, chrome hoops, lugs + tension rods, and the
    basket the piston rod grips. Returns the moving group + handles. ---- */
-export const BASKET = .2;                                // basket hub below the bottom head
+export const BASKET = HW.BASKET;                         // basket hub below the bottom head
 export function buildDrum(st, envMap, mats){
   const group = new THREE.Group(), r = st.r, D = st.depth;
   const { mesh: face, uniforms } = buildMembrane(st, envMap);
@@ -164,18 +171,19 @@ export function buildWires(st, mats, glow){
     geos.push(g);
   });
   const geo = mergeGeometries(geos); geos.forEach(g => g.dispose());
-  const mat = new THREE.MeshStandardMaterial({ color: 0xc8ccd6, metalness: 1, roughness: .25, emissive: new THREE.Color(glow), emissiveIntensity: .05 });
+  const mat = new THREE.MeshStandardMaterial({ color: 0xc8ccd6, metalness: 1, roughness: .2, envMap: mats.chrome.envMap, envMapIntensity: 1.4,
+    emissive: new THREE.Color(glow), emissiveIntensity: .05 });
   const u = { uBuzz: { value: 0 }, uT: { value: 0 } };
   mat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, u);
     sh.vertexShader = 'uniform float uBuzz, uT;\nattribute float aU, aPh;\nvarying float vBz;\n' + sh.vertexShader.replace('#include <begin_vertex>',
       `#include <begin_vertex>
       float bz = uBuzz * sin(6.28318 * (uT * (31.0 + 9.0 * aPh) + aPh)) * sin(3.14159 * aU);
-      transformed.y += .045 * bz;
+      transformed.y += .085 * bz;
       vBz = abs(bz);`);
     sh.fragmentShader = 'varying float vBz;\n' + sh.fragmentShader.replace('#include <emissivemap_fragment>',
       `#include <emissivemap_fragment>
-      totalEmissiveRadiance *= 1.0 + vBz * 60.0;`);
+      totalEmissiveRadiance *= 1.0 + vBz * 2.5;            // a glint as the wire flexes — steel doesn't glow`);
   };
   const wires = new THREE.Mesh(geo, mat);
   // end plates + the strainer (chrome, merged): what the wires are stretched between
@@ -191,8 +199,10 @@ export function buildWires(st, mats, glow){
 }
 
 /* ---- LATHED BRONZE: a cymbal turned on a lathe — bell dome, bow, thinning edge — in
-   a bronze that reads as metal on a lathe: anisotropic highlights wrapped round the
-   circumference (tangents follow the lathe), fine lathe grooves that break the
+   a bronze that reads as metal on a lathe: the grooves run ROUND, so the anisotropic
+   highlight stretches ACROSS them — the classic radial spoke of light from bell to edge
+   (LatheGeometry's tangent runs round the cymbal → rotate the anisotropy a quarter
+   turn), swept round the cymbal as it wobbles; fine lathe grooves that break the
    reflection into rings, a polished bell. Top of the bell at local y = 0. ---- */
 export function cymbalProfile(R){
   const rb = .21 * R, bellH = .085 * R + .015, bow = .1 * R;
@@ -214,8 +224,8 @@ export function cymbalGeometry(R){
   return g;
 }
 export function bronze(st, envMap){
-  const mat = new THREE.MeshPhysicalMaterial({ color: st.bronze, metalness: 1, roughness: .3, envMap, envMapIntensity: 1.6,
-    anisotropy: .75, emissive: new THREE.Color(st.glow), emissiveIntensity: .05, side: THREE.DoubleSide });
+  const mat = new THREE.MeshPhysicalMaterial({ color: st.bronze, metalness: 1, roughness: .26, envMap, envMapIntensity: 1.6,
+    anisotropy: .8, anisotropyRotation: Math.PI / 2, emissive: new THREE.Color(st.glow), emissiveIntensity: .05, side: THREE.DoubleSide });
   const u = { uRb: { value: .21 * st.r } };
   mat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, u);
@@ -262,65 +272,71 @@ export function buildMagnet(c, H, st, mats, glowTex){
   return { group, coil, halo, haloS: mr * 4, topY: faceY + .66, x: c.x, z: c.z };
 }
 
-/* ---- the MAGNET ARCH — a BANDSHELL: three superellipse ribs rising front → back,
-   springing from footings on the deck, each with a glowing trim line; a sloping rung
-   across them over every magnet; keystones + a crown spine. Static → frozen. ---- */
-export function buildArch(mags, mats){
+/* ---- the MAGNET SHELL — a BANDSHELL that opens toward the audience (drumparts
+   kitFrame): ribs FAN out from one pair of sculpted footings on the back line — the
+   vertical back rib, then two leaning forward over the kit — each with a glowing trim
+   line; a smoked-glass canopy between them; a curved RUNG follows the shell out over
+   every magnet (a finger off the scallop), the magnet hanging from it on a vertical
+   rod. Nothing stands in front of the kit. Static → frozen. ---- */
+export function buildArch(F, mats){
   const group = new THREE.Group();
   const add = m => (group.add(fz(m)), m);
-  const ribCurve = (R, off = 0) => {                     // the rib in its own plane, `off` = outward offset
-    const pts = [];
-    for (let k = 0; k <= 80; k++){
-      const s = -1 + 2 * k / 80, x = ARCH.X0 * Math.sign(s) * Math.pow(Math.abs(s), .6);   // dense near the feet
-      const e = 1e-3, dy = R.y(Math.min(ARCH.X0, x + e)) - R.y(Math.max(-ARCH.X0, x - e));
-      const n = new THREE.Vector2(-dy, 2 * e).normalize();   // outward normal: tangent (2e, dy) turned left
-      pts.push(V(x + n.x * off, R.y(x) + n.y * off, R.z(x + n.x * off)));
-    }
-    return new THREE.CatmullRomCurve3(pts);
+  const xs = n => Array.from({ length: n + 1 }, (_, k) => {   // dense near the feet
+    const s = -1 + 2 * k / n; return F.xc + F.X0 * Math.sign(s) * Math.pow(Math.abs(s), .55); });
+  const ribCurve = (th, off = 0) => {
+    const e = new THREE.Vector3(0, Math.cos(th), Math.sin(th));   // the rib plane's "up"
+    return new THREE.CatmullRomCurve3(xs(90).map(x => {
+      const h = 1e-3, d = (F.rho(Math.min(F.xc + F.X0, x + h)) - F.rho(Math.max(F.xc - F.X0, x - h))) / (2 * h);
+      const n = new THREE.Vector2(-d, 1).normalize();         // in-plane outward normal
+      const rr = F.rho(x) + n.y * off;
+      return V(x + n.x * off, 0, F.zA).addScaledVector(e, rr);
+    }));
   };
-  const ribs = Array.from({ length: ARCH.ribs }, (_, k) => rib(k));
-  ribs.forEach((R, k) => {
-    const main = k === 0 || k === ribs.length - 1;
-    add(new THREE.Mesh(new THREE.TubeGeometry(ribCurve(R), 180, main ? .13 : .085, 12), mats.chrome));
-    add(new THREE.Mesh(new THREE.TubeGeometry(ribCurve(R, main ? .19 : .14), 180, .03, 6), mats.trim));
-    for (const sx of [-1, 1]){                           // footings
-      const x = sx * ARCH.X0, z = R.z(x);
-      add(new THREE.Mesh(new THREE.CylinderGeometry(.3, .4, .3, 24), mats.iron)).position.set(x, .15, z);
-      const r = add(new THREE.Mesh(new THREE.TorusGeometry(.36, .025, 6, 32), mats.trim)); r.rotation.x = Math.PI / 2; r.position.set(x, .29, z);
-    }
-    const kst = add(new THREE.Mesh(new THREE.BoxGeometry(.5, .42, .34), mats.iron)); kst.position.set(0, R.y(0), R.z(0));
+  F.tilts.forEach((th, k) => {
+    const main = k !== 1;
+    add(new THREE.Mesh(new THREE.TubeGeometry(ribCurve(th), 200, main ? .12 : .08, 12), mats.chrome));
+    add(new THREE.Mesh(new THREE.TubeGeometry(ribCurve(th, main ? .19 : .14), 200, .028, 6), mats.trim));
   });
-  // the crown spine, front keystone → back keystone
-  const R0 = ribs[0], R1 = ribs.at(-1);
-  add(bar(V(0, R0.y(0), R0.z(0)), V(0, R1.y(0), R1.z(0)), .08, mats.chrome));
-  add(new THREE.Mesh(new THREE.SphereGeometry(.26, 24, 16), mats.chrome)).position.set(0, R1.y(0) + .38, R1.z(0));
-  // rungs: one per magnet (merged with any within .35 in x), sloping with the shell,
-  // cantilevered past the back rib if a magnet sits behind it
-  const rungs = [];
-  for (const m of [...mags].sort((a, b) => a.x - b.x)){
-    const last = rungs.at(-1);
-    if (last && m.x - last.x0 < .35){ last.ms.push(m); last.x = (last.x0 + m.x) / 2; }
-    else rungs.push({ x0: m.x, x: m.x, ms: [m] });
+  // the smoked-glass canopy between the back rib and the front one
+  const canopy = new THREE.BufferGeometry(), NX = 64, NT = 8, pos = [], idx = [];
+  const cx = xs(NX), thF = F.tilts.at(-1);
+  for (let i = 0; i <= NX; i++) for (let j = 0; j <= NT; j++){
+    const p = shellPoint(F, cx[i], thF * j / NT); pos.push(p.x, p.y + .02, p.z);
   }
-  for (const r of rungs){
-    const zb = Math.min(zBack(r.x), ...r.ms.map(m => m.z - .35)), zf = ARCH.front.z;
-    add(bar(V(r.x, rungY(r.x, zb), zb), V(r.x, rungY(r.x, zf), zf), .06, mats.dark));
-    for (const m of r.ms){
-      const y = rungY(r.x, m.z);
-      add(bar(V(m.x, m.topY, m.z), V(r.x, y, m.z), .028, mats.chrome, 8));   // hanger rod
+  for (let i = 0; i < NX; i++) for (let j = 0; j < NT; j++){
+    const a = i * (NT + 1) + j, b = a + NT + 1; idx.push(a, b, a + 1, b, b + 1, a + 1);
+  }
+  canopy.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); canopy.setIndex(idx); canopy.computeVertexNormals();
+  add(new THREE.Mesh(canopy, mats.glass));
+  // the footings: every rib springs from the same sculpted plinth (the fan's pivot)
+  for (const sx of [-1, 1]){
+    const x = F.xc + sx * F.X0;
+    add(new THREE.Mesh(new THREE.CylinderGeometry(.3, .44, .36, 28), mats.iron)).position.set(x, .18, F.zA);
+    add(new THREE.Mesh(new THREE.SphereGeometry(.24, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), mats.chrome)).position.set(x, .36, F.zA);
+    const r = add(new THREE.Mesh(new THREE.TorusGeometry(.4, .025, 6, 32), mats.trim)); r.rotation.x = Math.PI / 2; r.position.set(x, .33, F.zA);
+  }
+  // the RUNGS: curved arms along the shell, back rib → just past the farthest magnet
+  for (const r of shellRungs(F)){
+    const pts = [];
+    for (let k = 0; k <= 24; k++){ const p = shellPoint(F, r.x, r.th1 * k / 24); pts.push(V(p.x, p.y - .12, p.z)); }
+    add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 48, .06, 10), mats.dark));
+    add(new THREE.Mesh(new THREE.SphereGeometry(.1, 14, 10), mats.chrome)).position.copy(pts.at(-1));
+    for (const h of r.hang){
+      const y = h.y - .12;
+      add(bar(V(h.m.x, h.m.top, h.m.z), V(r.x, y, h.m.z), .028, mats.chrome, 8));   // hanger rod
       const clamp = add(new THREE.Mesh(new THREE.CylinderGeometry(.09, .09, .18, 12), mats.iron));
-      clamp.rotation.x = Math.PI / 2; clamp.position.set(r.x, y, m.z);
+      clamp.rotation.z = Math.PI / 2; clamp.position.set(r.x, y, h.m.z);
     }
   }
   return group;
 }
 
-/* ---- the RISER DECK: an angular faceted slab (the back-left corner cut away for the
-   belt's bay in the solo slot), with a glowing lip, and a sound-grille of concentric
-   grooves round the kick. The KICK SHOCKWAVE lives here: up to 3 rings (drumparts
-   shockRing) race across the top face from the kick — light through the grooves. ---- */
-export function buildDeck(mats, kick){
-  const outline = [[-9.3, 3.4], [9.3, 3.4], [9.3, -6.4], [-1.6, -6.4], [-4.4, -3.3], [-9.3, -3.3]];
+/* ---- the RISER DECK: an angular faceted slab sized to the kit (drumparts deckOutline),
+   with a glowing lip, and a sound-grille of concentric grooves round the kick. The KICK
+   SHOCKWAVE lives here: up to 3 rings (drumparts shockRing) race across the top face
+   from the kick — light through the grooves. ---- */
+export function buildDeck(mats, kick, F){
+  const outline = deckOutline(F);
   const sh = new THREE.Shape(outline.map(([x, z]) => new THREE.Vector2(x, -z)));
   const geo = new THREE.ExtrudeGeometry(sh, { depth: .26, bevelEnabled: true, bevelThickness: .04, bevelSize: .06, bevelSegments: 2 });
   geo.rotateX(-Math.PI / 2).translate(0, -.3, 0);        // top face at y ≈ 0
@@ -352,54 +368,86 @@ export function buildDeck(mats, kick){
   return { deck, lip, u };
 }
 
-/* ---- the SPIRAL STAIRCASE the toms climb: a chrome newel post, a cantilevered wedge
-   step under each tom (its edge lit in the tom's colour), the floor tom on a round
-   plinth at the foot. Pitch = height: a fill is a visible descent. ---- */
-export function buildStair(seats, C, R, mats, stepY){
+/* ---- the SPIRAL STAIRCASE the toms climb (drumparts stairTreads): a slim chrome
+   newel post; thick walnut wedge treads with a glowing nosing in each tom's colour (it
+   FLASHES on the tom's strike — a fill is a run of light down the stair); dark risers
+   closing each step; balusters + a chrome handrail. The floor tom stands at the foot,
+   on the deck. Pitch = height: a fill is a visible descent. ---- */
+export function buildStair(treads, seats, mats){
   const group = new THREE.Group(), add = m => (group.add(fz(m)), m);
   if (!seats.length) return { group };
-  const steel = new THREE.MeshStandardMaterial({ color: 0x9aa2b4, metalness: .9, roughness: .22, envMap: mats.chrome.envMap, envMapIntensity: 1.4 });
-  const rOut = R + 1.25;                                 // tread outer radius (past the widest hoop)
-  const rail = rOut - .12;                               // the handrail rides just inside the treads' nose
-  const top = Math.max(...seats.map(s => stepY(s))) + 1.1;
-  add(new THREE.Mesh(new THREE.CylinderGeometry(.16, .22, top, 24), mats.chrome)).position.set(C.x, top / 2, C.z);
-  add(new THREE.Mesh(new THREE.SphereGeometry(.26, 20, 14), mats.chrome)).position.set(C.x, top + .12, C.z);
-  add(new THREE.Mesh(new THREE.CylinderGeometry(.5, .6, .2, 24), mats.iron)).position.set(C.x, .1, C.z);
-  add(new THREE.Mesh(new THREE.CylinderGeometry(rOut + .15, rOut + .25, .12, 64), mats.deck || mats.iron)).position.set(C.x, .06, C.z);
-  const plinthTrim = add(new THREE.Mesh(new THREE.TorusGeometry(rOut + .2, .025, 6, 96), mats.trim));
-  plinthTrim.rotation.x = Math.PI / 2; plinthTrim.position.set(C.x, .125, C.z);
+  const { C, R, post } = SPIRAL;
+  const wood = new THREE.MeshPhysicalMaterial({ color: 0x7a4a2a, roughness: .4, metalness: 0, clearcoat: .7, clearcoatRoughness: .2,
+    envMap: mats.chrome.envMap, envMapIntensity: .7 });
+  const rail = R + .55;                                   // balusters stand between the toms' hoops and the nosing
+  const top = Math.max(.6, ...treads.map(t => t.y)) + 1.25;
+  add(new THREE.Mesh(new THREE.CylinderGeometry(post, post * 1.2, top, 20), mats.chrome)).position.set(C.x, top / 2, C.z);
+  add(new THREE.Mesh(new THREE.SphereGeometry(post * 1.7, 18, 12), mats.chrome)).position.set(C.x, top + .08, C.z);
+  add(new THREE.Mesh(new THREE.CylinderGeometry(.3, .38, .1, 24), mats.iron)).position.set(C.x, .05, C.z);
   const railPts = [];
-  seats.forEach((s, k) => {
-    const prev = seats[k - 1], next = seats[k + 1];
-    const a0 = prev ? (prev.phi + s.phi) / 2 : s.phi - (next ? (next.phi - s.phi) / 2 : .4);
-    const a1 = next ? (next.phi + s.phi) / 2 : s.phi + (prev ? (s.phi - prev.phi) / 2 : .4);
-    const y = Math.max(.12, stepY(s));
-    // a wedge tread: a cylinder sector (thetaStart measured like our bearing: 0 = +z, + toward +x)
-    if (y > .3){
-      add(new THREE.Mesh(new THREE.CylinderGeometry(rOut, rOut, .2, 32, 1, false, a0, a1 - a0), steel)).position.set(C.x, y - .1, C.z);
+  for (const t of treads){
+    const s = seats.find(q => q.lane === t.key);
+    add(new THREE.Mesh(new THREE.CylinderGeometry(t.rOut, t.rOut, t.th, 40, 1, false, t.a0, t.a1 - t.a0), wood)).position.set(C.x, t.y - t.th / 2, C.z);
+    // the nosing: a glowing strip round the tread's outer edge, the tom's colour
+    add(new THREE.Mesh(new THREE.CylinderGeometry(t.rOut + .012, t.rOut + .012, .05, 40, 1, true, t.a0, t.a1 - t.a0), s.trimMat)).position.set(C.x, t.y - .03, C.z);
+    // the riser: closing the climb from the step below, along the tread's leading edge
+    const hR = t.y - t.th - t.below;
+    if (hR > .02){
+      const len = t.rOut - t.rIn, a = t.a0, mid = t.rIn + len / 2;
+      const rs = add(new THREE.Mesh(new THREE.BoxGeometry(.05, hR, len), mats.iron));
+      rs.rotation.y = a; rs.position.set(C.x + mid * Math.sin(a), t.below + hR / 2, C.z + mid * Math.cos(a));
     }
-    const edge = new THREE.Mesh(new THREE.CylinderGeometry(rOut + .015, rOut + .015, .09, 32, 1, true, a0, a1 - a0), s.trimMat);
-    edge.position.set(C.x, y - .05, C.z); add(edge);
-    // a baluster at the tread's nose, up to the rail
     const bx = C.x + rail * Math.sin(s.phi), bz = C.z + rail * Math.cos(s.phi);
-    add(bar(V(bx, y, bz), V(bx, y + 1.05, bz), .03, mats.chrome, 8));
-    railPts.push(V(bx, y + 1.05, bz));
-  });
-  // the HANDRAIL: one chrome helix through the baluster tops — it's what makes it read as a stair
+    const ang = Math.asin(Math.min(1, (s.r + .14) / R));   // put the baluster off the tom's hoop
+    const ph = s.phi + ang, ux = C.x + (t.rOut - .15) * Math.sin(ph), uz = C.z + (t.rOut - .15) * Math.cos(ph);
+    add(bar(V(ux, t.y, uz), V(ux, t.y + 1.05, uz), .028, mats.chrome, 8));
+    railPts.push({ ph, y: t.y + 1.05 });
+  }
+  // the HANDRAIL: one chrome helix through the baluster tops
   if (railPts.length > 1){
-    const pts = [], n = 24 * railPts.length;
-    const ph0 = seats[0].phi - .35, ph1 = seats.at(-1).phi + .35;
-    const yAt = ph => {                                   // linear through the baluster tops, extended at the ends
-      const P = seats.map((s, k) => [s.phi, railPts[k].y]);
-      let k = 0; while (k < P.length - 2 && ph > P[k + 1][0]) k++;
-      const [x0, y0] = P[k], [x1, y1] = P[k + 1];
-      return y0 + (y1 - y0) * (ph - x0) / (x1 - x0);
+    const pts = [], n = 24 * railPts.length, r0 = treads[0].rOut - .15;
+    const ph0 = railPts[0].ph - .3, ph1 = railPts.at(-1).ph;   // ends at the top baluster (never past the back line)
+    const yAt = ph => {
+      let k = 0; while (k < railPts.length - 2 && ph > railPts[k + 1].ph) k++;
+      const A = railPts[k], B = railPts[k + 1];
+      return A.y + (B.y - A.y) * (ph - A.ph) / (B.ph - A.ph);
     };
-    for (let k = 0; k <= n; k++){ const ph = ph0 + (ph1 - ph0) * k / n; pts.push(V(C.x + rail * Math.sin(ph), yAt(ph), C.z + rail * Math.cos(ph))); }
-    add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), n * 2, .05, 8), mats.chrome));
-    add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map(p => p.clone().setY(p.y + .07))), n * 2, .018, 5), mats.trim));
+    for (let k = 0; k <= n; k++){ const ph = ph0 + (ph1 - ph0) * k / n; const rr = r0 + (treads.at(-1).rOut - treads[0].rOut) * k / n;
+      pts.push(V(C.x + rr * Math.sin(ph), yAt(ph), C.z + rr * Math.cos(ph))); }
+    add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), n * 2, .045, 8), mats.chrome));
   }
   return { group };
+}
+
+/* ---- a COIL SPRING that is rebuilt (not scaled) every frame: the vertex shader lays
+   the wire along the helix for the CURRENT length uLen, with a true Frenet frame, so the
+   coils keep a round wire as they stretch and close up. Grows +y from its origin. ---- */
+export function coilSpring(turns, R, wire, chrome){
+  const NS = Math.round(turns * 28), NP = 6, sp = [], idx = [];
+  for (let i = 0; i <= NS; i++) for (let j = 0; j <= NP; j++) sp.push(i / NS, j / NP * Math.PI * 2);
+  for (let i = 0; i < NS; i++) for (let j = 0; j < NP; j++){
+    const a = i * (NP + 1) + j, b = a + NP + 1; idx.push(a, a + 1, b, b, a + 1, b + 1);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(sp.length / 2 * 3), 3));
+  geo.setAttribute('aSP', new THREE.Float32BufferAttribute(sp, 2));
+  geo.setIndex(idx);
+  geo.boundingSphere = new THREE.Sphere(V(0, .6, 0), 1.2);
+  const mat = chrome.clone(), u = { uLen: { value: .5 } };
+  mat.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, u);
+    sh.vertexShader = `uniform float uLen;\nattribute vec2 aSP;\n` + sh.vertexShader
+      .replace('#include <beginnormal_vertex>', `
+        float cW = 6.28318 * ${turns.toFixed(1)}, cA = cW * aSP.x;
+        vec3 cT = normalize(vec3(-${R.toFixed(3)} * cW * sin(cA), uLen, ${R.toFixed(3)} * cW * cos(cA)));
+        vec3 cN = vec3(-cos(cA), 0.0, -sin(cA));
+        vec3 cB = normalize(cross(cT, cN)); cN = cross(cB, cT);
+        vec3 objectNormal = cos(aSP.y) * cN + sin(aSP.y) * cB;`)
+      .replace('#include <begin_vertex>', `
+        vec3 transformed = vec3(${R.toFixed(3)} * cos(cA), uLen * aSP.x, ${R.toFixed(3)} * sin(cA)) + ${wire.toFixed(3)} * objectNormal;`);
+  };
+  mat.customProgramCacheKey = () => 'coil' + turns + R + wire;
+  return { mesh: new THREE.Mesh(geo, mat), u };
 }
 
 /* ---- static structure → ONE mesh per material (bells' freeze). Bakes each frozen

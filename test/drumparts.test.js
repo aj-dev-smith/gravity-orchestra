@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { dribbleLane, dribbleAt, G } from '../src/engine.js';
 import { GM_DRUMS } from '../src/drumkit.js';
 import { SONGS } from '../src/songs/index.js';
-import { kitPieces, pieceLane, spiralSeats, styleOf, SPIRAL, KEEPOUT, rungY, zBack, ARCH,
+import { kitPieces, pieceLane, spiralSeats, styleOf, SPIRAL, BACK, kitFrame, shellPoint, shellRungs, deckOutline,
+         stairTreads, treadOutline, pieceReach, magnetTop, STANDS, TRIPOD, HAT, hatLinkage,
          clutchFrom, CLUTCH, wireBuzz, shockRing, shockAges, SHOCK } from '../src/drumparts.js';
+import { KIT_SOLO } from '../src/marbledrums.js';
 
 /* ---------------------------------------------------------------------------
    The drum machine's fresh coat — the pure half. Layout honesty (no two heads
@@ -16,8 +18,31 @@ import { kitPieces, pieceLane, spiralSeats, styleOf, SPIRAL, KEEPOUT, rungY, zBa
 const g = -G.y, DT = 1.2;
 const FULL = Object.fromEntries(Object.keys(GM_DRUMS).map(n => [n, [0]]));
 const drumSongs = Object.entries(SONGS).filter(([, s]) => s.drums);
-const H = g * DT * DT / 8;
-const magnetTop = p => p.lift + H + 2 * styleOf(p.key).ball + .66;   // drumlook.buildMagnet: face + pot + cap
+
+/* The belt bays' world XZ boxes for every SOLO-slot drum song, as measured by
+   __dev.boxes() (cx = the wall centre). The kit's ENTIRE plan footprint must stay out
+   of them — re-measure if a song's melody (hence its belt) changes. */
+const SOLO_BELTS = {
+  'mountain-king': { cx: 0, belts: [[-16.9, -4.1, -1.3, 2.3], [-1.2, -4.1, 19, 1.9]] },
+  backbeat:        { cx: 0, belts: [[-11.4, -4.1, 9.3, 1.7]] },
+};
+
+/* everything the kit puts on the floor plan, as [x, z, radius] discs, kit-local */
+function footprint(spec){
+  const ps = kitPieces(spec), F = kitFrame(ps), out = [];
+  for (const p of ps){
+    out.push([p.x, p.z, pieceReach(p), p.key]);
+    if (STANDS[p.key]) out.push([STANDS[p.key].x, STANDS[p.key].z, TRIPOD, p.key + ' stand']);
+    if (p.key === 'hat') out.push([p.x, p.z + HAT.heelZ + .1, .22, 'hat pedal']);
+  }
+  for (const t of stairTreads(ps)) for (const [x, z] of treadOutline(t)) out.push([x, z, 0, 'tread ' + t.key]);
+  for (const [x, z] of deckOutline(F)) out.push([x, z, .06, 'deck']);                      // + the bevel
+  for (const sx of [-1, 1]) out.push([F.xc + sx * F.X0, F.zA, .44, 'footing']);
+  for (const th of F.tilts) for (let k = 0; k <= 60; k++){ const x = F.xc - F.X0 + 2 * F.X0 * k / 60, q = shellPoint(F, x, th);
+    out.push([q.x, q.z, .19, 'rib']); }
+  for (const r of shellRungs(F)) for (let k = 0; k <= 20; k++){ const q = shellPoint(F, r.x, r.th1 * k / 20); out.push([q.x, q.z, .1, 'rung']); }
+  return { ps, F, out };
+}
 
 describe('kit layout', () => {
   const sets = [['full kit', FULL], ...drumSongs.map(([k, s]) => [k, s.drums])];
@@ -30,24 +55,69 @@ describe('kit layout', () => {
     expect(kitPieces({ hatOpen: [1] }).map(p => p.key)).toEqual(['hat']);
   });
 
-  for (const [name, spec] of sets) it(`${name}: no two heads share air, all on the deck, belt corner clear`, () => {
+  for (const [name, spec] of sets) it(`${name}: no two pieces share air (heads, tripods, stands)`, () => {
     const ps = kitPieces(spec);
-    for (let i = 0; i < ps.length; i++){
-      const a = ps[i], ra = styleOf(a.key).r;
-      expect(Math.abs(a.x) + ra).toBeLessThanOrEqual(9.3);
-      expect(a.z + ra).toBeLessThanOrEqual(3.4);
-      expect(a.z - ra).toBeGreaterThanOrEqual(-6.4);
-      if (a.x - ra < KEEPOUT.xMax) expect(a.z - ra).toBeGreaterThan(KEEPOUT.zMax);
-      for (let j = i + 1; j < ps.length; j++){
-        const b = ps[j];
-        // plan discs disjoint: a ball's column never passes through another head
-        expect(Math.hypot(a.x - b.x, a.z - b.z), `${a.key}/${b.key}`).toBeGreaterThanOrEqual(ra + styleOf(b.key).r + .15);
+    const disc = ps.flatMap(p => [[p.x, p.z, pieceReach(p), p.key, p],
+      ...(STANDS[p.key] ? [[STANDS[p.key].x, STANDS[p.key].z, .12, p.key + ' stand', null]] : [])]);
+    for (let i = 0; i < disc.length; i++) for (let j = i + 1; j < disc.length; j++){
+      const a = disc[i], b = disc[j];
+      if (!a[4] && !b[4]) continue;
+      if (a[3].startsWith(b[3]) || b[3].startsWith(a[3])) continue;     // a cymbal over its own stand
+      // a stand post may stand under a cymbal that sits higher than the boom's joint — only heads/tripods are checked here
+      const cymbalOverStand = (a[4] && styleOf(a[3]).kind === 'cymbal' && !b[4]) || (b[4] && styleOf(b[3]).kind === 'cymbal' && !a[4]);
+      if (cymbalOverStand) continue;
+      const need = (a[4] && b[4]) ? styleOf(a[3]).r + styleOf(b[3]).r + .15 : a[2] + b[2];
+      expect(Math.hypot(a[0] - b[0], a[1] - b[1]), `${a[3]}/${b[3]}`).toBeGreaterThanOrEqual(need);
+    }
+  });
+
+  for (const [name, spec] of sets) it(`${name}: nothing goes behind the BACK line (deck, footings, ribs, rungs, treads, stands)`, () => {
+    for (const [, z, r, what] of footprint(spec).out) expect(z - r, what).toBeGreaterThanOrEqual(BACK - (what === 'deck' ? .065 : 1e-9));
+  });
+
+  for (const [name, { cx, belts }] of Object.entries(SOLO_BELTS)) it(`${name} (solo slot): the whole kit stands clear of every belt bay`, () => {
+    for (const [x, z, r, what] of footprint(SONGS[name].drums).out){
+      const X = cx + KIT_SOLO.x + x, Z = KIT_SOLO.z + z;
+      for (const [x0, z0, x1, z1] of belts){
+        const inside = X + r > x0 && X - r < x1 && Z + r > z0 && Z - r < z1;
+        expect(inside, `${what} at (${X.toFixed(2)}, ${Z.toFixed(2)})`).toBe(false);
       }
     }
   });
 
-  for (const [name, spec] of sets) it(`${name}: every magnet hangs under the arch`, () => {
-    for (const p of kitPieces(spec)) expect(rungY(p.x, p.z) - magnetTop(p), p.key).toBeGreaterThan(.25);
+  for (const [name, spec] of sets) it(`${name}: on the deck — every piece, stand and tread inside the outline`, () => {
+    const { F, out } = footprint(spec);
+    for (const [x, z, r, what] of out){
+      if (what === 'deck' || what === 'rib' || what === 'rung') continue;
+      expect(x - r, what).toBeGreaterThanOrEqual(F.deck.x0); expect(x + r, what).toBeLessThanOrEqual(F.deck.x1);
+      expect(z - r, what).toBeGreaterThanOrEqual(F.deck.z0 - 1e-9); expect(z + r, what).toBeLessThanOrEqual(F.deck.z1);
+    }
+  });
+
+  for (const [name, spec] of sets) it(`${name}: every magnet hangs from a rung, and the shell clears every piece`, () => {
+    const { ps, F } = footprint(spec);
+    const rungs = shellRungs(F);
+    for (const p of ps){
+      const r = rungs.find(q => q.ms.some(m => m.key === p.key)), h = r.hang.find(q => q.m.key === p.key);
+      expect(h.z).toBeCloseTo(p.z, 9);                                  // the hanger rod is vertical
+      expect(h.y - .12 - magnetTop(p), p.key).toBeGreaterThan(.3);      // and the rung is above the pot
+      expect(h.th, p.key).toBeLessThan(r.th1);
+    }
+    // every rib + rung point passes over (never through) every piece's column
+    const pts = [];
+    for (const th of F.tilts) for (let k = 0; k <= 200; k++) pts.push(shellPoint(F, F.xc - F.X0 + 2 * F.X0 * k / 200, th));
+    for (const r of rungs) for (let k = 0; k <= 40; k++) pts.push(shellPoint(F, r.x, r.th1 * k / 40));
+    for (const q of pts) for (const p of ps){
+      if (Math.hypot(q.x - p.x, q.z - p.z) > pieceReach(p) + .25) continue;
+      expect(q.y - .2, `${p.key} under the shell at x=${q.x.toFixed(2)}`).toBeGreaterThan(magnetTop(p));
+    }
+  });
+
+  it('a compact kit gets a compact shell; the full kit a big one', () => {
+    const small = kitFrame(kitPieces({ kick: [0], snare: [0], hat: [0] })), full = kitFrame(kitPieces(FULL));
+    expect(small.X0).toBeLessThan(.6 * full.X0);
+    expect(small.deck.x1 - small.deck.x0).toBeLessThan(11);
+    expect(small.T).toBeLessThan(full.T);
   });
 
   it('the toms climb a spiral: PITCH = HEIGHT, neighbouring hoops never touch', () => {
@@ -63,9 +133,44 @@ describe('kit layout', () => {
     expect(seats.at(-1).lane).toBe('tomHigh');
   });
 
-  it('the back rib stays behind every magnet it carries (or the rung cantilevers past it)', () => {
-    for (const p of kitPieces(FULL)) expect(p.z).toBeLessThan(ARCH.front.z - .3);
-    expect(zBack(-ARCH.X0)).toBeGreaterThan(KEEPOUT.zMax - .2);
+  it('each tread sits under its own tom only — never under a neighbour, the kick or anything else', () => {
+    const ps = kitPieces(FULL), treads = stairTreads(ps);
+    expect(treads.length).toBeGreaterThan(2);
+    for (const t of treads){
+      expect(t.y).toBeGreaterThan(t.below);                              // the stair climbs
+      for (const [x, z] of treadOutline(t, 24)) for (const p of ps){
+        if (p.key === t.key) continue;
+        expect(Math.hypot(x - p.x, z - p.z), `tread ${t.key} / ${p.key}`).toBeGreaterThanOrEqual(pieceReach(p) + .05);
+      }
+    }
+  });
+});
+
+describe('hi-hat LINKAGE — the real way round', () => {
+  const closed = hatLinkage(0), open = hatLinkage(HAT.OPEN);
+  it('pedal pressed (toe down) = CLOSED, released (toe up) = OPEN', () => {
+    expect(closed.pedalAng).toBeLessThan(.08);
+    expect(open.pedalAng).toBeGreaterThan(.3);
+    expect(open.pedalToe.y).toBeGreaterThan(closed.pedalToe.y);
+  });
+  it('the pull-tube end moves exactly the clutch travel; the rocker is a first-class lever', () => {
+    expect(closed.end.y - open.end.y).toBeCloseTo(HAT.OPEN, 12);
+    expect(open.toe.y - closed.toe.y).toBeCloseTo(HAT.OPEN, 12);      // equal arms: toe rises as the tube drops
+  });
+  it('the return spring is stretched while the pedal holds it closed, relaxed open', () => {
+    expect(closed.spring).toBeGreaterThan(open.spring);
+    expect(open.spring).toBeGreaterThan(.3);
+  });
+  it('continuous + monotone through the travel, the toe link stays (nearly) rigid', () => {
+    let prev = hatLinkage(0);
+    const L0 = Math.hypot(prev.toe.z - prev.pedalToe.z, prev.toe.y - prev.pedalToe.y);
+    for (let dr = .002; dr <= HAT.OPEN + 1e-9; dr += .002){
+      const k = hatLinkage(dr);
+      expect(k.pedalAng).toBeGreaterThan(prev.pedalAng);
+      expect(Math.abs(k.pedalAng - prev.pedalAng)).toBeLessThan(.01);
+      expect(Math.abs(Math.hypot(k.toe.z - k.pedalToe.z, k.toe.y - k.pedalToe.y) - L0)).toBeLessThan(.08);
+      prev = k;
+    }
   });
 });
 

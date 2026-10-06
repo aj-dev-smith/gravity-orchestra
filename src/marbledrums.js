@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import { G, dribbleAt, dribblePiston, firstStrike } from './engine.js';
-import { styleOf, kitPieces, pieceLane, SPIRAL, clutchFrom, wireBuzz, shockAges, shockRing, DROP_V } from './drumparts.js';
+import { dribbleAt, dribblePiston, firstStrike } from './engine.js';
+import { styleOf, kitPieces, pieceLane, clutchFrom, wireBuzz, shockAges, shockRing, DROP_V, DT_MAX, MAG_H, HW,
+         kitFrame, stairTreads, pieceFloor, STANDS, TRIPOD, HAT, hatLinkage } from './drumparts.js';
 import { V, fz, bar, kitMaterials, buildDrum, buildWires, cymbalProfile, cymbalGeometry, bronze,
-         buildMagnet, buildArch, buildDeck, buildStair, freeze, BASKET } from './drumlook.js';
+         buildMagnet, buildArch, buildDeck, buildStair, coilSpring, freeze } from './drumlook.js';
 
 /* ============================================================
    MARBLE DRUMS — the drum machine. Render subsystem, same DI'd
@@ -26,19 +27,20 @@ import { V, fz, bar, kitMaterials, buildDrum, buildWires, cymbalProfile, cymbalG
    THE FRESH COAT (drumlook.js builds it, drumparts.js solves it):
    sparkle-lacquer shells with chrome lugs/rods/hoops under coated
    heads; lathed bronze cymbals; the toms climb a SPIRAL STAIRCASE
-   (pitch = height — a fill is a visible descent); crash + ride on
-   booms; the magnets hang from a sculptural ARCH. Parts that REACT,
+   (pitch = height — a fill is a visible descent, its steps' nosings
+   flashing in turn); crash + ride on booms; the magnets hang from a
+   BANDSHELL that fans open toward the audience, all of it sized to the
+   kit actually built. Parts that REACT,
    each a pure fn of songTime with a visible cause: SNARE WIRES rattle
    under the snare on every hit; the HI-HAT is one pair of cymbals on
-   one ball, its CLUTCH (pedal → spring → bottom cymbal) solved from
-   the merged hat/hatOpen sequence so the pair is open exactly on
-   open hits; the KICK lands and a SHOCKWAVE rings out across the
+   one ball, its CLUTCH (pedal → rocker → pull-tube → bottom cymbal,
+   a return spring) solved from the merged hat/hatOpen sequence so the
+   pair is open exactly on open hits — pedal down = closed, like a real one; the KICK lands and a SHOCKWAVE rings out across the
    riser floor's grille.
 
    Every frame is re-derived from songTime (time is the only state).
    ============================================================ */
 
-const DT_MAX    = 1.2;      // longest flown gap (s) → magnet height H = |G|·DT_MAX²/8 ≈ 2.6
 const EDGE_W    = .25;      // strike-edge window (s): a strike fires once if we land within it
 const RISER_TOP = 1.5;      // deck height (world y) — shared with the room/floor staging
 /* The kit's slot (x relative to the belt wall's centre, z toward the audience). It has
@@ -58,18 +60,18 @@ const RIPPLE_MAX = .13;     // …capped
 const WOBBLE     = { hat: .09, crash: .26, ride: .18 };   // cymbal wobble (rad) at full impact
 const LIGHTS     = 4;       // strike-light pool (a constant count → no shader recompiles)
 const LIGHT_PEAK = 9;       // strike-light intensity at full velocity
-// ---- hardware dimensions ----
-const ROD_VIS    = .22;     // piston rod showing between the basket and its sleeve, at rest
-const ROD_IN     = .7;      // …and the length riding inside the sleeve (≥ max piston travel)
-const SLEEVE     = 1.0;
-const HAT_OPEN   = .28;     // how far the clutch drops the bottom hat when open
-const HAT_SPRING = .82;     // the clutch spring's rest length
-const PEDAL_L    = .9;      // hi-hat footboard length (heel hinge → toe)
-const STANDS     = { crash: { x: -7.85, z: .2 }, ride: { x: 8.05, z: -.35 } };   // boom stands, outside the kit
+const TRIM_BASE  = 1.1;     // a stair nosing's resting glow (it flashes on its tom's strike)
+// ---- hardware dimensions (drumparts HW: shared with the layout solve) ----
+const { ROD_VIS, ROD_IN, SLEEVE } = HW;
 
 /* The kit's footprint for room staging (the Void grows a plinth under it): `slot` is the
-   song's KIT_SOLO / KIT_ROOM. Matches the deck outline (drumlook.buildDeck). */
-export function kitAnchor(cx, slot){ return { x: cx + slot.x, z: slot.z - 1.5, w: 18.6, d: 9.8, yaw: 0, y: RISER_TOP }; }
+   song's KIT_SOLO / KIT_ROOM. Matches the deck of the kit LAST BUILT (main builds the kit
+   before it places the room) — sized to that song's pieces (drumparts kitFrame). */
+let lastDeck = { x0: -9.3, x1: 9.3, z0: -6.4, z1: 3.4 };
+export function kitAnchor(cx, slot){
+  const D = lastDeck;
+  return { x: cx + slot.x + (D.x0 + D.x1) / 2, z: slot.z + (D.z0 + D.z1) / 2, w: D.x1 - D.x0, d: D.z1 - D.z0, yaw: 0, y: RISER_TOP };
+}
 
 export function makeMarbleDrums({ envMap, glowTex }){
   let pieces = [];
@@ -87,18 +89,19 @@ export function makeMarbleDrums({ envMap, glowTex }){
     const K = V(cx + slot.x, RISER_TOP, slot.z);
     const kit = new THREE.Group(); kit.position.copy(K); group.add(kit);
     const mats = kitMaterials(envMap);
-    const H = -G.y * DT_MAX * DT_MAX / 8;
+    const H = MAG_H;
 
     const layout = kitPieces(spec);
-    const deck = buildDeck(mats, layout.find(p => p.key === 'kick'));
+    const F = kitFrame(layout);                          // deck + shell sized to THIS kit
+    lastDeck = F.deck;
+    const deck = buildDeck(mats, layout.find(p => p.key === 'kick'), F);
     kit.add(deck.deck, deck.lip);
-    deckU = deck.u; mats.deck = deck.deck.material;   // the stair's plinth shares the deck's skin (the shockwave crosses it)
+    deckU = deck.u;
 
-    // the staircase: each tom's step sits so its sleeve straddles it
+    // the staircase: each tom's tread sits so its sleeve straddles it
     const seats = layout.filter(p => p.seat).map(p => ({ ...p.seat, r: styleOf(p.key).r,
-      trimMat: new THREE.MeshStandardMaterial({ color: 0x100804, emissive: new THREE.Color(styleOf(p.key).glow), emissiveIntensity: 1.3 }) }));
-    const stepY = s => s.y - styleOf(s.lane).depth - BASKET - ROD_VIS - SLEEVE * .55;
-    kit.add(buildStair(seats, SPIRAL.C, SPIRAL.R, mats, stepY).group);
+      trimMat: new THREE.MeshStandardMaterial({ color: 0x100804, emissive: new THREE.Color(styleOf(p.key).flake), emissiveIntensity: TRIM_BASE }) }));
+    kit.add(buildStair(stairTreads(layout), seats, mats).group);
 
     /* ---- per-piece builders ---- */
     const supportUnder = (x, z, top, floorY, r, wide) => {   // a sleeve from `top` down, standing on `floorY`
@@ -107,7 +110,7 @@ export function makeMarbleDrums({ envMap, glowTex }){
       sleeve.position.set(x, (top + bot) / 2, z); kit.add(sleeve);
       const cap = fz(new THREE.Mesh(new THREE.CylinderGeometry(r * 1.35, r * 1.35, .1, 20), mats.chrome));
       cap.position.set(x, top - .05, z); kit.add(cap);
-      if (floorY === 0 && bot > .3){                     // a chrome tripod on the deck
+      if (floorY === 0 && bot > .3){                     // a chrome tripod on the deck (a short post just stands on a flange)
         for (let k = 0; k < 3; k++){
           const a = k * 2.094 + .5, rr = wide ? .9 : .6;
           kit.add(fz(bar(V(x, bot + .12, z), V(x + rr * Math.sin(a), .02, z + rr * Math.cos(a)), .028, mats.chrome, 8)));
@@ -150,36 +153,52 @@ export function makeMarbleDrums({ envMap, glowTex }){
       felt.position.y = -Pf.under - .02; group.add(felt);
       const h = { group, tilt, face: top, bronze: mat, depth: Pf.under };
       if (p.key === 'hat'){
-        // the HI-HAT: the piston rod carries the TOP cymbal (the struck one, so contact
-        // stays honest); the CLUTCH drops the BOTTOM one on its tube against a spring,
-        // pulled by the pedal. Open = the pair parted.
+        // the HI-HAT: the piston carries the pair; the TOP cymbal (the struck one) is fixed
+        // on it so contact stays honest, the BOTTOM one rides a pull-tube that the clutch
+        // moves (drumparts hatLinkage): pedal pressed → rocker lifts the tube → closed.
         const bot = new THREE.Group(); group.add(bot);
         bot.add(new THREE.Mesh(geo, mat));
-        const tubeL = 1.6;
-        const tube = new THREE.Mesh(new THREE.CylinderGeometry(.04, .04, tubeL, 12), mats.chrome);
-        tube.position.y = -Pf.under - tubeL / 2; bot.add(tube);
-        const collar = new THREE.Mesh(new THREE.CylinderGeometry(.075, .075, .07, 14), mats.iron);
-        collar.position.y = -Pf.under - .06; bot.add(collar);
-        const rodL = Pf.under + HAT_OPEN + .3;
-        const rod = new THREE.Mesh(new THREE.CylinderGeometry(.02, .02, rodL, 8), mats.chrome);
-        rod.position.y = -rodL / 2; group.add(rod);
         h.bot0 = -(Pf.th(0) + .006);                    // closed: nested right under the top
         bot.position.y = h.bot0;
-        const sleeveTop = c.y + h.bot0 - Pf.under - .095 - HAT_SPRING;
-        supportUnder(c.x, c.z, sleeveTop, 0, .07, false);
-        // the clutch spring: a coil from the sleeve top to the collar, rescaled each frame
-        const pts = [];
-        for (let k = 0; k <= 140; k++){ const a = k / 140 * 9 * Math.PI * 2; pts.push(V(.085 * Math.cos(a), k / 140, .085 * Math.sin(a))); }
-        const spring = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 280, .012, 5), mats.chrome);
-        spring.position.set(c.x, sleeveTop, c.z); kit.add(spring);
-        // the PEDAL: a footboard hinged at its heel in front of the stand; toe down = open
-        const pedal = new THREE.Group(); pedal.position.set(c.x, .1, c.z + 1.05); kit.add(pedal);
-        const board = new THREE.Mesh(new THREE.BoxGeometry(.3, .04, PEDAL_L), mats.chrome);
-        board.position.z = -PEDAL_L / 2; pedal.add(board);
+        const collarY = h.bot0 - Pf.under - .06;        // group-local
+        const tubeL = c.y + collarY - HAT.endY;         // closed: the tube's end at the rocker pin
+        const tube = new THREE.Mesh(new THREE.CylinderGeometry(.034, .034, tubeL, 12), mats.chrome);
+        tube.position.y = collarY - tubeL / 2; bot.add(tube);
+        const collar = new THREE.Mesh(new THREE.CylinderGeometry(.075, .075, .07, 14), mats.iron);
+        collar.position.y = collarY; bot.add(collar);
+        const pin = new THREE.Mesh(new THREE.CylinderGeometry(.03, .03, .14, 8), mats.iron);
+        pin.rotation.z = Math.PI / 2; pin.position.y = collarY - tubeL; bot.add(pin);
+        const rodL = Pf.under + HAT.OPEN + .3;          // the top cymbal's rod, riding inside the tube
+        const rod = new THREE.Mesh(new THREE.CylinderGeometry(.02, .02, rodL, 8), mats.chrome);
+        rod.position.y = -rodL / 2; group.add(rod);
+        // the STAND: a sleeve the tube slides in, on a tripod; the rocker housing at its foot
+        const sTop = c.y + collarY - HAT.OPEN - .14, sBot = 1.0;
+        const sl = fz(new THREE.Mesh(new THREE.CylinderGeometry(.065, .075, sTop - sBot, 16), mats.dark));
+        sl.position.set(c.x, (sTop + sBot) / 2, c.z); kit.add(sl);
+        const ring = fz(new THREE.Mesh(new THREE.CylinderGeometry(.1, .1, .1, 16), mats.chrome)); ring.position.set(c.x, sBot + .05, c.z); kit.add(ring);
+        for (let k = 0; k < 3; k++){ const a = k * 2.094 + 3.3;
+          kit.add(fz(bar(V(c.x, sBot + .05, c.z), V(c.x + TRIPOD * Math.sin(a), .02, c.z + TRIPOD * Math.cos(a)), .028, mats.chrome, 8))); }
+        const Q = V(c.x, HAT.q.y, c.z + HAT.q.z);
+        const housing = fz(new THREE.Mesh(new THREE.BoxGeometry(.2, .16, .2), mats.iron)); housing.position.copy(Q); kit.add(housing);
+        kit.add(fz(bar(V(c.x, .02, c.z + HAT.q.z), V(c.x, Q.y - .08, c.z + HAT.q.z), .04, mats.iron, 8)));   // the housing's post
+        const axle = fz(new THREE.Mesh(new THREE.CylinderGeometry(.03, .03, .3, 10), mats.chrome)); axle.rotation.z = Math.PI / 2; axle.position.copy(Q); kit.add(axle);
+        const rocker = new THREE.Group(); rocker.position.copy(Q); kit.add(rocker);
+        rocker.add(new THREE.Mesh(new THREE.BoxGeometry(.05, .05, 2 * HAT.arm + .08), mats.chrome));
+        // the return SPRING: rocker front end → a hook on a bracket off the stand
+        const toe0 = hatLinkage(0).toe;
+        kit.add(fz(bar(V(c.x, HAT.hook + .04, c.z), V(c.x, HAT.hook + .04, c.z + toe0.z), .022, mats.chrome, 8)));
+        const spring = coilSpring(11, .045, .009, mats.chrome);
+        kit.add(spring.mesh);
+        // the PEDAL: a baseplate, a heel hinge, a footboard; a rigid link toe → rocker
+        const plate = fz(new THREE.Mesh(new THREE.BoxGeometry(.34, .03, HAT.heelZ - HAT.q.z + .35), mats.iron));
+        plate.position.set(c.x, .015, c.z + (HAT.heelZ + HAT.q.z) / 2 + .05); kit.add(plate);
         const heel = fz(new THREE.Mesh(new THREE.BoxGeometry(.38, .12, .16), mats.iron));
-        heel.position.set(c.x, .06, c.z + 1.08); kit.add(heel);
+        heel.position.set(c.x, .06, c.z + HAT.heelZ + .03); kit.add(heel);
+        const pedal = new THREE.Group(); pedal.position.set(c.x, .1, c.z + HAT.heelZ); kit.add(pedal);
+        const board = new THREE.Mesh(new THREE.BoxGeometry(.3, .035, HAT.pedalL), mats.chrome);
+        board.position.z = -HAT.pedalL / 2; pedal.add(board);
         const link = new THREE.Mesh(new THREE.CylinderGeometry(.015, .015, 1, 6), mats.chrome); kit.add(link);
-        Object.assign(h, { bot, spring, sleeveTop, pedal, link, under: Pf.under });
+        Object.assign(h, { bot, rocker, spring, pedal, link, under: Pf.under });
       } else {
         // a cymbal on a BOOM: its rod into a sleeve at the boom tip; the boom from a stand outside
         const rodL = ROD_VIS + .5;
@@ -188,7 +207,7 @@ export function makeMarbleDrums({ envMap, glowTex }){
         const sTop = c.y - Pf.under - .04 - ROD_VIS, sBot = sTop - .55;
         const sl = fz(new THREE.Mesh(new THREE.CylinderGeometry(.09, .1, .55, 16), mats.dark));
         sl.position.set(c.x, (sTop + sBot) / 2, c.z); kit.add(sl);
-        const S = STANDS[p.key] || { x: c.x + (c.x > 0 ? 1.4 : -1.4), z: c.z + 1.2 };
+        const S = STANDS[p.key] || { x: c.x + (c.x > 0 ? 1.4 : -1.4), z: c.z + 1.2 };   // (drumparts: the layout knows the stands)
         const tip = V(c.x, sBot, c.z), joint = V(S.x, sBot - .55, S.z);
         const dir = tip.clone().sub(joint).normalize();
         const tail = joint.clone().addScaledVector(dir, -.7);
@@ -197,7 +216,7 @@ export function makeMarbleDrums({ envMap, glowTex }){
         const kn = fz(new THREE.Mesh(new THREE.SphereGeometry(.1, 16, 12), mats.iron)); kn.position.copy(joint); kit.add(kn);
         kit.add(fz(bar(V(S.x, .5, S.z), joint, .055, mats.chrome)));                             // the stand post
         for (let k = 0; k < 3; k++){ const a = k * 2.094 + .3;
-          kit.add(fz(bar(V(S.x, .55, S.z), V(S.x + .75 * Math.sin(a), .02, S.z + .75 * Math.cos(a)), .03, mats.chrome, 8))); }
+          kit.add(fz(bar(V(S.x, .55, S.z), V(S.x + TRIPOD * Math.sin(a), .02, S.z + TRIPOD * Math.cos(a)), .03, mats.chrome, 8))); }
       }
       return h;
     };
@@ -208,7 +227,7 @@ export function makeMarbleDrums({ envMap, glowTex }){
       const meta = pieceLane(p, spec, { rollT, beat, P, dtMax: DT_MAX });
       const c = V(p.x, p.lift, p.z);                     // contact, kit-local
       const world = c.clone().add(K);
-      const floorY = p.seat ? Math.max(.12, stepY(p.seat)) : 0;
+      const floorY = pieceFloor(p);
       const head = st.kind === 'cymbal' ? buildCymbalPiece(p, st, c) : buildDrumPiece(p, st, c, floorY);
       const mag = buildMagnet(c, H, st, mats, glowTex);
       kit.add(mag.group); mags.push(mag);
@@ -222,11 +241,12 @@ export function makeMarbleDrums({ envMap, glowTex }){
                    first: firstStrike(L, start),
                    wobbleA: WOBBLE[p.key] ?? .12, wobbleAxis: pieces.length * 2.4,
                    drum: { contact: world, style: { ball: st.glow } },   // the shape main's drumStrike reads
+                   trim: seats.find(q => q.lane === p.key)?.trimMat,   // a tom's stair nosing
                    fired: -Infinity, flash: 0 };
       pieces.push(pc);
       if (p.key === 'kick') kickPc = pc;
     }
-    kit.add(buildArch(mags, mats));
+    kit.add(buildArch(F, mats));
 
     // the STRIKE LIGHTS: a small round-robin pool — every hit throws its colour into the room
     lights = Array.from({ length: LIGHTS }, () => {
@@ -271,11 +291,12 @@ export function makeMarbleDrums({ envMap, glowTex }){
       // the head on its piston (its rod rides with it; the sleeve stays put)
       head.group.position.y = c.y + off;
       if (head.membrane){
-        head.face.material.emissiveIntensity = .3 + 2.4 * pc.flash;
+        head.face.material.emissiveIntensity = .04 + 2.4 * pc.flash;   // coated white; the drum's colour only on the strike
         head.membrane.uAge.value = d.i < 0 ? 99 : d.since;
         head.membrane.uAmp.value = Math.min(RIPPLE_MAX, RIPPLE_K * vHit);
       }
       if (head.bronze) head.bronze.emissiveIntensity = .05 + 1.5 * pc.flash;
+      if (pc.trim) pc.trim.emissiveIntensity = TRIM_BASE + 5 * pc.flash;   // the step lights as its tom sounds
 
       // SNARE WIRES: the rattle under the bottom head
       if (head.wires){
@@ -284,17 +305,18 @@ export function makeMarbleDrums({ envMap, glowTex }){
         head.wires.uT.value = on ? d.since : 0;
       }
 
-      // HI-HAT CLUTCH: open-ness solved from the merged hit sequence
+      // HI-HAT CLUTCH: open-ness solved from the merged hit sequence, driven through the
+      // linkage (the tube rides the piston too, so the pedal follows the whole stand)
       let open = 1;
       if (head.bot){
         open = clutchFrom(L, pc.meta.open, d, start);
-        head.bot.position.y = head.bot0 - HAT_OPEN * open;
-        const collarY = c.y + off + head.bot.position.y - head.under - .095;
-        head.spring.scale.y = Math.max(.1, collarY - head.sleeveTop);
-        const ang = .2 - .26 * open;                     // toe down = open
-        head.pedal.rotation.x = ang;
-        const a = V(c.x, .1 + PEDAL_L * Math.sin(ang), c.z + 1.05 - PEDAL_L * Math.cos(ang));
-        const b = V(c.x, head.sleeveTop - SLEEVE + .2, c.z);   // the pull link: toe → the stand's base
+        head.bot.position.y = head.bot0 - HAT.OPEN * open;
+        const k = hatLinkage(HAT.OPEN * open - off);
+        head.rocker.rotation.x = k.alpha;
+        head.spring.mesh.position.set(c.x, k.toe.y, c.z + k.toe.z);
+        head.spring.u.uLen.value = k.spring;
+        head.pedal.rotation.x = k.pedalAng;               // toe up = open, pressed = closed
+        const a = V(c.x, k.pedalToe.y, c.z + k.pedalToe.z), b = V(c.x, k.toe.y, c.z + k.toe.z);
         head.link.position.copy(a).lerp(b, .5);
         head.link.scale.y = a.distanceTo(b);
         head.link.quaternion.setFromUnitVectors(V(0, 1, 0), b.sub(a).normalize());

@@ -1,34 +1,46 @@
 import * as THREE from 'three';
-import { G, dribbleLane, dribbleAt, dribblePiston, firstStrike } from './engine.js';
-import { normalizeHit } from './drumkit.js';
+import { dribbleAt, dribblePiston, firstStrike } from './engine.js';
+import { styleOf, kitPieces, pieceLane, clutchFrom, wireBuzz, shockAges, shockRing, DROP_V, DT_MAX, MAG_H, HW,
+         kitFrame, stairTreads, pieceFloor, STANDS, TRIPOD, HAT, hatLinkage } from './drumparts.js';
+import { V, fz, bar, kitMaterials, buildDrum, buildWires, cymbalProfile, cymbalGeometry, bronze,
+         buildMagnet, buildArch, buildDeck, buildStair, coilSpring, freeze } from './drumlook.js';
 
 /* ============================================================
-   MARBLE DRUMS — the drum machine, rebuilt from the ground up.
-   Render subsystem, same DI'd shape as paternoster.js / camera.js.
+   MARBLE DRUMS — the drum machine. Render subsystem, same DI'd
+   shape as paternoster.js / camera.js.
 
    THE ONE IDEA: one immortal ball per drum, and it only ever
    bounces on THAT drum. The flight between two strikes is the
    solved vertical arc for the gap (engine.js dribbleAt — apex =
    |G|·gap²/8, the belt's dt² grammar), so the groove is readable
    from across the room: the hat ball buzzes, the kick ball heaves,
-   the snare lands on 2 and 4. No allocator, no feed, no plumbing —
-   lanes never interact, polyphony is free, nothing ever appears or
-   vanishes.
+   the snare lands on 2 and 4. No allocator, no feed, no plumbing.
 
    What keeps it REAL:
    · every head rides a PISTON (dribblePiston) that visibly supplies
-     each change in bounce energy — kick up for a taller arc, give
-     for a shorter one — and is exactly at rest at contact;
+     each change in bounce energy, exactly at rest at contact;
    · a gap too long to fly ends on an ELECTROMAGNET hung at exactly
-     the max apex: the ball arrives at zero speed, the coil lights
-     and holds it, then cuts and the ball free-falls onto the beat;
-   · ball size is the drum's: the kick throws a chrome cannonball,
-     the hat a BB.
+     the max apex — the ball docks at zero speed, the coil clacks and
+     holds, then cuts and the ball free-falls onto the beat;
+   · ball size is the drum's: the kick throws a chrome cannonball.
+
+   THE FRESH COAT (drumlook.js builds it, drumparts.js solves it):
+   sparkle-lacquer shells with chrome lugs/rods/hoops under coated
+   heads; lathed bronze cymbals; the toms climb a SPIRAL STAIRCASE
+   (pitch = height — a fill is a visible descent, its steps' nosings
+   flashing in turn); crash + ride on booms; the magnets hang from a
+   BANDSHELL that fans open toward the audience, all of it sized to the
+   kit actually built. Parts that REACT,
+   each a pure fn of songTime with a visible cause: SNARE WIRES rattle
+   under the snare on every hit; the HI-HAT is one pair of cymbals on
+   one ball, its CLUTCH (pedal → rocker → pull-tube → bottom cymbal,
+   a return spring) solved from the merged hat/hatOpen sequence so the
+   pair is open exactly on open hits — pedal down = closed, like a real one; the KICK lands and a SHOCKWAVE rings out across the
+   riser floor's grille.
 
    Every frame is re-derived from songTime (time is the only state).
    ============================================================ */
 
-const DT_MAX    = 1.2;      // longest flown gap (s) → magnet height H = |G|·DT_MAX²/8 ≈ 2.6
 const EDGE_W    = .25;      // strike-edge window (s): a strike fires once if we land within it
 const RISER_TOP = 1.5;      // deck height (world y) — shared with the room/floor staging
 /* The kit's slot (x relative to the belt wall's centre, z toward the audience). It has
@@ -39,336 +51,341 @@ const RISER_TOP = 1.5;      // deck height (world y) — shared with the room/fl
    the director's drums shot. */
 export const KIT_SOLO = { x: 14, z: 5 };
 export const KIT_ROOM = { x: 11, z: 19 };
-const ARC_R     = 11;       // amphitheater radius: the row curves toward the camera at the wings
-const GAP       = .55;      // clear air between neighbouring heads along the arc
-
-/* Lane order along the arc, left → right. The toms run HIGH → LOW so a descending
-   fill sweeps across the machine as a wave; the kick is spliced in dead centre. */
-const ORDER = ['crash', 'hatOpen', 'hat', 'clap', 'snare',
-               'tomHigh', 'tomHiMid', 'tomMid', 'tomLow', 'floorHigh', 'ride'];
-
-/* Per-lane look. r = head radius, ball = marble radius (mass reads as size),
-   lift = head height above the deck, kind picks the head builder. */
-const STYLE = {
-  kick:      { r: 1.30, ball: .34, lift: 1.0, kind: 'drum',   head: 0xff8a3d, glow: 0xffb066, chrome: true },
-  snare:     { r: .72,  ball: .20, lift: 1.7, kind: 'drum',   head: 0xeaf0ff, glow: 0xbfe0ff },
-  hat:       { r: .62,  ball: .13, lift: 2.1, kind: 'cymbal', head: 0xffe27a, glow: 0xfff0a8 },
-  hatOpen:   { r: .62,  ball: .13, lift: 2.2, kind: 'cymbal', head: 0xffe8a0, glow: 0xfff0a8 },
-  clap:      { r: .58,  ball: .17, lift: 1.8, kind: 'drum',   head: 0xff9ad8, glow: 0xffc0e8 },
-  tomHigh:   { r: .58,  ball: .18, lift: 1.9, kind: 'drum',   head: 0xffd668, glow: 0xffe898 },
-  tomHiMid:  { r: .64,  ball: .20, lift: 1.8, kind: 'drum',   head: 0xffbe68, glow: 0xffdc98 },
-  tomMid:    { r: .70,  ball: .22, lift: 1.7, kind: 'drum',   head: 0xffa468, glow: 0xffcc98 },
-  tomLow:    { r: .78,  ball: .24, lift: 1.6, kind: 'drum',   head: 0xff8868, glow: 0xffbc98 },
-  floorHigh: { r: .90,  ball: .27, lift: 1.4, kind: 'drum',   head: 0xff665a, glow: 0xffa692 },
-  crash:     { r: .95,  ball: .16, lift: 2.6, kind: 'cymbal', head: 0xfff0b0, glow: 0xfff6d0 },
-  ride:      { r: .95,  ball: .16, lift: 2.5, kind: 'cymbal', head: 0xe8f0b0, glow: 0xf2f8d0 },
-};
-const FALLBACK = STYLE.snare;
 
 // ---- the juice knobs (feel-tunables) ----
 const TRAIL_N    = 9;       // ghost-trail samples per ball
 const TRAIL_DT   = .016;    // seconds between ghost samples
 const RIPPLE_K   = .016;    // membrane wave amplitude per unit impact speed…
 const RIPPLE_MAX = .13;     // …capped
-const WOBBLE     = { hat: .07, hatOpen: .1, crash: .26, ride: .18 };   // cymbal wobble (rad) at full impact
+const WOBBLE     = { hat: .09, crash: .26, ride: .18 };   // cymbal wobble (rad) at full impact
 const LIGHTS     = 4;       // strike-light pool (a constant count → no shader recompiles)
 const LIGHT_PEAK = 9;       // strike-light intensity at full velocity
+const TRIM_BASE  = 1.1;     // a stair nosing's resting glow (it flashes on its tom's strike)
+// ---- hardware dimensions (drumparts HW: shared with the layout solve) ----
+const { ROD_VIS, ROD_IN, SLEEVE } = HW;
 
-const wrapP = (t, P) => ((t % P) + P) % P;
-
-/* Where the kit stands, for staging (rooms' anchor points, the director's drum shot) —
-   one source of truth so a plinth / camera never ends up under nothing if the kit moves.
-   Footprint = the riser sector + the head arc's wings, world units. */
 /* The kit's footprint for room staging (the Void grows a plinth under it): `slot` is the
-   song's KIT_SOLO / KIT_ROOM. */
-export function kitAnchor(cx, slot){ return { x: cx + slot.x, z: slot.z - .5, w: 16, d: 11, yaw: 0, y: RISER_TOP }; }
+   song's KIT_SOLO / KIT_ROOM. Matches the deck of the kit LAST BUILT (main builds the kit
+   before it places the room) — sized to that song's pieces (drumparts kitFrame). */
+let lastDeck = { x0: -9.3, x1: 9.3, z0: -6.4, z1: 3.4 };
+export function kitAnchor(cx, slot){
+  const D = lastDeck;
+  return { x: cx + slot.x + (D.x0 + D.x1) / 2, z: slot.z + (D.z0 + D.z1) / 2, w: D.x1 - D.x0, d: D.z1 - D.z0, yaw: 0, y: RISER_TOP };
+}
 
 export function makeMarbleDrums({ envMap, glowTex }){
-  let lanes = [];                                       // [{lane, L, style, contact, head, ball, coil, ...}]
+  let pieces = [];
   let start = -Infinity;
-  let lights = [], lightIdx = 0;                        // strike-light pool (rebuilt per song, constant size)
+  let lights = [], lightIdx = 0;
+  let deckU = null, kickPc = null;
 
-  /* Rebuild for a song. spec = song.drums; {rollT, beat, P, cx, start}. Returns the
+  /* Rebuild for a song. spec = song.drums; {rollT, beat, P, cx, start, slot}. Returns the
      group for the caller to put under `world` (disposed on the next song change). */
   function build(spec, { rollT, beat, P, cx, start: s0 = -Infinity, slot = KIT_SOLO }){
     const group = new THREE.Group();
-    lanes = []; start = s0; lights = [];
-    if (!spec) return group;
+    pieces = []; start = s0; lights = []; deckU = null; kickPc = null;
+    if (!spec || !Object.keys(spec).length) return group;
 
-    const K = new THREE.Vector3(cx + slot.x, RISER_TOP, slot.z);
-    const chrome = new THREE.MeshStandardMaterial({ color: 0xd8dde8, metalness: 1, roughness: .16, envMap, envMapIntensity: 1.3 });
-    const dark   = new THREE.MeshStandardMaterial({ color: 0x232733, metalness: .7, roughness: .45, envMap });
-    group.add(buildDeck(K, dark));
+    const K = V(cx + slot.x, RISER_TOP, slot.z);
+    const kit = new THREE.Group(); kit.position.copy(K); group.add(kit);
+    const mats = kitMaterials(envMap);
+    const H = MAG_H;
 
-    // place the lanes along the arc in ORDER, with the kick dead centre: the biggest drum
-    // anchors the middle of the machine, and a tom fill sweeps right across it
-    const names = Object.keys(spec);
-    const row = ORDER.filter(n => names.includes(n))
-      .concat(names.filter(n => n !== 'kick' && !ORDER.includes(n)));
-    if (names.includes('kick')) row.splice(Math.ceil(row.length / 2), 0, 'kick');
-    const widths = row.map(n => (STYLE[n] || FALLBACK).r * 2 + GAP);
-    const total = widths.reduce((a, b) => a + b, 0);
-    let along = -total / 2;
-    const slots = {};
-    row.forEach((n, i) => {
-      const mid = along + widths[i] / 2; along += widths[i];
-      const a = mid / ARC_R;                             // arc angle
-      slots[n] = new THREE.Vector3(Math.sin(a) * ARC_R, 0, (Math.cos(a) - 1) * ARC_R * -1 - 1.2);
-    });
+    const layout = kitPieces(spec);
+    const F = kitFrame(layout);                          // deck + shell sized to THIS kit
+    lastDeck = F.deck;
+    const deck = buildDeck(mats, layout.find(p => p.key === 'kick'), F);
+    kit.add(deck.deck, deck.lip);
+    deckU = deck.u;
 
-    for (const lane of row){                             // in ARC order — the truss threads them in sequence
-      const style = STYLE[lane] || FALLBACK;
-      const hits = spec[lane].map(normalizeHit);
-      const strikes = hits.map(h => rollT + h.beat * beat);
-      const L = dribbleLane(strikes, P, { dtMax: DT_MAX });
-      const vel = L.s.map(s => Math.max(...hits
-        .filter((h, k) => Math.abs(wrapP(strikes[k], P) - s) < 1e-9).map(h => h.vel)));
-      const slot = slots[lane];
-      const contact = new THREE.Vector3(K.x + slot.x, K.y + style.lift, K.z + slot.z);
+    // the staircase: each tom's tread sits so its sleeve straddles it
+    const seats = layout.filter(p => p.seat).map(p => ({ ...p.seat, r: styleOf(p.key).r,
+      trimMat: new THREE.MeshStandardMaterial({ color: 0x100804, emissive: new THREE.Color(styleOf(p.key).flake), emissiveIntensity: TRIM_BASE }) }));
+    kit.add(buildStair(stairTreads(layout), seats, mats).group);
 
-      const head = buildHead(style, envMap, chrome, dark);
-      head.group.position.copy(contact);
-      const column = buildColumn(contact, K.y, head.depth, chrome, dark);
-      const mag = buildMagnet(contact, L.H, style, chrome, dark, glowTex);
-      const ball = buildBall(style, envMap, glowTex);
-      group.add(head.group, column.group, mag.group, ball.g, ball.ghosts);
+    /* ---- per-piece builders ---- */
+    const supportUnder = (x, z, top, floorY, r, wide) => {   // a sleeve from `top` down, standing on `floorY`
+      const bot = Math.max(floorY - .25, top - SLEEVE);
+      const sleeve = fz(new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.08, top - bot, 20), mats.dark));
+      sleeve.position.set(x, (top + bot) / 2, z); kit.add(sleeve);
+      const cap = fz(new THREE.Mesh(new THREE.CylinderGeometry(r * 1.35, r * 1.35, .1, 20), mats.chrome));
+      cap.position.set(x, top - .05, z); kit.add(cap);
+      if (floorY === 0 && bot > .3){                     // a chrome tripod on the deck (a short post just stands on a flange)
+        for (let k = 0; k < 3; k++){
+          const a = k * 2.094 + .5, rr = wide ? .9 : .6;
+          kit.add(fz(bar(V(x, bot + .12, z), V(x + rr * Math.sin(a), .02, z + rr * Math.cos(a)), .028, mats.chrome, 8)));
+        }
+        const col = fz(new THREE.Mesh(new THREE.CylinderGeometry(r * 1.4, r * 1.4, .14, 16), mats.chrome));
+        col.position.set(x, bot + .07, z); kit.add(col);
+        const ext = fz(new THREE.Mesh(new THREE.CylinderGeometry(r * .7, r * .7, bot, 12), mats.dark));   // the centre column to the deck
+        ext.position.set(x, bot / 2, z); kit.add(ext);
+      } else {
+        const fl = fz(new THREE.Mesh(new THREE.CylinderGeometry(r * 2.2, r * 2.6, .1, 24), mats.iron));
+        fl.position.set(x, Math.max(floorY, bot) + .05, z); kit.add(fl);
+      }
+    };
 
-      lanes.push({ lane, L, vel, style, contact, head, column, mag, ball,
+    const buildDrumPiece = (p, st, c, floorY) => {
+      const h = buildDrum(st, envMap, mats);
+      h.group.position.copy(c); kit.add(h.group);
+      const big = p.key === 'kick';
+      const rodR = big ? .12 : .06;
+      // the piston rod hangs from the basket hub and rides with the head
+      const sTop = c.y - h.under - ROD_VIS;
+      const rodL = ROD_VIS + Math.min(ROD_IN, sTop - Math.max(floorY - .25, sTop - SLEEVE) - .03);   // never out the sleeve's foot
+      const rod = new THREE.Mesh(new THREE.CylinderGeometry(rodR, rodR, rodL, 16), mats.chrome);
+      rod.position.y = -h.under - rodL / 2; h.group.add(rod);
+      supportUnder(c.x, c.z, sTop, floorY, big ? .3 : .13, big);
+      if (p.key === 'snare'){
+        const w = buildWires(st, mats, st.glow);
+        h.group.add(w.wires, w.plates);
+        h.wires = w.u;
+      }
+      return h;
+    };
+
+    const buildCymbalPiece = (p, st, c) => {
+      const Pf = cymbalProfile(st.r), geo = cymbalGeometry(st.r), mat = bronze(st, envMap);
+      const group = new THREE.Group(); group.position.copy(c); kit.add(group);
+      const tilt = new THREE.Group(); group.add(tilt);   // the wobble pivot — at the contact point
+      const top = new THREE.Mesh(geo, mat); tilt.add(top);
+      const felt = new THREE.Mesh(new THREE.CylinderGeometry(.06, .06, .05, 14), mats.felt);
+      felt.position.y = -Pf.under - .02; group.add(felt);
+      const h = { group, tilt, face: top, bronze: mat, depth: Pf.under };
+      if (p.key === 'hat'){
+        // the HI-HAT: the piston carries the pair; the TOP cymbal (the struck one) is fixed
+        // on it so contact stays honest, the BOTTOM one rides a pull-tube that the clutch
+        // moves (drumparts hatLinkage): pedal pressed → rocker lifts the tube → closed.
+        const bot = new THREE.Group(); group.add(bot);
+        bot.add(new THREE.Mesh(geo, mat));
+        h.bot0 = -(Pf.th(0) + .006);                    // closed: nested right under the top
+        bot.position.y = h.bot0;
+        const collarY = h.bot0 - Pf.under - .06;        // group-local
+        const tubeL = c.y + collarY - HAT.endY;         // closed: the tube's end at the rocker pin
+        const tube = new THREE.Mesh(new THREE.CylinderGeometry(.034, .034, tubeL, 12), mats.chrome);
+        tube.position.y = collarY - tubeL / 2; bot.add(tube);
+        const collar = new THREE.Mesh(new THREE.CylinderGeometry(.075, .075, .07, 14), mats.iron);
+        collar.position.y = collarY; bot.add(collar);
+        const pin = new THREE.Mesh(new THREE.CylinderGeometry(.03, .03, .14, 8), mats.iron);
+        pin.rotation.z = Math.PI / 2; pin.position.y = collarY - tubeL; bot.add(pin);
+        const rodL = Pf.under + HAT.OPEN + .3;          // the top cymbal's rod, riding inside the tube
+        const rod = new THREE.Mesh(new THREE.CylinderGeometry(.02, .02, rodL, 8), mats.chrome);
+        rod.position.y = -rodL / 2; group.add(rod);
+        // the STAND: a sleeve the tube slides in, on a tripod; the rocker housing at its foot
+        const sTop = c.y + collarY - HAT.OPEN - .14, sBot = 1.0;
+        const sl = fz(new THREE.Mesh(new THREE.CylinderGeometry(.065, .075, sTop - sBot, 16), mats.dark));
+        sl.position.set(c.x, (sTop + sBot) / 2, c.z); kit.add(sl);
+        const ring = fz(new THREE.Mesh(new THREE.CylinderGeometry(.1, .1, .1, 16), mats.chrome)); ring.position.set(c.x, sBot + .05, c.z); kit.add(ring);
+        for (let k = 0; k < 3; k++){ const a = k * 2.094 + 3.3;
+          kit.add(fz(bar(V(c.x, sBot + .05, c.z), V(c.x + TRIPOD * Math.sin(a), .02, c.z + TRIPOD * Math.cos(a)), .028, mats.chrome, 8))); }
+        const Q = V(c.x, HAT.q.y, c.z + HAT.q.z);
+        const housing = fz(new THREE.Mesh(new THREE.BoxGeometry(.2, .16, .2), mats.iron)); housing.position.copy(Q); kit.add(housing);
+        kit.add(fz(bar(V(c.x, .02, c.z + HAT.q.z), V(c.x, Q.y - .08, c.z + HAT.q.z), .04, mats.iron, 8)));   // the housing's post
+        const axle = fz(new THREE.Mesh(new THREE.CylinderGeometry(.03, .03, .3, 10), mats.chrome)); axle.rotation.z = Math.PI / 2; axle.position.copy(Q); kit.add(axle);
+        const rocker = new THREE.Group(); rocker.position.copy(Q); kit.add(rocker);
+        rocker.add(new THREE.Mesh(new THREE.BoxGeometry(.05, .05, 2 * HAT.arm + .08), mats.chrome));
+        // the return SPRING: rocker front end → a hook on a bracket off the stand
+        const toe0 = hatLinkage(0).toe;
+        kit.add(fz(bar(V(c.x, HAT.hook + .04, c.z), V(c.x, HAT.hook + .04, c.z + toe0.z), .022, mats.chrome, 8)));
+        const spring = coilSpring(11, .045, .009, mats.chrome);
+        kit.add(spring.mesh);
+        // the PEDAL: a baseplate, a heel hinge, a footboard; a rigid link toe → rocker
+        const plate = fz(new THREE.Mesh(new THREE.BoxGeometry(.34, .03, HAT.heelZ - HAT.q.z + .35), mats.iron));
+        plate.position.set(c.x, .015, c.z + (HAT.heelZ + HAT.q.z) / 2 + .05); kit.add(plate);
+        const heel = fz(new THREE.Mesh(new THREE.BoxGeometry(.38, .12, .16), mats.iron));
+        heel.position.set(c.x, .06, c.z + HAT.heelZ + .03); kit.add(heel);
+        const pedal = new THREE.Group(); pedal.position.set(c.x, .1, c.z + HAT.heelZ); kit.add(pedal);
+        const board = new THREE.Mesh(new THREE.BoxGeometry(.3, .035, HAT.pedalL), mats.chrome);
+        board.position.z = -HAT.pedalL / 2; pedal.add(board);
+        const link = new THREE.Mesh(new THREE.CylinderGeometry(.015, .015, 1, 6), mats.chrome); kit.add(link);
+        Object.assign(h, { bot, rocker, spring, pedal, link, under: Pf.under });
+      } else {
+        // a cymbal on a BOOM: its rod into a sleeve at the boom tip; the boom from a stand outside
+        const rodL = ROD_VIS + .5;
+        const rod = new THREE.Mesh(new THREE.CylinderGeometry(.04, .04, rodL, 10), mats.chrome);
+        rod.position.y = -Pf.under - .04 - rodL / 2; group.add(rod);
+        const sTop = c.y - Pf.under - .04 - ROD_VIS, sBot = sTop - .55;
+        const sl = fz(new THREE.Mesh(new THREE.CylinderGeometry(.09, .1, .55, 16), mats.dark));
+        sl.position.set(c.x, (sTop + sBot) / 2, c.z); kit.add(sl);
+        const S = STANDS[p.key] || { x: c.x + (c.x > 0 ? 1.4 : -1.4), z: c.z + 1.2 };   // (drumparts: the layout knows the stands)
+        const tip = V(c.x, sBot, c.z), joint = V(S.x, sBot - .55, S.z);
+        const dir = tip.clone().sub(joint).normalize();
+        const tail = joint.clone().addScaledVector(dir, -.7);
+        kit.add(fz(bar(tail, tip, .05, mats.chrome)));                                           // the boom arm
+        const cw = fz(new THREE.Mesh(new THREE.SphereGeometry(.15, 16, 12), mats.iron)); cw.position.copy(tail); kit.add(cw);
+        const kn = fz(new THREE.Mesh(new THREE.SphereGeometry(.1, 16, 12), mats.iron)); kn.position.copy(joint); kit.add(kn);
+        kit.add(fz(bar(V(S.x, .5, S.z), joint, .055, mats.chrome)));                             // the stand post
+        for (let k = 0; k < 3; k++){ const a = k * 2.094 + .3;
+          kit.add(fz(bar(V(S.x, .55, S.z), V(S.x + TRIPOD * Math.sin(a), .02, S.z + TRIPOD * Math.cos(a)), .03, mats.chrome, 8))); }
+      }
+      return h;
+    };
+
+    const mags = [];
+    for (const p of layout){
+      const st = styleOf(p.key);
+      const meta = pieceLane(p, spec, { rollT, beat, P, dtMax: DT_MAX });
+      const c = V(p.x, p.lift, p.z);                     // contact, kit-local
+      const world = c.clone().add(K);
+      const floorY = pieceFloor(p);
+      const head = st.kind === 'cymbal' ? buildCymbalPiece(p, st, c) : buildDrumPiece(p, st, c, floorY);
+      const mag = buildMagnet(c, H, st, mats, glowTex);
+      kit.add(mag.group); mags.push(mag);
+      const ball = buildBall(st, envMap, glowTex);
+      kit.add(ball.g, ball.ghosts);
+
+      const L = meta.L;
+      const pc = { key: p.key, meta, L, st, c, head, mag, ball,
                    vMax: L.vOut.length ? Math.max(...L.vOut) : 1,
-                   first: firstStrike(L, start),               // the armed drop's landing, absolute
-                   wobbleA: WOBBLE[lane] ?? .12, wobbleAxis: lanes.length * 2.4,   // each cymbal precesses its own way
-                   drum: { contact, style: { ball: style.glow } },   // the shape main's drumStrike reads
-                   fired: -Infinity, flash: 0 });
+                   vInMax: Math.max(DROP_V(DT_MAX), ...L.vIn),
+                   first: firstStrike(L, start),
+                   wobbleA: WOBBLE[p.key] ?? .12, wobbleAxis: pieces.length * 2.4,
+                   drum: { contact: world, style: { ball: st.glow } },   // the shape main's drumStrike reads
+                   trim: seats.find(q => q.lane === p.key)?.trimMat,   // a tom's stair nosing
+                   fired: -Infinity, flash: 0 };
+      pieces.push(pc);
+      if (p.key === 'kick') kickPc = pc;
     }
-    group.add(buildTruss(lanes, K, chrome, dark));
+    kit.add(buildArch(F, mats));
 
     // the STRIKE LIGHTS: a small round-robin pool — every hit throws its colour into the room
     lights = Array.from({ length: LIGHTS }, () => {
       const l = new THREE.PointLight(0xffffff, 0, 7, 2);
-      group.add(l); return { l, age: 9, peak: 0 };
+      kit.add(l); return { l, age: 9, peak: 0 };
     });
     lightIdx = 0;
+    freeze(kit);
     return group;
   }
 
   /* Per frame. Pure render of songTime: heads ride their pistons, balls fly their
-     solved arcs, magnets light while they hold. Strike edges fire onStrike once each. */
+     solved arcs, magnets light while they hold, the reacting parts follow their solves.
+     Strike edges fire onStrike once each. */
   function update(songTime, P, dt, { started, skipStrikes, onStrike }){
     const t = started ? songTime : start;               // before play: the machine sits ARMED
     const half = DT_MAX / 2;
-    for (const ln of lanes){
-      const d = dribbleAt(ln.L, t, start);
-      const off = started ? dribblePiston(ln.L, t, { start }) : 0;
+    for (const pc of pieces){
+      const { L, c, head } = pc;
+      const d = dribbleAt(L, t, start);
+      const off = started ? dribblePiston(L, t, { start }) : 0;
       // impact speed of the strike we last left (the armed first drop lands at full speed)
-      const vHit = d.i < 0 ? 0 : Math.abs(t - d.since - ln.first) < 1e-6 ? -G.y * half : ln.L.vIn[d.i];
+      const vHit = d.i < 0 ? 0 : Math.abs(t - d.since - pc.first) < 1e-6 ? DROP_V(DT_MAX) : L.vIn[d.i];
 
       // strike edge: the strike we most recently left, if it's fresh and not yet fired
       if (started && d.i >= 0 && d.since <= EDGE_W){
         const at = t - d.since;
-        if (at > ln.fired + 1e-6){
-          ln.fired = at;
+        if (at > pc.fired + 1e-6){
+          pc.fired = at;
           if (!skipStrikes){
-            ln.flash = 1;
-            const vel = ln.vel[d.i];
-            onStrike && onStrike({ lane: ln.lane, vel, drum: ln.drum });
-            const L = lights[lightIdx++ % lights.length];        // throw this hit's colour into the room
-            if (L){ L.l.color.set(ln.style.glow); L.l.position.set(ln.contact.x, ln.contact.y + .7, ln.contact.z + .4);
-                    L.age = 0; L.peak = LIGHT_PEAK * (.35 + .65 * vel) * (ln.lane === 'kick' ? 1.6 : 1); }
+            pc.flash = 1;
+            const vel = pc.meta.vel[d.i];
+            onStrike && onStrike({ lane: pc.meta.lane[d.i], vel, drum: pc.drum });
+            const Lt = lights[lightIdx++ % lights.length];   // throw this hit's colour into the room
+            if (Lt){ Lt.l.color.set(pc.st.glow); Lt.l.position.set(c.x, c.y + .7, c.z + .4);
+                     Lt.age = 0; Lt.peak = LIGHT_PEAK * (.35 + .65 * vel) * (pc.key === 'kick' ? 1.6 : 1); }
           }
         }
       }
-      ln.flash *= Math.exp(-dt * 9);
+      pc.flash *= Math.exp(-dt * 9);
 
-      // head on its piston (the rod slides with it; the sleeve stays put)
-      ln.head.group.position.y = ln.contact.y + off;
-      ln.column.rod.position.y = ln.column.rodY + off;
-      ln.head.face.material.emissiveIntensity = .3 + 2.4 * ln.flash;
-
-      // drum: the membrane ripple — a pure fn of time since the strike and its impact speed
-      if (ln.head.membrane){
-        ln.head.membrane.uAge.value = d.i < 0 ? 99 : d.since;
-        ln.head.membrane.uAmp.value = Math.min(RIPPLE_MAX, RIPPLE_K * vHit);
+      // the head on its piston (its rod rides with it; the sleeve stays put)
+      head.group.position.y = c.y + off;
+      if (head.membrane){
+        head.face.material.emissiveIntensity = .04 + 2.4 * pc.flash;   // coated white; the drum's colour only on the strike
+        head.membrane.uAge.value = d.i < 0 ? 99 : d.since;
+        head.membrane.uAmp.value = Math.min(RIPPLE_MAX, RIPPLE_K * vHit);
       }
+      if (head.bronze) head.bronze.emissiveIntensity = .05 + 1.5 * pc.flash;
+      if (pc.trim) pc.trim.emissiveIntensity = TRIM_BASE + 5 * pc.flash;   // the step lights as its tom sounds
+
+      // SNARE WIRES: the rattle under the bottom head
+      if (head.wires){
+        const on = started && d.i >= 0;
+        head.wires.uBuzz.value = on ? wireBuzz(d.since, d.since + d.until, vHit / pc.vInMax) : 0;
+        head.wires.uT.value = on ? d.since : 0;
+      }
+
+      // HI-HAT CLUTCH: open-ness solved from the merged hit sequence, driven through the
+      // linkage (the tube rides the piston too, so the pedal follows the whole stand)
+      let open = 1;
+      if (head.bot){
+        open = clutchFrom(L, pc.meta.open, d, start);
+        head.bot.position.y = head.bot0 - HAT.OPEN * open;
+        const k = hatLinkage(HAT.OPEN * open - off);
+        head.rocker.rotation.x = k.alpha;
+        head.spring.mesh.position.set(c.x, k.toe.y, c.z + k.toe.z);
+        head.spring.u.uLen.value = k.spring;
+        head.pedal.rotation.x = k.pedalAng;               // toe up = open, pressed = closed
+        const a = V(c.x, k.pedalToe.y, c.z + k.pedalToe.z), b = V(c.x, k.toe.y, c.z + k.toe.z);
+        head.link.position.copy(a).lerp(b, .5);
+        head.link.scale.y = a.distanceTo(b);
+        head.link.quaternion.setFromUnitVectors(V(0, 1, 0), b.sub(a).normalize());
+      }
+
       // cymbal: a precessing WOBBLE about the bell. It grows from zero at the strike and is
       // tapered back to level by the next one, so every contact lands on a level cymbal.
-      if (ln.head.tilt){
+      // A closed hi-hat is clamped — it barely moves; open, it swings free.
+      if (head.tilt){
         let th = 0, ph = 0;
         if (d.i >= 0 && started){
           const s = d.since, gap = d.since + d.until;
           const taper = Math.max(0, 1 - s / gap) ** 2;
-          th = ln.wobbleA * Math.min(1, vHit / ln.vMax) * (1 - Math.exp(-s * 14)) * Math.exp(-s * 1.4) * taper;
-          ph = ln.wobbleAxis + s * 9;                     // the wobble axis walks round — real cymbal precession
+          th = pc.wobbleA * (head.bot ? .2 + .8 * open : 1) * Math.min(1, vHit / pc.vMax)
+             * (1 - Math.exp(-s * 14)) * Math.exp(-s * 1.4) * taper;
+          ph = pc.wobbleAxis + s * 9;                    // the wobble axis walks round — real cymbal precession
         }
-        ln.head.tilt.rotation.set(th * Math.cos(ph), 0, th * Math.sin(ph));
+        head.tilt.rotation.set(th * Math.cos(ph), 0, th * Math.sin(ph));
+      }
+
+      // KICK SHOCKWAVE: the live rings across the riser floor
+      if (pc === kickPc && deckU){
+        const rings = started ? shockAges(L, d, t, start) : [];
+        for (let k = 0; k < 3; k++){
+          const R = rings[k];
+          if (!R){ deckU.uAmp.value.setComponent(k, 0); continue; }
+          const sr = shockRing(R.age);
+          const vIn = Math.abs(t - R.age - pc.first) < 1e-6 ? DROP_V(DT_MAX) : L.vIn[R.k];
+          deckU.uR.value.setComponent(k, sr.r);
+          deckU.uAge.value.setComponent(k, R.age);
+          deckU.uAmp.value.setComponent(k, sr.a * R.fade * Math.min(1, vIn / pc.vInMax) * (.4 + .6 * pc.meta.vel[R.k]));
+        }
       }
 
       // the ball: underside at contact + d.y
-      const by = ln.contact.y + ln.style.ball;
-      ln.ball.g.position.set(ln.contact.x, by + d.y, ln.contact.z);
+      const by = c.y + pc.st.ball;
+      pc.ball.g.position.set(c.x, by + d.y, c.z);
 
       // ghost trail: the ball's own past, re-sampled from the solved arc (dim while slow/held)
       const speed = Math.min(1, Math.abs(d.vy) / 6);
-      ln.ball.trail.forEach((s, j) => {
+      pc.ball.trail.forEach((s, j) => {
         const tj = t - (j + 1) * TRAIL_DT;
         if (!started || tj < start || speed < .05){ s.material.opacity = 0; return; }
-        s.position.set(ln.contact.x, by + dribbleAt(ln.L, tj, start).y, ln.contact.z);
+        s.position.set(c.x, by + dribbleAt(L, tj, start).y, c.z);
         const f = 1 - (j + 1) / (TRAIL_N + 1);
         s.material.opacity = .32 * f * speed;
-        s.scale.setScalar(ln.style.ball * 3.4 * (.4 + .6 * f));
+        s.scale.setScalar(pc.st.ball * 3.4 * (.4 + .6 * f));
       });
 
       // magnet coil: energizes as the ball arrives, CLACKS bright the instant it docks,
       // settles to a steady hold glow, and cuts hard on release
       let on = 0;
       if (d.mode === 'hold'){
-        const docked = d.i < 0 ? 9 : d.since - half;      // time since the ball docked (armed: long ago)
+        const docked = d.i < 0 ? 9 : d.since - half;
         on = 1 + 2.2 * Math.exp(-docked * 9);
       } else if (d.mode === 'arc' && d.vy > 0 && d.until > half){
         on = Math.max(0, 1 - (half - d.since) / .12);
       }
-      ln.mag.coil.material.emissiveIntensity = .15 + 3.0 * on;
-      ln.mag.halo.material.opacity = Math.min(1, .5 * on);
-      ln.mag.halo.scale.setScalar(ln.mag.haloS * (1 + .35 * Math.max(0, on - 1)));
+      pc.mag.coil.material.emissiveIntensity = .15 + 3.0 * on;
+      pc.mag.halo.material.opacity = Math.min(1, .5 * on);
+      pc.mag.halo.scale.setScalar(pc.mag.haloS * (1 + .35 * Math.max(0, on - 1)));
     }
-    for (const L of lights){                             // strike lights: a hard flash, a quick decay
-      L.age += dt;
-      L.l.intensity = L.peak * Math.exp(-L.age * 11);
+    for (const Lt of lights){                            // strike lights: a hard flash, a quick decay
+      Lt.age += dt;
+      Lt.l.intensity = Lt.peak * Math.exp(-Lt.age * 11);
     }
   }
 
   return { build, update };
-}
-
-/* ---- the riser deck the station stands on ---- */
-function buildDeck(K, mat){
-  const deck = new THREE.Mesh(new THREE.CylinderGeometry(ARC_R * .62, ARC_R * .66, .3, 64, 1, false, -1.05, 2.1), mat);
-  deck.position.set(K.x, K.y - .15, K.z - ARC_R * .45);
-  return deck;
-}
-
-/* ---- a head. The struck surface's TOP is at local y = 0 so contact is honest.
-   drum   = a real MEMBRANE (ripple shader, below) over an open shell + chrome hoop.
-   cymbal = a bronze disc whose BELL top sits at y = 0 (the ball lands on the bell);
-            the whole cymbal wobbles about that point (wobble, in update). ---- */
-function buildHead(style, envMap, chrome, dark){
-  const group = new THREE.Group();
-  const r = style.r;
-  if (style.kind === 'cymbal'){
-    const mat = new THREE.MeshStandardMaterial({ color: style.head, metalness: .9, roughness: .25, envMap,
-      emissive: new THREE.Color(style.head), emissiveIntensity: .3 });
-    const bellH = r * .2 * .45;
-    const tilt = new THREE.Group();                      // the wobble pivot — at the contact point
-    const disc = new THREE.Mesh(new THREE.CylinderGeometry(r * .98, r, .04, 48), mat);
-    disc.position.y = -bellH - .02;
-    const bell = new THREE.Mesh(new THREE.SphereGeometry(r * .2, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), mat);
-    bell.scale.y = .45; bell.position.y = -bellH;
-    tilt.add(disc, bell); group.add(tilt);
-    return { group, face: disc, tilt, depth: bellH + .04 };
-  }
-  const { mesh: face, uniforms } = buildMembrane(style, envMap);
-  const h = r * .55;
-  const shell = new THREE.Mesh(new THREE.CylinderGeometry(r * .99, r * .96, h, 48, 1, true), dark);
-  shell.position.y = -h / 2 - .005;
-  const floor = new THREE.Mesh(new THREE.CircleGeometry(r * .96, 48), dark);   // closes the shell's bottom
-  floor.rotation.x = Math.PI / 2; floor.position.y = -h;
-  const rim = new THREE.Mesh(new THREE.TorusGeometry(r * 1.01, .045, 10, 48), chrome);
-  rim.rotation.x = Math.PI / 2; rim.position.y = .005;
-  group.add(face, shell, floor, rim);
-  return { group, face, membrane: uniforms, depth: h };
-}
-
-/* ---- the drumhead MEMBRANE: a finely-ringed disc whose vertex shader displaces a
-   circular wave travelling out from the contact point, clamped to zero at the hoop
-   (a real fixed-edge membrane) and decaying. The same wave brightens the emissive,
-   so every strike sends a ring of light across the head — under bloom, it glows.
-   Driven by uAge (time since the last strike — a pure fn of songTime) and uAmp. ---- */
-function buildMembrane(style, envMap){
-  const R = style.r * .99;
-  const geo = new THREE.RingGeometry(0, R, 72, 28);      // many rings → a smooth radial wave
-  geo.rotateX(-Math.PI / 2);                             // lie flat, facing up: local +y is the wave axis
-  const mat = new THREE.MeshStandardMaterial({ color: style.head, metalness: .1, roughness: .55, envMap,
-    emissive: new THREE.Color(style.head), emissiveIntensity: .3, side: THREE.DoubleSide });
-  const uniforms = { uAge: { value: 99 }, uAmp: { value: 0 }, uR: { value: R } };
-  mat.onBeforeCompile = sh => {
-    Object.assign(sh.uniforms, uniforms);
-    sh.vertexShader = 'uniform float uAge, uAmp, uR;\nvarying float vWave;\n' + sh.vertexShader.replace(
-      '#include <begin_vertex>',
-      `#include <begin_vertex>
-      float rr = length(position.xz);
-      float front = 3.0 * uAge;                                      // wave speed (u/s)
-      float lead = 1.0 - smoothstep(front - .2, front, rr);          // nothing ahead of the front
-      float edge = 1.0 - (rr * rr) / (uR * uR);                      // fixed at the hoop
-      float w = uAmp * exp(-uAge * 4.0) * sin(20.0 * (rr - front)) * lead * edge;
-      transformed.y += w;
-      vWave = abs(w) / max(uAmp, 1e-4);`);
-    sh.fragmentShader = 'varying float vWave;\n' + sh.fragmentShader.replace(
-      '#include <emissivemap_fragment>',
-      `#include <emissivemap_fragment>
-      totalEmissiveRadiance *= 1.0 + vWave * 4.0;`);
-  };
-  return { mesh: new THREE.Mesh(geo, mat), uniforms };
-}
-
-/* ---- the piston column: a fixed dark SLEEVE from the deck, a chrome ROD that slides
-   with the head. The rod is what you see push. ---- */
-function buildColumn(contact, deckY, under, chrome, dark){   // under = head body depth below contact
-  const group = new THREE.Group();
-  const top = contact.y - under, span = top - deckY;
-  const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(.16, .2, span * .6, 20), dark);
-  sleeve.position.set(contact.x, deckY + span * .3, contact.z);
-  const rodLen = span * .7;
-  const rod = new THREE.Mesh(new THREE.CylinderGeometry(.08, .08, rodLen, 16), chrome);
-  const rodY = top - rodLen / 2;
-  rod.position.set(contact.x, rodY, contact.z);
-  group.add(sleeve, rod);
-  return { group, rod, rodY };
-}
-
-/* ---- an electromagnet, hung so its face sits exactly where the ball's TOP is at the
-   max apex. Its drop rod up to the truss is added by the build (it needs the truss). ---- */
-function buildMagnet(contact, H, style, chrome, dark, glowTex){
-  const group = new THREE.Group();
-  const faceY = contact.y + H + style.ball * 2;          // ball underside at H → ball top at H + 2r
-  const mr = Math.max(.2, style.ball * 1.6);
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(mr, mr, .5, 24), chrome);
-  body.position.set(contact.x, faceY + .25, contact.z);
-  const cap = new THREE.Mesh(new THREE.CylinderGeometry(mr * 1.08, mr * 1.08, .08, 24), dark);
-  cap.position.set(contact.x, faceY + .52, contact.z);
-  const coil = new THREE.Mesh(new THREE.TorusGeometry(mr * .82, .05, 10, 32),
-    new THREE.MeshStandardMaterial({ color: 0x331a10, emissive: new THREE.Color(0xff5a1e), emissiveIntensity: .15 }));
-  coil.rotation.x = Math.PI / 2; coil.position.set(contact.x, faceY + .03, contact.z);
-  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff7a3a, transparent: true, opacity: 0,
-    blending: THREE.AdditiveBlending, depthWrite: false }));
-  halo.scale.setScalar(mr * 4); halo.position.copy(coil.position);
-  group.add(body, cap, coil, halo);
-  return { group, coil, halo, haloS: mr * 4, topY: faceY + .56 };
-}
-
-/* ---- the overhead TRUSS every magnet hangs from: one chrome spine riding the arc
-   above the heads (lanes arrive in arc order), an end tower at each wing down to the
-   deck, a drop rod per magnet. One structure instead of a forest of posts. ---- */
-function buildTruss(lanes, K, chrome, dark){
-  const group = new THREE.Group();
-  const top = Math.max(...lanes.map(l => l.mag.topY)) + .7;
-  const row = lanes;
-  const rod = (x, z, y0, y1, r = .045, mat = chrome) => {
-    const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, y1 - y0, 10), mat);
-    m.position.set(x, (y0 + y1) / 2, z); group.add(m);
-  };
-  if (row.length){
-    const pts = row.map(l => new THREE.Vector3(l.contact.x, top, l.contact.z));
-    const ext = (a, b) => a.clone().add(a.clone().sub(b).setLength(1.2));   // run past the wing drums
-    if (pts.length > 1){ pts.unshift(ext(pts[0], pts[1])); pts.push(ext(pts[pts.length - 1], pts[pts.length - 2])); }
-    else pts.push(pts[0].clone().add(new THREE.Vector3(.01, 0, 0)));
-    const curve = new THREE.CatmullRomCurve3(pts);
-    for (const off of [0, .32]){                         // a two-rail truss: chord + a lower rail
-      const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 96, off ? .05 : .09, 10), off ? dark : chrome);
-      tube.position.y = -off; group.add(tube);
-    }
-    for (const p of [pts[0], pts[pts.length - 1]]) rod(p.x, p.z, K.y, top, .14, dark);   // end towers
-    for (const l of row) rod(l.contact.x, l.contact.z, l.mag.topY, top - .32);         // drop rods
-  }
-  return group;
 }
 
 /* ---- a marble: chrome core with a lane-tinted glow; the kick's is a cannonball ---- */

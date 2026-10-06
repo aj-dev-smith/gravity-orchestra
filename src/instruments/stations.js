@@ -31,6 +31,12 @@
        centre, HUNG: the RICOCHET chandelier — a crown over the belt,
               its lowest plate clear above the paternoster's top housing,
               so the wide shot reads it ABOVE the strike band, never across it.
+       left wing, HUNG: the VOLLEY court — two walls trading one marble, flown
+              over the marimba / bass tier, its strike plane yawed to face the
+              audience's eye (AUDIENCE dx −6, z 40). It rides out with the left
+              wing like the floor tiers (hangPlace); where a wide belt leaves the
+              wing no room, it flies BEHIND the left bays instead, above their
+              housing (flown forward it would cover the bays from the audience).
    yaw turns each station toward the middle of the room; the director's
    station shots look straight down each station's own +z, so a yaw is
    also its camera angle.
@@ -58,6 +64,11 @@ export const STATIONS = {
   turntable: { x:  0,  y: -1.0, z: 12.5, yaw: 0, w: 14, d: 14 },  // front-centre, low: the stage camera looks down onto the spinning record
   // a CHANDELIER hung over the belt: x/z follow the belt wall's centre, y its top (see HANG)
   ricochet: { x:   0,  y: 16,  z:  0,  yaw:  0,   w: 16, d: 16, hang: true },
+  // a flying COURT hung over the LEFT WING (x is relative to the belt centre and RIDES OUT with
+  // the wing — hangPlace), yawed toward the audience's eye. y is ignored (main hangs every hung
+  // station HANG_CLEAR above the belt's top housing). Footprint: the deck is ~19.5 wide and
+  // 2·(ZW + 1.3) deep — ZW grows with belt speed (≤ ~7 for the densest honest line) → d 16
+  volley:   { x: -24,  y: 16,  z: -4,   yaw: .45, w: 20, d: 16, hang: true },
 };
 
 /* the drum machine is not a plugin, but it stands in the same amphitheater: its slot
@@ -65,6 +76,7 @@ export const STATIONS = {
 const PRIO = { turntable: 90, bells: 80, marimba: 80, bass: 70, musicbox: 70, drums: 60, bowls: 60 };
 export const MARGIN = 1.4;          // clear air between any two footprints (and the belt wall)
 export const WING_REF = 12.6;       // the belt half-width the slots above were tuned for
+export const HANG_CROWN = 8;        // the centred chandelier's crown half-width: an off-centre hung station keeps clear of it
 export const HANG_CLEAR = 1.8;      // a hung station's LOWEST part (plate, stem, knot) clears the belt's top housing by this
 /* the audience's eye (world x offset from the belt centre, z): the wide shot looks from the
    front, a little left of centre. A BACK-tier station (behind the belt's front face) must be
@@ -72,6 +84,30 @@ export const HANG_CLEAR = 1.8;      // a hung station's LOWEST part (plate, stem
    brought forward to stand in front of the belt's depth (a 3-bay belt leaves no room beside it). */
 export const AUDIENCE = { dx: -6, z: 40 };
 const FORE_GRAZE = 3;               // a station may overlap the belt's outer edge (in x) this much before it counts as in front of it
+
+/** Where a HUNG station flies this song (world x/z; main measures `box` — its footprint relative
+    to its origin, rotated — from the built geometry). A centred one (|slot.x| ≤ 4: the chandelier)
+    stays on the belt's axis. An off-centre one RIDES OUT with its wing exactly like the floor
+    tiers (its gap to the wall's edge kept), stays inside the room, and — when the wing has no
+    room left beside a wide belt (its footprint would hang over the bays: the court read as
+    stacked on the belt) — flies BEHIND them instead (hung above the housing: seen over the belt,
+    never across the band — flown forward it would cover the bays from the audience), in toward
+    the centre as far as the chandelier's crown allows. Pure. */
+export function hangPlace(slot, box, wall, room, { cx = (wall[0] + wall[1]) / 2, ref = WING_REF, margin = MARGIN } = {}){
+  let x = cx + slot.x, z = (wall[2] + wall[3]) / 2 + slot.z;
+  if (Math.abs(slot.x) <= 4) return { x, z };
+  x += slot.x < 0 ? Math.min(0, (wall[0] - cx) + ref) : Math.max(0, (wall[1] - cx) - ref);
+  x = Math.max(room.x0 - box[0], Math.min(room.x1 - box[1], x));
+  const over = slot.x < 0 ? x + box[1] > wall[0] + FORE_GRAZE : x + box[0] < wall[1] - FORE_GRAZE;   // (a graze over the housing's edge is fine)
+  if (over){
+    // no room beside the bays: fly it BEHIND them (above the housing — hung — it never covers the
+    // band from the audience) and in toward the centre, up to the centred chandelier's crown
+    z = Math.max(room.z0 - box[2], Math.min(z, wall[2] - margin - box[3]));
+    const inner = HANG_CROWN + margin;
+    x = slot.x < 0 ? Math.max(x, cx - inner - box[1]) : Math.min(x, cx + inner - box[0]);
+  }
+  return { x, z };
+}
 
 /* Fallback for an instrument with no named slot: park it out front, in a row. */
 export function stationFor(key, i = 0){

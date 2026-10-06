@@ -16,7 +16,7 @@ import { makeMarbleDrums, KIT_SOLO, KIT_ROOM, kitAnchor } from './marbledrums.js
 import { makeCameraRig } from './camera.js';
 import { makeRoomHost } from './rooms/index.js';
 import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
-import { stationFor, layoutStations, HANG_CLEAR } from './instruments/stations.js';
+import { stationFor, layoutStations, HANG_CLEAR, hangPlace } from './instruments/stations.js';
 import { eventTimes, wrapP } from './instruments/clock.js';
 import { normalizeHit } from './drumkit.js';
 import { encodeSong, decodeSong } from './share.js';
@@ -533,6 +533,15 @@ function buildWorld(keyName){
         station.position.y = y; station.updateMatrixWorld(true);
         body = buildAt(); station.add(body); rig.inst.update(-LEAD_IN, P0, 0, POSE0); station.updateMatrixWorld(true);
       }
+      // an OFF-CENTRE hung station (the volley court) rides out with its wing / flies forward
+      // past a wide belt (stations.js hangPlace) — measured from its built footprint
+      const b = visBox(station), p = station.position;
+      if (!b.isEmpty() && Math.abs(st.x) > 4){
+        const at = hangPlace(st, [b.min.x - p.x, b.max.x - p.x, b.min.z - p.z, b.max.z - p.z],
+          [wallBox.min.x, wallBox.max.x, wallBox.min.z, wallBox.max.z],
+          { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 }, { cx: stageView.cx });
+        station.position.x = at.x; station.position.z = at.z; station.updateMatrixWorld(true);
+      }
     }
     rig.station = station; rig.slot = { ...st, y };
     rig.cue = eventTimes(part, { rollT: ROLL_T, beat: BEAT }).map(e => ({ t: e.t, w: e.vel }));
@@ -738,8 +747,10 @@ function syncDirector(S, view){
     // a HUNG station is shot from just under its lowest plate, looking up into it: the air
     // between the sculpture and the belt's housing reads in profile (from above, the plates
     // would sit visually ON the housing — the clearance foreshortens to nothing)
-    const eyeY = rig.slot.hang ? hangLow(st) - st.position.y + .6 : h + (c.up ?? 5);
-    const hk = rig.slot.hang ? 1.15 : 1;                 // (and from a step further back: the canopy stays in frame)
+    // (a hung station with a DECK — camera.overDeck, the volley court — is shot from above it instead)
+    const under = rig.slot.hang && !c.overDeck;
+    const eyeY = under ? hangLow(st) - st.position.y + .6 : h + (c.up ?? 5);
+    const hk = under ? 1.15 : 1;                         // (and from a step further back: the canopy stays in frame)
     shots.push({ key: ck, color: rig.I.color, self: st,
       aim: st.localToWorld(new THREE.Vector3(0, h + (rig.slot.hang ? 1 : 0), 0)),
       eye: st.localToWorld(new THREE.Vector3(c.x ?? 0, eyeY, (c.dist ?? 15) * hk)) });

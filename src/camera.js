@@ -44,6 +44,12 @@ const RECENT = .45, RECENT_T = 6, UNSEEN = .6, UNSEEN_0 = 14, UNSEEN_T = 26, BEL
      the loop seam (no music, no lead marble) breathes wide, never the empty-wall shot. */
 const ENSEMBLE_N = 7, ENSEMBLE_S = 2.6, ENSEMBLE_REST = 4, SKIM_S = 2.8;   // REST: s off the wide before it re-earns one
 const _Y = new THREE.Vector3(0, 1, 0);
+/* KEEP THE MARBLE IN FRAME: a follow shot (all / lead / alto / bass) pulls its eye back along
+   its own line just far enough that every marble it is ABOUT sits inside FIT of the frame — a
+   tall arc's apex or a crane-hop lane ride over the housings used to sail out of the top. A
+   closed-form fit (no search), capped at FIT_MAX and by the room's walls. */
+const FIT = .86, FIT_MAX = 2.4;                               // (and never out through the room's walls)
+const _fo = new THREE.Vector3(), _fu = new THREE.Vector3(), _fR = new THREE.Vector3(), _fU = new THREE.Vector3(), _fq = new THREE.Vector3();
 
 /* Keyboard fly: key → [right, up, forward] screen-space contribution. */
 const KEY_PAN = 0.65;                                         // pan units = KEY_PAN · distance · dt (scales with zoom)
@@ -75,6 +81,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
   let stageView = { cx: 0, halfW: 8 };                        // x-centre + half-width of the field (FIXED framing)
   let curTracks = [];                                         // last-built tracks, for the button row
   let stations = [], stage = null;                            // [{key, eye, aim, color}] + the wide {eye, aim}
+  let follow = null, bounds = null;                           // main's SOLVED follow offsets ({land, portrait}) + the eye's room box
   let cutNow = false, openUntil = -Infinity, stageOff = -99;
   let lastSeen = {};                                          // director: shot key → time it was last on screen
   let dbgCand = null, dbgRotate = null, dbgFloor = 0;         // the director's last weighing (dev: __dev.weigh)
@@ -164,9 +171,9 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
   /* Called by buildWorld after syncTracks: the song's instrument stations (world-space
      eye + aim per station) and the wide STAGE shot. A song that brings stations opens
      on the director — it is the show; songs without keep the free-look default. */
-  function syncStations(list, wide, { auto = true, openWide = false, openUntil: openT = 0 } = {}){
+  function syncStations(list, wide, { auto = true, openWide = false, openUntil: openT = 0, follow: fol = null, bounds: bnd = null } = {}){
     const had = stations.length;
-    stations = list; stage = wide;
+    stations = list; stage = wide; follow = fol; bounds = bnd;
     if (auto && list.length && !had && mode === DEFAULT_MODE) mode = 'auto';
     if (!list.length && mode === 'stage') mode = DEFAULT_MODE;
     if (!FIXED_OK.has(mode) && !curTracks.some(t => t.role === mode) && !list.some(st => st.key === mode)) mode = 'auto';
@@ -297,6 +304,8 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
       ideal.copy(shot.eye).sub(aim).multiplyScalar(fit).applyAxisAngle(_Y, sway * .12).add(aim);
     } else {
       const followed = effMode !== 'all' ? marblePts.find(m => m.role === effMode) : null;
+      // (a newborn still holding off-screen before its fall is not part of the picture yet)
+      const shown = marblePts.some(m => m.vis !== false) ? marblePts.filter(m => m.vis !== false) : marblePts;
       const focus = _focus.set(0, 0, 0);
       let back = Math.max(1, 1.3 / Math.min(camera.aspect, 1.3));
       if (!marblePts.length){
@@ -306,10 +315,10 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
         back *= .92;                                          // tight, personal chase
       } else {
         let wSum = 0;
-        marblePts.forEach(m => { focus.addScaledVector(m.p, m.w); wSum += m.w; });
+        shown.forEach(m => { focus.addScaledVector(m.p, m.w); wSum += m.w; });
         focus.divideScalar(wSum);
         let spread = 0;
-        marblePts.forEach(m => spread = Math.max(spread, m.p.distanceTo(focus)));
+        shown.forEach(m => spread = Math.max(spread, m.p.distanceTo(focus)));
         back *= (1 + Math.min(spread * .075, .7));
       }
       // VERTICAL IS (MOSTLY) PINNED: the band is static, so the camera doesn't bob with
@@ -317,10 +326,15 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
       // follow sits further back and gives a PARTIAL vertical follow above the band (lift),
       // so the top of a tall arc (apex ~8 u) stays in frame; the shared lerp smooths it.
       const room = stations.length > 0;
-      ideal.copy(focus); ideal.x += (4.5 + sway*2.2)*back; ideal.z += ((room ? 13 : 9.5) - sway*1.4)*back;
+      // in a full room the offset is SOLVED (main: shotsolve.solveFollow — swung + lifted until
+      // no other machine stands between the eye and the belt, per aspect class)
+      const fo = room && follow ? ((camera.aspect < .9 && follow.portrait) || follow.land) : null;
+      const ox = fo ? fo[0] : 4.5, oy = fo ? fo[1] : 3.4, oz = fo ? fo[2] : (room ? 13 : 9.5);
+      ideal.copy(focus); ideal.x += (ox + sway*2.2)*back; ideal.z += (oz - sway*1.4)*back;
       const lift = room && marblePts.length ? Math.max(0, focus.y - stageY - 2.5) : 0;
-      ideal.y = stageY + 3.4 + lift*.4;                       // eye height: the band plane (+ a share of the lift)
+      ideal.y = stageY + oy + lift*.4;                        // eye height: the band plane (+ a share of the lift)
       aim.copy(focus); aim.y = stageY + .6 + lift*.6;         // look at the band centre, not the bobbing marble
+      if (marblePts.length) fitFollow(ideal, aim, followed ? [followed] : shown);
     }
     // a director cut GLIDES only when it's short AND the glide's straight line is clear air —
     // never a dolly through a machine (main's pathBlocked raycasts the world); otherwise CUT
@@ -341,6 +355,35 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
       camera.position.y += (Math.random()-.5)*shakeAmp;
     }
     camera.lookAt(camTarget);
+  }
+
+  /* pull eye back along aim→eye until every subject marble sits inside FIT of the frame */
+  function fitFollow(eye, aim, pts){
+    _fo.subVectors(eye, aim); const D = _fo.length(); if (D < 1e-3) return;
+    _fu.copy(_fo).divideScalar(D);
+    _fR.crossVectors(_Y, _fu).normalize(); _fU.crossVectors(_fu, _fR);
+    const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * FIT, tanH = tanV * camera.aspect;
+    let k = 1;
+    for (const m of pts){
+      _fq.subVectors(m.p, aim); const d = _fq.dot(_fu);
+      k = Math.max(k, (Math.abs(_fq.dot(_fR)) / tanH + d) / D, (Math.abs(_fq.dot(_fU)) / tanV + d) / D);
+    }
+    k = Math.min(k, FIT_MAX);
+    // …never out through the room's walls: in a full room the spread dolly × a phone's pull-back
+    // alone can carry the eye past them — then pull IN across the floor, but never DOWN (the
+    // solved height is what clears the front row)
+    let kh = k, kv = Math.max(k, 1);
+    if (bounds){
+      const lim = (k0, a, v, lo, hi) => v > 1e-6 ? Math.min(k0, (hi - a) / v) : v < -1e-6 ? Math.min(k0, (lo - a) / v) : k0;
+      kh = Math.max(.35, lim(lim(kh, aim.x, _fo.x, bounds.x0, bounds.x1), aim.z, _fo.z, bounds.z0, bounds.z1));
+      kv = Math.max(.35, lim(kv, aim.y, _fo.y, bounds.y0, bounds.y1));
+    }
+    // …nor back into a machine (main hands over every machine's box with the solved offsets):
+    // step the pull in until the eye stands ≥ .8 clear of each
+    const clearAt = (h, v) => { const x = aim.x + _fo.x * h, y = aim.y + _fo.y * v, z = aim.z + _fo.z * h;
+      return !follow?.boxes?.some(b => Math.hypot(Math.max(b[0] - x, 0, x - b[1]), Math.max(b[2] - y, 0, y - b[3]), Math.max(b[4] - z, 0, z - b[5])) < .8); };
+    while (kh > 1 && !clearAt(kh, kv)){ kh = Math.max(1, kh - .1); kv = Math.max(1, Math.min(kv, kh)); }
+    if (kh !== 1 || kv !== 1) eye.set(aim.x + _fo.x * kh, aim.y + _fo.y * kv, aim.z + _fo.z * kh);
   }
 
   function resize(){

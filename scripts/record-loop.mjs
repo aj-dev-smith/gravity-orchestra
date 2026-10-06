@@ -30,7 +30,11 @@ const fps = await page.evaluate(() => new Promise(res => { let n = 0; const t0 =
 await page.click('#rec');                                       // arm: starts at the next loop seam
 const before = new Set(fs.readdirSync(outdir));
 // wait for the record card's DOWNLOAD button (appears after one full loop)
-await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b => b.textContent === 'DOWNLOAD'), { timeout: 400000, polling: 1000 });
+for (let i = 0; ; i++){                                 // short polls: one long waitForFunction outlives CDP's protocol timeout
+  if (await page.evaluate(() => [...document.querySelectorAll('button')].some(b => b.textContent === 'DOWNLOAD'))) break;
+  if (i > 900) throw new Error('no recording after 15 min');
+  await new Promise(r => setTimeout(r, 1000));
+}
 await page.evaluate(() => [...document.querySelectorAll('button')].find(b => b.textContent === 'DOWNLOAD').click());
 let file = null;
 for (let i = 0; i < 120 && !file; i++){

@@ -4,6 +4,7 @@ import { eventTimes, makeEdge, wrapP } from '../clock.js';
 import { noteNum, arcPos } from '../../engine.js';
 import { buildOrbit, marbleAt, sinceStrike, wobble, gateLift, BALL_R, PLATE_T, GATE_R, CABLE_R, CLEAR } from './solve.js';
 import { glassVoice, gateClink, relayTock } from './voice.js';
+import { phosphorAt, armPhosphor, paintPhosphor } from './phosphor.js';
 
 /* ============================================================
    RICOCHET SCULPTURE — a new archetype: a FROZEN PATH.
@@ -175,6 +176,7 @@ export default {
         return { nd, i, relay, col, colBase: col.clone(), piv, axis, wobA, discM, rimM, halo, contact, r,
                  inDt: orb.nodes[(i - 1 + N) % N].dt };
       });
+      plates.forEach(armPhosphor);                         // phosphor crystal: dormant until struck
 
       // ---- the frozen knot: the whole orbit as one faint wire, lit ahead of the marble ----
       const tubes = [];
@@ -302,6 +304,7 @@ export default {
         pl.halo.scale.setScalar(pl.r * (2.2 + 3 * fl));
         const w = isFinite(s) ? wobble(s, P, pl.wobA * (.4 + .6 * v)) : 0;
         pl.piv.quaternion.copy(_q.setFromAxisAngle(pl.axis, w));
+        paintPhosphor(pl, phosphorAt(orb, pl.i, t));       // the struck crystal's afterglow (phosphor.js)
       }
 
       // ---- the knot lights up just ahead of the marble ----

@@ -8,7 +8,7 @@ import { G, UP, UPY, ROLL_T, DESCENT, solveLaunch, arcPos, arcVel, padOffset, be
 import * as audio from './audio.js';
 import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } from './juice.js';
 import { makePaternosterShop, makeToneBarParts, PT, BAR } from './paternoster.js';
-import { planCrane, plateField, craneBall, segAt, hopLayout } from './crane.js';
+import { planCrane, plateField, plateEdge, plateDeploy, craneBall, segAt, hopLayout } from './crane.js';
 import { makeMarbleDrums, KIT_SOLO, KIT_ROOM, kitAnchor } from './marbledrums.js';
 import { makeCameraRig } from './camera.js';
 import { makeRoomHost } from './rooms/index.js';
@@ -444,10 +444,11 @@ function buildWorld(keyName){
 
 /* PATERNOSTER: the marble is CONSERVED, and the MAGNET CRANE flies every gap a free arc
    can't (src/crane.js): any gap longer than dtFree — and the loop seam — is a CRANE HOP
-   (straight up to the magnet, carried, dropped onto the next pad on its beat). The plan is
-   choreographed around the voice's own tone-plates (plateField). Then every pad's tilt is
-   re-aimed to bisect its REAL in/out: a hop's launch pad fires straight up, its landing pad
-   catches a vertical drop. The free arcs themselves are untouched. */
+   (an APEX KISS — a real arc the magnet takes at its apex and glides level — or straight up
+   to the magnet, carried, dropped onto the next pad on its beat). The plan is choreographed
+   around the voice's own tone-plates (plateField; a plate in the way stows early / unfolds
+   late — its edge is in the plan, the render reads it). Then every pad's tilt is re-aimed to
+   bisect its REAL in/out (the plan's vOut/vIn). The free arcs themselves are untouched. */
 function planTrackCrane(tr){
   const P = ROLL_T + LOOP_T, n = tr.pads.length, g = -G.y;
   const padT = tr.pads.map(p => tr.rollT + p.t);
@@ -458,9 +459,10 @@ function planTrackCrane(tr){
   if (tr.crane.warnings.length) console.warn(`cascade crane (${tr.role}):\n  ` + tr.crane.warnings.join('\n  '));
   const hopOf = i => tr.crane.hopAt[i] >= 0 ? tr.crane.hops[tr.crane.hopAt[i]] : null;
   // falling-frame velocities (the band frame minus the belt's DESCENT)
-  const vOut = i => { const h = hopOf(i); return h ? new THREE.Vector3(0, g * h.Tr - DESCENT, 0) : tr.arcs[i].clone(); };
+  // (a hop's launch/arrival are the plan's own: straight up/down, or an apex kiss's ballistic in/out)
+  const vOut = i => { const h = hopOf(i); return h ? new THREE.Vector3(h.vOut.x, h.vOut.y - DESCENT, h.vOut.z) : tr.arcs[i].clone(); };
   const vIn = i => { const k = (i - 1 + n) % n, h = hopOf(k);
-    return h ? new THREE.Vector3(0, -g * h.Tf - DESCENT, 0) : arcVel(tr.arcs[k], tr.pads[k].dt); };
+    return h ? new THREE.Vector3(h.vIn.x, h.vIn.y - DESCENT, h.vIn.z) : arcVel(tr.arcs[k], tr.pads[k].dt); };
   tr.padObjs.forEach((po, i) => {
     const vout = vOut(i), nn = vout.clone().normalize().sub(vIn(i).normalize()).normalize();
     if (nn.y < .2) nn.set(0, 1, 0);
@@ -744,7 +746,8 @@ function ballPos(tr, tau, birthT = 0){
     if (c){
       const lift = STAGE_Y + UP.y - DESCENT * tau;      // contact level, minus the render lift main re-adds
       const h = pl.hops[c.hop], seamTail = h.seam && c.seg >= 0;   // the seam's rise/ride belongs to the old ball
-      const prog = c.mode === 'rise' ? 0 : THREE.MathUtils.clamp((tau - (c.seg < 0 ? pl.rel0 : h.carryEnd)) /
+      const prog = c.seg >= 0 && h.mode === 'kiss' ? THREE.MathUtils.clamp((tau - h.s) / h.gap, 0, 1)   // a kiss reads as one arc
+                 : c.mode === 'rise' ? 0 : THREE.MathUtils.clamp((tau - (c.seg < 0 ? pl.rel0 : h.carryEnd)) /
                    ((c.seg < 0 ? pl.rollT : h.land) - (c.seg < 0 ? pl.rel0 : h.carryEnd)), 0, 1);
       return {pos: new THREE.Vector3(c.x, c.y + lift, c.z), vel: new THREE.Vector3(c.vx, c.vy, c.vz),
               plunge:false, idx: c.seg, nextIdx: c.seg < 0 ? 0 : seamTail ? -1 : h.j,
@@ -847,11 +850,11 @@ function animate(){
           spawnBurst(rpos.clone().add(UP), rig.glow, 18, 4.5);
         }
       }
-      if (tr.crane ? tau >= P + tr.crane.rel : (tau > P + FADE_TAIL || fade >= 1)){ checkinRig(rig); tr.balls.splice(bi, 1); continue; }
+      if (tr.crane ? tau >= tr.crane.retireT : (tau > P + FADE_TAIL || fade >= 1)){ checkinRig(rig); tr.balls.splice(bi, 1); continue; }
       // PATERNOSTER hand-off: a newborn stays hidden while its predecessor still rides the magnet
       // (they share one position at the release instant, so only one marble is ever seen)
       const hidden = tr.crane && r.crane === 'hang' &&
-        tr.balls.some(b => b.birthT < ball.birthT && songTime - b.birthT < P + tr.crane.rel);
+        tr.balls.some(b => b.birthT < ball.birthT && songTime - b.birthT < tr.crane.retireT);
       if (tr.crane && r.crane === 'docked' && ball.dockHop !== r.hop){   // the CLACK: docking on the electromagnet
         ball.dockHop = r.hop;
         if (!skipStrikes){
@@ -902,7 +905,8 @@ function animate(){
       // entrance/exit unfold: at the screen edges the pad lies flat & flush on the belt,
       // then telescopes out to rest depth and tips up into catch position — sequenced
       // (extend → tilt) and confined to the edges, so the strike zone stays rock-solid.
-      const dep = reduceMotion ? FULL_DEPLOY : deployPose(c, innerC, cullC);
+      // (a plate the crane needs out of the way unfolds later / stows sooner — its own edge, planned)
+      const dep = reduceMotion ? FULL_DEPLOY : (tr.crane ? plateDeploy(c, innerC, Math.min(cullC, plateEdge(tr.crane, idx, c))) : deployPose(c, innerC, cullC));
       po.g.quaternion.copy(Q_FLAT).slerp(po.qN, dep.tilt);
       _qn.copy(UPY).applyQuaternion(po.g.quaternion);   // live normal (for the flipper nudge as it unfolds)
       const z = THREE.MathUtils.lerp(PT.STOW_Z, po.base.z, dep.extend);   // belt-flush → rest depth

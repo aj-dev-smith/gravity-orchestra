@@ -18,6 +18,7 @@ import { encodeSong, decodeSong } from './share.js';
 import { parseMidi } from './midi/parse.js';
 import { convertToSong } from './midi/convert.js';
 import { recSupported, startRecording } from './record.js';
+import { spatialize } from './spatial.js';
 /* ============================================================
    CASCADE — melody-driven marble run, now multi-track.
    A song is one or more tracks of [note, beats-until-next-hit].
@@ -459,6 +460,16 @@ function buildWorld(keyName){
   if (started) clock.start();
 }
 
+/* SPATIAL AUDIO: where a strike sounds = where it is relative to the CAMERA at that
+   instant (src/spatial.js: pan by bearing, gentle distance rolloff + air). Audio-only —
+   as the director cuts, the next strike's image follows the shot. */
+const _spv = new THREE.Vector3();
+function placeAt(worldPos){
+  camera.updateMatrixWorld();
+  _spv.copy(worldPos).applyMatrix4(camera.matrixWorldInverse);
+  return spatialize(_spv.x, _spv.y, _spv.z);
+}
+
 const noteEl = document.getElementById('note');
 function strike(tr, i, rig){
   const pad = tr.pads[i], po = tr.padObjs[i];
@@ -478,7 +489,7 @@ function strike(tr, i, rig){
     expoKick = 1;
   }
   if (audio.isReady() && !muted){
-    try { audio.playNote(pad.note, tr.deep); } catch(e){ /* audio must never break the run */ }
+    try { audio.playNote(pad.note, tr.deep, placeAt(padR)); } catch(e){ /* audio must never break the run */ }
   }
 }
 
@@ -494,7 +505,7 @@ function drumStrike(hit){
     expoKick = Math.max(expoKick, .8 * v);
   }
   if (audio.isReady() && !muted){
-    try { audio.playDrum(hit.lane, hit.vel ?? 1); } catch(e){ /* audio must never break the run */ }
+    try { audio.playDrum(hit.lane, hit.vel ?? 1, placeAt(c)); } catch(e){ /* audio must never break the run */ }
   }
 }
 
@@ -566,7 +577,7 @@ function instStrike(rig, hit){
   L.age = 0; L.peak = 8 * (.35 + .65 * v) * (hit.light ?? 1);
   if (hit.shake) cam.addShake(hit.shake * v);
   if (audio.isReady() && !muted){
-    try { audio.playVoice(`inst:${rig.I.key}:${hit.note}`, v, { dur: hit.dur || 0 }); } catch(e){ /* audio must never break the run */ }
+    try { audio.playVoice(`inst:${rig.I.key}:${hit.note}`, v, { dur: hit.dur || 0, sp: placeAt(p) }); } catch(e){ /* audio must never break the run */ }
   }
 }
 
@@ -964,6 +975,7 @@ if (new URLSearchParams(location.search).has('debug')){
     station(key, dist, up){ return lookAtStation(key, dist, up); },
     instruments: () => instLive.map(r => r.I.key),
     cam(m){ cam.mode = m; }, get shot(){ return cam.shot; },
+    audioProbe: () => audio.probe(),                   // mix-bus gain reduction + reverb-return peak
   };
   dbg = { update(T){
     if (!held) bar.value = Math.round(T / (ROLL_T + LOOP_T) * 1000);

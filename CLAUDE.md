@@ -221,7 +221,25 @@ both already in this ledger: iOS drum samples play full-velocity; a dense hat ru
 its own tail (one `<audio>` element per drum). The webaudio path has neither.
 
 Also: `MediaStreamDestination → <audio>.srcObject` is a parallel iOS output; the recording
-tap (`captureStream`) hangs off the post-echo mix. `navigator.wakeLock` keeps the screen on.
+tap (`captureStream`) hangs off the final mix. `navigator.wakeLock` keeps the screen on.
+
+**Spatial audio + mix bus (live path only — the war's internals are untouched, nodes were
+only INSERTED).** Every live voice takes an optional placement `sp = {pan, gain, lp}`
+(`playNote(note, deep, sp)`, `playDrum(name, vel, sp)`, `playVoice(key, vel, {dur, sp})`).
+main.js's `placeAt(worldPos)` projects the strike into CAMERA space at strike time and
+`src/spatial.js` (pure, tested) maps it: pan by bearing (eased cubic, clamped ±`PAN_MAX`
+.75 — never hard-panned), full gain inside `REF_DIST` 22 u then a gentle rolloff floored at
+`MIN_GAIN` .55, and an air lowpass only past 1.25·REF_DIST. As the director cuts, the next
+strike's image follows the shot. Graph tail: `out → busTrim → glue comp → limiter → ceiling
+= mixOut → destination / iOS MediaStreamDestination / recording tap` — speakers, the iOS
+mirror and recordings all get the same never-clipping mix. Knobs live in `MIX` (audio.js):
+`voiceTrim` .5 (plugin voices render ~.8 peak — this seats them with the belt), `busTrim`,
+`glue`, `limit`, `ceiling` (DynamicsCompressor adds its own makeup gain — re-measure if you
+touch these), and the room reverb (`revSecs/revSend/revReturn`): a ConvolverNode on a send
+for plugins marked `wet`, its IR computed **synchronously** in `roomIR()` (round 1 was an
+ASYNC IR leaving the convolver silent; a same-tick buffer can't be). `?debug` →
+`__dev.audioProbe()` reports glue/limiter gain reduction + the reverb-return peak. The iOS
+`<audio>` sample path can't pan/bus — it plays exactly as before.
 
 ---
 

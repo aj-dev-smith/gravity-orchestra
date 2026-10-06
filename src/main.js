@@ -461,13 +461,14 @@ function buildWorld(keyName){
 }
 
 /* SPATIAL AUDIO: where a strike sounds = where it is relative to the CAMERA at that
-   instant (src/spatial.js: pan by bearing, gentle distance rolloff + air). Audio-only —
-   as the director cuts, the next strike's image follows the shot. */
+   instant (src/spatial.js: pan by FRAME position, distance relative to the shot's focus,
+   farther = wetter). Audio-only — as the director cuts, the next strike follows the shot. */
 const _spv = new THREE.Vector3();
 function placeAt(worldPos){
   camera.updateMatrixWorld();
   _spv.copy(worldPos).applyMatrix4(camera.matrixWorldInverse);
-  return spatialize(_spv.x, _spv.y, _spv.z);
+  const tanH = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * camera.aspect;
+  return spatialize(_spv.x, _spv.y, _spv.z, { tanH, focus: camera.position.distanceTo(cam.target) });
 }
 
 const noteEl = document.getElementById('note');

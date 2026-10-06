@@ -35,17 +35,25 @@ function mergeable(o){
 const drawnUnder = (o, root) => { for (let p = o; p; p = p.parent){ if (!p.visible) return false; if (p === root) return true; } return true; };
 
 /** root: a built station group (already placed). pose(t): poses it at songTime t (a pure fn).
-    times: the songTimes to prove stillness over. Returns { merged, removed } counts. */
-export function mergeStatic(root, pose, times){
+    times: the songTimes to prove stillness over. rest (optional): re-poses the station for
+    the count-in after the sweep — given it, every part whose LOCAL transform held still across
+    the sweep AND the rest pose is also FROZEN (see freezeStill). Returns { merged, removed, frozen }. */
+export function mergeStatic(root, pose, times, rest){
   root.updateMatrixWorld(true);
-  const cand = [];
-  root.traverse(o => { if (o !== root && mergeable(o)) cand.push({ o, m: o.matrixWorld.clone(), v: drawnUnder(o, root), live: true }); });
-  if (cand.length < 2) return { merged: 0, removed: 0 };
-  for (const t of times){
+  const cand = [], locals = [];
+  root.traverse(o => { if (o !== root && mergeable(o)) cand.push({ o, m: o.matrixWorld.clone(), v: drawnUnder(o, root), live: true });
+                       if (rest) locals.push({ o, m: o.matrix.clone(), still: true }); });
+  for (const t of (cand.length >= 2 || rest) ? times : []){
     pose(t);
     root.updateMatrixWorld(true);
     for (const c of cand) if (c.live && (!c.m.equals(c.o.matrixWorld) || drawnUnder(c.o, root) !== c.v)) c.live = false;
+    for (const l of locals) if (l.still && !l.m.equals(l.o.matrix)) l.still = false;
   }
+  const res = cand.length < 2 ? { merged: 0, removed: 0 } : mergeStill(root, pose, times, cand);
+  if (rest){ rest(); res.frozen = freezeStill(root, locals); }
+  return res;
+}
+function mergeStill(root, pose, times, cand){
   pose(times[0]);
   root.updateMatrixWorld(true);
   const inv = root.matrixWorld.clone().invert(), groups = new Map(), _m = new THREE.Matrix4();
@@ -72,3 +80,77 @@ export function mergeStatic(root, pose, times){
   }
   return { merged, removed };
 }
+
+/* ---- FREEZE: the matrix half of the same proof ----
+   three.js recomposes every object's local matrix and re-multiplies its world matrix EVERY
+   frame (matrixAutoUpdate), and a parent that recomposes forces its whole subtree to
+   re-multiply. A station is thousands of objects, most of which the sweep just proved never
+   move — so they stop auto-updating (their matrices are correct as of the rest pose). The
+   station root and the world above it never move either (main freezes those), so a still
+   subtree under a still parent costs only the traversal.
+   Exclusions: userData.noMerge (and everything under it), and the ancestors of any part that
+   drives its own matrix by hand (matrixAutoUpdate already off and NOT still: it relies on its
+   parent's world being re-pushed each frame).
+   SAFETY NET (watchFrozen): the sweep samples the loop, so a part that moves only in a brief
+   window between samples could be frozen by mistake. Every frame a slice of the frozen set is
+   re-checked against its live position/quaternion/scale; a part found moving is thawed for
+   good (a stale pose for a few frames, once, instead of a stuck part forever). */
+const FROZEN = [];                                       // every part this page froze (pruned on rebuild)
+let watchI = 0;
+const _wm = new THREE.Matrix4();
+function freezeStill(root, locals){
+  root.updateMatrixWorld(true);
+  const blocked = new Set();
+  const block = o => { for (let p = o; p; p = p.parent){ if (blocked.has(p)) break; blocked.add(p); if (p === root) break; } };
+  root.traverse(o => { if (o.userData.noMerge) o.traverse(c => blocked.add(c)); });
+  for (const l of locals) if (!l.still && !l.o.matrixAutoUpdate) block(l.o);
+  let n = 0;
+  // effects (lights, sprites, points, see-through glows) are placed by STRIKES, which the sweep
+  // does not fire — they are never frozen; the rest is guarded by watchFrozen
+  const fx = o => o.isLight || o.isSprite || o.isPoints || [].concat(o.material || []).some(m => m.transparent);
+  const freeze = o => { if (!o.matrixAutoUpdate || blocked.has(o) || fx(o)) return; o.matrixAutoUpdate = false; FROZEN.push(o); n++;
+                       if (o === root) o.updateMatrixWorld = forcedUpdate; };
+  for (const l of locals) if (l.still && l.o.matrix.equals(l.m) && (l.o === root || isUnder(l.o, root))) freeze(l.o);
+  root.traverse(o => { if (o.name === 'merged-static') freeze(o); });   // (built still)
+  return n;
+}
+/* A frozen STATION ROOT is the one frozen thing outside code is allowed to move (layout, the stage
+   editor: set position/rotation, then updateMatrixWorld(true)). three.js skips the local matrix
+   when matrixAutoUpdate is off, so a FORCED update on a frozen root recomposes it first — the
+   editor's move/turn/measure then sees the truth without knowing about freezing. The per-frame
+   render traversal never forces a still world, so this costs nothing while playing. */
+function forcedUpdate(force){
+  if (force && !this.matrixAutoUpdate) this.updateMatrix();
+  return Object.getPrototypeOf(this).updateMatrixWorld.call(this, force);
+}
+/** Unfreeze a subtree for good (an editor about to animate parts by hand can call this; the next
+    world rebuild re-proves and re-freezes). */
+export function thaw(root){
+  let n = 0; const f = new Set(FROZEN);
+  root.traverse(o => { if (!o.matrixAutoUpdate && f.has(o)){ o.matrixAutoUpdate = true; n++; } });
+  for (let i = FROZEN.length - 1; i >= 0; i--) if (FROZEN[i].matrixAutoUpdate) FROZEN.splice(i, 1);
+  return n;
+}
+const isUnder = (o, root) => { for (let p = o.parent; p; p = p.parent) if (p === root) return true; return false; };
+
+/** Per frame: re-check a slice of the frozen parts (all of them every 8 frames: a mis-frozen part
+    is stale for ≤ ~130 ms, once). */
+export function watchFrozen(per = 1 / 8){
+  const N = FROZEN.length; if (!N) return 0;
+  let thawed = 0;
+  for (let k = Math.ceil(N * per); k > 0; k--){
+    if (watchI >= FROZEN.length) watchI = 0;
+    const o = FROZEN[watchI];
+    _wm.compose(o.position, o.quaternion, o.scale);
+    if (!_wm.equals(o.matrix)){ o.matrixAutoUpdate = true; FROZEN.splice(watchI, 1); thawed++; thawCount++; if (THAWED.length < 64) THAWED.push(o); }
+    else watchI++;
+  }
+  return thawed;
+}
+let thawCount = 0;
+const THAWED = [];                                      // dev: the first parts the net caught moving
+/** On a world rebuild: forget parts that left the scene (the old song's stations). */
+export function pruneFrozen(){
+  for (let i = FROZEN.length - 1; i >= 0; i--){ let p = FROZEN[i]; while (p.parent) p = p.parent; if (!p.isScene) FROZEN.splice(i, 1); }
+}
+export const frozenStats = () => ({ frozen: FROZEN.length, thawed: thawCount, caught: THAWED });

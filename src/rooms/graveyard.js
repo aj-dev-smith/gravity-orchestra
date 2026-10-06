@@ -332,7 +332,7 @@ export default {
     const flash = new THREE.Mesh(new THREE.PlaneGeometry(260, 120), flashMat);
     flash.position.set(10, F + 40, -128); flash.renderOrder = -8; group.add(flash);
     const trees = [[-64, -66, 38], [-26, -88, 30], [62, -70, 42], [74, -36, 30], [-74, -28, 34], [-4, -96, 26]];
-    const treeParts = trees.map(([x, z, h], i) => treeGeo(rng(200 + i), h).translate(x, F, z).toNonIndexed());
+    const treeParts = trees.map(([x, z, h], i) => treeGeo(rng(200 + i), h).translate(x, F, z));   // (already non-indexed: treeGeo merges flat parts)
     group.add(new THREE.Mesh(mergeGeometries(treeParts), sil));
 
     // ---- candles on the graves: wax stubs + guttering flames + soft halos + warm pools ----

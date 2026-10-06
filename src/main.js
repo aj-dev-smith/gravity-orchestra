@@ -1043,7 +1043,7 @@ shareEl.addEventListener('click', async () => {
 });
 (async () => {                                          // boot: a share link IS the song
   const m = location.hash.match(/^#s=(.+)$/);
-  if (!m) return;
+  if (!m || new URLSearchParams(location.search).has('midi')) return;   // ?midi= wins (it loads the song)
   try { registerSong('shared', await decodeSong(m[1])); }
   catch(e){ console.warn('cascade: ignoring bad share link —', e.message); }
 })();
@@ -1060,20 +1060,36 @@ addEventListener('drop', async e => {
   const file = [...(e.dataTransfer?.files || [])].find(f => /\.midi?$/i.test(f.name));
   if (!file){ subEl.textContent = SONGS[sel.value].sub; return; }
   try {
-    const parsed = parseMidi(new Uint8Array(await file.arrayBuffer()));
-    const { song, warnings } = convertToSong(parsed, {label: file.name.replace(/\.midi?$/i, '')});
-    enterSound();                                       // a drop is a gesture: veil off, audio up
-    registerSong('imported', song);
-    audio.primeSamples();                               // drop is a gesture: unlock the new bank
-    audio.showState();
-    if (warnings.length){
-      console.warn('cascade midi import:\n  ' + warnings.join('\n  '));
-      subEl.textContent = `${song.sub} · ${warnings.length} import note(s) in console`;
-    }
+    importMidi(new Uint8Array(await file.arrayBuffer()), file.name, true);
   } catch(err){
     subEl.textContent = `couldn't read ${file.name}: ${err.message}`;
   }
 });
+/* The one MIDI import path (drop + ?midi=). `gesture` = called from a user gesture
+   (drop): only then may audio be built/unlocked (§5 — a context born outside a gesture
+   is a zombie). The ?midi boot just registers the song; the veil tap starts sound. */
+function importMidi(bytes, name, gesture){
+  const { song, warnings } = convertToSong(parseMidi(bytes), {label: name.replace(/^.*\//, '').replace(/\.midi?$/i, '')});
+  if (gesture) enterSound();                            // a drop is a gesture: veil off, audio up
+  registerSong('imported', song);
+  if (gesture){
+    audio.primeSamples();                               // drop is a gesture: unlock the new bank
+    audio.showState();
+  }
+  if (warnings.length){
+    console.warn('cascade midi import:\n  ' + warnings.join('\n  '));
+    subEl.textContent = `${song.sub} · ${warnings.length} import note(s) in console`;
+  }
+}
+/* ?midi=<url> — dev hook: fetch + import a MIDI on boot (e.g. /?midi=/midi/canon-in-d.mid) */
+const midiUrl = new URLSearchParams(location.search).get('midi');
+if (midiUrl) (async () => {
+  try {
+    const res = await fetch(midiUrl);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    importMidi(new Uint8Array(await res.arrayBuffer()), midiUrl, false);
+  } catch(err){ subEl.textContent = `couldn't load ${midiUrl}: ${err.message}`; }
+})();
 document.getElementById('mute').addEventListener('click', e => {
   muted = !muted;
   e.target.textContent = muted ? 'SOUND OFF' : 'SOUND ON';

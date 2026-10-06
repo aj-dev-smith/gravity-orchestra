@@ -2,6 +2,7 @@
 // returns { song, warnings }
 
 import { GM_DRUMS, drumByGm } from '../drumkit.js';
+import { orchestrate, shapePart, PART_SPEC } from './orchestra.js';
 
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 // stable lane order for the emitted drums block (registry order → consistent
@@ -52,9 +53,24 @@ export function convertToSong(parsed, opts = {}) {
     throw new Error('midi: only channel-9 percussion found — need at least one melodic track to drive the engine');
   }
 
+  // --- step 0b: ORCHESTRA — route each voice by its GM program (orchestra.js) ---
+  // Pianos / guitars / leads stay belt candidates (the melodic spine); mallets, chimes,
+  // basses, pads/strings go to the room's instrument plugins as song.parts. A file with
+  // NO program changes is a bare sketch (GM default = piano everywhere): it keeps the
+  // classic belts-only import exactly, unless opts.orchestra forces routing on.
+  const orchestra = opts.orchestra ?? !!parsed.hasPrograms;
+  let beltTracks = melodicTracks;
+  let routed = [];                                  // [{ key, name, notes }] raw parse notes
+  if (orchestra) {
+    const r = orchestrate(melodicTracks, { ppq, bpm });
+    beltTracks = r.belt;
+    routed = r.parts;
+    warnings.push(...r.warnings);
+  }
+
   // --- step 2: monophonic reduction per track ---
   // group by quantized onset, keep highest midi pitch per group
-  const monoTracks = melodicTracks.map(tr => {
+  const monoTracks = beltTracks.map(tr => {
     const byOnset = new Map();
     for (const n of tr.notes) {
       const onsetBeats = quantize(n.tick * beatsPerTick);
@@ -74,14 +90,14 @@ export function convertToSong(parsed, opts = {}) {
     // sorted by onset
     const onsets = [...byOnset.entries()]
       .sort((a, b) => a[0] - b[0])
-      .map(([onset, n]) => ({ onset, midi: n.midi }));
+      .map(([onset, n]) => ({ onset, midi: n.midi, dur: n.dur }));
 
     return { name: tr.name, onsets };
   }).filter(t => t.onsets.length > 0);
 
   // --- step 3: keep at most 3 tracks (busiest by onset count) ---
   let kept = monoTracks;
-  if (monoTracks.length > 3) {
+  if (!orchestra && monoTracks.length > 3) {
     const sorted = [...monoTracks].sort((a, b) => b.onsets.length - a.onsets.length);
     kept = sorted.slice(0, 3);
     for (const dropped of sorted.slice(3)) {
@@ -98,7 +114,10 @@ export function convertToSong(parsed, opts = {}) {
     const mean = t.onsets.reduce((s, n) => s + n.midi, 0) / t.onsets.length;
     return { ...t, mean };
   });
-  withMean.sort((a, b) => b.mean - a.mean); // highest first
+  // legacy: the highest mean leads. Orchestra mode: orchestrate() already chose the lead
+  // (it must enter early and last — see orchestra.js) and put it first; the rest by mean.
+  if (orchestra) withMean.splice(1, Infinity, ...withMean.slice(1).sort((a, b) => b.mean - a.mean));
+  else withMean.sort((a, b) => b.mean - a.mean); // highest first
 
   let lead, alto, bass;
   if (withMean.length === 1) {
@@ -134,6 +153,21 @@ export function convertToSong(parsed, opts = {}) {
   }
   if (pickups > 0) {
     warnings.push(`drums: kept ${pickups} pickup hit${pickups > 1 ? 's' : ''} before the downbeat (the lead-in fill)`);
+  }
+
+  // --- step 5c: plugin part notes, lead-aligned + quantized like the drums ---
+  const partNotes = {};                             // key -> [{ beat, midi, vel, dur }]
+  for (const p of routed) {
+    const list = (partNotes[p.key] ||= []);
+    for (const n of p.notes) {
+      list.push({
+        voice: p.voice, src: p.name,
+        beat: tidy(quantize(n.tick * beatsPerTick) - leadOffset),
+        midi: n.midi,
+        vel: Math.max(0.01, Math.min(1, n.vel / 127)),
+        dur: n.dur == null ? null : Math.max(1 / 12, quantize(n.dur * beatsPerTick)),
+      });
+    }
   }
 
   lead = { ...lead, onsets: shiftOnsets(lead) };
@@ -175,18 +209,23 @@ export function convertToSong(parsed, opts = {}) {
   if (bass) bass.onsets = shiftMidi(bass.onsets, 48, 71, 'bass');
 
   // --- step 7: loop length and beat intervals ---
-  // loopBeats = max of all tracks' (lastOnset + 1), rounded up to 4-beat bar
-  let maxEnd = lead.onsets[lead.onsets.length - 1].onset + 1;
+  // loopBeats = max of all tracks' last onset + 1 (a beat's grace — the seam keeps a
+  // breath), rounded up to a 4-beat bar. (Deliberately NOT the note's real release: that
+  // changed every existing import's loop — golden-tested in test/midi-orchestra.)
+  const endOf = n => n.onset + 1;
+  let maxEnd = endOf(lead.onsets[lead.onsets.length - 1]);
   if (alto && alto.onsets.length > 0) {
-    maxEnd = Math.max(maxEnd, alto.onsets[alto.onsets.length - 1].onset + 1);
+    maxEnd = Math.max(maxEnd, endOf(alto.onsets[alto.onsets.length - 1]));
   }
   if (bass && bass.onsets.length > 0) {
-    maxEnd = Math.max(maxEnd, bass.onsets[bass.onsets.length - 1].onset + 1);
+    maxEnd = Math.max(maxEnd, endOf(bass.onsets[bass.onsets.length - 1]));
   }
   // a trailing drum hit (e.g. a final crash) must fit inside the loop window too —
   // one grid cell past it is enough to keep the strict `beat < loopBeats` invariant.
   // (negative beats are pickups; they wrap into the existing window, never extend it.)
   for (const h of drumHits) if (h.beat > 0) maxEnd = Math.max(maxEnd, h.beat + 1 / 12);
+  // …and so must every plugin note (pickups wrap to the tail, never extend it)
+  for (const list of Object.values(partNotes)) for (const n of list) if (n.beat > 0) maxEnd = Math.max(maxEnd, n.beat + 1 / 12);
   const loopBeats = Math.ceil(maxEnd / 4) * 4;
 
   function onsetsToNotes(onsets, role) {
@@ -287,6 +326,22 @@ export function convertToSong(parsed, opts = {}) {
     song.drums = drums;
     const laneCount = Object.keys(drums).length;
     song.sub += ` + drums (${laneCount} lane${laneCount > 1 ? 's' : ''})`;
+  }
+
+  // --- step 13: instrument parts (orchestra mode) ---
+  // Each plugin's notes are shaped to what its machine can honestly play (range,
+  // lanes, polyphony, recovery) — see orchestra.js PART_SPEC. Keys in registry order.
+  const parts = {};
+  for (const key of Object.keys(PART_SPEC)) {
+    if (!partNotes[key]) continue;
+    const r = shapePart(key, partNotes[key], { bpm, loopBeats });
+    warnings.push(...r.warnings);
+    if (r.part.length) parts[key] = r.part;
+    else warnings.push(`${key}: no playable notes left — part dropped`);
+  }
+  if (Object.keys(parts).length > 0) {
+    song.parts = parts;
+    song.sub += ` + ${Object.keys(parts).join(', ')}`;
   }
 
   return { song, warnings };

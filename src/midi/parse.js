@@ -1,5 +1,14 @@
 // parse.js — zero-dependency MIDI parser (format 0 and 1)
-// returns { format, ppq, bpm, tracks: [{ name, notes: [{ midi, tick, channel, vel }] }] }
+// returns { format, ppq, bpm, hasPrograms,
+//           tracks: [{ name, notes: [{ midi, tick, channel, vel, dur, program }] }] }
+//   dur      sounding length in ticks (note-on → its note-off, FIFO per channel+key);
+//            null when the file never releases the note
+//   program  the GM program (0–127) in effect on the note's channel at its onset —
+//            channel state is GLOBAL across format-1 tracks (it's one synth), so a
+//            program change in any track applies. A channel whose first program
+//            change comes AFTER its first note (sloppy exports) uses that first one;
+//            a channel with none is GM default 0 (acoustic grand piano).
+//   hasPrograms  true when any non-percussion channel carries a program change
 //
 // The parser is FAITHFUL: it decodes every sounding note-on (vel > 0) on every
 // channel — including channel 9 (percussion) — and records its velocity. The
@@ -24,12 +33,18 @@ function readUint(buf, pos, len) {
   return v;
 }
 
-// parse a single MTrk chunk; returns { name, notes, bpm }
+// parse a single MTrk chunk; returns { name, notes, bpm, pcs }
 function parseTrack(buf, start, end) {
   let pos = start;
   let abs = 0;      // absolute tick counter
   let status = 0;   // running status byte
   const notes = [];
+  const pcs = [];          // program changes: { tick, channel, program }
+  const open = new Map();  // `${ch}:${key}` → FIFO of indices into notes still sounding
+  const release = (ch, key) => {
+    const q = open.get(`${ch}:${key}`);
+    if (q && q.length) { const i = q.shift(); notes[i].dur = abs - notes[i].tick; }
+  };
   let name = '';
   let bpm = null;
 
@@ -85,6 +100,7 @@ function parseTrack(buf, start, end) {
 
     switch (type) {
       case 0x8: { // note-off: two data bytes
+        release(ch, buf[pos]);
         pos += 2;
         break;
       }
@@ -94,7 +110,12 @@ function parseTrack(buf, start, end) {
         // vel 0 = note-off. Every other note-on is kept, channel 9 included —
         // convert.js decides what's melody and what's percussion.
         if (vel > 0) {
-          notes.push({ midi, tick: abs, channel: ch, vel });
+          const k = `${ch}:${midi}`;
+          if (!open.has(k)) open.set(k, []);
+          open.get(k).push(notes.length);
+          notes.push({ midi, tick: abs, channel: ch, vel, dur: null, program: 0 });
+        } else {
+          release(ch, midi);
         }
         break;
       }
@@ -103,7 +124,10 @@ function parseTrack(buf, start, end) {
       case 0xe: // pitch bend: two data bytes
         pos += 2;
         break;
-      case 0xc: // program change: one data byte
+      case 0xc: // program change: one data byte — kept (convert routes by it)
+        pcs.push({ tick: abs, channel: ch, program: buf[pos] & 0x7f });
+        pos += 1;
+        break;
       case 0xd: // channel aftertouch: one data byte
         pos += 1;
         break;
@@ -112,7 +136,25 @@ function parseTrack(buf, start, end) {
     }
   }
 
-  return { name, notes, bpm };
+  return { name, notes, bpm, pcs };
+}
+
+// stamp every note with the program in effect on its channel at its onset (see header)
+function assignPrograms(rawTracks) {
+  const pcs = rawTracks.flatMap(t => t.pcs).sort((a, b) => a.tick - b.tick);
+  const byCh = new Map();
+  for (const pc of pcs) {
+    if (!byCh.has(pc.channel)) byCh.set(pc.channel, []);
+    byCh.get(pc.channel).push(pc);
+  }
+  for (const t of rawTracks) for (const n of t.notes) {
+    const list = byCh.get(n.channel);
+    if (!list) continue;
+    let prog = list[0].program;                       // late first change still names the channel
+    for (const pc of list) { if (pc.tick <= n.tick) prog = pc.program; else break; }
+    n.program = prog;
+  }
+  return pcs.some(pc => pc.channel !== 9);
 }
 
 export function parseMidi(bytes) {
@@ -166,9 +208,11 @@ export function parseMidi(bytes) {
     if (t.bpm !== null) { bpm = t.bpm; break; }
   }
 
+  const hasPrograms = assignPrograms(rawTracks);
+
   // format 0: split single track by channel
   if (format === 0) {
-    if (rawTracks.length === 0) return { format, ppq, bpm, tracks: [] };
+    if (rawTracks.length === 0) return { format, ppq, bpm, hasPrograms, tracks: [] };
     const src = rawTracks[0].notes;
     const byChannel = new Map();
     for (const n of src) {
@@ -179,7 +223,7 @@ export function parseMidi(bytes) {
     for (const [ch, notes] of [...byChannel.entries()].sort((a, b) => a[0] - b[0])) {
       if (notes.length > 0) tracks.push({ name: `ch${ch}`, notes });
     }
-    return { format, ppq, bpm, tracks };
+    return { format, ppq, bpm, hasPrograms, tracks };
   }
 
   // format 1: one logical track per MTrk, drop empty
@@ -187,5 +231,5 @@ export function parseMidi(bytes) {
     .filter(t => t.notes.length > 0)
     .map(t => ({ name: t.name, notes: t.notes }));
 
-  return { format, ppq, bpm, tracks };
+  return { format, ppq, bpm, hasPrograms, tracks };
 }

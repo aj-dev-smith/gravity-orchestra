@@ -7,7 +7,7 @@
    songs are built from repeats — verse, chorus, verse, chorus — and the engine
    loops anyway. So: find the best LOOPABLE window and import just that.
 
-   Method (pure, O(bars²) — a 6-minute song is ~180 bars):
+   Method (pure, O(bars²) — a 6-minute song is ~180 bars; capped at PHRASE.MAX_BARS):
      1. a fingerprint per BAR (bar grid from the file's meter): harmony (a
         12-bin chroma of the melodic notes), rhythm (onset slots, melodic and
         drum separately), and the LEAD's own (slot, pitch) set — the tune.
@@ -17,11 +17,16 @@
                    of the matrix) — the chorus / the hook is the most-repeated
           seam     does it LOOP: the bar after the window resembles the window's
                    first bar (the song itself goes end → start there)
-          lead     the lead is sounding through it (a hard floor: the belt is the
+          lead     the lead STRIKES through it (bars with an onset — a hard floor: the belt is the
                    spine; a window it sits out is no song)
           energy   how full it is (choruses are the fullest repeat)
           length   ~30–75 s; aligned to the song's own 4-bar phrase grid
-     4. the best window wins; ties go to the earlier one.
+          gap      the lead's longest rest in the loop (seam wrap included) — a soft penalty
+          budget   the busiest accompanying voice vs a plugin's solve budget — a soft penalty
+     4. the best window wins; within a hair of it, the EARLIEST statement of the same material
+        (the first full chorus, not the ad-libbed last one). The next-best distinct windows ride
+        along: convert.js re-imports the window alone with the lead PINNED and falls back to
+        them if the final belt's lead doesn't strike through ≥ the floor of the loop's bars.
 
    The window is a CIRCLE: convert.js cuts it at the lead's first note inside
    it and rotates anything earlier (an accompaniment pickup, the drum fill) to
@@ -42,6 +47,20 @@ export const PHRASE = {
   CELL: 4,                      // bars: the unit of "this material recurs" (a 4-bar phrase)
   MAX_SHARE: .8,                // a window this close to the whole song isn't worth cutting
   SLOTS: 16,                    // onset slots per 4/4 bar (scaled by the meter)
+  GAP_OK: 3, GAP_BAD: 12,       // s: the lead's longest rest in the loop (the seam wrap included) — free up to
+                                // GAP_OK, fully penalized at GAP_BAD (the belt's arc grows with dt²: a 4-bar
+                                // hold is one enormous, idle flight)
+  BUDGET: 256,                  // notes: a plugin's solve budget (orchestra PART_SPEC.maxEvents) — a window
+                                // whose busiest accompanying voice overflows it loses its tail on that machine.
+                                // (a proxy — the router may stack voices on one machine — so convert.js also
+                                // re-ranks the chosen window against its other lengths by the REAL drop count)
+  SIBLING: .06,                 // score margin: a shorter window inside the chosen one worth that re-rank
+  SHORT_SEC: 12,                // MIN_SEC relaxes to this (an 8-bar phrase) before the lead floor relaxes: a
+                                // short loop the lead plays through beats a long one it sits half out
+  MAX_BARS: 512,                // bars analysed at most (O(bars²)): ~17 min of 4/4 at 120 — longer is a stray note
+  SILENCE_BARS: 32,             // a note after this many empty bars is stray: the song ended before it
+  TRIES: 5,                     // ranked windows convert.js may try before falling back to the whole song
+  EARLY: .02,                   // a score margin: the EARLIEST statement of the same material within it wins
 };
 
 /** the bar grid: the DOMINANT meter (most ticks in force up to the end), as beats per bar,
@@ -66,14 +85,19 @@ const norm = v => { let s = 0; for (const x of v) s += x * x; s = Math.sqrt(s); 
 const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
 
 /** Per-bar fingerprints. events: [{ beat, midi, vel (0..1), dur (beats | null), kind: 'lead'|'mel'|'drum' }]
-    in absolute beats. → [{ chroma, rhythm, lead: Set, leadOn, notes, drums }] */
-export function barFeatures(events, { barBeats = 4, origin = 0, nBars } = {}){
+    in absolute beats ('mel' may carry `voice`, an id: per-voice note counts for the budget term).
+    → [{ chroma, rhythm, lead: Set, leadOn, leadFirst, leadLast, leadGap, notes, drums, vn }]
+    leadOn = the lead STRIKES in this bar (an onset — a note held over from an earlier bar is one
+    idle flight on the belt, not activity). nBars is capped at maxBars. */
+export function barFeatures(events, { barBeats = 4, origin = 0, nBars, maxBars = PHRASE.MAX_BARS } = {}){
   const slots = Math.max(4, Math.round(PHRASE.SLOTS * barBeats / 4));
   const barOf = b => Math.floor((b - origin) / barBeats + 1e-9);
   if (nBars == null){ nBars = 0; for (const e of events) nBars = Math.max(nBars, barOf(e.beat) + 1); }
+  nBars = Math.min(nBars, maxBars);
   const F = Array.from({ length: nBars }, () => ({
     chroma: new Array(12).fill(0), mel: new Array(slots).fill(0), drum: new Array(slots).fill(0),
-    lead: new Set(), leadOn: false, notes: 0, drums: 0, leadN: 0, leadSum: 0, low: 128, high: 0 }));
+    lead: new Set(), leadOn: false, leadFirst: Infinity, leadLast: -Infinity, leadGap: 0, ons: [],
+    notes: 0, drums: 0, leadN: 0, leadSum: 0, low: 128, high: 0, vn: null }));
   for (const e of events){
     const i = barOf(e.beat);
     if (i < 0 || i >= nBars) continue;
@@ -84,13 +108,14 @@ export function barFeatures(events, { barBeats = 4, origin = 0, nBars } = {}){
     f.chroma[e.midi % 12] += w;
     f.mel[slot] += 1; f.notes++; f.low = Math.min(f.low, e.midi); f.high = Math.max(f.high, e.midi);
     if (e.kind === 'lead'){
-      f.lead.add(slot * 128 + e.midi); f.leadN++; f.leadSum += e.midi;
-      // a held lead note keeps the lead "on" through the bars it rings across (≤ 2 bars)
-      const end = Math.min(nBars - 1, barOf(e.beat + Math.min(2 * barBeats, Math.max(0, (e.dur ?? 0) - 1e-6))));
-      for (let j = i; j <= end; j++) F[j].leadOn = true;
-    }
+      f.lead.add(slot * 128 + e.midi); f.leadN++; f.leadSum += e.midi; f.leadOn = true; f.ons.push(e.beat);
+      f.leadFirst = Math.min(f.leadFirst, e.beat); f.leadLast = Math.max(f.leadLast, e.beat);
+    } else if (e.voice != null){ (f.vn ||= new Map()).set(e.voice, (f.vn.get(e.voice) || 0) + 1); }
   }
   for (const f of F){
+    f.ons.sort((a, b) => a - b);
+    for (let k = 1; k < f.ons.length; k++) f.leadGap = Math.max(f.leadGap, f.ons[k] - f.ons[k - 1]);
+    delete f.ons;
     // TEXTURE — what a section sounds like as a whole (register, density, who's playing), not
     // which notes: it changes at a section line and holds inside one (the phrase grid's signal)
     const hats = f.drum.reduce((s, x) => s + (x > 0), 0) / slots;
@@ -124,8 +149,11 @@ export function selfSimilarity(F){
 
 /** Score every candidate window. → [{ fromBar (0-based), bars, sec, score, reps, best, seam, leadFrac,
     energy, terms }] best first. bpm converts bars to seconds. */
-export function scoreWindows(F, S, { barBeats = 4, bpm = 120, lengths = PHRASE.LENGTHS, leadMin = PHRASE.LEAD_MIN } = {}){
+export function scoreWindows(F, S, { barBeats = 4, origin = 0, bpm = 120, lengths = PHRASE.LENGTHS, leadMin = PHRASE.LEAD_MIN, minSec: minSec0 = PHRASE.MIN_SEC } = {}){
   const n = F.length, at = (i, j) => S[i * n + j];
+  // per-voice prefix sums of the accompanying notes (the budget term: the busiest voice in a window)
+  const vids = [...new Set(F.flatMap(f => f.vn ? [...f.vn.keys()] : []))];
+  const VP = vids.map(v => { const p = new Float64Array(n + 1); for (let i = 0; i < n; i++) p[i + 1] = p[i] + (F[i].vn?.get(v) || 0); return p; });
   // diagonal prefix sums: D[g][i] = Σ_{k<i} S[k][k+g]  (lag g ≥ 1)
   const D = [null];
   for (let g = 1; g < n; g++){
@@ -195,7 +223,7 @@ export function scoreWindows(F, S, { barBeats = 4, bpm = 120, lengths = PHRASE.L
   const out = [];
   const secOf = L => L * barBeats * 60 / bpm;
   const fits = lengths.filter(L => L < n * PHRASE.MAX_SHARE - 1e-9 && secOf(L) <= PHRASE.MAX_SEC);
-  const minSec = fits.some(L => secOf(L) >= PHRASE.MIN_SEC) ? PHRASE.MIN_SEC : 0;   // a slow song: take what fits
+  const minSec = fits.some(L => secOf(L) >= minSec0) ? minSec0 : 0;   // a slow song: take what fits
   for (const L of fits){
     const sec = secOf(L);
     if (sec < minSec) continue;
@@ -208,6 +236,20 @@ export function scoreWindows(F, S, { barBeats = 4, bpm = 120, lengths = PHRASE.L
       }
       const leadFrac = on / L;
       if (leadFrac < leadMin) continue;
+      // the lead's longest REST in the loop, the seam's wrap included (the loop is cut at its first
+      // onset, so the wrap is W − (last − first)) — what the belt shows as one long idle arc
+      let gap = 0, prev = null, firstOn = null;
+      for (let k = s; k < s + L; k++){
+        const f = F[k]; if (!f.leadOn) continue;
+        if (prev != null) gap = Math.max(gap, f.leadFirst - prev); else firstOn = f.leadFirst;
+        gap = Math.max(gap, f.leadGap); prev = f.leadLast;
+      }
+      gap = Math.max(gap, L * barBeats - (prev - firstOn));
+      const gapSec = gap * 60 / bpm;
+      const gapPen = Math.min(1, Math.max(0, (gapSec - PHRASE.GAP_OK) / (PHRASE.GAP_BAD - PHRASE.GAP_OK)));
+      // the solve BUDGET: the busiest accompanying voice past a plugin's budget loses its tail there
+      let busy = 0; for (const p of VP) busy = Math.max(busy, p[s + L] - p[s]);
+      const budgetPen = Math.min(1, Math.max(0, busy / PHRASE.BUDGET - 1));
       // repeats: other non-overlapping placements of the same material, best first
       const cands = [];
       for (let p = 0; p + L <= n; p++) if (Math.abs(p - s) >= L) cands.push([p, diag(s, p, L)]);
@@ -231,39 +273,71 @@ export function scoreWindows(F, S, { barBeats = 4, bpm = 120, lengths = PHRASE.L
       // repeat = the window is made of recurring material (length-neutral), holds the song's
       // most-recurring phrase (the hook), and recurs itself as a whole
       const rep = .45 * hook / L + .3 * peak / cmax + .25 * (.5 * Math.min(reps, 2) / 2 + .5 * best);
-      const terms = { rep, seam, lead: leadFrac, energy, len: fit, align: off };
-      const score = .28 * rep + .24 * seam + .10 * leadFrac + .12 * energy + .16 * fit + .10 * off;
-      out.push({ fromBar: s, bars: L, sec, score, reps, best, peak, hookT, hookA, hookB, seam, leadFrac, energy, energyRel: d / L / Math.max(1e-9, mean), terms });
+      const terms = { rep, seam, lead: leadFrac, energy, len: fit, align: off, gap: -gapPen, budget: -budgetPen };
+      const score = .28 * rep + .24 * seam + .10 * leadFrac + .12 * energy + .16 * fit + .10 * off - .12 * gapPen - .10 * budgetPen;
+      out.push({ fromBar: s, bars: L, sec, score, reps, best, peak, hookT, hookA, hookB, seam, leadFrac, leadGap: gap, busy,
+                 energy, energyRel: d / L / Math.max(1e-9, mean), terms });
     }
   }
   return out.sort((a, b) => b.score - a.score || a.fromBar - b.fromBar);
 }
 
-/** a plain-words name for the chosen window (an honest guess, not a claim) */
-export function describePhrase(c){
+/** is this lead a SINGER's line? Only then is "the chorus" a fair word for its most-repeated section
+    (an instrumental's hook is a theme, not a chorus). program: GM 0–127; name: the track's name. */
+export function vocalLead(program, name = ''){
+  return [53, 54, 85].includes(program) || /vocal|voice|vox|sing|lyric/i.test(name || '');
+}
+
+/** a plain-words name for the chosen window (an honest guess, not a claim). vocal: a sung lead —
+    only then are the words "chorus" / "verse" used; an instrumental gets neutral words. */
+export function describePhrase(c, { vocal = false } = {}){
   if (!c) return '';
   // peak = how often the window's most-recurring 4-bar phrase comes back elsewhere
   if (c.peak >= Math.max(3, c.hookT ?? 0) && c.energyRel >= .95){
+    if (!vocal) return 'the most-repeated section';
     const a = c.hookA ?? 0, b = c.hookB ?? 0, half = c.bars / 2;
     if (a + b >= .6 * c.bars) return 'the chorus';
     return b >= a ? (a <= .3 * half ? 'a verse into the chorus' : 'the chorus') : 'the chorus and the verse after it';
   }
-  if (c.peak >= 2) return 'the main theme';
   if (c.peak >= 1) return 'a repeated section';
   return 'the fullest stretch';
 }
 
 /** The whole pipeline over beat events: → the best window { fromBar (0-based), bars, startBeat, endBeat,
-    sec, label, … } or null (nothing loopable: no window keeps the lead). */
-export function findPhrase(events, { barBeats = 4, origin = 0, bpm = 120 } = {}){
-  const F = barFeatures(events, { barBeats, origin });
+    sec, label, floor, alts, … } or null (nothing loopable: no window keeps the lead).
+    floor = the lead-activity floor the window cleared (LEAD_MIN, or LEAD_RELAX for a sparse lead);
+    alts = the next-best DISTINCT windows (≤ TRIES − 1, each overlapping no earlier pick by more
+    than half) for convert.js to fall back on if the final import's lead doesn't hold up.
+    Ties of the same material go EARLY: within PHRASE.EARLY of the best score, the first statement
+    of the same section (diagonal similarity ≥ REP_T) wins — the first full chorus is the canonical
+    one; a last one carries the ad-libs and the outro tag. */
+export function findPhrase(events, { barBeats = 4, origin = 0, bpm = 120, vocal = false, maxBars = PHRASE.MAX_BARS } = {}){
+  const F = barFeatures(events, { barBeats, origin, maxBars });
   if (F.length < 8) return null;
-  const S = selfSimilarity(F);
+  const S = selfSimilarity(F), n = F.length;
   // the lead must sound through the loop; a sparse lead (long rests between phrases) relaxes the floor once
-  let all = scoreWindows(F, S, { barBeats, bpm });
-  if (!all.length) all = scoreWindows(F, S, { barBeats, bpm, leadMin: PHRASE.LEAD_RELAX });
-  const c = all[0];
-  if (!c) return null;
-  return { ...c, startBeat: origin + c.fromBar * barBeats, endBeat: origin + (c.fromBar + c.bars) * barBeats,
-           totalBars: F.length, label: describePhrase(c) };
+  // (tiers: the full rules; then a SHORT loop (an 8-bar phrase) the lead plays through; only then a
+  // relaxed lead floor)
+  let floor = PHRASE.LEAD_MIN, all = [];
+  for (const t of [{}, { minSec: PHRASE.SHORT_SEC }, { leadMin: PHRASE.LEAD_RELAX }]){
+    all = scoreWindows(F, S, { barBeats, origin, bpm, ...t });
+    if (all.length){ floor = t.leadMin ?? PHRASE.LEAD_MIN; break; }
+  }
+  if (!all.length) return null;
+  const same = (a, b) => { let x = 0; for (let k = 0; k < a.bars; k++) x += S[(a.fromBar + k) * n + b.fromBar + k]; return x / a.bars >= PHRASE.REP_T; };
+  let c = all[0];
+  for (const o of all) if (o.bars === c.bars && o.fromBar < c.fromBar && o.score >= all[0].score - PHRASE.EARLY && same(o, all[0])) c = o;
+  const picks = [c];
+  const overlap = (a, b) => Math.max(0, Math.min(a.fromBar + a.bars, b.fromBar + b.bars) - Math.max(a.fromBar, b.fromBar)) / Math.min(a.bars, b.bars);
+  for (const o of all){
+    if (picks.length >= PHRASE.TRIES) break;
+    if (picks.every(p => overlap(p, o) <= .5)) picks.push(o);
+  }
+  const out = w => ({ ...w, startBeat: origin + w.fromBar * barBeats, endBeat: origin + (w.fromBar + w.bars) * barBeats,
+                      totalBars: n, floor, label: describePhrase(w, { vocal }) });
+  // SHORTER loops inside the chosen window, close in score: if it overflows a machine's solve budget
+  // for real, convert.js weighs these (the same section, fewer notes per machine) against it
+  const sib = w => all.filter(o => o.bars < w.bars && o.fromBar >= w.fromBar && o.fromBar + o.bars <= w.fromBar + w.bars &&
+                                   o.score >= w.score - PHRASE.SIBLING).slice(0, 3).map(out);
+  return { ...out(c), siblings: sib(c), alts: picks.slice(1).map(w => ({ ...out(w), siblings: sib(w) })) };
 }

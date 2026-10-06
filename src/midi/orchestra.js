@@ -222,6 +222,18 @@ function voiceStats(v, q12, secPerTick, ppq){
   });
 }
 
+/** A PINNED lead (convert.js's phrase window: the loop keeps the whole song's lead): the voice that
+    is mostly (≥ half) pin notes, the most of them; null when none is. pin: a Set of note objects. */
+function pinnedVoice(vs, pin){
+  if (!pin) return null;
+  let best = null, bn = 0;
+  for (const v of vs){
+    let k = 0; for (const n of v.notes) if (pin.has(n)) k++;
+    if (k >= .5 * v.notes.length && k > bn){ best = v; bn = k; }
+  }
+  return best;
+}
+
 /** The lead rule (see above), shared by program and role routing. vs: candidates. */
 function pickLead(vs, span0, span1){
   const span = Math.max(1, span1 - span0);
@@ -237,7 +249,7 @@ function pickLead(vs, span0, span1){
   return legacy(present.length ? present : ok);
 }
 
-export function orchestrate(tracks, { ppq, bpm }){
+export function orchestrate(tracks, { ppq, bpm, pin = null }){
   const warnings = [];
   const q12 = tick => Math.round(tick / ppq * 12) / 12;
   const voices = makeVoices(tracks, { ppq, bpm });
@@ -264,7 +276,7 @@ export function orchestrate(tracks, { ppq, bpm }){
   const eligible = routed.filter(v => v.home === 'belt' || v.home === 'sustain');
   let lead = null, doubled = false;
   if (eligible.length){
-    lead = pickLead(eligible, span0, span1);
+    lead = pinnedVoice(eligible, pin) || pickLead(eligible, span0, span1);
     if (lead.dest !== 'belt'){
       warnings.push(`"${lead.name}" leads the belt (its top line) instead of the ${lead.dest}`);
       lead.dest = 'belt';
@@ -384,7 +396,7 @@ export function splitHands(notes, q12){
            inner: notes.filter(n => !top.has(n) && !bottom.has(n)).sort(order) };
 }
 
-export function orchestrateByRole(tracks, { ppq, bpm, programs = false, reason = 'no program data' }){
+export function orchestrateByRole(tracks, { ppq, bpm, programs = false, reason = 'no program data', pin = null }){
   const warnings = [];
   const q12 = tick => Math.round(tick / ppq * 12) / 12;
   const secPerTick = 60 / bpm / ppq;
@@ -439,7 +451,7 @@ export function orchestrateByRole(tracks, { ppq, bpm, programs = false, reason =
   // the lead: the legacy choice among the lines that could lead (else any line, else anyone)
   const lines = voices.filter(v => isLine(v) && !v.comp && !v.low);
   const pool = voices.filter(canLead).length ? voices.filter(canLead) : lines.length ? lines : voices;
-  const lead = pickLead(pool, span0, span1);
+  const lead = pinnedVoice(voices.filter(v => !v.comp), pin) || pickLead(pool, span0, span1);
   const loopSec = ROLL_T + (span1 - lead.first + 1) * 60 / bpm;
 
   const belt = [lead];

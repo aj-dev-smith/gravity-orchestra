@@ -30,7 +30,8 @@ const SECTIONS = {
   O: { lead: null, bass: [45], drums: null },
 };
 
-function compose(form, { bpm = 120, barBeats = 4, num = 4, den = 4, leadShift = 0, leadProgram = 80 } = {}){
+function compose(form, { bpm = 120, barBeats = 4, num = 4, den = 4, leadShift = 0, leadProgram = 80, leadName = 'Lead Vocal',
+                         meter = [], extra = [] } = {}){
   const lead = [], bass = [], kit = [], riff = [];
   const starts = [];                                  // [{ sec, bar (1-based) }]
   let bar = 0;
@@ -54,10 +55,11 @@ function compose(form, { bpm = 120, barBeats = 4, num = 4, den = 4, leadShift = 
     { tick: Math.round(b * PPQ), type: 'on', note: m, vel: 96, channel: ch },
     { tick: Math.round((b + len) * PPQ) - 8, type: 'off', note: m, channel: ch }]);
   const tracks = [
-    { events: [{ tick: 0, type: 'name', text: 'Lead' }, { tick: 0, type: 'tempo', uspq: uspq(bpm) },
-               { tick: 0, type: 'timesig', num, den }, { tick: 0, type: 'pc', program: leadProgram, channel: 0 }, ...ev(lead, 0)] },
+    { events: [{ tick: 0, type: 'name', text: leadName }, { tick: 0, type: 'tempo', uspq: uspq(bpm) },
+               { tick: 0, type: 'timesig', num, den }, ...meter, { tick: 0, type: 'pc', program: leadProgram, channel: 0 }, ...ev(lead, 0)] },
     { events: [{ tick: 0, type: 'name', text: 'Bass' }, { tick: 0, type: 'pc', program: 33, channel: 1 }, ...ev(bass, 1)] },
   ];
+  for (const x of extra) tracks.push({ events: [{ tick: 0, type: 'name', text: x.name }, { tick: 0, type: 'pc', program: x.program, channel: x.channel }, ...ev(x.notes, x.channel)] });
   if (riff.length) tracks.push({ events: [{ tick: 0, type: 'name', text: 'Riff' }, { tick: 0, type: 'pc', program: 11, channel: 2 }, ...ev(riff, 2)] });
   tracks.push({ events: [{ tick: 0, type: 'name', text: 'Drums' },
     ...kit.flatMap(([b, m, v]) => [{ tick: Math.round(b * PPQ), type: 'on', note: m, vel: v, channel: 9 },
@@ -250,5 +252,161 @@ describe('the creation tools carry the window (MAP panel: LOOP / WHOLE SONG)', (
   it('loopText names the window in words', async () => {
     const { loopText } = await import('../src/editor/index.js');
     expect(loopText({ fromBar: 33, bars: 16, sec: 41, songSec: 207, label: 'the chorus' })).toBe('bars 33–48 (0:41 of 3:27) — the chorus');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POLISH: the lead is PINNED through the window-only re-import, measured on ONSETS, checked on the
+// final belt; labels are honest; the detector is bounded; edge windows.
+const barsStruck = (melody, barBeats, bars) => {
+  const on = new Set(); let t = 0;
+  for (const [, b] of melody){ on.add(Math.floor(t / barBeats + 1e-9)); t += b; }
+  return [...on].filter(i => i < bars).length / bars;
+};
+
+describe('the LEAD is pinned: the loop keeps the whole song’s lead (two candidate leads)', () => {
+  // A (the whole song's lead) sings every verse + chorus; B — busier and higher — plays ONLY in the
+  // choruses. Over the whole song B enters 32 beats late → it can't lead. In a chorus-only window it
+  // is there from the downbeat, busiest and highest → a fresh router hands it the belt.
+  const form = POP;
+  const B = [];
+  { let bar = 0; for (const [k, n] of form){ for (let i = 0; i < n; i++, bar++) if (k === 'C') for (let e = 0; e < 8; e++) B.push([bar * 4 + e / 2, [86, 88, 91, 88][e % 4], .5]); } }
+  const { bytes } = compose(form, { extra: [{ name: 'Synth', program: 81, channel: 3, notes: B }] });
+  const parsed = parseMidi(bytes);
+  const { song, phrase, warnings } = convertToSong(parsed);
+  const B_NOTES = new Set(['D6', 'E6', 'G6']);
+
+  it('the window-alone router WOULD pick B (the test exercises the pin)', () => {
+    const lo = phrase.startBeat, hi = phrase.endBeat;
+    const clipped = { ...parsed, tracks: parsed.tracks.map(tr => ({ ...tr, notes: tr.notes.filter(n => n.tick / PPQ >= lo && n.tick / PPQ < hi) })).filter(tr => tr.notes.length) };
+    const fresh = convertToSong(clipped, { window: 'full' });
+    expect(fresh.warnings.join('\n')).not.toMatch(/"Lead Vocal" leads/);
+    expect(fresh.song.melody.some(([n]) => B_NOTES.has(n))).toBe(true);    // B's notes (D6 E6 G6) lead
+  });
+  it('…but the loop keeps A on the belt, striking in ≥ 70% of the window’s bars', () => {
+    expect(phrase).toBeTruthy();
+    expect(song.melody.some(([n]) => B_NOTES.has(n))).toBe(false);        // B is not the lead
+    expect(barsStruck(song.melody, 4, phrase.bars)).toBeGreaterThanOrEqual(PHRASE.LEAD_MIN);
+    expect(phrase.leadFrac).toBeCloseTo(barsStruck(song.melody, 4, phrase.bars), 9);   // the reported figure IS the belt's
+    expect(warnings.some(w => /the lead strikes in \d+% of its bars/.test(w))).toBe(true);
+    expectHonestLoop(song, phrase);
+  });
+});
+
+describe('lead activity is ONSETS, not ringing', () => {
+  it('a 2-bar held note lights only the bar it is struck in', () => {
+    const F = barFeatures([{ beat: 0, midi: 72, vel: 1, dur: 8, kind: 'lead' }, { beat: 12, midi: 72, vel: 1, dur: 1, kind: 'lead' }], { barBeats: 4 });
+    expect(F.map(f => f.leadOn)).toEqual([true, false, false, true]);
+  });
+  it('a sparse lead (8 bars on, many off) prefers the SHORT loop it plays through over a long half-idle one', () => {
+    // the lead only sings in two 8-bar stretches; the rest is an instrumental groove
+    const form = [['I', 8], ['C', 8], ['I', 16], ['R', 8], ['C', 8], ['I', 16]];
+    const { bytes, sectionAt } = compose(form);
+    const { song, phrase } = convert(bytes);
+    expect(phrase).toBeTruthy();
+    expect(barsStruck(song.melody, 4, phrase.bars)).toBeGreaterThanOrEqual(PHRASE.LEAD_MIN);
+    for (let b = phrase.fromBar; b < phrase.fromBar + phrase.bars; b++) expect(sectionAt(b)).toBe('C');
+    expect(phrase.leadGap * 60 / song.bpm).toBeLessThanOrEqual(PHRASE.GAP_BAD);
+  });
+});
+
+describe('labels are honest: "chorus" only for a sung lead', () => {
+  it('an instrumental lead (Square Lead) gets neutral words', () => {
+    const { bytes } = compose(POP, { leadName: 'Lead' });
+    const { phrase, song } = convert(bytes);
+    expect(phrase.label).not.toMatch(/chorus|verse/);
+    expect(phrase.label).toBe('the most-repeated section');
+    expect(song.sub).toContain('the most-repeated section');
+  });
+});
+
+describe('earliness: the same material goes to its FIRST statement', () => {
+  it('two identical late choruses never beat the identical earlier one by a hair', () => {
+    const { bytes, sectionAt } = compose(POP);
+    const { phrase } = convert(bytes);
+    const S = phrase.fromBar;
+    // no earlier start that's the same section-phase lands within the margin and was passed over:
+    // the chosen chorus block is the earliest occurrence of its section pattern in the song
+    const pat = b => Array.from({ length: phrase.bars }, (_, k) => sectionAt(b + k)).join('');
+    for (let b = 1; b < S; b++) expect(pat(b)).not.toBe(pat(S));
+  });
+});
+
+describe('edge windows', () => {
+  it('an explicit window past the song’s end is clamped to its last bar (no looped silence)', () => {
+    const { bytes } = compose(POP);                                     // 64 bars; C at 53–60, outro 61–64
+    const { song, phrase, warnings } = convert(bytes, { window: { fromBar: 57, bars: 16 } });
+    expect(phrase).toMatchObject({ fromBar: 57, bars: 8 });
+    expect(sum(song.melody)).toBe(32);
+    expect(warnings.some(w => /run past the song's end \(bar 64\)/.test(w))).toBe(true);
+    expectHonestLoop(song, phrase);
+  });
+  it('a window whose lead enters in its 3rd bar: bars 1–2 rotate to the tail, nothing dropped', () => {
+    const { bytes } = compose(POP);                                     // intro (no lead) bars 1–4, verse from bar 5
+    const { song, phrase } = convert(bytes, { window: { fromBar: 3, bars: 8 } });
+    expect(sum(song.melody)).toBe(32);
+    expect(song.melody[0][0]).toBe('E4');                               // the verse's first note (64) is beat 0
+    const hits = Object.values(song.drums).flat().map(h => Array.isArray(h) ? h[0] : h);
+    expect(hits.length).toBe(8 * (4 + 4));                              // every groove hit of bars 3–10 (kick/snare + hats)
+    expect(Math.max(...hits)).toBeGreaterThanOrEqual(24);               // bars 3–4 now live at beats 24–31
+    expectHonestLoop(song, phrase);
+  });
+  it('mixed meter (a 2/4 bar inside 4/4) still imports an honest loop on the dominant grid', () => {
+    const { bytes } = compose(POP, { meter: [{ tick: 20 * 4 * PPQ, type: 'timesig', num: 2, den: 4 }, { tick: (20 * 4 + 2) * PPQ, type: 'timesig', num: 4, den: 4 }] });
+    const parsed = parseMidi(bytes);
+    expect(parsed.timeSigs.length).toBe(3);
+    const { song, phrase } = convertToSong(parsed);
+    expect(phrase).toBeTruthy();
+    expect(phrase.barBeats).toBe(4);
+    expect(sum(song.melody) % 4).toBe(0);
+    expectHonestLoop(song, phrase);
+  });
+});
+
+describe('cost is bounded: a stray note at hour 2 can’t freeze the import', () => {
+  it('the detector ignores notes after 32+ empty bars, and the import stays fast', () => {
+    const { bytes } = compose(POP, { extra: [{ name: 'Stray', program: 0, channel: 4, notes: [[2 * 3600 * 2, 60, 1]] }] });   // 2 h at 120 bpm
+    const parsed = parseMidi(bytes);
+    const t0 = performance.now();
+    const { song, phrase, warnings } = convertToSong(parsed);
+    expect(performance.now() - t0).toBeLessThan(200);
+    expect(phrase).toBeTruthy();
+    expect(phrase.totalBars).toBe(64);
+    expect(phrase.fromBar + phrase.bars - 1).toBeLessThanOrEqual(64);
+    expect(warnings.some(w => /ignored 1 stray note/.test(w))).toBe(true);
+    expectHonestLoop(song, phrase);
+  });
+  it('barFeatures never analyses more than MAX_BARS bars', () => {
+    const F = barFeatures([{ beat: 0, midi: 60, vel: 1, dur: 1, kind: 'lead' }, { beat: 1e6, midi: 60, vel: 1, dur: 1, kind: 'lead' }], { barBeats: 4 });
+    expect(F.length).toBe(PHRASE.MAX_BARS);
+  });
+});
+
+describe('the MAP panel shows the LOOP', () => {
+  it('rows count only the notes inside the window (same ids); a voice that sits it out is idle', async () => {
+    const { midiSources, midiSourcesIn } = await import('../src/editor/mapping.js');
+    const { bytes } = compose(POP, { extra: [{ name: 'Bridge Horn', program: 61, channel: 5, notes: [[40 * 4, 70, 4], [41 * 4, 72, 4]] }] });   // bars 41–42 only (the bridge)
+    const parsed = parseMidi(bytes);
+    const win = { startBeat: 12 * 4, endBeat: 20 * 4 };                 // bars 13–20: the first chorus
+    const all = midiSources(parsed), loop = midiSourcesIn(parsed, win);
+    expect(loop.map(s => s.id).sort()).toEqual(all.map(s => s.id).sort());
+    expect(loop[loop.length - 1]).toMatchObject({ name: 'Bridge Horn', idle: true });   // sits the loop out → listed last
+    const lead = loop.find(s => s.name === 'Lead Vocal');
+    expect(lead.count).toBe(2 * SECTIONS.C.lead.reduce((s, p) => s + p.length, 0));
+    expect(lead.events.every(e => e.beat >= 48 && e.beat < 80)).toBe(true);
+    expect(loop.find(s => s.name === 'Bridge Horn')).toMatchObject({ count: 0, idle: true });
+    expect(all.find(s => s.name === 'Bridge Horn').count).toBe(2);
+  });
+  it('a hand LEAD that never plays in the loop comes back with no phrase (the panel refuses it)', async () => {
+    const { applyMidiMapping, defaultMidiMapping, midiSources } = await import('../src/editor/mapping.js');
+    const { bytes } = compose(POP, { extra: [{ name: 'Bridge Horn', program: 61, channel: 5, notes: [[40 * 4, 70, 4], [41 * 4, 72, 4]] }] });
+    const parsed = parseMidi(bytes);
+    const win = { window: { fromBar: 13, bars: 8 } };
+    const map = defaultMidiMapping(parsed, win);
+    expect(applyMidiMapping(parsed, map, win).phrase).toMatchObject({ fromBar: 13, bars: 8 });
+    const horn = midiSources(parsed).find(s => s.name === 'Bridge Horn').id;
+    const lead = Object.keys(map).find(k => map[k] === 'lead' || String(map[k]).startsWith('lead+'));
+    const hand = { ...map, [lead]: 'off', [horn]: 'lead' };
+    expect(applyMidiMapping(parsed, hand, win).phrase).toBe(null);
   });
 });

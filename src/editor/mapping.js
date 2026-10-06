@@ -137,6 +137,22 @@ export function midiSources(parsed){
   return list.sort((a, b) => a.drums - b.drums);       // the drums last, the rest in file order
 }
 
+/** The import's sources as the LOOP plays them (a phrase window: convert.js's `phrase`, its
+    [startBeat, endBeat) in the file's beats): the same rows and ids as midiSources — so a mapping
+    stays valid — but each row's count + sparkline are the notes INSIDE the window (on convert's
+    1/12-beat grid), and a voice that never plays there is flagged `idle` ("not in the loop") and
+    listed after the ones that do. */
+export function midiSourcesIn(parsed, win){
+  const all = midiSources(parsed);
+  if (!win) return all;
+  const lo = win.startBeat - 1e-9, hi = win.endBeat - 1e-9;
+  const rows = all.map(s => {
+    const events = s.events.filter(e => { const b = q12(e.beat); return b >= lo && b < hi; });
+    return { ...s, events, count: events.length, idle: !events.length };
+  });
+  return [...rows.filter(s => !s.idle), ...rows.filter(s => s.idle)];   // who plays the loop first (file order kept)
+}
+
 /** What the importer did on its own, as a mapping: { id: target }. Reads the orchestra's
     routing (spied through opts.router: whatever the AUTO router does — programs or roles) — or, for a file the importer kept belts-only
     (no program changes), the legacy rule: the 3 busiest lines, by register. */
@@ -200,7 +216,7 @@ export function applyMidiMapping(parsed, mapping, opts = {}){
     return { belt, parts, warnings };
   };
   const tagged = tagMidi(parsed, { dropDrums: mapping[DRUMS] === OFF });
-  const { song, warnings } = convertToSong(tagged, { ...opts, orchestra: true, router: route });
+  const { song, warnings, phrase } = convertToSong(tagged, { ...opts, orchestra: true, router: route });
   // the LINE machines (no orchestra spec — convert carried their notes into the loop length
   // but can't fit them): fit here, on the lead's timeline exactly as convert aligned the rest
   const loopBeats = sumBeats(song.melody), ppq = parsed.ppq;
@@ -217,7 +233,7 @@ export function applyMidiMapping(parsed, mapping, opts = {}){
     song.parts = { ...(song.parts || {}), [key]: r.part };
     song.sub += had ? `, ${key}` : ` + ${key}`;
   }
-  return { song, warnings: [...warnings, ...extra] };
+  return { song, warnings: [...warnings, ...extra], phrase };
 }
 
 /* =================== authored songs =================== */

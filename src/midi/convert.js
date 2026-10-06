@@ -3,7 +3,7 @@
 
 import { GM_DRUMS, drumByGm } from '../drumkit.js';
 import { orchestrate, orchestrateByRole, shapePart, PART_SPEC, ROLL_T } from './orchestra.js';
-import { PHRASE, barGrid, findPhrase } from './phrase.js';
+import { PHRASE, barGrid, findPhrase, vocalLead } from './phrase.js';
 
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 // stable lane order for the emitted drums block (registry order → consistent
@@ -40,6 +40,7 @@ export function windowBpm(tempos, ppq, b0, b1) {
   return spans[spans.length - 1].bpm;
 }
 
+const BUDGET_W = .25;          // phrase re-rank: score cost of overflowing a solve budget by a full budget
 const mmss = s => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
 
 /* opts.window — WHICH PART of the song becomes the loop (phrase.js):
@@ -111,10 +112,39 @@ export function convertToSong(parsed, opts = {}) {
     // opts.router: a caller-supplied router (orchestrate's signature + result shape), handed the
     // auto router too — the creation tools' instrument-mapping panel (src/editor/mapping.js)
     // routes by hand, or spies on what auto would do
-    const r = opts.router ? opts.router(melodicTracks, { ppq, bpm }, autoRoute) : autoRoute(melodicTracks, { ppq, bpm });
+    // (a phrase window's second pass PINS the whole song's lead: o.pin — see step 4b)
+    const ro = { ppq, bpm, ...(opts._pin ? { pin: opts._pin } : {}) };
+    const r = opts.router ? opts.router(melodicTracks, ro, autoRoute) : autoRoute(melodicTracks, ro);
     beltTracks = r.belt;
     routed = r.parts;
     warnings.push(...r.warnings);
+  }
+  // --- step 0c: the PINNED lead (a phrase window's second pass) ---
+  // The window was chosen because the WHOLE SONG's lead strikes through it; the window-only
+  // re-route must not hand the belt to someone else (a busier voice in these bars, a pad that
+  // happens to start first). The routers honour o.pin; this backstop catches what they can't
+  // (a hand router, a two-hand split, legacy routing): the pinned notes become belt[0] and leave
+  // whatever else they were routed to.
+  let pinnedFirst = false;
+  if (opts._pin){
+    const pin = opts._pin, has = n => pin.has(n);
+    const count = tr => { let k = 0; for (const n of tr.notes) if (has(n)) k++; return k; };
+    const total = melodicTracks.reduce((s, tr) => s + count(tr), 0);
+    if (total){
+      let bi = -1, bk = 0;
+      beltTracks.forEach((tr, i) => { const k = count(tr); if (k > bk){ bi = i; bk = k; } });
+      const own = bi >= 0 && bk >= .8 * total && bk >= .5 * beltTracks[bi].notes.length;
+      if (own){ if (bi > 0) beltTracks = [beltTracks[bi], ...beltTracks.filter((_, i) => i !== bi)]; }
+      else {
+        const strip = tr => ({ ...tr, notes: tr.notes.filter(n => !has(n)) });
+        beltTracks = [{ name: opts._pinName || 'the lead', notes: melodicTracks.flatMap(tr => tr.notes.filter(has)) },
+                      ...beltTracks.map(strip).filter(tr => tr.notes.length)];
+        if (orchestra) beltTracks = beltTracks.slice(0, 3);
+        routed = routed.map(strip).filter(p => p.notes.length);
+        warnings.push(`phrase: "${opts._pinName || 'the lead'}" keeps the belt lead in the loop (the whole song's lead)`);
+      }
+      pinnedFirst = true;
+    }
   }
 
   // --- step 2: monophonic reduction per track ---
@@ -141,13 +171,13 @@ export function convertToSong(parsed, opts = {}) {
       .sort((a, b) => a[0] - b[0])
       .map(([onset, n]) => ({ onset, midi: n.midi, dur: n.dur }));
 
-    return { name: tr.name, onsets };
+    return { name: tr.name, onsets, src: tr.notes, pinned: pinnedFirst && tr === beltTracks[0] };
   }).filter(t => t.onsets.length > 0);
 
   // --- step 3: keep at most 3 tracks (busiest by onset count) ---
   let kept = monoTracks;
   if (!orchestra && monoTracks.length > 3) {
-    const sorted = [...monoTracks].sort((a, b) => b.onsets.length - a.onsets.length);
+    const sorted = [...monoTracks].sort((a, b) => (b.pinned - a.pinned) || b.onsets.length - a.onsets.length);
     kept = sorted.slice(0, 3);
     for (const dropped of sorted.slice(3)) {
       warnings.push(`dropped track "${dropped.name || '(unnamed)'}" (${dropped.onsets.length} notes, not in busiest 3)`);
@@ -166,7 +196,7 @@ export function convertToSong(parsed, opts = {}) {
   // legacy: the highest mean leads. Orchestra mode: orchestrate() already chose the lead
   // (it must enter early and last — see orchestra.js) and put it first; the rest by mean.
   if (orchestra) withMean.splice(1, Infinity, ...withMean.slice(1).sort((a, b) => b.mean - a.mean));
-  else withMean.sort((a, b) => b.mean - a.mean); // highest first
+  else withMean.sort((a, b) => (b.pinned - a.pinned) || b.mean - a.mean); // highest first (a pinned lead first)
 
   let lead, alto, bass;
   if (withMean.length === 1) {
@@ -182,29 +212,67 @@ export function convertToSong(parsed, opts = {}) {
   // MAP panel can't move the window under the user), BEFORE timeline zero. The window
   // is a circle [startBeat, endBeat): it is cut at the lead's first note inside it, and
   // anything earlier in the window (a pickup, the fill) rotates to the loop's tail.
-  const phrase = pickWindow({ parsed, opts, bpm, lead, melodicTracks, drumNotes, beatsPerTick, warnings });
-  if (phrase && !opts._phrase) {
+  let finishWin = w => w;
+  const picks = opts._phrase ? null : pickWindow({ parsed, opts, bpm, lead, melodicTracks, drumNotes, beatsPerTick, warnings, setFinish: f => (finishWin = f) });
+  if (picks) {
     // RE-IMPORT THE WINDOW ALONE: the orchestra must route what plays IN the loop (a voice that
     // only plays in the bridge can't take a machine from one that plays in the chorus), and
-    // every fit (budgets, ranges, the lead) is judged on the loop's own material. The first pass
-    // only served to find the lead the window is chosen around.
-    const lo = phrase.startBeat - 1e-9, hi = phrase.endBeat - 1e-9;
-    const clipped = { ...parsed, bpm: phrase.bpm, tracks: parsed.tracks
-      .map(tr => ({ ...tr, notes: tr.notes.filter(n => { const b = quantize(n.tick * beatsPerTick); return b >= lo && b < hi; }) }))
-      .filter(tr => tr.notes.length > 0) };
-    return convertToSong(clipped, { ...opts, _phrase: phrase });
+    // every fit (budgets, ranges) is judged on the loop's own material — but the LEAD is PINNED
+    // (_pin: the whole song's lead, the one the window was chosen around). Then the final belt is
+    // CHECKED: an auto window whose lead strikes in fewer than its floor of bars falls back to the
+    // next-ranked window, and past those, to the whole song.
+    // A window that overflows a machine's solve budget for real (the detector's density term is a
+    // proxy) is weighed against shorter windows inside it: score − BUDGET_W·dropped/BUDGET.
+    const pin = new Set(lead.src), rejected = [];
+    const span = w => `bars ${w.fromBar}–${w.fromBar + w.bars - 1}`;
+    const run = w => {
+      const lo = w.startBeat - 1e-9, hi = w.endBeat - 1e-9;
+      const clipped = { ...parsed, bpm: w.bpm, tracks: parsed.tracks
+        .map(tr => ({ ...tr, notes: tr.notes.filter(n => { const b = quantize(n.tick * beatsPerTick); return b >= lo && b < hi; }) }))
+        .filter(tr => tr.notes.length > 0) };
+      try { return convertToSong(clipped, { ...opts, _phrase: w, _pin: pin, _pinName: lead.name }); }
+      catch (e) { rejected.push(`${span(w)} (${e.message})`); return null; }
+    };
+    const holds = (w, r) => !w.auto || r.phrase.leadFrac >= w.floor - 1e-9;
+    const worth = (w, r) => w.score - BUDGET_W * Math.min(1, r.phrase.budgetDropped / PHRASE.BUDGET);
+    for (const w of picks) {
+      let r = run(w);
+      if (!r) continue;
+      if (!holds(w, r)) { rejected.push(`${span(w)} (the lead strikes in only ${Math.round(r.phrase.leadFrac * 100)}% of its bars)`); continue; }
+      if (w.auto && r.phrase.budgetDropped > 0) {
+        for (const sw of (w.siblings || []).map(finishWin)) {
+          const sr = run(sw);
+          if (sr && holds(sw, sr) && worth(sw, sr) > worth(r.phrase, r)) {
+            sr.warnings.push(`phrase: ${span(sw)} instead of ${span(w)} — the longer loop overflowed a machine's solve budget by ${r.phrase.budgetDropped} notes`);
+            r = sr;
+          }
+        }
+      }
+      if (rejected.length) r.warnings.push(`phrase: passed over ${rejected.join('; ')}`);
+      r.warnings.unshift(...warnings.filter(x => x.startsWith('phrase:')));   // what the choosing pass had to say
+      return r;
+    }
+    warnings.push(`phrase: no window kept the lead striking through the loop — imported the whole song (${rejected.join('; ')})`);
   }
-  if (phrase) {
-    sayPhrase(phrase, warnings);
-    if (phrase.bpm !== phrase.songBpm)
-      warnings.push(`phrase: the loop plays at ${phrase.bpm} bpm — the window's own tempo (the song's dominant tempo is ${phrase.songBpm})`);
-  }
+  const phrase = opts._phrase ? { ...opts._phrase } : null;
+  if (phrase) { delete phrase.alts; delete phrase.siblings; }
   const W = phrase ? phrase.endBeat - phrase.startBeat : 0;
   const inWin = b => !phrase || (b >= phrase.startBeat - 1e-9 && b < phrase.endBeat - 1e-9);
   if (phrase) {
     lead = { ...lead, onsets: lead.onsets.filter(n => inWin(n.onset)) };
     if (alto) alto = { ...alto, onsets: alto.onsets.filter(n => inWin(n.onset)) };
     if (bass) bass = { ...bass, onsets: bass.onsets.filter(n => inWin(n.onset)) };
+    // the HONEST lead figures, measured on what the belt will play: the share of the window's bars
+    // the lead STRIKES in, and its longest rest (the seam's wrap included) in beats
+    const struck = new Set(lead.onsets.map(n => Math.floor((n.onset - phrase.startBeat) / phrase.barBeats + 1e-9)));
+    phrase.leadFrac = struck.size / phrase.bars;
+    const on = lead.onsets.map(n => n.onset);
+    let gap = on.length ? W - (on[on.length - 1] - on[0]) : W;
+    for (let i = 1; i < on.length; i++) gap = Math.max(gap, on[i] - on[i - 1]);
+    phrase.leadGap = tidy(gap);
+    sayPhrase(phrase, warnings);
+    if (phrase.bpm !== phrase.songBpm)
+      warnings.push(`phrase: the loop plays at ${phrase.bpm} bpm — the window's own tempo (the song's dominant tempo is ${phrase.songBpm})`);
   }
 
   // --- step 5: zero the timeline on the lead ---
@@ -427,10 +495,12 @@ export function convertToSong(parsed, opts = {}) {
   // Each plugin's notes are shaped to what its machine can honestly play (range,
   // lanes, polyphony, recovery) — see orchestra.js PART_SPEC. Keys in registry order.
   const parts = {};
+  let budgetDropped = 0;                            // notes the machines' solve budgets dropped (orchestra budgetWindow)
   for (const key of Object.keys(PART_SPEC)) {
     if (!partNotes[key]) continue;
     const r = shapePart(key, partNotes[key], { bpm, loopBeats });
     warnings.push(...r.warnings);
+    for (const w of r.warnings) { const m = /kept the first (\d+) of (\d+) notes/.exec(w); if (m) budgetDropped += m[2] - m[1]; }
     if (r.part.length) parts[key] = r.part;
     else warnings.push(`${key}: no playable notes left — part dropped`);
   }
@@ -441,6 +511,7 @@ export function convertToSong(parsed, opts = {}) {
     song.staging = 'auto';
     song.sub += ` + ${Object.keys(parts).join(', ')}`;
   }
+  if (phrase) phrase.budgetDropped = budgetDropped;
   if (phrase) song.sub += ` · looping bars ${phrase.fromBar}–${phrase.fromBar + phrase.bars - 1}${phrase.label ? ` — ${phrase.label}` : ''}`;
 
   return { song, warnings, phrase };
@@ -451,30 +522,32 @@ export function convertToSong(parsed, opts = {}) {
 function sayPhrase(w, warnings) {
   const a = w.fromBar, b = w.fromBar + w.bars - 1;
   warnings.push(`phrase: looping bars ${a}–${b} of ${w.totalBars} (${w.bars} bars, ${mmss(w.sec)} of ${mmss(w.songSec)})` +
-                `${w.label ? ` — ${w.label}` : ''}${w.leadFrac != null ? `; the lead plays through ${Math.round(w.leadFrac * 100)}% of it` : ''}` +
+                `${w.label ? ` — ${w.label}` : ''}${w.leadFrac != null ? `; the lead strikes in ${Math.round(w.leadFrac * 100)}% of its bars` : ''}` +
                 ` · opts.window 'full' imports the whole song`);
 }
 
-function pickWindow({ parsed, opts, bpm, lead, melodicTracks, drumNotes, beatsPerTick, warnings }) {
-  if (opts._phrase) return { ...opts._phrase };     // the second pass (the window alone): as chosen
+/* → the windows to try, best first ([] never: null = the whole song). Each: 1-based fromBar, bars,
+   startBeat, endBeat, bpm, sec, label, auto, floor (the lead-activity floor an auto window must hold
+   on the final belt) … The song's END is where its notes end — a note after PHRASE.SILENCE_BARS
+   empty bars is stray (a sequencer's forgotten event), and at most PHRASE.MAX_BARS bars are
+   analysed, so one stray event at hour 2 can't make the O(bars²) detector freeze the tab. */
+function pickWindow({ parsed, opts, bpm, lead, melodicTracks, drumNotes, beatsPerTick, warnings, setFinish }) {
   const want = opts.window ?? 'auto';
   if (want === 'full') return null;
-  // the song's span (beats) and its bar grid
-  let endTick = 0;
-  for (const tr of melodicTracks) for (const n of tr.notes) endTick = Math.max(endTick, n.tick);
-  for (const n of drumNotes) endTick = Math.max(endTick, n.tick);
+  const grid0 = barGrid(parsed.timeSigs || [], parsed.ppq, 0);
+  // the song's span: the last note before a long silence (the rest is stray)
+  const ticks = [];
+  for (const tr of melodicTracks) for (const n of tr.notes) ticks.push(n.tick);
+  for (const n of drumNotes) ticks.push(n.tick);
+  ticks.sort((a, b) => a - b);
+  const silence = PHRASE.SILENCE_BARS * grid0.barBeats * parsed.ppq;
+  let endTick = ticks[0] ?? 0, stray = 0;
+  for (let i = 1; i < ticks.length; i++) { if (ticks[i] - ticks[i - 1] > silence) { stray = ticks.length - i; break; } endTick = ticks[i]; }
   const grid = barGrid(parsed.timeSigs || [], parsed.ppq, endTick);
   const songBeats = endTick * beatsPerTick + 1;
   const songSec = songBeats * 60 / bpm;
   const totalBars = Math.max(1, Math.floor((endTick * beatsPerTick - grid.origin) / grid.barBeats + 1e-9) + 1);
-  // the detector's view of the song: the lead's line, the other melodic notes, the drums
-  const events = [];
-  for (const n of lead.onsets) events.push({ beat: n.onset, midi: n.midi, vel: .9, dur: n.dur == null ? null : n.dur * beatsPerTick, kind: 'lead' });
-  for (const tr of melodicTracks) for (const n of tr.notes)
-    events.push({ beat: n.tick * beatsPerTick, midi: n.midi, vel: n.vel / 127, dur: n.dur == null ? null : n.dur * beatsPerTick, kind: 'mel' });
-  for (const n of drumNotes) events.push({ beat: n.tick * beatsPerTick, midi: n.midi, vel: n.vel / 127, dur: null, kind: 'drum' });
-
-  if (opts.phraseProbe) opts.phraseProbe({ events, grid, bpm, songSec });   // dev / test hook: the detector's input
+  const pin = new Set(lead.src);
   const finish = w => {
     w.startBeat = grid.origin + (w.fromBar - 1) * grid.barBeats;
     w.endBeat = w.startBeat + w.bars * grid.barBeats;
@@ -489,21 +562,44 @@ function pickWindow({ parsed, opts, bpm, lead, melodicTracks, drumNotes, beatsPe
   };
   if (typeof want === 'object' && want) {
     const fromBar = Math.max(1, Math.round(want.fromBar || 1));
-    const bars = Math.max(1, Math.round(want.bars || 1));
+    let bars = Math.max(1, Math.round(want.bars || 1));
+    if (fromBar > totalBars) {
+      warnings.push(`phrase: the song has ${totalBars} bars — bar ${fromBar} is past its end; imported the whole song instead`);
+      return null;
+    }
+    if (fromBar + bars - 1 > totalBars) {         // a window can't loop silence past the song's last bar
+      warnings.push(`phrase: bars ${fromBar}–${fromBar + bars - 1} run past the song's end (bar ${totalBars}) — looping bars ${fromBar}–${totalBars}`);
+      bars = totalBars - fromBar + 1;
+    }
     const w = finish({ fromBar, bars, label: want.label || '', auto: false });
     if (!lead.onsets.some(n => n.onset >= w.startBeat - 1e-9 && n.onset < w.endBeat - 1e-9)) {
       warnings.push(`phrase: the lead never plays in bars ${fromBar}–${fromBar + bars - 1} — imported the whole song instead`);
       return null;
     }
-    return w;
+    return [w];
   }
   if (songSec <= PHRASE.AUTO_SEC) return null;      // short songs import whole
-  const best = findPhrase(events, { barBeats: grid.barBeats, origin: grid.origin, bpm });
+  // the detector's view of the song: the lead's line, the other melodic notes (by voice, for the
+  // budget term — the lead's own notes carry none), the drums
+  const end = endTick * beatsPerTick + 1e-9;
+  const events = [];
+  for (const n of lead.onsets) if (n.onset <= end) events.push({ beat: n.onset, midi: n.midi, vel: .9, dur: n.dur == null ? null : n.dur * beatsPerTick, kind: 'lead' });
+  melodicTracks.forEach((tr, ti) => { for (const n of tr.notes) if (n.tick <= endTick)
+    events.push({ beat: n.tick * beatsPerTick, midi: n.midi, vel: n.vel / 127, dur: n.dur == null ? null : n.dur * beatsPerTick, kind: 'mel',
+                  voice: pin.has(n) ? null : `${ti}:${n.program ?? 0}` }); });
+  for (const n of drumNotes) if (n.tick <= endTick) events.push({ beat: n.tick * beatsPerTick, midi: n.midi, vel: n.vel / 127, dur: null, kind: 'drum' });
+  if (stray) warnings.push(`phrase: ignored ${stray} stray note${stray > 1 ? 's' : ''} after ${PHRASE.SILENCE_BARS}+ empty bars when choosing the loop`);
+  if (totalBars > PHRASE.MAX_BARS) warnings.push(`phrase: ${totalBars} bars — only the first ${PHRASE.MAX_BARS} were searched for the loop`);
+
+  if (opts.phraseProbe) opts.phraseProbe({ events, grid, bpm, songSec });   // dev / test hook: the detector's input
+  const pg = lead.src.find(n => n.program != null)?.program ?? 0;
+  const best = findPhrase(events, { barBeats: grid.barBeats, origin: grid.origin, bpm, vocal: vocalLead(pg, lead.name) });
   if (!best) {
     warnings.push(`phrase: no loopable ${PHRASE.LENGTHS[0]}–${PHRASE.LENGTHS[PHRASE.LENGTHS.length - 1]}-bar window keeps the lead playing — imported the whole song (${mmss(songSec)})`);
     return null;
   }
-  const w = finish({ fromBar: best.fromBar + 1, bars: best.bars, label: best.label, auto: true,
-                     score: best.score, reps: best.reps, seam: best.seam, leadFrac: best.leadFrac });
-  return w;
+  const win = c => finish({ fromBar: c.fromBar + 1, bars: c.bars, label: c.label, auto: true, floor: c.floor,
+    score: c.score, reps: c.reps, seam: c.seam, leadFrac: c.leadFrac, leadGap: c.leadGap });
+  setFinish(win);
+  return [best, ...best.alts].map(c => Object.assign(win(c), { siblings: c.siblings }));
 }

@@ -20,7 +20,7 @@
    ============================================================ */
 import { makeMapPanel } from './panel.js';
 import { makeStageEdit } from './stage-edit.js';
-import { midiSources, defaultMidiMapping, applyMidiMapping, songSources, defaultSongMapping, applySongMapping,
+import { midiSources, midiSourcesIn, defaultMidiMapping, applyMidiMapping, songSources, defaultSongMapping, applySongMapping,
          setTarget, sameMapping, loadMapping, saveMapping, sanitizeMapping, targetsFor, machineOf } from './mapping.js';
 import { convertToSong } from '../midi/convert.js';
 import { placeSlot, sanitizeLayout, encodeLayout, loadLayout, saveLayout, makeHistory } from './placement.js';
@@ -82,7 +82,11 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
   const isMidi = key => key === 'imported' && !!midi;
   const labels = Object.fromEntries(machines.map(m => [m.key, m.label]));
 
-  function sources(key){ return isMidi(key) ? midiSources(midi.parsed) : songSources(songs[key], labels); }
+  // (looping: each row shows what the voice plays IN the loop — a voice that sits it out says so)
+  function sources(key){
+    if (!isMidi(key)) return songSources(songs[key], labels);
+    return midi.phrase && midi.win !== 'whole' ? midiSourcesIn(midi.parsed, midi.phrase) : midiSources(midi.parsed);
+  }
   /* PHRASE LOOP (src/midi/phrase.js): a long import loops its best window; the panel can swap to the
      whole song. midi.win: 'loop' | 'whole' — the convert opts every re-solve of this import uses */
   const winOpts = () => !midi?.phrase ? {} : midi.win === 'whole' ? { window: 'full' }
@@ -118,6 +122,12 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
       catch (e){ status = `couldn't apply the saved map: ${e.message}`; return orig; }
     }
     const r = memo.get(mk);
+    // a saved map whose lead never plays in the loop: convert played the whole song — say so, and
+    // show WHOLE SONG (not a LOOP the room isn't playing)
+    if (isMidi(key) && midi.phrase && midi.win !== 'whole' && !r.phrase){
+      midi.win = 'whole';
+      status = 'the saved map’s lead never plays in the loop — playing the whole song';
+    }
     lastWarnings = r.warnings;
     return r.song;
   }
@@ -144,8 +154,14 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
       r.mapping = { ...defaults(key), ...sanitizeMapping(r.mapping) };
       if (sameMapping(r.mapping, mappingFor(key))){ status = r.note; renderPanel(); return; }
       if (isMidi(key)){                              // try it before committing: a map that can't make a song is refused
-        try { applyMidiMapping(midi.parsed, r.mapping, { label: midi.label, ...winOpts() }); }
+        let t;
+        try { t = applyMidiMapping(midi.parsed, r.mapping, { label: midi.label, ...winOpts() }); }
         catch (e){ status = e.message; renderPanel(); return; }
+        // …and so is a LEAD that never plays in the loop (convert would quietly play the whole song)
+        if (midi.phrase && midi.win !== 'whole' && !t.phrase){
+          status = `${source.name} never plays in the loop (bars ${midi.phrase.fromBar}–${midi.phrase.fromBar + midi.phrase.bars - 1}) — can't lead it; WHOLE SONG can`;
+          renderPanel(); return;
+        }
       }
       saveMapping(store, idOf(key), r.mapping, defaults(key));
       status = r.note || `${src.find(s => s.id === id)?.name} → ${target === 'off' ? 'off' : labelOf(target)}`;
@@ -327,6 +343,7 @@ function injectStyles(){
   .mp-loop button.on{color:var(--amber);border-color:var(--amber);background:rgba(255,183,100,.08)}
   .mp-loop button:hover:not(.on):not(:disabled){color:var(--ink)}
   .mp-rows{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+  .mp-row.idle{opacity:.5}
   .mp-row{display:grid;grid-template-columns:minmax(0,1fr) 96px 150px;gap:10px;align-items:center;padding:7px 8px 7px 10px;border-radius:8px;
     background:rgba(90,97,120,.08);border-left:2px solid var(--c)}
   .mp-row.off{opacity:.62}

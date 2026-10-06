@@ -44,12 +44,13 @@ export function makeMapPanel({ machines, onPick, onAuto, onWindow = () => {}, on
     for (const s of sources){
       const t = mapping[s.id] ?? OFF;
       const hot = t !== OFF && strained(s.id);
-      const row = document.createElement('div'); row.className = 'mp-row' + (t === OFF ? ' off' : '') + (hot ? ' strain' : '');
+      const row = document.createElement('div'); row.className = 'mp-row' + (t === OFF ? ' off' : '') + (hot ? ' strain' : '') + (s.idle ? ' idle' : '');
       if (hot) row.title = 'this machine is straining to play its part (see below)';
       row.style.setProperty('--c', colorOf(t));
       const info = document.createElement('div'); info.className = 'mp-info';
       const nm = document.createElement('span'); nm.className = 'mp-name'; nm.textContent = s.name; nm.title = s.name;
-      const meta = document.createElement('span'); meta.className = 'mp-meta'; meta.textContent = `${s.gm} · ${s.count} note${s.count === 1 ? '' : 's'}`;
+      const meta = document.createElement('span'); meta.className = 'mp-meta';
+      meta.textContent = s.idle ? `${s.gm} · not in the loop` : `${s.gm} · ${s.count} note${s.count === 1 ? '' : 's'}`;
       if (hot) meta.textContent = `⚠ straining · ${meta.textContent}`;
       info.append(nm, meta);
       const cv = document.createElement('canvas'); cv.className = 'mp-spark'; cv.width = 192; cv.height = 52;
@@ -69,7 +70,7 @@ export function makeMapPanel({ machines, onPick, onAuto, onWindow = () => {}, on
     strainEl.hidden = !strain.length;
     strainEl.textContent = strain.length ? `⚠ ${strain.join(' · ')} — the part asks more than the machine can physically do; try another machine or thin the part` : '';
     statusEl.textContent = busy ? 're-solving the room…' : status;
-    statusEl.classList.toggle('warn', /needs|room for|can't|couldn/.test(status));
+    statusEl.classList.toggle('warn', /needs|room for|can't|couldn|never plays/.test(status));
     notesEl.hidden = !warnings.length;
     notesEl.querySelector('summary').textContent = `${warnings.length} fitting note${warnings.length === 1 ? '' : 's'} — how each machine was made to fit`;
     const ul = notesEl.querySelector('ul'); ul.textContent = '';

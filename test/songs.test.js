@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SONGS } from '../src/songs/index.js';
+import { SONGS, SONG_GROUPS, songShelves, defaultSongKey, DEFAULT_SONG } from '../src/songs/index.js';
 import { buildRecord } from '../src/instruments/turntable/solve.js';
 import { buildOrbit, CLEAR as RICO_CLEAR, FOOT_MAX } from '../src/instruments/ricochet/solve.js';
 import { eventTimes } from '../src/instruments/clock.js';
@@ -48,6 +48,24 @@ const EXPECTED_KEYS = [
 describe('SONGS catalogue', () => {
   it('has exactly the expected keys in order', () => {
     expect(Object.keys(SONGS)).toEqual(EXPECTED_KEYS);
+  });
+  // the picker's shelves (SONG_GROUPS): every song on exactly one shelf, no ghosts
+  it('shelves every song exactly once, naming only real songs', () => {
+    const shelved = SONG_GROUPS.flatMap(([, keys]) => keys);
+    expect(new Set(shelved).size).toBe(shelved.length);
+    for (const k of shelved) expect(SONGS[k], k).toBeDefined();
+    expect([...shelved].sort()).toEqual([...EXPECTED_KEYS].sort());
+  });
+  it('an unshelved song still reaches the menu (under More)', () => {
+    const shelves = songShelves({ ...SONGS, 'new-song': SONGS['fur-elise'] });
+    expect(shelves.at(-1)).toEqual(['More', ['new-song']]);
+    expect(songShelves().some(([l]) => l === 'More')).toBe(false);
+  });
+  it('the opening song is seasonal: Danse Macabre in October, else the Daybreak Engine', () => {
+    expect(defaultSongKey(new Date(2026, 9, 6))).toBe('danse-macabre');
+    expect(defaultSongKey(new Date(2026, 9, 31))).toBe('danse-macabre');
+    expect(defaultSongKey(new Date(2026, 10, 1))).toBe(DEFAULT_SONG);
+    expect(defaultSongKey(new Date(2026, 5, 19))).toBe('daybreak-engine');
   });
 });
 

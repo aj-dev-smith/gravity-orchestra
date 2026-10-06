@@ -119,8 +119,12 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
   const btn = document.createElement('button');
   btn.setAttribute('aria-label', 'change room');
   btn.style.cssText = 'position:fixed;top:74px;right:20px;z-index:5;background:none;border:none;cursor:pointer;' +
-    'color:#5a6178;font:11px ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.2em;padding:6px;text-transform:uppercase';
-  const btnText = () => { btn.textContent = 'ROOM: ' + (cur ? cur.label : 'none'); };
+    'color:#5a6178;font:11px ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.2em;padding:6px;text-transform:uppercase;' +
+    'text-align:right;line-height:1.35;text-shadow:0 0 8px #07060e';
+  btn.title = 'cycle rooms (R)';
+  // two lines: a dim 'ROOM ↻' caption over the room's own name (long names fit a phone)
+  const btnText = () => { btn.innerHTML = '<span style="display:block;font-size:9px;opacity:.75">ROOM&nbsp;›</span>' +
+    '<span style="display:block;color:#cfd6e6;opacity:.7"></span>'; btn.lastChild.textContent = cur ? cur.label : 'none'; };
   btn.addEventListener('click', () => { host.cycle(); });
   btn.addEventListener('pointerenter', () => { btn.style.color = '#cfd6e6'; });
   btn.addEventListener('pointerleave', () => { btn.style.color = '#5a6178'; });

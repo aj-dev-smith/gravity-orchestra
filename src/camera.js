@@ -137,21 +137,42 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
   }
 
   /* The cam-button row. Hidden for single-track songs (the line IS the harmony). */
+  /* Two parts: the CORE (auto / stage / free) always in reach, then every other angle in
+     a SCROLLER that never wraps (a phone swipes it; index.html styles both). */
   function renderButtons(){
+    const keep = camsEl.querySelector('.camscroll')?.scrollLeft || 0;   // a re-render mustn't jump the strip
     camsEl.innerHTML = '';
     if (curTracks.length < 2 && !stations.length){ camsEl.style.display = 'none'; mode = DEFAULT_MODE; return; }
     camsEl.style.display = 'flex';
     const multi = curTracks.length > 1;
-    ['auto', ...(stations.length ? ['stage'] : []), 'fixed', 'free',
-     ...(multi ? ['all', ...curTracks.map(t => t.role)] : []), ...stations.map(st => st.key)].forEach(m => {
+    const core = document.createElement('div'), more = document.createElement('div');
+    core.className = 'camcore'; more.className = 'camscroll';
+    const add = (box, m) => {
       const b = document.createElement('button');
       b.className = 'camb' + (mode === m ? ' on' : '');
       if (mode === m) b.style.color = CAMCOLORS[m] || stations.find(st => st.key === m)?.color || '#cfd6e6';
       b.textContent = m.toUpperCase();
       b.addEventListener('click', () => { mode = m; renderButtons(); });
-      camsEl.appendChild(b);
-    });
+      box.appendChild(b);
+    };
+    ['auto', ...(stations.length ? ['stage'] : []), 'free'].forEach(m => add(core, m));
+    ['fixed', ...(multi ? ['all', ...curTracks.map(t => t.role)] : []), ...stations.map(st => st.key)].forEach(m => add(more, m));
+    // a mouse wheel scrolls the strip sideways (only when it actually overflows)
+    more.addEventListener('wheel', e => {
+      if (more.scrollWidth <= more.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      more.scrollLeft += e.deltaY; e.preventDefault();
+    }, { passive: false });
+    more.addEventListener('scroll', () => camEdges(more), { passive: true });
+    camsEl.append(core, more);
+    more.scrollLeft = keep; camEdges(more);
   }
+  // fade whichever edge of the strip has more buttons hiding past it
+  function camEdges(more){
+    if (!more) return;
+    more.classList.toggle('fl', more.scrollLeft > 2);
+    more.classList.toggle('fr', more.scrollLeft + more.clientWidth < more.scrollWidth - 2);
+  }
+  addEventListener('resize', () => camEdges(camsEl.querySelector('.camscroll')));
 
   /* Called by buildWorld: re-frame for the new song and rebuild the button row.
      A mode that no longer maps to a track (e.g. 'alto' on a duo) falls back to auto. */

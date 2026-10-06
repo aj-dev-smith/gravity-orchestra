@@ -29,7 +29,12 @@
     color:var(--amber);border:1px solid rgba(255,183,100,.35);border-radius:8px;
     font:inherit;font-size:11px;letter-spacing:.12em;padding:6px 10px;cursor:pointer}
   #song:focus-visible{outline:none;border-color:var(--amber)}
-  #songsub{font-size:10px;color:var(--dim);margin-top:6px;letter-spacing:.08em}
+  [hidden]{display:none!important}
+  #song{max-width:min(320px,calc(100vw - 130px));text-overflow:ellipsis}
+  #song optgroup{color:var(--dim);font-style:normal;letter-spacing:.2em}
+  #song option{color:var(--amber)}
+  #songsub{font-size:10px;color:var(--dim);margin-top:6px;letter-spacing:.08em;line-height:1.5;
+    max-width:min(340px,calc(100vw - 210px));text-shadow:0 0 8px #07060e,0 0 2px #07060e}
   #share{pointer-events:auto;display:block;margin-top:8px;background:none;border:1px solid rgba(90,97,120,.45);
     color:var(--dim);font:inherit;font-size:10px;letter-spacing:.18em;padding:5px 12px;border-radius:999px;cursor:pointer}
   #share:hover{color:var(--amber);border-color:rgba(255,183,100,.5)}
@@ -56,12 +61,26 @@
   #reccard video{max-width:min(86vw,900px);max-height:62vh;border:1px solid rgba(90,97,120,.45);border-radius:12px}
   #reccard .row{display:flex;gap:10px}
   #astate{position:fixed;bottom:20px;right:20px;color:var(--dim);font-size:10px;letter-spacing:.12em;opacity:.75;text-align:right;max-width:55vw}
-  #cams{position:fixed;bottom:46px;left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:5}
-  .camb{background:rgba(7,6,14,.55);border:1px solid rgba(90,97,120,.45);color:var(--dim);
+  #cams{position:fixed;bottom:46px;left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:5;
+    align-items:center;max-width:calc(100vw - 32px)}
+  .camcore{display:flex;gap:8px;flex:none;align-items:center}
+  .camcore::after{content:'';width:1px;height:14px;background:rgba(90,97,120,.5);margin-left:2px}
+  .camscroll{display:flex;gap:8px;min-width:0;overflow-x:auto;overscroll-behavior-x:contain;
+    scrollbar-width:none;padding:1px 0;--fl:0px;--fr:0px;
+    -webkit-mask-image:linear-gradient(90deg,transparent,#000 var(--fl),#000 calc(100% - var(--fr)),transparent);
+            mask-image:linear-gradient(90deg,transparent,#000 var(--fl),#000 calc(100% - var(--fr)),transparent)}
+  .camscroll::-webkit-scrollbar{display:none}
+  .camscroll.fl{--fl:26px} .camscroll.fr{--fr:34px}
+  .camb{flex:none;white-space:nowrap;background:rgba(7,6,14,.55);border:1px solid rgba(90,97,120,.45);color:var(--dim);
     font:inherit;font-size:10px;letter-spacing:.18em;padding:6px 13px;border-radius:999px;cursor:pointer;
     transition:all .2s ease}
   .camb.on{border-color:currentColor;background:rgba(7,6,14,.8)}
   .camb:focus-visible{outline:none;border-color:var(--ink)}
+  @media (max-width:560px){
+    #cams,.camcore,.camscroll{gap:6px}
+    .camb{padding:6px 10px;letter-spacing:.14em}
+    #songsub{letter-spacing:.04em}
+  }
 </style>
 </head>
 <body>

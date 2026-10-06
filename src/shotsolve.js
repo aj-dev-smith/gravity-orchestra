@@ -12,7 +12,9 @@
      (c) SEES its station: ≤ 1 of the 15 probe rays (a 5×3 grid through
          the frame's middle, the same grid __dev.occlusion casts) hits
          another machine first, and
-     (d) still frames the station about as well as the preference does
+     (d) still frames the station about as well as the preference does, and
+     (e) keeps the frame's EDGES free of foreground clutter (≤ FG_MAX of the 27 border rays meet
+         another machine — or the room — nearer than .6 × the aim's depth)
    wins; if none is perfect, the least-bad one (blocked rays dominate).
    Pure: the world is reached only through `blocked(eye, dir, far)` — main
    raycasts the real meshes, the unit test ray-boxes a measured table —
@@ -42,6 +44,33 @@ export function probeRays(eye, aim){
 export function blockedRays(eye, aim, blocked, scale = 1){
   let n = 0; for (const r of probeRays(eye, aim)) if (blocked(eye, r.dir, r.far)) n += scale;
   return n;
+}
+/* FOREGROUND CLUTTER at the frame's EDGES. The 15 probe rays only watch the frame's middle; a
+   portrait pull-back (or a low corner) can still bring a neighbour's dark housing into the lower
+   third. EDGE: rays round the frame's border (±.85 of the half-frame), aspect-aware — a phone's
+   tall frame reaches further up and down.
+   A hit counts only when it is FOREGROUND: nearer than `near` × the aim's depth. 27 rays: the
+   top / bottom edges, the sides, and the lower third (where a pulled-back eye's neighbours rise). */
+export const EDGE = (() => { const r = [];
+  for (const sx of [-.85, -.57, -.28, 0, .28, .57, .85]){ r.push([sx, -.85]); r.push([sx, .85]); }   // top + bottom edges
+  for (const sy of [-.6, -.3, 0, .3, .6]){ r.push([-.85, sy]); r.push([.85, sy]); }                  // the sides
+  for (const sx of [-.5, 0, .5]) r.push([sx, -.6]);                                                 // + the lower third
+  return r; })();
+export const FG_MAX = .12;                  // ≤ 3 of the 27 edge rays may meet foreground clutter
+/* a phone's TALL frame shows a lot more floor and sky: clutter there is judged over the whole frame,
+   a 5 × 9 grid (±.85 / ±.88 of the half-frame), nearer than .8 × the aim's depth */
+export const GRID_TALL = (() => { const r = []; for (const sx of [-.85, -.42, 0, .42, .85]) for (let j = 0; j < 9; j++) r.push([sx, -.88 + 1.76 * j / 8]); return r; })();
+export const FG_TALL = { aspect: .46, near: .8, pts: GRID_TALL, max: 2 / 45 };
+/** share (0..1) of the edge rays of eye → aim whose first hit is foreground clutter */
+export function foreground(eye, aim, blocked, { aspect = 1.5, fov = 55, near = .6, pts = EDGE, stop = Infinity } = {}){
+  const v = sub(aim, eye), D = len(v), f = norm(v), R = norm(cross(f, [0, 1, 0])), U = cross(R, f);
+  const tv = Math.tan(fov * Math.PI / 360), th = tv * aspect;
+  let n = 0;
+  for (const [sx, sy] of pts){
+    const d = norm([f[0] + R[0] * sx * th + U[0] * sy * tv, f[1] + R[1] * sx * th + U[1] * sy * tv, f[2] + R[2] * sx * th + U[2] * sy * tv]);
+    if (blocked(eye, d, near * D / Math.max(.2, dot(d, f))) && ++n > stop) break;   // (depth-based reach: near × the aim's depth; stop: enough to fail)
+  }
+  return n / pts.length;
 }
 /** ray (o, unit d) vs box [x0,x1,y0,y1,z0,z1]: entry distance, or Infinity */
 export function rayBox(o, d, b){
@@ -85,7 +114,7 @@ export function boxPts(b, yMin = -Infinity){
     others: [box] — every other machine's 3D box (clear air: an eye stays ≥ `air` from each)
     subject: [x,y,z][] — the points that should be in frame (framing is kept ≥ the pref's − .15)
     Returns { eye, rays, az, lift, k, cost } — rays = blocked probe rays of the winner. */
-export function solveShotEye({ aim, pref, room, blocked, others = [], subject = null, air = 1.2, fov = 55, aspect = 1.5 }){
+export function solveShotEye({ aim, pref, room, blocked, others = [], subject = null, air = 1.2, fov = 55, aspect = 1.5, fgMax = FG_MAX, fgNear = .6, fgPts = EDGE, fgBudget = 40, maxCands = Infinity }){
   const off0 = sub(pref, aim);
   const inRoom = e => e[0] >= room.x0 && e[0] <= room.x1 && e[1] >= room.y0 && e[1] <= room.y1 && e[2] >= room.z0 && e[2] <= room.z1;
   const swayIn = e => { const o = sub(e, aim); return [-SWAY, 0, SWAY].every(a => { const r = rotY(o, a); return inRoom([aim[0] + r[0], aim[1] + r[1], aim[2] + r[2]]); }); };
@@ -99,17 +128,21 @@ export function solveShotEye({ aim, pref, room, blocked, others = [], subject = 
   cands.sort((a, b) => a.dev - b.dev);
   let best = null;
   for (const c of cands){
+    if (maxCands-- <= 0) break;                                       // (a bounded search: the best so far wins)
     const r = rotY(off0, c.az * Math.PI / 180);
     const eye = [aim[0] + r[0] * c.k, aim[1] + r[1] * c.k + c.lift, aim[2] + r[2] * c.k];
     if (!swayIn(eye)) continue;
     if (others.some(b => boxDist(eye, b) < air)) continue;
     const rays = blockedRays(eye, aim, blocked);
     const fr = subject ? framed(eye, aim, subject, fov, aspect) : 1;
-    const cost = rays * 10 + c.dev + Math.max(0, fr0 - .15 - fr) * 8;
-    if (!best || cost < best.cost) best = { eye, rays, az: c.az, lift: c.lift, k: c.k, cost, framed: fr };
-    if (rays <= CLEAR_RAYS && fr >= fr0 - .15) break;                // the first clean one in preference order wins
+    // (cast only for an eye that already sees its station; it stops counting once it has failed)
+    if (rays <= CLEAR_RAYS && fgBudget-- <= 0) break;               // (a bounded search: the best so far wins)
+    const fg = rays <= CLEAR_RAYS ? foreground(eye, aim, blocked, { aspect, fov, near: fgNear, pts: fgPts, stop: Math.floor(fgMax * fgPts.length) + 2 }) : 1;
+    const cost = rays * 10 + c.dev + Math.max(0, fr0 - .15 - fr) * 8 + Math.max(0, fg - fgMax) * 12;
+    if (!best || cost < best.cost) best = { eye, rays, fg, az: c.az, lift: c.lift, k: c.k, cost, framed: fr };
+    if (rays <= CLEAR_RAYS && fr >= fr0 - .15 && fg <= fgMax) break;   // the first clean one in preference order wins
   }
-  return best || { eye: pref, rays: blockedRays(pref, aim, blocked), az: 0, lift: 0, k: 1, cost: Infinity, framed: fr0 };
+  return best || { eye: pref, rays: blockedRays(pref, aim, blocked), fg: 0, az: 0, lift: 0, k: 1, cost: Infinity, framed: fr0, none: true };   // (none: no candidate stood in the room)
 }
 
 /* ---- the BELT's follow shot (camera.js 'all' / 'lead' / 'alto' / 'bass' in a full room) ----
@@ -129,7 +162,7 @@ const F_Y = [3.4, 6, 9, 12, 15, 18];
     What must stay SEEN is the belt's strike BAND: targets across the bays' front at the band's
     heights; every one inside the frame (fov 55°, the class's aspect) is cast to from the eye.
     Returns { off: [ox, oy, oz], rays } — rays = the worst blocked share over the samples, ×15. */
-export function solveFollow({ wall, boxes, stageY, backs = [1, 1.6], room, base = FOLLOW_BASE, blocked = null, air = .8, portrait = false }){
+function followKit({ wall, boxes, stageY, backs = [1, 1.6], room, blocked = null, portrait = false }){
   const zc = (wall[4] + wall[5]) / 2, foci = [], band = [];
   for (let i = 0; i < 3; i++) foci.push([wall[0] + 2 + (wall[1] - wall[0] - 4) * i / 2, stageY + .6, zc]);
   for (let i = 0; i < 7; i++) for (const dy of [-2, 1, 4]) band.push([wall[0] + 1 + (wall[1] - wall[0] - 2) * i / 6, stageY + dy, zc]);
@@ -146,17 +179,35 @@ export function solveFollow({ wall, boxes, stageY, backs = [1, 1.6], room, base 
     }
     return n ? Math.round(b / n * 15) : 15;
   };
+  const eyes = (ox, oy, oz) => { const out = []; for (const f of foci) for (const k of backs) out.push([[f[0] + ox * k, stageY + oy, f[2] + oz * k], f]); return out; };
+  return { seenBand, eyes, inRoom };
+}
+/** a follow offset's score under these opts: { rays: worst blocked band share ×15, out: eyes outside the room, graze: eyes within `air` of a machine } */
+export function followScore(opts, off){
+  const K = followKit(opts), air = opts.air ?? .8;
+  let rays = 0, out = 0, graze = 0;
+  for (const [e, f] of K.eyes(...off)){
+    if (!K.inRoom(e)) out++;
+    if (opts.boxes.some(b => boxDist(e, b) < air)) graze++;
+    rays = Math.max(rays, K.seenBand(e, f));
+  }
+  return { rays, out, graze };
+}
+export function solveFollow({ wall, boxes, stageY, backs = [1, 1.6], room, base = FOLLOW_BASE, blocked = null, air = .8, portrait = false, prefer = null }){
+  const { seenBand, eyes, inRoom } = followKit({ wall, boxes, stageY, backs, room, blocked, portrait });
   const cands = [];
   for (const a of F_AZ) for (const oy of F_Y) cands.push({ a, oy, dev: Math.abs(a) / 60 + (oy - base[1]) / 10 });
   cands.sort((p, q) => p.dev - q.dev);                       // the classic offset first, then the nearest
   const offOf = a => { const c = Math.cos(a * Math.PI / 180), s = Math.sin(a * Math.PI / 180); return [base[0] * c + base[2] * s, base[0] * -s + base[2] * c]; };
-  const eyes = (ox, oy, oz) => { const out = []; for (const f of foci) for (const k of backs) out.push([[f[0] + ox * k, stageY + oy, f[2] + oz * k], f]); return out; };
+  const clean = (ox, oy, oz) => { const E = eyes(ox, oy, oz);
+    return !E.some(([e]) => !inRoom(e) || boxes.some(b => boxDist(e, b) < air)) && E.every(([e, f]) => seenBand(e, f, true) === 0); };
+  // pass 0 — a previous solve (the room changed under the song): kept when it is still clean
+  if (prefer && clean(...prefer)) return { off: prefer.slice(), rays: 0 };
   // pass 1 — the first candidate (in preference order) that is CLEAN: in room, in clear air, every
   // in-frame band target seen. A candidate drops out at its first blocked ray, so it is cheap.
   for (const { a, oy } of cands){
-    const [ox, oz] = offOf(a), E = eyes(ox, oy, oz);
-    if (E.some(([e]) => !inRoom(e) || boxes.some(b => boxDist(e, b) < air))) continue;
-    if (E.every(([e, f]) => seenBand(e, f, true) === 0)) return { off: [ox, oy, oz], rays: 0 };
+    const [ox, oz] = offOf(a);
+    if (clean(ox, oy, oz)) return { off: [ox, oy, oz], rays: 0 };
   }
   // pass 2 (a floor with no clean follow): the least blocked, then the least strayed
   let best = null;
@@ -169,7 +220,7 @@ export function solveFollow({ wall, boxes, stageY, backs = [1, 1.6], room, base 
       const n = seenBand(eye, f); worst = Math.max(worst, n); sum += n;
       if (best && worst * 10 >= best.cost) break;           // (can't win any more)
     }
-    const cost = worst * 10 + sum * .5 + out * 2 + dev;
+    const cost = worst * 10 + sum * .5 + out * 40 + dev;          // (an eye out through the wall sees the wall: worse than a blocked ray)
     if (!best || cost < best.cost) best = { off: [ox, oy, oz], rays: worst, cost };
   }
   return best;

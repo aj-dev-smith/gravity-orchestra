@@ -22,7 +22,7 @@ import { convertToSong } from './midi/convert.js';
 import { recSupported, startRecording } from './record.js';
 import { spatialize } from './spatial.js';
 import { mergeStatic } from './mergestatic.js';
-import { solveShotEye, solveFollow, blockedRays, boxDist, boxPts, rayBox, CLEAR_RAYS } from './shotsolve.js';
+import { makeFollow, solveShots as solveShotsIn, resolveRoom, solidBox, roomSolids } from './shotrig.js';
 /* ============================================================
    CASCADE — melody-driven marble run, now multi-track.
    A song is one or more tracks of [note, beats-until-next-hit].
@@ -797,68 +797,22 @@ function syncDirector(S, view){
   lastShots = shots;
   cam.syncStations(shots, wide, { auto: !soloKey, openWide: full && !soloKey, openUntil: ROLL_T + 2 * BEAT, follow, bounds: eyeRoom() });
 }
-/* SOLVED SHOT EYES. Each station's hand-tuned framing is only its PREFERRED eye: shotsolve.js
-   samples candidates on rings round the aim (swung, lifted, pushed back / pulled in — nearest
-   the preference first) and keeps the first that stays in the room, stands in clear air and SEES
-   its station (≤ 1 of 15 probe rays hits another machine first — the real meshes, raycast here).
-   The belt's follow offset is solved the same way against every machine's box (solveFollow). */
-const _ubRay = new THREE.Raycaster(), _ubO = new THREE.Vector3(), _ubD = new THREE.Vector3();
-const glowy = m => !!m && (m.blending === THREE.AdditiveBlending || (m.transparent && !m.depthWrite));
+/* SOLVED SHOT EYES (src/shotrig.js over the pure shotsolve.js): each station's hand-tuned framing
+   is only its PREFERRED eye — the solve keeps the first candidate that stays in the room, stands in
+   clear air and SEES its station past every other machine AND the room's standing geometry (the
+   real meshes, raycast); the belt's follow offsets are solved the same way, both aspect classes. */
 const eyeRoom = () => ({ x0: -ROOM.HW + 1.5, x1: ROOM.HW - 1.5, y0: ROOM.FLOOR + 1.5, y1: ROOM.CEIL - 1.5, z0: ROOM.BACK + 1.5, z1: ROOM.FRONT - 1.5 });
+const followRig = makeFollow();
+let solvedRoom = null;
+function shotCtx(){
+  const w = stageWall;
+  return { world, roomGroup: rooms.group, belts: new Set(tracks.map(t => t.stage)), stageY: STAGE_Y, room: eyeRoom(), camera, drawn,
+           wall: w.isEmpty() ? null : [w.min.x, w.max.x, w.min.y, w.max.y, w.min.z, w.max.z], follow: followRig };
+}
 function solveShots(shots){
-  const t0 = performance.now();
-  const kids = world.children.map(c => { const b = visBox(c); return b.isEmpty() ? null : { c, box: [b.min.x, b.max.x, b.min.y, b.max.y, b.min.z, b.max.z] }; }).filter(Boolean);
-  const room = eyeRoom();
-  const top = o => { while (o.parent && o.parent !== world) o = o.parent; return o; };
-  // does this probe ray hit a machine other than `self` first? (AABB prefilter: only the machines
-  // whose box the ray crosses are raycast — the solve stays a few ms per song)
-  const blockedFor = self => (e, d, far) => {
-    const near = kids.filter(k => rayBox(e, d, k.box) < far).map(k => k.c);
-    if (!near.length || (near.length === 1 && near[0] === self)) return false;
-    _ubRay.set(_ubO.fromArray(e), _ubD.fromArray(d)); _ubRay.far = far; _ubRay.camera = camera;
-    const h = _ubRay.intersectObjects(near, true).find(i => (i.object.isMesh || i.object.isInstancedMesh) && drawn(i.object) && !glowy(i.object.material));
-    return !!h && top(h.object) !== self;
-  };
-  shots.forEach(sh => {
-    const blocked = blockedFor(sh.self), others = kids.filter(k => k.c !== sh.self).map(k => k.box);
-    const own = kids.find(k => k.c === sh.self)?.box;
-    const r = solveShotEye({ aim: sh.aim.toArray(), pref: sh.eye.toArray(), room, blocked, others, subject: own ? boxPts(own, sh.aim.y - 4) : null });
-    sh.pref = sh.eye.clone(); sh.eye.fromArray(r.eye); sh.rays = r.rays;
-    // the portrait pull-back: as far as the line stays in the room AND in clear air, seeing its station
-    const aim = sh.aim.toArray(), off = sh.eye.clone().sub(sh.aim);
-    let k = 1;
-    for (let q = 1.25; q <= 2.51; q += .25){
-      const e = sh.aim.clone().addScaledVector(off, q).toArray();
-      if (others.some(b => boxDist(e, b) < 1.2) || blockedRays(e, aim, blocked) > CLEAR_RAYS) break;
-      k = q;
-    }
-    sh.fitMax = Math.min(roomFit(sh.aim, sh.eye), k);
-    delete sh.self;
-  });
-  // the belt's follow shot, per aspect class (a phone pulls it ~2.8× back: past the front row)
-  let follow = null;
-  if (!stageWall.isEmpty() && shots.length){
-    const belts = new Set(tracks.map(t => t.stage));
-    const boxes = kids.filter(k => !belts.has(k.c)).map(k => k.box), w = stageWall;
-    const wall = [w.min.x, w.max.x, w.min.y, w.max.y, w.min.z, w.max.z];
-    const bk = kids.filter(k => !belts.has(k.c));
-    const blocked = (e, d, far) => {                    // the real meshes of every machine but the belt
-      const near = bk.filter(k => rayBox(e, d, k.box) < far).map(k => k.c);
-      if (!near.length) return false;
-      _ubRay.set(_ubO.fromArray(e), _ubD.fromArray(d)); _ubRay.far = far; _ubRay.camera = camera;
-      return _ubRay.intersectObjects(near, true).some(i => (i.object.isMesh || i.object.isInstancedMesh) && drawn(i.object) && !glowy(i.object.material));
-    };
-    // solved for the CURRENT aspect class now; the other only if the screen turns (cached)
-    const solve = portrait => solveFollow({ wall, boxes, stageY: STAGE_Y, backs: portrait ? [2.4, 3.2] : [1, 1.6], room, blocked, portrait });
-    const memo = {};
-    const get = cls => (memo[cls] ??= solve(cls === 'portrait'));
-    follow = { get land(){ return get('land').off; }, get portrait(){ return get('portrait').off; },
-               get rays(){ return [memo.land?.rays, memo.portrait?.rays]; }, all(){ get('land'); get('portrait'); return this; },
-               boxes };                                   // (boxes: camera.js keeps a pulled-back eye in clear air)
-    get(camera.aspect < .9 ? 'portrait' : 'land');
-  }
-  lastSolve = { ms: +(performance.now() - t0).toFixed(1), follow };
-  return follow;
+  solvedRoom = rooms.key;
+  lastSolve = { ...solveShotsIn(shots, shotCtx()), follow: followRig };
+  return followRig;
 }
 /* The points the WIDE shot must hold: the belt wall (band → top housing), a hung station's
    plates + canopy, every floor station from its deck up — and the front row only from its
@@ -956,14 +910,6 @@ function fitShot(pts, dir, aspect, fill = .94, fov = camera.fov, inset = 0){
   return { aim, eye: aim.clone().addScaledVector(dir, D * Math.max(.3, k)), k };
 }
 const _Yup = new THREE.Vector3(0, 1, 0);
-function roomFit(aim, eye, pad = 1.5){
-  const d = eye.clone().sub(aim); let k = Infinity;
-  const lim = (a, v, lo, hi) => { if (v > 1e-6) k = Math.min(k, (hi - a) / v); else if (v < -1e-6) k = Math.min(k, (lo - a) / v); };
-  lim(aim.x, d.x, -ROOM.HW + pad, ROOM.HW - pad);
-  lim(aim.y, d.y, ROOM.FLOOR + pad, ROOM.CEIL - pad);
-  lim(aim.z, d.z, ROOM.BACK + pad, ROOM.FRONT - pad);
-  return Math.max(1, k);
-}
 /* song.director — optional per-station pull for THIS song ({ bowls: 2.2 }): sparse,
    sustained machines (a bowl struck once a bar) score low on hit density, so a song
    that showcases one says so in its data. Clamped; absent → 1. */
@@ -1322,6 +1268,7 @@ function animate(){
   cam.update({ dt, time: clock.elapsedTime, songTime, tracks, marblePts, leadRender, reduceMotion, started,
                stationScores: auto ? sc : null });
 
+  if (solvedRoom !== null && rooms.key !== solvedRoom){ solvedRoom = rooms.key; lastSolve = { ...resolveRoom(lastShots, shotCtx()), follow: followRig }; }   // the room changed: re-check every eye against it
   rooms.update(dt, songTime, camera, expoKick + ensFlare);         // room ambience (pure fn of songTime + the music's kick)
   // PERF: an additive glow at opacity 0 still costs a full draw call. Every machine keeps
   // dozens of flash halos parked dark between strikes (~260 in a full room), so skip them
@@ -1588,9 +1535,11 @@ if (new URLSearchParams(location.search).has('debug')){
     get layout(){ return lastLayout; }, get wide(){ return lastWide; }, get merge(){ return mergeStats; },
     // staging-audit handles (scripts/staging-audit.mjs): the live camera, the song's world, the live marbles
     get three(){ return THREE; }, get camera(){ return camera; }, get world(){ return world; }, get marbles(){ return devMarbles; }, get P(){ return ROLL_T + LOOP_T; },
-    get shots(){ return lastShots.map(s => ({ key: s.key, owner: s.owner, eye: s.eye.toArray(), aim: s.aim.toArray(), pref: s.pref?.toArray(), rays: s.rays, fitMax: s.fitMax })); },
-    get solve(){ const f = lastSolve?.follow; return lastSolve && { ms: lastSolve.ms, follow: f && (f.all(), { land: f.land, portrait: f.portrait, rays: f.rays }) }; },
-    hung: () => instLive.filter(r => r.slot.hang).map(r => { const b = visBox(r.station); return { key: r.I.key, box: [b.min.x, b.max.x, b.min.y, b.max.y, b.min.z, b.max.z] }; }),
+    get shots(){ return lastShots.map(s => ({ key: s.key, owner: s.owner, eye: s.eye.toArray(), aim: s.aim.toArray(), pref: s.pref?.toArray(), rays: s.rays, fg: s.fg, fitMax: s.fitMax, portrait: s.portrait?.eye.toArray() })); },
+    get solve(){ const f = lastSolve?.follow; return lastSolve && { ms: lastSolve.ms, split: lastSolve.split, kept: lastSolve.kept, solids: lastSolve.solids, room: solvedRoom, follow: lastShots.length && f?.land ? { land: f.land, portrait: f.portrait, rays: f.rays } : null }; },
+    get follow(){ return followRig; }, shotCtx: () => shotCtx(),
+    roomSolids: () => roomSolids(rooms.group).map(s => s.box),   // the room's standing geometry, as the shot solve sees it
+    hung: () => instLive.filter(r => r.slot.hang).map(r => ({ key: r.I.key, box: solidBox(r.station, drawn) })),   // (solid: the merged cable/glow batches aren't bulk)
     hang: () => instLive.filter(r => r.slot.hang).map(r => ({ key: r.I.key, wallTop: +stageWall.max.y.toFixed(2), low: +hangLow(r.station).toFixed(2), y: +r.station.position.y.toFixed(2) })),
     renderInfo(n = 10){
       return new Promise(res => {

@@ -49,7 +49,12 @@ const _Y = new THREE.Vector3(0, 1, 0);
    tall arc's apex or a crane-hop lane ride over the housings used to sail out of the top. A
    closed-form fit (no search), capped at FIT_MAX and by the room's walls. */
 const FIT = .86, FIT_MAX = 2.4;                               // (and never out through the room's walls)
+/* …and when even that can't hold them (two marbles in bays a portrait frame can't span, the pull
+   capped by FIT_MAX or the front wall), ALL is not a shot on this screen: the director drops to the
+   heaviest single marble (the lead) until ALL has fit again for ALL_REST s. */
+const ALL_REST = 1.5, ALL_HOLD = .35;
 const _fo = new THREE.Vector3(), _fu = new THREE.Vector3(), _fR = new THREE.Vector3(), _fU = new THREE.Vector3(), _fq = new THREE.Vector3();
+const _pI = new THREE.Vector3(), _pA = new THREE.Vector3(), _pF = new THREE.Vector3();
 
 /* Keyboard fly: key → [right, up, forward] screen-space contribution. */
 const KEY_PAN = 0.65;                                         // pan units = KEY_PAN · distance · dt (scales with zoom)
@@ -84,6 +89,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
   let follow = null, bounds = null;                           // main's SOLVED follow offsets ({land, portrait}) + the eye's room box
   let cutNow = false, openUntil = -Infinity, stageOff = -99;
   let lastSeen = {};                                          // director: shot key → time it was last on screen
+  let allBadUntil = -Infinity, allFailSince = null;                                // director: ALL can't hold every marble on this screen until then
   let dbgCand = null, dbgRotate = null, dbgFloor = 0;         // the director's last weighing (dev: __dev.weigh)
   const _ideal = new THREE.Vector3(), _aim = new THREE.Vector3(), _focus = new THREE.Vector3();
 
@@ -217,8 +223,17 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
         if (m >= 1.05 && m > score){ score = m; want = tr.role; }
       });
       if (want === 'all' && tracks[0]._st && tracks[0]._st.dt <= .33) want = 'lead';  // shred cam
+      // can ALL hold every live marble on THIS screen? (a probe pose: same solve, no sway / sight test)
+      // (not in the count-in — the armed marbles hang on their magnets — and only a failure that
+      // HOLDS: a single tall apex is fitFollow's job, not a reason to leave ALL)
+      if (songTime >= 0 && marblePts.filter(m => m.vis !== false).length > 1 && !followPose('all', marblePts, 0, _pI, _pA, false)){
+        allFailSince ??= time;
+        if (time - allFailSince > ALL_HOLD) allBadUntil = time + ALL_REST;
+      } else allFailSince = null;
+      const allBad = time < allBadUntil;
+      if (want === 'all' && allBad) want = heaviest(marblePts);
       if (!stations.length){
-        if (want !== autoWant && time - lastCut > 2.2){
+        if (want !== autoWant && (time - lastCut > 2.2 || (autoWant === 'all' && allBad))){
           autoWant = want; lastCut = time;
         }
       } else if (songTime < openUntil){                      // the opening reveal: hold the wide
@@ -270,6 +285,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
         else if (sc._skim) cut('lead');                       // the money shot: the lead's skim, no matter the hold
         else if (force) cut(force);
         else if (sc._seam) cut('stage');                      // the loop seam: breathe wide, re-open on the newborn's fall
+        else if (autoWant === 'all' && allBad && marblePts.length) cut(want);   // ALL can't hold them here: the lead
         else {
           // (on the belt, the incumbent is whichever belt framing is live: its pull is the belt's)
           const cur = (cand[autoWant] ?? (autoWant !== 'stage' && !isSt(autoWant) && marblePts.length ? cand[want] : 0) ?? 0) * (held > BORED ? .45 : 1);
@@ -302,40 +318,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
       const fit = Math.min(shot.fitMax ?? Infinity, Math.pow(Math.max(1, 1.5 / camera.aspect), .6));   // fitMax: the eye can't leave the room
       aim.copy(shot.aim);
       ideal.copy(shot.eye).sub(aim).multiplyScalar(fit).applyAxisAngle(_Y, sway * .12).add(aim);
-    } else {
-      const followed = effMode !== 'all' ? marblePts.find(m => m.role === effMode) : null;
-      // (a newborn still holding off-screen before its fall is not part of the picture yet)
-      const shown = marblePts.some(m => m.vis !== false) ? marblePts.filter(m => m.vis !== false) : marblePts;
-      const focus = _focus.set(0, 0, 0);
-      let back = Math.max(1, 1.3 / Math.min(camera.aspect, 1.3));
-      if (!marblePts.length){
-        focus.set(0, stageY, 0);                              // pre-start (or between balls): frame the band
-      } else if (followed){
-        focus.copy(followed.p);
-        back *= .92;                                          // tight, personal chase
-      } else {
-        let wSum = 0;
-        shown.forEach(m => { focus.addScaledVector(m.p, m.w); wSum += m.w; });
-        focus.divideScalar(wSum);
-        let spread = 0;
-        shown.forEach(m => spread = Math.max(spread, m.p.distanceTo(focus)));
-        back *= (1 + Math.min(spread * .075, .7));
-      }
-      // VERTICAL IS (MOSTLY) PINNED: the band is static, so the camera doesn't bob with
-      // every bounce. x/z follow the marble (with sway + spread-dolly). In a full ROOM the
-      // follow sits further back and gives a PARTIAL vertical follow above the band (lift),
-      // so the top of a tall arc (apex ~8 u) stays in frame; the shared lerp smooths it.
-      const room = stations.length > 0;
-      // in a full room the offset is SOLVED (main: shotsolve.solveFollow — swung + lifted until
-      // no other machine stands between the eye and the belt, per aspect class)
-      const fo = room && follow ? ((camera.aspect < .9 && follow.portrait) || follow.land) : null;
-      const ox = fo ? fo[0] : 4.5, oy = fo ? fo[1] : 3.4, oz = fo ? fo[2] : (room ? 13 : 9.5);
-      ideal.copy(focus); ideal.x += (ox + sway*2.2)*back; ideal.z += (oz - sway*1.4)*back;
-      const lift = room && marblePts.length ? Math.max(0, focus.y - stageY - 2.5) : 0;
-      ideal.y = stageY + oy + lift*.4;                        // eye height: the band plane (+ a share of the lift)
-      aim.copy(focus); aim.y = stageY + .6 + lift*.6;         // look at the band centre, not the bobbing marble
-      if (marblePts.length) fitFollow(ideal, aim, followed ? [followed] : shown);
-    }
+    } else followPose(effMode, marblePts, sway, ideal, aim, true);
     // a director cut GLIDES only when it's short AND the glide's straight line is clear air —
     // never a dolly through a machine (main's pathBlocked raycasts the world); otherwise CUT
     // …and a cut that changes LENS is a cut too (a glide keeps its focal length: a dolly that
@@ -357,9 +340,55 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
     camera.lookAt(camTarget);
   }
 
+  /* the FOLLOW pose (all / lead / alto / bass): into ideal + aim. Returns whether every marble it
+     is about sits inside the frame (false: the pull-back was capped — the director's ALL probe). */
+  function followPose(role, marblePts, sway, ideal, aim, los){
+    const followed = role !== 'all' ? marblePts.find(m => m.role === role) : null;
+    // (a newborn still holding off-screen before its fall is not part of the picture yet)
+    const shown = marblePts.some(m => m.vis !== false) ? marblePts.filter(m => m.vis !== false) : marblePts;
+    const focus = _focus.set(0, 0, 0);
+    let back = Math.max(1, 1.3 / Math.min(camera.aspect, 1.3));
+    if (!marblePts.length){
+      focus.set(0, stageY, 0);                                // pre-start (or between balls): frame the band
+    } else if (followed){
+      focus.copy(followed.p);
+      back *= .92;                                            // tight, personal chase
+    } else {
+      let wSum = 0;
+      shown.forEach(m => { focus.addScaledVector(m.p, m.w); wSum += m.w; });
+      focus.divideScalar(wSum);
+      let spread = 0;
+      shown.forEach(m => spread = Math.max(spread, m.p.distanceTo(focus)));
+      back *= (1 + Math.min(spread * .075, .7));
+    }
+    // VERTICAL IS (MOSTLY) PINNED: the band is static, so the camera doesn't bob with
+    // every bounce. x/z follow the marble (with sway + spread-dolly). In a full ROOM the
+    // follow sits further back and gives a PARTIAL vertical follow above the band (lift),
+    // so the top of a tall arc (apex ~8 u) stays in frame; the shared lerp smooths it.
+    const room = stations.length > 0;
+    // in a full room the offset is SOLVED (main: shotsolve.solveFollow — swung + lifted until
+    // no other machine stands between the eye and the belt, per aspect class)
+    const fo = room && follow ? ((camera.aspect < .9 && follow.portrait) || follow.land) : null;
+    const ox = fo ? fo[0] : 4.5, oy = fo ? fo[1] : 3.4, oz = fo ? fo[2] : (room ? 13 : 9.5);
+    ideal.copy(focus); ideal.x += (ox + sway*2.2)*back; ideal.z += (oz - sway*1.4)*back;
+    const lift = room && marblePts.length ? Math.max(0, focus.y - stageY - 2.5) : 0;
+    ideal.y = stageY + oy + lift*.4;                          // eye height: the band plane (+ a share of the lift)
+    aim.copy(focus); aim.y = stageY + .6 + lift*.6;           // look at the band centre, not the bobbing marble
+    if (!marblePts.length) return true;
+    // (a followed newborn still holding off-screen is not fitted either)
+    return fitFollow(ideal, aim, followed ? (followed.vis !== false ? [followed] : []) : shown, los);
+  }
+  /* the heaviest live, visible marble's role (the lead: w 1.7) */
+  function heaviest(marblePts){
+    let best = null;
+    for (const m of marblePts) if (m.vis !== false && (!best || m.w > best.w)) best = m;
+    return best ? best.role : 'all';
+  }
+
   /* pull eye back along aim→eye until every subject marble sits inside FIT of the frame */
-  function fitFollow(eye, aim, pts){
-    _fo.subVectors(eye, aim); const D = _fo.length(); if (D < 1e-3) return;
+  function fitFollow(eye, aim, pts, los = true){
+    if (!pts.length) return true;
+    _fo.subVectors(eye, aim); const D = _fo.length(); if (D < 1e-3) return true;
     _fu.copy(_fo).divideScalar(D);
     _fR.crossVectors(_Y, _fu).normalize(); _fU.crossVectors(_fu, _fR);
     const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * FIT, tanH = tanV * camera.aspect;
@@ -383,7 +412,25 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
     const clearAt = (h, v) => { const x = aim.x + _fo.x * h, y = aim.y + _fo.y * v, z = aim.z + _fo.z * h;
       return !follow?.boxes?.some(b => Math.hypot(Math.max(b[0] - x, 0, x - b[1]), Math.max(b[2] - y, 0, y - b[3]), Math.max(b[4] - z, 0, z - b[5])) < .8); };
     while (kh > 1 && !clearAt(kh, kv)){ kh = Math.max(1, kh - .1); kv = Math.max(1, Math.min(kv, kh)); }
+    // …nor back to where another machine stands between the eye and a marble it is about (the
+    // solved offset is clean at the class's own pull-backs; past them, SEE before backing further):
+    // step the pull in until every sight line is clear (main: real meshes, AABB-prefiltered)
+    if (los && follow?.blocked){
+      const sees = (h, v) => { _pF.set(aim.x + _fo.x * h, aim.y + _fo.y * v, aim.z + _fo.z * h);
+        for (const m of pts){ _fq.subVectors(m.p, _pF); const L = _fq.length(); if (L < 1) continue;
+          if (follow.blocked(_pF.toArray(), _fq.divideScalar(L).toArray(), L - .6)) return false; }
+        return true; };
+      while (kh > 1.05 && !sees(kh, kv)){ kh = Math.max(1, kh - .2); kv = Math.max(1, Math.min(kv, kh)); }
+    }
     if (kh !== 1 || kv !== 1) eye.set(aim.x + _fo.x * kh, aim.y + _fo.y * kv, aim.z + _fo.z * kh);
+    // does every subject now sit inside the frame? (from the final eye, at the true lens)
+    _fo.subVectors(aim, eye).normalize(); _fR.crossVectors(_fo, _Y).normalize(); _fU.crossVectors(_fR, _fo);
+    const tv = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)), th = tv * camera.aspect;
+    for (const m of pts){
+      _fq.subVectors(m.p, eye); const z = _fq.dot(_fo);
+      if (z < .1 || Math.abs(_fq.dot(_fR)) > z * th * .98 || Math.abs(_fq.dot(_fU)) > z * tv * .98) return false;
+    }
+    return true;
   }
 
   function resize(){

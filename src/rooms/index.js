@@ -169,6 +169,7 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
   const host = {
     frame: STAGE,                                             // FLOOR etc. — identical across rooms
     get key(){ return key; },
+    get group(){ return cur ? cur.group : null; },             // the live room's group (the director's shot solve sees its piers / graves)
     set, place, prewarm,
     cycle(){ const k = set(ROOM_KEYS[(ROOM_KEYS.indexOf(key) + 1) % ROOM_KEYS.length], { announce: true }); save(k); return k; },
     /* a song's preferred room (song data `room` field). ?room and a pick made this session

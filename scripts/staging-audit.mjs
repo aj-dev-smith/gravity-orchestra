@@ -254,7 +254,7 @@ function probeLive(key, selfKey){
   return { blocked: +(blocked / n).toFixed(2), by, near, eye: p.toArray().map(v => +v.toFixed(1)) };
 }
 
-const results = [], fixture = [];
+const results = [], fixture = [], roomTable = {};
 const shotDir = A.shots;
 if (shotDir) fs.mkdirSync(shotDir, { recursive: true });
 for (const [ri, room] of ROOMS.entries()){
@@ -311,6 +311,9 @@ for (const [ri, room] of ROOMS.entries()){
       }
     }
     results.push({ room, song: name, ...st, run });
+    // the room's standing geometry as the shot solve sees it (song-independent — except the Void's
+    // islands, grown under each song's machines by place(): not tabled)
+    if (A.fixture && !(room in roomTable) && room !== 'void') roomTable[room] = await pg.evaluate(() => window.__dev.roomSolids().map(b => b.map(v => +v.toFixed(2))));
     if (A.fixture && ri === 0) fixture.push(await pg.evaluate(name => {
       const D = window.__dev, L = D.layout, r = v => +v.toFixed(2), r3 = a => a.map(r);
       if (!L) return { song: name, wall: null, items: [], fixed: [], shots: [] };
@@ -334,5 +337,5 @@ for (const [ri, room] of ROOMS.entries()){
   await page.close();
 }
 if (A.json) fs.writeFileSync(A.json, JSON.stringify(results, null, 1));
-if (A.fixture) fs.writeFileSync(A.fixture, '[\n' + fixture.map(f => JSON.stringify(f)).join(',\n') + '\n]\n');
+if (A.fixture) fs.writeFileSync(A.fixture, '{"rooms":' + JSON.stringify(roomTable) + ',\n"songs":[\n' + fixture.map(f => JSON.stringify(f)).join(',\n') + '\n]}\n');
 await browser.close();

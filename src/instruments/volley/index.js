@@ -108,14 +108,11 @@ export default {
       const NL = Math.ceil(loopLen / LINK);
       const links = new THREE.InstancedMesh(new THREE.BoxGeometry(.15, .07, .09), M.steel, NL * 4);
       links.frustumCulled = false; group.add(links);
-      // the sprockets (8: front/back × top/bottom × two walls), each turned by its chain
-      const sprockets = [];
-      const sprGeo = sprocketGeo();
-      for (const s of [-1, 1]) for (const zs of [-1, 1]) for (const y of [Y_CH0, Y_CH1]){
-        const m = new THREE.Mesh(sprGeo, M.chrome);
-        m.position.set(s * (XF + RS), y, zs * (ZW + .5)); group.add(m);
-        sprockets.push({ m, s, zs });
-      }
+      // the sprockets (8: front/back × top/bottom × two walls), each turned by its chain — one instanced draw
+      const SPR = [];
+      for (const s of [-1, 1]) for (const zs of [-1, 1]) for (const y of [Y_CH0, Y_CH1]) SPR.push({ s, pos: new THREE.Vector3(s * (XF + RS), y, zs * (ZW + .5)) });
+      const sprockets = new THREE.InstancedMesh(sprocketGeo(), M.chrome, SPR.length);
+      sprockets.frustumCulled = false; group.add(sprockets);
 
       // ---- the pads: a pool, re-derived every frame. Each = a disc (tinted its note) with a glowing rim,
       //      on an ARM from a brass KNUCKLE at the end of a telescoping BOOM from a SHOE clamped on its SLAT ----
@@ -150,23 +147,17 @@ export default {
           ticks.setMatrixAt(j, m4.makeTranslation(s * (XF + RS), l.y, zs * TICK_Z)); ticks.setColorAt(j, l.col.clone().multiplyScalar(.2)); j++; }
         ticks.count = j; }
 
-      // ---- the shuttle: a carriage hanging under the bridge rail, a rod, the coil + its face ----
+      // ---- the shuttle: a carriage hanging under the bridge rail, a rod, the coil + its face
+      //      (one merged geometry per material: five draws for the whole trolley) ----
       const shuttle = new THREE.Group(); group.add(shuttle);
-      const car = new THREE.Mesh(new THREE.BoxGeometry(.78, .34, .56), M.alu); car.position.y = Y_CAR; shuttle.add(car);
-      for (const sx of [-1, 1]) for (const sz of [-1, 1]){
-        const w = new THREE.Mesh(new THREE.CylinderGeometry(.08, .08, .07, 12).rotateX(Math.PI / 2), M.dark);
-        w.position.set(sx * .25, Y_RAIL - .02, sz * .2); shuttle.add(w);
-      }
-      const rod = new THREE.Mesh(new THREE.CylinderGeometry(.05, .05, Y_CAR - .17 - (Y_COIL + COIL_H), 10), M.chrome);
-      rod.position.y = (Y_CAR - .17 + Y_COIL + COIL_H) / 2; shuttle.add(rod);
-      const coil = new THREE.Mesh(new THREE.CylinderGeometry(COIL_R, COIL_R, COIL_H, 24), M.coil);
-      coil.position.y = Y_COIL + COIL_H / 2; shuttle.add(coil);
-      const face = new THREE.Mesh(new THREE.CylinderGeometry(COIL_R * .9, COIL_R * .9, .04, 24), M.chrome);
-      face.position.y = Y_COIL + .02; shuttle.add(face);
-      for (const y of [.11, .22, .33]){
-        const wind = new THREE.Mesh(new THREE.TorusGeometry(COIL_R + .01, .017, 6, 24).rotateX(Math.PI / 2), M.brass);
-        wind.position.y = Y_COIL + y; shuttle.add(wind);
-      }
+      const trolley = (mat, geos) => shuttle.add(new THREE.Mesh(mergeFlat(geos), mat));
+      trolley(M.alu, [new THREE.BoxGeometry(.78, .34, .56).translate(0, Y_CAR, 0)]);
+      trolley(M.dark, [-1, 1].flatMap(sx => [-1, 1].map(sz => new THREE.CylinderGeometry(.08, .08, .07, 12).rotateX(Math.PI / 2).translate(sx * .25, Y_RAIL - .02, sz * .2))));
+      const rodL = Y_CAR - .17 - (Y_COIL + COIL_H);
+      trolley(M.chrome, [new THREE.CylinderGeometry(.05, .05, rodL, 10).translate(0, Y_COIL + COIL_H + rodL / 2, 0),
+                      new THREE.CylinderGeometry(COIL_R * .9, COIL_R * .9, .04, 24).translate(0, Y_COIL + .02, 0)]);
+      trolley(M.coil, [new THREE.CylinderGeometry(COIL_R, COIL_R, COIL_H, 24).translate(0, Y_COIL + COIL_H / 2, 0)]);
+      trolley(M.brass, [.11, .22, .33].map(y => new THREE.TorusGeometry(COIL_R + .01, .017, 6, 24).rotateX(Math.PI / 2).translate(0, Y_COIL + y, 0)));
       // its power cable, festooned along the rail back to the left pylon
       const cable = new THREE.Mesh(new THREE.BoxGeometry(1, .05, .07), M.rubber);
       cable.userData.noMerge = true; group.add(cable);
@@ -189,7 +180,7 @@ export default {
       R.evs.forEach((e, i) => { const b = R.evs[(i + 1) % R.n]; if (R.n > 1 && e.side !== b.side && e.u) crossT.push(e.s + (0 - e.C[0]) / e.u); });
       const netL = laneClock(crossT, P);
       const intoCowl = s => laneClock(R.evs.filter(e => e.side === s).map(e => e.s + ZW / R.V), P);
-      S = { R, P, start, ZW, POOL, pads, rims, arms, booms, knuckles, shoes, slats, IMS, links, NL, loopLen, sprockets,
+      S = { R, P, start, ZW, POOL, pads, rims, arms, booms, knuckles, shoes, slats, IMS, links, NL, loopLen, sprockets, SPR,
             ticks, lanes, shuttle, cable, coil: M.coil, marble, marbleMat: M.marble, halo, NPT, netL, netTop: M.netTop, netMat: M.net,
             cowl: { '-1': { L: intoCowl(-1), mat: M.slotL }, '1': { L: intoCowl(1), mat: M.slotR } },
             edge: makeEdge(EDGE_W),
@@ -221,7 +212,8 @@ export default {
           }
         }
         S.links.instanceMatrix.needsUpdate = true;
-        for (const sp of S.sprockets) sp.m.rotation.y = -sp.s * run / RS;
+        S.SPR.forEach((sp, k) => S.sprockets.setMatrixAt(k, m4.compose(sp.pos, q.setFromAxisAngle(S.up, -sp.s * run / RS), sc.set(1, 1, 1))));
+        S.sprockets.instanceMatrix.needsUpdate = true;
       }
 
       // ---- the marble ----
@@ -369,10 +361,12 @@ export default {
 
 /* ================= geometry builders ================= */
 
-const box = (w, h, d, x, y, z, mat, group) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); group.add(m); return m; };
+/* (static parts drop their material groups: one-group geometry is what main's static merge bakes) */
+const one = g => { g.clearGroups(); return g; };
+const box = (w, h, d, x, y, z, mat, group) => { const m = new THREE.Mesh(one(new THREE.BoxGeometry(w, h, d)), mat); m.position.set(x, y, z); group.add(m); return m; };
 function bar(a, b, r, mat, group, seg = 8){
   const d = b.clone().sub(a), L = d.length();
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, L, seg), mat);
+  const m = new THREE.Mesh(one(new THREE.CylinderGeometry(r, r, L, seg)), mat);
   m.position.copy(a).addScaledVector(d, .5);
   m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize());
   group.add(m); return m;
@@ -438,6 +432,8 @@ function buildWall(group, M, s, ZW){
     for (const z of [z0, z1]) box(.05, h, .05, s * (x0 - .02), yc, z, M.line, group);
     const win = new THREE.Mesh(new THREE.BoxGeometry(.03, h - .9, Math.min(.16, dz * .3)), s < 0 ? M.slotL : M.slotR);
     win.position.set(s * (x0 - .03), yc, zm); win.userData.noMerge = true; group.add(win);
+    // its end face: a column of vents (the re-tuning bay breathes)
+    for (let k = 0; k < 5; k++) box(cw - .5, .05, .03, cx, Y_BEAM0 + .9 + k * (h - 1.8) / 4, z1 + zs * .016, M.column, group);
   }
   // the strike column: two lit posts between the strands
   for (const zs of [-1, 1]) box(.05, Y_CH1 - Y_CH0, .05, s * (XF + RS), (Y_CH0 + Y_CH1) / 2, zs * TICK_Z, M.column, group);
@@ -450,7 +446,7 @@ function buildNet(group, M, ZW){
     bar(new THREE.Vector3(0, 0, s * zp), new THREE.Vector3(0, NET_H + .2, s * zp), .06, M.chrome, group, 12);
     const cap = new THREE.Mesh(new THREE.SphereGeometry(.1, 12, 8), M.brass); cap.position.set(0, NET_H + .22, s * zp); group.add(cap);
   }
-  const top = new THREE.Mesh(new THREE.CylinderGeometry(.035, .035, 2 * zp, 8).rotateX(Math.PI / 2), M.netTop);
+  const top = new THREE.Mesh(one(new THREE.CylinderGeometry(.035, .035, 2 * zp, 8)).rotateX(Math.PI / 2), M.netTop);
   top.position.set(0, NET_H, 0); group.add(top);
   bar(new THREE.Vector3(0, y0, -zp), new THREE.Vector3(0, y0, zp), .02, M.steel, group, 6);
   const pts = [], step = .28;
@@ -490,6 +486,13 @@ function buildRigging(group, M, ZW, ceilY, floorY){
   }
 }
 
+/* merge any list of geometries into one (non-indexed, position/normal/uv) */
+function mergeFlat(list){
+  const flat = list.map(g => { const f = g.index ? g.toNonIndexed() : g; for (const k of Object.keys(f.attributes)) if (!['position', 'normal', 'uv'].includes(k)) f.deleteAttribute(k); return f; });
+  const out = mergeGeometries(flat);
+  list.forEach(g => g.dispose()); flat.forEach(g => g.dispose());
+  return out;
+}
 /* a sprocket: a hub + 12 teeth + its shaft, merged */
 function sprocketGeo(){
   const parts = [new THREE.CylinderGeometry(RS * .82, RS * .82, .12, 20)];
@@ -498,7 +501,7 @@ function sprocketGeo(){
     parts.push(new THREE.BoxGeometry(.08, .1, .1).rotateY(-a).translate(RS * Math.cos(a), 0, RS * Math.sin(a)));
   }
   parts.push(new THREE.CylinderGeometry(.06, .06, .5, 10));
-  return mergeGeometries(parts.map(g => { const f = g.index ? g.toNonIndexed() : g; for (const k of Object.keys(f.attributes)) if (!['position', 'normal', 'uv'].includes(k)) f.deleteAttribute(k); return f; }));
+  return mergeFlat(parts);
 }
 
 function makeHaloCloud(n, glowTex){

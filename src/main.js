@@ -22,6 +22,7 @@ import { convertToSong } from './midi/convert.js';
 import { recSupported, startRecording } from './record.js';
 import { spatialize } from './spatial.js';
 import { mergeStatic } from './mergestatic.js';
+import { makeEditor } from './editor/index.js';
 /* ============================================================
    CASCADE — melody-driven marble run, now multi-track.
    A song is one or more tracks of [note, beats-until-next-hit].
@@ -35,6 +36,7 @@ let BEAT = .7, SCALE = [];
 let tracks = [], LOOP_T = 0, world = null;
 let drumGroup = null;                                   // the drum machine's group (dev layout probe)
 let stageWall = new THREE.Box3();                       // the belt machines' world box this song (staging + the wide fit)
+let curBuild = null;                                    // this song's staging inputs (stage edit re-anchors from them: restage)
 let lastLayout = null, lastWide = null, lastShots = [];                                  // dev: the last room solve (__dev.layout)
 let kitSlot = KIT_SOLO;                                 // where the drum machine stands this song (marbledrums.js)
 const FIXED_ZMAX = 30;                                  // FIXED cam: cap the pull-back. Past ~30 the FogExp2 eats
@@ -393,7 +395,7 @@ function disposeTree(root){
 
 function buildWorld(keyName){
   if (recState !== 'idle') abortRec();                  // a rebuilt world invalidates the take
-  const S = SONGS[keyName];
+  const S = editor.song(keyName);                       // (the creation tools' instrument MAP may re-route it — src/editor)
   BEAT = 60 / S.bpm; SCALE = S.scale;
   document.getElementById('songsub').textContent = S.sub;
 
@@ -470,7 +472,7 @@ function buildWorld(keyName){
   // next song change). Aligned to the lead's timeline; `start` arms every ball on its magnet
   // for the count-in. The kit moves to the front-right tier when the room is full of plugin
   // stations; the solve may slide it further (then it is rebuilt there: its contacts are world).
-  kitSlot = full ? KIT_ROOM : KIT_SOLO;
+  kitSlot = editor.kitSlot(full ? KIT_ROOM : KIT_SOLO);  // (a user-placed kit — stage edit — is pinned there)
   // (posed once at the count-in instant: an un-posed ball parked at the origin would make the
   //  measured footprint reach across the room)
   const POSE0 = { started: false, skipStrikes: true, onStrike(){} };
@@ -485,7 +487,7 @@ function buildWorld(keyName){
   instRigs.forEach((rig, i) => {
     const part = S.parts?.[rig.I.key];
     if (!part || !part.length) return;
-    const st = stationFor(rig.I.key, i);
+    const st = editor.slot(rig.I.key, stationFor(rig.I.key, i));   // a user-placed station (stage edit): pinned x/z/yaw
     const station = new THREE.Group();
     // a HUNG station (the ricochet chandelier) is a crown over the belt: centred on the wall,
     // its LOWEST part (plate, stem, the knot's wire) HANG_CLEAR above the paternoster's top
@@ -526,9 +528,9 @@ function buildWorld(keyName){
   const items = [];
   instLive.forEach(r => { if (r.slot.hang) return;
     const p = r.station.position, box = relBox(r.station, p.x, p.z, r.I.key);
-    if (box) items.push({ key: r.I.key, x: p.x, z: p.z, box, top: tops[r.I.key], rig: r }); });
+    if (box) items.push({ key: r.I.key, x: p.x, z: p.z, box, top: tops[r.I.key], rig: r, pin: r.slot.pin }); });
   const kx0 = stageView.cx + kitSlot.x, kz0 = kitSlot.z;
-  if (S.drums){ const box = relBox(drumGroup, kx0, kz0, 'drums'); if (box) items.push({ key: 'drums', x: kx0, z: kz0, box, top: tops.drums }); }
+  if (S.drums){ const box = relBox(drumGroup, kx0, kz0, 'drums'); if (box) items.push({ key: 'drums', x: kx0, z: kz0, box, top: tops.drums, pin: kitSlot.pin }); }
   if (items.length && !wallBox.isEmpty()){
     const solved = layoutStations(items,
       [wallBox.min.x, wallBox.max.x, wallBox.min.z, wallBox.max.z],
@@ -566,13 +568,8 @@ function buildWorld(keyName){
   rooms.cue({ storm: Array.isArray(S.storm) ? S.storm.filter(Number.isFinite) : null,
               sky: Array.isArray(S.sky) ? S.sky.filter(c => Array.isArray(c) && Number.isFinite(c[0]) && typeof c[1] === 'string') : null,
               rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T });
-  // anchor points for the room (the Void grows a plinth + light pillar under each)
-  rooms.place([
-    { x: stageView.cx, z: -2.25, w: wallW + 4, d: 6, yaw: 0, y: STAGE_Y - 9.6 },   // the paternoster bays (housing bottom)
-    ...(S.drums ? [kitAnchor(stageView.cx, kitSlot)] : []),
-    ...instLive.filter(r => !r.slot.hang).map(r => ({ x: r.station.position.x, z: r.station.position.z, yaw: r.station.rotation.y,
-      w: r.slot.w, d: r.slot.d, y: r.slot.y })),
-  ]);
+  curBuild = { S, view: stageView, wallW, P0, buildKit };
+  placeRoom();
 
   audio.setBeat(BEAT);
   cam.syncTracks(tracks, stageView);                    // reframe + rebuild the cam-button row for the new song
@@ -586,6 +583,39 @@ function buildWorld(keyName){
   songTime = -LEAD_IN; loopIndex = -1; skipStrikes = true;
   tracks.forEach(tr => spawnBall(tr, 0));   // the count-in: marble hangs ARMED on its magnet
   if (started) clock.start();
+  editor.built();
+}
+/* anchor points for the room (the Void grows a plinth + light pillar under each) */
+function placeRoom(){
+  const { S, view, wallW } = curBuild;
+  rooms.place([
+    { x: view.cx, z: -2.25, w: wallW + 4, d: 6, yaw: 0, y: STAGE_Y - 9.6 },   // the paternoster bays (housing bottom)
+    ...(S.drums ? [kitAnchor(view.cx, kitSlot)] : []),
+    ...instLive.filter(r => !r.slot.hang).map(r => ({ x: r.station.position.x, z: r.station.position.z, yaw: r.station.rotation.y,
+      w: r.slot.w, d: r.slot.d, y: r.slot.y })),
+  ]);
+}
+/* STAGE EDIT moved a station (src/editor/stage-edit.js moved its group: a rigid render-time move
+   of an already-solved world — supports already reach the flat floor). Re-anchor the room and
+   re-solve the director's shots from where things now stand. A dragged KIT is rebuilt at its new
+   slot (its contacts are world-space). No re-solve of any physics; songTime runs on. */
+function restage(){
+  if (!curBuild) return;
+  const { S, view, P0, buildKit } = curBuild;
+  if (drumGroup && (drumGroup.position.x || drumGroup.position.z)){
+    kitSlot = { x: kitSlot.x + drumGroup.position.x, z: kitSlot.z + drumGroup.position.z, pin: true };
+    world.remove(drumGroup); disposeTree(drumGroup);
+    drumGroup = buildKit(); world.add(drumGroup);
+    if (!NO_MERGE){
+      const times = Array.from({ length: 48 }, (_, k) => -LEAD_IN + (k + .37) / 48 * (P0 + LEAD_IN));
+      mergeStatic(drumGroup, t => drumKit.update(t, P0, 0, { started: true, skipStrikes: true, onStrike(){} }), times);
+    }
+    drumKit.update(songTime, P0, 0, { started, skipStrikes: true, onStrike(){} });
+  }
+  instLive.forEach(r => r.station.updateMatrixWorld(true));
+  placeRoom();
+  syncDirector(S, view);
+  fadeMats = collectFadeMats(world); fadeWarm = 3;
 }
 
 /* PATERNOSTER: the marble is CONSERVED, and the MAGNET CRANE flies every gap a free arc
@@ -1067,6 +1097,26 @@ Object.entries(SONGS).forEach(([k, s]) => {
   sel.appendChild(o);
 });
 if (soloI && SONGS['solo-' + soloKey]) sel.value = 'solo-' + soloKey;
+/* CREATION TOOLS (src/editor/): the instrument MAP (who plays what) + STAGE EDIT (where it
+   stands). Data over the song — main asks it for the effective song + each station's slot. */
+const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: SONGS,
+  machines: INSTRUMENTS.map(I => ({ key: I.key, label: I.label, color: I.color })),
+  host: {
+    key: () => sel.value,
+    rebuild(keepTime){ const t = songTime; buildWorld(sel.value); if (keepTime && started){ songTime = t; skipStrikes = true; }
+      audio.primeSamples(); audio.showState(); },        // (called from a tap/change: a gesture — §5)
+    restage,
+    pieces: () => [
+      ...instLive.filter(r => !r.slot.hang).map(r => ({ key: r.I.key, label: r.I.label, color: r.I.color, obj: r.station, kind: 'station', canRotate: true })),
+      ...(drumGroup && curBuild?.S.drums ? [{ key: 'drums', label: 'Drum Machine', color: '#ff8a3d', obj: drumGroup, kind: 'kit', canRotate: false,
+        deckY: kitAnchor(0, kitSlot).y }] : []),
+    ],
+    wall: () => stageWall, cx: () => curBuild?.view.cx ?? 0,
+    kitPivot: () => ({ x: (curBuild?.view.cx ?? 0) + kitSlot.x + (drumGroup?.position.x || 0), z: kitSlot.z + (drumGroup?.position.z || 0) }),
+    visBox: o => visBox(o),
+    room: { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 },
+    roomBox: { y1: ROOM.CEIL - 2, z1: ROOM.FRONT - 2 },
+  } });
 buildWorld(sel.value);
 if (soloI) lookAtStation(soloKey);
 /* the machine runs from first paint — only AUDIO waits for a gesture.
@@ -1300,6 +1350,7 @@ function animate(){
     for (let i = 0; i < fadeMats.length; i++){ const m = fadeMats[i]; m.visible = m.opacity > .002; }
   }
   if (convDbgOn) convDebug(leadRender ? leadRender.y : cam.target.y, camera.position.y);
+  editor.update();                                      // stage edit: name tags follow their machines
   composer.render();
 }
 animate();
@@ -1393,7 +1444,7 @@ function registerSong(key, song){
   shareEl.hidden = false;
 }
 shareEl.addEventListener('click', async () => {
-  const url = `${location.origin}${location.pathname}#s=${await encodeSong(SONGS[sel.value])}`;
+  const url = `${location.origin}${location.pathname}#s=${await encodeSong(editor.shareable(sel.value))}`;   // (+ the map + stage layout)
   history.replaceState(null, '', url);
   try { await navigator.clipboard.writeText(url); shareEl.textContent = 'COPIED'; }
   catch(e){ shareEl.textContent = 'LINK IN URL BAR'; }
@@ -1427,7 +1478,9 @@ addEventListener('drop', async e => {
    (drop): only then may audio be built/unlocked (§5 — a context born outside a gesture
    is a zombie). The ?midi boot just registers the song; the veil tap starts sound. */
 function importMidi(bytes, name, gesture){
-  const { song, warnings } = convertToSong(parseMidi(bytes), {label: name.replace(/^.*\//, '').replace(/\.midi?$/i, '')});
+  const parsed = parseMidi(bytes), label = name.replace(/^.*\//, '').replace(/\.midi?$/i, '');
+  const { song, warnings } = convertToSong(parsed, {label});
+  editor.midiLoaded(parsed, label, warnings);           // the instrument MAP opens on it (src/editor)
   if (gesture) enterSound();                            // a drop is a gesture: veil off, audio up
   registerSong('imported', song);
   if (gesture){
@@ -1548,6 +1601,7 @@ if (new URLSearchParams(location.search).has('debug')){
       return out;
     },
     get layout(){ return lastLayout; }, get wide(){ return lastWide; }, get merge(){ return mergeStats; },
+    get editor(){ return editor; },                    // creation tools: .openMap() .toggleEdit() .stage.state() .stage.select(k)
     hang: () => instLive.filter(r => r.slot.hang).map(r => ({ key: r.I.key, wallTop: +stageWall.max.y.toFixed(2), low: +hangLow(r.station).toFixed(2), y: +r.station.position.y.toFixed(2) })),
     renderInfo(n = 10){
       return new Promise(res => {

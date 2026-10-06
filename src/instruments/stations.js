@@ -79,7 +79,7 @@ export function stationFor(key, i = 0){
 }
 
 /** SOLVE the room for one song.
-    items: [{ key, x, z, box: [x0, x1, z0, z1] }] — WORLD x/z of each floor station's
+    items: [{ key, x, z, box: [x0, x1, z0, z1], pin? }] — WORLD x/z of each floor station's
       origin at its base slot (main: belt centre + slot), and its footprint measured from
       the built geometry RELATIVE to that origin (already rotated by its yaw).
     wall:  [x0, x1, z0, z1] — the belt machines' world XZ box.
@@ -101,6 +101,7 @@ function solveOnce(items, wall, room, margin, ref, cx, bandY, eyeY){
   // 1. the WINGS ride out with the belt: a station beside the wall (not the front row)
   //    keeps its gap to the wall's real edge, so the tiers keep their shape on a wide belt
   for (const s of S){
+    if (s.pin) continue;                                  // a station the user PLACED (stage edit) stays put
     const beside = s.z + s.box[2] < wall[3] + 6;          // its back edge reaches the wall's depth band
     if (!beside) continue;
     if (s.x < cx - 4) s.x += Math.min(0, (wall[0] - cx) + ref);
@@ -137,10 +138,13 @@ function solveOnce(items, wall, room, margin, ref, cx, bandY, eyeY){
   //    takes the NEAREST spot that is (a grid search outward from its slot: the smallest move;
   //    on a crowded 3-bay floor a back-tier wing steps forward of the belt rather than hide).
   const placed = [wall];
-  const order = [...S].sort((a, b) => b.prio - a.prio || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  // (user-PINNED stations — stage edit — are placed first, exactly where the user put them;
+  //  the auto-placed rest step around them)
+  const order = [...S].sort((a, b) => !!b.pin - !!a.pin || b.prio - a.prio || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   const offs = searchGrid();
   let clean = true;
   for (const s of order){
+    if (s.pin){ placed.push(bx(s)); continue; }
     clampIn(s);
     const b = bx(s);
     const hits = (dx, dz) => { let n = 0; for (const o of placed)

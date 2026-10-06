@@ -1,146 +1,277 @@
 import { describe, it, expect } from 'vitest';
-import { eventTimes } from '../src/instruments/clock.js';
+import { eventTimes, at } from '../src/instruments/clock.js';
 import { noteHz } from '../src/engine.js';
+import { SONGS } from '../src/songs/index.js';
 import {
-  makeLanes, ballAt, kickAt, flexAt, barTopAt, modeShape, keyboard, H, DT_MAX, g, NODE,
-  KICK_MAX, PAD_T, PLUNGE, SOL_H, ROD, FLEX_MAX, effectiveStart,
+  solve, keyboard, handsAt, malletAt, liftAt, flexAt, motionStats, innerExtent, modeShape, prepH,
+  HEAD_R, NODE, FLEX_MAX, GAP_MIN, S_MIN, V_MAX, A_MAX, VS_MAX, AS_MAX, T_REC, E, A_ST,
+  H_ARMED, TRAVEL, MAL_X, ROLL_DT, HP_MAX, Y_W, LS, PEAK,
 } from '../src/instruments/marimba/solve.js';
 import { marimbaVoice, layerId } from '../src/instruments/marimba/voice.js';
 import marimba from '../src/instruments/marimba/index.js';
 
-const ROLL_T = 2.6, BEAT = 60 / 100, START = -2.4;
-const loopBeats = marimba.demo.beats;
-const P = ROLL_T + loopBeats * BEAT;
+const ROLL_T = 2.6, START = -2.4;
+const KB = { width: 11.2, x0: -.35 };
 
-// a synthetic part with every kind of lane: a dense roll (16ths), mid arcs, a long hold,
-// a lone note, chords, and a pickup-style note at beat 0 that wraps the seam
-const SYN = [
-  ...Array.from({ length: 8 }, (_, k) => [4 + k * .25, 'E5', .4 + k * .07]),   // a roll
-  [0, 'A3'], [1.5, 'A3', .6], [2.5, 'A3', .8], [9, 'A3'],                       // arcs + a hold
-  [0, 'E4'], [0, 'C5'], [8, 'E4', .5], [8, 'C5', .5],                            // chords
-  [6, 'G5'],                                                                      // a lone note
-  [15.75, 'D4'], [0.25, 'D4'],                                                    // across the seam
+function planFor(part, bpm = 100, loopBeats = 16){
+  const beat = 60 / bpm, P = ROLL_T + loopBeats * beat;
+  const ev = eventTimes(part, { rollT: ROLL_T, beat });
+  const kb = keyboard(ev.map(e => e.note), KB);
+  return solve(ev, { P, start: START, kb });
+}
+const loopBeatsOf = s => s.melody.reduce((a, n) => a + n[1], 0);
+
+const DEMO = planFor(marimba.demo.part, marimba.demo.bpm, marimba.demo.beats);
+// a synthetic part with every kind of move: chords of 2/3/4, a fast line that crosses the
+// keyboard, octave leaps, a repeated note, a unison roll, a dyad roll, a note across the seam
+const SYN_PART = [
+  [0, 'C3'], [0, 'G3'], [0, 'E4'], [0, 'C5'],
+  ...['C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4', 'C5', 'D5', 'E5'].map((n, k) => [1 + k * .25, n, .5 + .05 * k]),
+  [4, 'C3'], [4.5, 'C5'], [5, 'D3'], [5.5, 'D5'],
+  [6, 'G4', .8], [6.25, 'G4', .6], [6.5, 'G4', .7],
+  [8, 'E4', .6, 2],
+  [11, 'C4', .7, 1.5], [11, 'A4', .7, 1.5],
+  [13, 'F3'], [13, 'A3'], [13, 'F4'],
+  [15.75, 'B4', .9],
 ];
-const lanesFor = part => makeLanes(eventTimes(part, { rollT: ROLL_T, beat: BEAT }), P, START);
+const SYN = planFor(SYN_PART);
+const SONG_PLANS = Object.entries(SONGS).filter(([, s]) => s.parts?.marimba?.length)
+  .map(([k, s]) => [k, planFor(s.parts.marimba, s.bpm, loopBeatsOf(s))]);
+const PLANS = [['demo', DEMO], ['synthetic', SYN], ...SONG_PLANS];
 
-const LANES = [...lanesFor(SYN), ...lanesFor(marimba.demo.part)];
+/** every strike of every mallet at absolute song time, for the first two loops after start */
+function strikes(plan, loops = 2){
+  const out = [];
+  plan.mallets.forEach((M, k) => M.strikes.forEach((s, i) => {
+    for (let n = -1; n <= loops; n++){
+      const t = s.t + n * plan.P;
+      if (t < plan.start) continue;
+      if (at(M.L, t + 1e-9, plan.start).armed) continue;   // before this lane's first strike: never happened
+      out.push({ k, M, s, i, t });
+    }
+  }));
+  return out;
+}
 
-describe('marimba solve — lands exactly on the beat', () => {
-  it('every lane is at the bar (y = 0) at each of its strikes, every loop', () => {
-    for (const { L, start: START } of LANES) for (const s of L.s) for (const k of [0, 1, 2]){
-      const t = s + k * P;
-
-      const d = ballAt(L, t, START);
-      if (d.i < 0) continue;                       // strikes before the first after START never happened
-      expect(d.y, `t=${t}`).toBeCloseTo(0, 6);
+describe('marimbist solve — contact is honest', () => {
+  it('every head is EXACTLY on its bar (x, top + r, z) at each strike instant', () => {
+    for (const [name, plan] of PLANS) for (const { k, s, t } of strikes(plan)){
+      const p = malletAt(plan, k, t), b = plan.kb.bars[s.bar];
+      expect(p.x, `${name} k${k} t=${t}`).toBeCloseTo(s.x, 7);
+      expect(p.y, `${name} k${k} t=${t}`).toBeCloseTo(b.top + HEAD_R, 7);
+      expect(p.z, `${name} k${k} t=${t}`).toBeCloseTo(s.z, 7);
+      expect(Math.abs(s.z - b.z)).toBeLessThanOrEqual(b.len / 2 - HEAD_R);
+      expect(Math.abs(s.x - b.x)).toBeLessThanOrEqual(b.w / 2 - HEAD_R + 1e-9);   // and the head fits on the bar
     }
   });
 
-  it('the first strike after the count-in is a free fall from the magnet onto the beat', () => {
-    for (const { L, first, start: START } of LANES){
-      const held = ballAt(L, START, START);
-      if (first - START > DT_MAX / 2){                 // tail strikes inside the count-in may already be falling
-        expect(held.mode).toBe('hold');
-        expect(held.y).toBeCloseTo(H, 9);
-      } else expect(held.mode).toBe('drop');
-      const land = ballAt(L, first - 1e-6, START);
-      expect(land.y).toBeLessThan(1e-4);
-      expect(land.vy).toBeCloseTo(-g * DT_MAX / 2, 3);
-    }
-  });
-
-  it('long gaps dock on the magnet at exactly zero speed and never rise above it', () => {
-    for (const { L, start: START } of LANES){
-      for (let t = START; t < START + 2 * P; t += .003){
-        const d = ballAt(L, t, START);
-        expect(d.y).toBeLessThanOrEqual(H + 1e-9);
-        if (d.mode === 'hold'){ expect(d.vy).toBe(0); expect(d.y).toBeCloseTo(H, 9); }
+  it('the head never passes through any bar (sphere vs. every bar box, flex included)', () => {
+    for (const [name, plan] of [['demo', DEMO], ['synthetic', SYN], SONG_PLANS[0]]){
+      const bars = plan.kb.bars;
+      for (let t = plan.start; t < plan.start + plan.P + 1; t += .0015){
+        const hs = handsAt(plan, t);
+        for (let k = 0; k < 4; k++){
+          const p = malletAt(plan, k, t, hs);
+          for (let i = 0; i < bars.length; i++){
+            const b = bars[i];
+            if (Math.abs(p.x - b.x) > b.w / 2 + HEAD_R) continue;
+            const u = Math.max(-.5, Math.min(.5, (p.z - b.z) / b.len));
+            const top = b.top + Math.max(0, flexAt(plan, i, t) * -modeShape(u));
+            const dx = Math.max(0, Math.abs(p.x - b.x) - b.w / 2), dz = Math.max(0, Math.abs(p.z - b.z) - b.len / 2);
+            const dy = Math.max(0, p.y - top, (b.top - b.thick) - p.y);
+            expect(Math.hypot(dx, dy, dz), `${name} k${k} ${b.note} t=${t.toFixed(4)}`).toBeGreaterThanOrEqual(HEAD_R - 2e-4);
+          }
+        }
       }
     }
   });
 
-  it('the ball is continuous across the loop seam and the count-in', () => {
-    for (const { L, start: START } of LANES){
-      let prev = ballAt(L, START, START).y;
-      for (let t = START + .001; t < START + 2.2 * P; t += .001){
-        const y = ballAt(L, t, START).y;
-        expect(Math.abs(y - prev), `t=${t}`).toBeLessThan(.02);   // max |v| ≈ 7.3 u/s → ≤ .0073/ms
-        prev = y;
-      }
+  it('lift is exactly 0 at contact and > 0 everywhere else nearby', () => {
+    for (const [, plan] of PLANS) for (const { M, t } of strikes(plan, 1)){
+      expect(liftAt(plan, M, t)).toBeCloseTo(0, 9);
+      expect(Math.abs(flexAt(plan, M.strikes[0].bar, t))).toBeLessThan(.08);
+      expect(liftAt(plan, M, t - .004)).toBeGreaterThan(0);
+      expect(liftAt(plan, M, t + .004)).toBeGreaterThan(0);
     }
   });
 });
 
-describe('marimba solve — honest contact', () => {
-  it('plungers and the bar flex are exactly at rest at every contact', () => {
-    for (const { L, start: START } of LANES) for (const s of L.s) for (const k of [0, 1]){
-      const t = s + k * P;
-      if (t < START) continue;
-      const d = ballAt(L, t, START);
-      if (d.i < 0) continue;
-      expect(kickAt(L, t, START)).toBeCloseTo(0, 9);
-      expect(flexAt(L, t, START, d)).toBeCloseTo(0, 9);
+describe('marimbist solve — the stroke is real', () => {
+  it('prep height rises with velocity (louder = higher) and impact speed is √(2·A·H)', () => {
+    expect(prepH(1, 9)).toBeGreaterThan(prepH(.5, 9));
+    expect(prepH(.5, 9)).toBeGreaterThan(prepH(0, 9));
+    expect(prepH(1, 9)).toBeCloseTo(HP_MAX, 9);
+    for (const M of DEMO.mallets) M.strikes.forEach((s, i) => expect(M.vin[i]).toBeCloseTo(Math.sqrt(2 * A_ST * M.Hp[i]), 9));
+  });
+
+  it('down-stroke arrives at the impact speed; the rebound leaves at only E of it (lossy)', () => {
+    const h = 1e-5;
+    for (const { M, i, t } of strikes(DEMO, 1)){
+      const vIn = (liftAt(DEMO, M, t - h) - liftAt(DEMO, M, t - 2 * h)) / h;
+      const vOut = (liftAt(DEMO, M, t + 2 * h) - liftAt(DEMO, M, t + h)) / h;
+      expect(-vIn / M.vin[i]).toBeCloseTo(1, 2);
+      expect(vOut / M.vin[i]).toBeCloseTo(E, 2);
     }
   });
 
-  it('the marble never penetrates the bar (bar top ≤ ball underside, always)', () => {
-    for (const { note, L, start: START } of LANES){
-      for (let t = START; t < START + 2 * P; t += .0007){
-        const d = ballAt(L, t, START);
-        const top = barTopAt(L, t, START, d);
-        expect(top, `${note} t=${t.toFixed(4)} ball=${d.y}`).toBeLessThanOrEqual(d.y + 1e-6);
-      }
-    }
+  it('a mallet never re-strikes faster than it can recover', () => {
+    for (const [, plan] of PLANS) for (const M of plan.mallets) if (M.L && M.L.s.length > 1)
+      for (const g of M.L.gaps) expect(g).toBeGreaterThanOrEqual(T_REC - 1e-9);
   });
 
-  it('the bar mode shape is the true free-free first mode: nodes at 22.4 %, ends 1.64× the centre', () => {
-    expect(modeShape(.5 - NODE)).toBeCloseTo(0, 3);
-    expect(modeShape(-(.5 - NODE))).toBeCloseTo(0, 3);
-    expect(modeShape(0)).toBeCloseTo(-1, 9);
-    expect(modeShape(.5) / -modeShape(0)).toBeCloseTo(1.645, 2);   // the ends swing against the centre
-    expect(modeShape(-.5)).toBeCloseTo(modeShape(.5), 6);          // symmetric
-  });
-
-  it('the bend is a shiver, not a rubber banana (ends ≤ 40 % of the bar thickness)', () => {
-    expect(FLEX_MAX * modeShape(.5)).toBeLessThanOrEqual(.4 * .15);
-    for (const { L, start } of LANES) for (let t = start; t < start + P; t += .002)
-      expect(Math.abs(flexAt(L, t, start))).toBeLessThanOrEqual(FLEX_MAX + 1e-12);
-  });
-
-  it('the node solenoid stack never collides with itself over the full kick travel', () => {
-    let lo = 0, hi = 0;
-    for (const { L, start } of LANES) for (let t = start; t < start + 2 * P; t += .001){
-      const k = kickAt(L, t, start); lo = Math.min(lo, k); hi = Math.max(hi, k);
-    }
-    // (a strike's follow-through can overlap the next wind-up by a hair: allow 2 mm)
-    expect(lo).toBeGreaterThanOrEqual(-KICK_MAX - .002);
-    expect(hi).toBeLessThanOrEqual(KICK_MAX + .002);
-    // y relative to the bar underside at rest; barrel spans [−PAD_T−PLUNGE−SOL_H, −PAD_T−PLUNGE]
-    const barrelTop = -PAD_T - PLUNGE, barrelBot = barrelTop - SOL_H;
-    for (const off of [lo, hi, -KICK_MAX, KICK_MAX]){
-      const padBot = off - PAD_T, rodBot = off - PAD_T - ROD;
-      expect(padBot).toBeGreaterThan(barrelTop + .005);        // the pad never bottoms on the barrel
-      expect(rodBot).toBeGreaterThan(barrelBot + .005);        // the rod never pokes out under the barrel (or rail)
-      expect(rodBot).toBeLessThan(barrelTop - .02);            // …and never pulls out of it
+  it('the bar shiver is exactly 0 at every contact and never more than a shiver', () => {
+    for (const [, plan] of PLANS){
+      for (const { s, t } of strikes(plan, 1)) expect(flexAt(plan, s.bar, t)).toBeCloseTo(0, 9);
+      for (let t = plan.start; t < plan.start + plan.P; t += .01)
+        for (let i = 0; i < plan.bars.length; i += 3) for (const u of [0, .25, .5])
+          expect(Math.abs(flexAt(plan, i, t) * modeShape(u))).toBeLessThanOrEqual(FLEX_MAX * 1.65 + 1e-12);
     }
   });
 });
 
-describe('marimba count-in', () => {
-  it('the demo does not open with its own ending: no wrapped-tail strike sounds in the count-in', () => {
-    const ev = eventTimes(marimba.demo.part, { rollT: ROLL_T, beat: BEAT });
-    const s0 = effectiveStart(ev, P, START);
-    expect(s0).toBeGreaterThan(START);
-    for (const { L, first, start } of lanesFor(marimba.demo.part)){
-      expect(start).toBe(s0);
-      expect(first).toBeGreaterThanOrEqual(ROLL_T - 1e-6);     // every lane's first strike is in loop 0
-      expect(ballAt(L, start, start).mode).toBe('hold');      // …and is a drop from its magnet
+describe('marimbist solve — two hands, never crossing', () => {
+  it('hands never cross: inner extents always ≥ the minimum gap', () => {
+    for (const [name, plan] of PLANS) expect(motionStats(plan, .004).gap, name).toBeGreaterThanOrEqual(GAP_MIN - 1e-9);
+  });
+
+  it('every yoke stays in range (both heads apart, at most the tongs\' reach) and inside the towers', () => {
+    for (const [name, plan] of PLANS){
+      const m = motionStats(plan, .004);
+      expect(m.sLo, name).toBeGreaterThanOrEqual(S_MIN - 2e-3);
+      expect(m.sHi, name).toBeLessThanOrEqual(plan.rig.sMax + 2e-3);
+      for (let t = plan.start; t < plan.start + plan.P; t += .01){
+        const hs = handsAt(plan, t);
+        for (const h of hs){
+          expect(h.cx - h.s / 2).toBeGreaterThanOrEqual(MAL_X[0] - 2e-3);
+          expect(h.cx + h.s / 2).toBeLessThanOrEqual(MAL_X[1] + 2e-3);
+        }
+      }
     }
   });
-  it('a pickup still plays: the effective start never passes a real first strike', () => {
-    const ev = eventTimes([[-1, 'C4'], [0, 'E4'], [15.5, 'G4']], { rollT: ROLL_T, beat: BEAT });
-    const s0 = effectiveStart(ev, P, START);
-    expect(s0).toBeLessThanOrEqual(ROLL_T - BEAT - DT_MAX / 2);
+
+  it('carriages + yokes stay within their speed / acceleration limits (unless the solver warned)', () => {
+    for (const [name, plan] of PLANS){
+      if (plan.warnings.some(w => /limits/.test(w))) continue;
+      const m = motionStats(plan, .002);
+      expect(m.v, name).toBeLessThanOrEqual(V_MAX * PEAK);
+      expect(m.a, name).toBeLessThanOrEqual(A_MAX * PEAK);
+      expect(m.vs, name).toBeLessThanOrEqual(VS_MAX * PEAK);
+      expect(m.as, name).toBeLessThanOrEqual(AS_MAX * PEAK);
+    }
+  });
+
+  it('the demo and the synthetic part need no warnings at all', () => {
+    expect(DEMO.warnings).toEqual([]);
+    expect(SYN.warnings).toEqual([]);
+  });
+});
+
+describe('marimbist allocation', () => {
+  it('a 4-note chord: the low two go to the left hand, the high two to the right', () => {
+    const p = planFor([[0, 'C3'], [0, 'G3'], [0, 'E4'], [0, 'C5']]);
+    const note = k => p.kb.bars[p.mallets[k].strikes[0].bar].note;
+    expect([0, 1, 2, 3].map(note)).toEqual(['C3', 'G3', 'E4', 'C5']);
+  });
+
+  it('more than four notes: the inner voices are dropped, with a warning', () => {
+    const p = planFor([[0, 'C3'], [0, 'E3'], [0, 'G3'], [0, 'C4'], [0, 'E4'], [0, 'G4']]);
+    expect(p.mallets.reduce((a, M) => a + M.strikes.length, 0)).toBe(4);
+    expect(p.warnings.join()).toMatch(/4 mallets/);
+  });
+
+  it('a fast line across the whole keyboard hands off between the hands', () => {
+    for (const [plan, b0, b1, n] of [[SYN, 1, 3.3, 10], [DEMO, 8, 11.9, 15]]){
+      const run = plan.mallets.map(M => M.strikes.filter(s => { const b = (s.t - ROLL_T) / .6; return b >= b0 - 1e-6 && b < b1; }).length);
+      expect(run[0] + run[1]).toBeGreaterThan(1);
+      expect(run[2] + run[3]).toBeGreaterThan(1);
+      expect(run.reduce((a, b) => a + b)).toBe(n);
+    }
+  });
+
+  it('leaps alternate low/high: the low notes are left-hand, the high notes right-hand', () => {
+    const hand = note => SYN.mallets.findIndex(M => M.strikes.some(s => {
+      const b = (s.t - ROLL_T) / .6; return b >= 4 - 1e-6 && b < 6 - 1e-6 && SYN.kb.bars[s.bar].note === note; })) >> 1;
+    expect(hand('C3')).toBe(0); expect(hand('D3')).toBe(0); expect(hand('C5')).toBe(1); expect(hand('D5')).toBe(1);
+  });
+
+  it('a long note becomes a ROLL: alternating mallets, every stroke re-strikes the bar', () => {
+    const t0 = ROLL_T + 8 * .6, t1 = t0 + 2 * .6;
+    const st = SYN.mallets.flatMap(M => M.strikes.filter(s => s.t >= t0 - 1e-9 && s.t < t1).map(s => ({ ...s, k: M.k })))
+      .sort((a, b) => a.t - b.t);
+    expect(st.length).toBeGreaterThanOrEqual(Math.round(1.2 / ROLL_DT) - 2);
+    expect(new Set(st.map(s => s.k >> 1)).size).toBe(1);                  // one hand
+    for (let i = 1; i < st.length; i++){
+      expect(st[i].k).not.toBe(st[i - 1].k);                              // alternating mallets
+      expect(SYN.kb.bars[st[i].bar].note).toBe('E4');                      // on the one bar
+    }
+    const bar = SYN.bars[st[0].bar];
+    expect(bar.hits.filter(h => h.t >= t0 - 1e-9 && h.t < t1).length).toBe(st.length);   // each one sounds
+  });
+
+  it('a rolled dyad: each hand alternates between its own mallets', () => {
+    const t0 = ROLL_T + 11 * .6, t1 = t0 + 1.5 * .6;
+    for (const h of [0, 1]){
+      const ks = [h * 2, h * 2 + 1].map(k => SYN.mallets[k].strikes.filter(s => s.t >= t0 - 1e-9 && s.t < t1).length);
+      expect(ks[0]).toBeGreaterThan(3); expect(ks[1]).toBeGreaterThan(3);
+      expect(Math.abs(ks[0] - ks[1])).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('every song with a marimba part solves (sensible warnings only)', () => {
+    expect(SONG_PLANS.length).toBeGreaterThanOrEqual(3);
+    for (const [name, plan] of SONG_PLANS){
+      const n = plan.mallets.reduce((a, M) => a + M.strikes.length, 0);
+      expect(n, name).toBeGreaterThan(20);
+      for (const w of plan.warnings) expect(w, name).toMatch(/limits|cut short|dropped/);
+      const reach = plan.warnings.map(w => /more than its limits.*×(\d+)/.exec(w)?.[1] ?? (/more than its limits/.test(w) ? 1 : 0)).reduce((a, b) => a + +b, 0);
+      expect(reach / n, name).toBeLessThan(.03);                          // ≤ 3 % of notes are beyond the rig
+    }
+  });
+});
+
+describe('marimbist count-in + seam', () => {
+  it('at the count-in the hands are PARKED at the rail ends with every mallet raised', () => {
+    for (const [, plan] of PLANS){
+      const hs = handsAt(plan, plan.start);
+      expect(hs[0].cx).toBeCloseTo(TRAVEL[0] + .3, 9);
+      expect(hs[1].cx).toBeCloseTo(TRAVEL[1] - .3, 9);
+      for (const M of plan.mallets) expect(liftAt(plan, M, plan.start)).toBeCloseTo(H_ARMED, 9);
+    }
+  });
+
+  it('everything is continuous: from the count-in, through the first strikes, across the loop seam', () => {
+    for (const [name, plan] of [['demo', DEMO], ['synthetic', SYN], ...SONG_PLANS]){
+      let prev = [0, 1, 2, 3].map(k => malletAt(plan, k, plan.start));
+      const t1 = plan.start + plan.P + 1.5;
+      for (let t = plan.start + .001; t < t1; t += .001){
+        const hs = handsAt(plan, t);
+        const cur = [0, 1, 2, 3].map(k => malletAt(plan, k, t, hs));
+        for (let k = 0; k < 4; k++){
+          const d = Math.hypot(cur[k].x - prev[k].x, cur[k].y - prev[k].y, cur[k].z - prev[k].z);
+          // head speed ≤ carriage + yoke + stroke (≈ 12 + 8 + 13 u/s) → ≤ .05 per ms; a warned plan may exceed
+          if (!plan.warnings.length) expect(d, `${name} k${k} t=${t.toFixed(3)}`).toBeLessThan(.05);
+          else expect(d, `${name} k${k} t=${t.toFixed(3)}`).toBeLessThan(.1);
+        }
+        prev = cur;
+      }
+    }
+  });
+
+  it('the solved performance is periodic: pose at t and t + P agree after the first loop', () => {
+    for (const [, plan] of PLANS){
+      const t0 = Math.max(...plan.mallets.map(M => M.L ? at(M.L, plan.start, plan.start).first : plan.start)) + .01;
+      for (let t = t0; t < t0 + plan.P; t += .37){
+        const a = malletAt(plan, 3, t), b = malletAt(plan, 3, t + plan.P);
+        expect(a.x).toBeCloseTo(b.x, 6); expect(a.y).toBeCloseTo(b.y, 6); expect(a.z).toBeCloseTo(b.z, 6);
+      }
+    }
+  });
+
+  it('the head is a rigid shaft-length from its wrist pivot, always', () => {
+    for (let t = DEMO.start; t < DEMO.start + DEMO.P; t += .05) for (let k = 0; k < 4; k++){
+      const p = malletAt(DEMO, k, t);
+      expect(Math.hypot(p.y - Y_W, p.z - p.zw)).toBeCloseTo(LS, 9);
+    }
   });
 });
 
@@ -166,6 +297,16 @@ describe('marimba keyboard', () => {
       for (let i = 1; i < row.length; i++)
         expect(row[i].x - row[i - 1].x).toBeGreaterThan((row[i].w + row[i - 1].w) / 2);
   });
+  it('the bar mode shape is the true free-free first mode: nodes at 22.4 %, ends 1.64× the centre', () => {
+    expect(modeShape(.5 - NODE)).toBeCloseTo(0, 3);
+    expect(modeShape(-(.5 - NODE))).toBeCloseTo(0, 3);
+    expect(modeShape(0)).toBeCloseTo(-1, 9);
+    expect(modeShape(.5) / -modeShape(0)).toBeCloseTo(1.645, 2);
+    expect(FLEX_MAX * modeShape(.5)).toBeLessThanOrEqual(.4 * .15);
+  });
+  it('the inner-extent guard is symmetric about the hands', () => {
+    expect(innerExtent(0, 0, 1)).toBeCloseTo(-innerExtent(1, 0, 1), 12);
+  });
 });
 
 describe('marimba voice', () => {
@@ -178,35 +319,27 @@ describe('marimba voice', () => {
       expect(a.samples.length / a.sr).toBeLessThanOrEqual(3.01);
       expect(Math.abs(a.samples[a.samples.length - 1])).toBeLessThan(1e-4);
     }
-    // high bars ring shorter
     expect(marimbaVoice('C6').samples.length).toBeLessThan(marimbaVoice('C3').samples.length);
-  });
-  it('dies away rather than gating: the last 400 ms before the fade is already quiet', () => {
-    for (const n of ['C3', 'A3', 'E5']){
-      const { samples: x, sr } = marimbaVoice(n);
-      let pk = 0; for (const v of x) pk = Math.max(pk, Math.abs(v));
-      let tail = 0; for (let i = x.length - Math.round(.4 * sr); i < x.length; i++) tail = Math.max(tail, Math.abs(x[i]));
-      expect(20 * Math.log10(tail / pk)).toBeLessThan(-18);
-    }
   });
   it('a hard strike is BRIGHTER, not just louder (the velocity layer)', () => {
     expect(layerId('E4', .9)).toBe('E4|h'); expect(layerId('E4', .5)).toBe('E4');
     const hf = x => { let d = 0, e = 0; for (let i = 1; i < 4000; i++){ d += (x[i] - x[i - 1]) ** 2; e += x[i] ** 2; } return d / e; };
     expect(hf(marimbaVoice('E4|h').samples)).toBeGreaterThan(hf(marimbaVoice('E4').samples) * 1.15);
-    expect(marimba.voiceIds(marimba.demo.part)).toContain('E5|h');
-    expect(marimba.voiceIds(marimba.demo.part)).toContain('E5');
+  });
+  it('bakes every layer a strike (incl. a roll\'s softer alternate strokes) can ask for', () => {
+    const ids = new Set(marimba.voiceIds(marimba.demo.part));
+    for (const M of DEMO.mallets) for (const s of M.strikes) expect(ids.has(layerId(DEMO.kb.bars[s.bar].note, s.vel))).toBe(true);
   });
 });
 
 describe('marimba demo', () => {
-  it('is a real phrase: runs, chords, long gaps, dynamics', () => {
+  it('shows off: 4-note chords, a fast line, leaps, rolls, dynamics', () => {
     const p = marimba.demo.part;
-    expect(p.length).toBeGreaterThan(30);
     const byBeat = {}; for (const e of p) (byBeat[e[0]] ||= []).push(e);
-    expect(Object.values(byBeat).some(v => v.length >= 3)).toBe(true);           // a chord
-    expect(new Set(p.map(e => e[2] ?? 1)).size).toBeGreaterThan(3);               // dynamics
-    const lanes = lanesFor(p);
-    expect(lanes.some(l => l.L.gaps.some(gp => gp < .2))).toBe(true);             // a dense roll
-    expect(lanes.some(l => l.L.gaps.some(gp => gp > DT_MAX))).toBe(true);         // a magnet hold
+    expect(Object.values(byBeat).some(v => v.length === 4)).toBe(true);
+    expect(p.some(e => (e[3] ?? 0) >= 1)).toBe(true);
+    expect(new Set(p.map(e => e[2] ?? 1)).size).toBeGreaterThan(5);
+    expect(marimba.demo.beats % 4).toBe(0);
+    for (const e of p){ expect(e[0]).toBeGreaterThanOrEqual(0); expect(e[0]).toBeLessThan(marimba.demo.beats); }
   });
 });

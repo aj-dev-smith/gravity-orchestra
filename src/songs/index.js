@@ -12,6 +12,9 @@ import backbeat from './backbeat.js';
 import canonOrchestra from './canon-orchestra.js';
 import carolOfTheBells from './carol-of-the-bells.js';
 import morningMood from './morning-mood.js';
+import baldMountain from './bald-mountain.js';
+import danseMacabre from './danse-macabre.js';
+import marionette from './marionette.js';
 
 export const SONGS = {
   'daybreak-engine': daybreakEngine,
@@ -28,4 +31,7 @@ export const SONGS = {
   'canon-orchestra': canonOrchestra,
   'carol-of-the-bells': carolOfTheBells,
   'morning-mood': morningMood,
+  'bald-mountain': baldMountain,
+  'danse-macabre': danseMacabre,
+  'marionette': marionette,
 };

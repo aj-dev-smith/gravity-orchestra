@@ -4,6 +4,7 @@ import grid from './grid.js';
 import cathedral from './cathedral.js';
 import studio from './studio.js';
 import voidRoom from './void.js';
+import graveyard from './graveyard.js';
 /* ============================================================
    ROOM HOST — the one seam main.js talks to. A Room module is
        { key, label, build(scene, {envMap, renderer}) → {
@@ -25,7 +26,7 @@ import voidRoom from './void.js';
    never swallow the iOS priming tap — same rule as the free cam).
    ============================================================ */
 
-export const ROOMS = [grid, cathedral, studio, voidRoom];
+export const ROOMS = [grid, cathedral, studio, voidRoom, graveyard];
 export const ROOM_KEYS = [...ROOMS.map(r => r.key), 'off'];
 export { STAGE };
 

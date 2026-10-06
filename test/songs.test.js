@@ -37,6 +37,9 @@ const EXPECTED_KEYS = [
   'canon-orchestra',
   'carol-of-the-bells',
   'morning-mood',
+  'bald-mountain',
+  'danse-macabre',
+  'marionette',
 ];
 
 describe('SONGS catalogue', () => {

@@ -56,6 +56,7 @@ const PAN_KEYS = {
 
 export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = null }){
   const BASE_FOV = 55;
+  let freeFov = null;                                         // a lens override for the free eye (stage edit's plan view)
   const camera = new THREE.PerspectiveCamera(BASE_FOV, innerWidth/innerHeight, .1, 200);
   /* a shot may carry its own lens (shot.fov — the room's WIDE is a wider lens: the hall is
      bigger than any eye position inside it can frame at 55°); every other pose is BASE_FOV.
@@ -192,7 +193,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
       if (freeNow) orbit.target.copy(camTarget);              // orbit around whatever we were framing
     }
     if (freeNow){
-      lens(BASE_FOV, dt, false);
+      lens(freeFov || BASE_FOV, dt, false);                  // (freeFov: stage edit's plan view — a wider lens)
       keyboardFly(dt);                                        // WASD / arrows / QE fly the eye + pivot
       orbit.update();
       camPos.copy(camera.position); camTarget.copy(orbit.target);
@@ -349,6 +350,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
   }
 
   return { camera, target: camTarget, orbit, update, syncTracks, syncStations, addShake, resize,
-           get mode(){ return mode; }, set mode(m){ mode = m; renderButtons(); }, get shot(){ return autoWant; }, get weigh(){
+           get mode(){ return mode; }, set mode(m){ mode = m; renderButtons(); },
+           get freeFov(){ return freeFov; }, set freeFov(f){ freeFov = f || null; if (f){ camera.fov = f; camera.updateProjectionMatrix(); } }, get shot(){ return autoWant; }, get weigh(){
              return dbgCand && { cand: dbgCand, floor: dbgFloor, rot: Object.fromEntries(Object.keys(dbgCand).map(k => [k, +dbgRotate(k, dbgCand[k]).toFixed(2)])) }; } };
 }

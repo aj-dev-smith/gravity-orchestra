@@ -50,26 +50,84 @@ export function placeSlot(base, placed){
   return { ...base, x: placed.x, z: placed.z, yaw: Number.isFinite(placed.yaw) ? placed.yaw : base.yaw, pin: true };
 }
 
-/* ---- footprints: [x0, x1, z0, z1] world XZ boxes ---- */
-/** do two footprints overlap by more than `tol` in BOTH axes (a shared edge is not an overlap) */
+/* ---- footprints ----
+   A machine's footprint is its LOCAL box [x0, x1, z0, z1] (measured once, unrotated, about
+   its pivot) turned by its yaw and moved to its pivot: an ORIENTED rectangle, given as its 4
+   world XZ corners [[x, z] ×4]. The belt and the room are axis-aligned boxes. Overlap is a
+   2-D separating-axis test, so a machine turned 45° is judged by what it occupies — not by
+   the much larger axis-aligned box around it. */
+/** do two axis-aligned footprints overlap by more than `tol` in BOTH axes (a shared edge is not an overlap) */
 export const overlaps = (a, b, tol = .05) =>
   Math.min(a[1], b[1]) - Math.max(a[0], b[0]) > tol && Math.min(a[3], b[3]) - Math.max(a[2], b[2]) > tol;
 export const moveBox = (rel, x, z) => [rel[0] + x, rel[1] + x, rel[2] + z, rel[3] + z];
+/** an axis-aligned box → its 4 corners */
+export const boxCorners = b => [[b[0], b[2]], [b[1], b[2]], [b[1], b[3]], [b[0], b[3]]];
+/** a local box turned by yaw (about +y, three.js sense) and moved to (x, z) → 4 world corners */
+export function footprint(rel, x, z, yaw = 0){
+  const c = Math.cos(yaw), s = Math.sin(yaw);
+  return boxCorners(rel).map(([lx, lz]) => [x + lx * c + lz * s, z - lx * s + lz * c]);
+}
+/** the axis-aligned bounds of a corner list → [x0, x1, z0, z1] */
+export function bounds(poly){
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const [x, z] of poly){ x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+  return [x0, x1, z0, z1];
+}
+/** convex polygons (corner lists) overlap by more than `tol` along every separating axis */
+export function polysOverlap(a, b, tol = .05){
+  for (const poly of [a, b]) for (let i = 0; i < poly.length; i++){
+    const [x0, z0] = poly[i], [x1, z1] = poly[(i + 1) % poly.length];
+    let nx = z0 - z1, nz = x1 - x0;
+    const L = Math.hypot(nx, nz); if (L < 1e-9) continue;
+    nx /= L; nz /= L;
+    let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+    for (const [x, z] of a){ const d = x * nx + z * nz; a0 = Math.min(a0, d); a1 = Math.max(a1, d); }
+    for (const [x, z] of b){ const d = x * nx + z * nz; b0 = Math.min(b0, d); b1 = Math.max(b1, d); }
+    if (Math.min(a1, b1) - Math.max(a0, b0) <= tol) return false;
+  }
+  return true;
+}
+/** is the point inside a convex polygon (either winding) */
+export function inPoly([px, pz], poly){
+  let sign = 0;
+  for (let i = 0; i < poly.length; i++){
+    const [x0, z0] = poly[i], [x1, z1] = poly[(i + 1) % poly.length];
+    const c = (x1 - x0) * (pz - z0) - (z1 - z0) * (px - x0);
+    if (Math.abs(c) < 1e-12) continue;
+    if (sign && Math.sign(c) !== sign) return false;
+    sign = Math.sign(c);
+  }
+  return true;
+}
+const asPoly = f => Array.isArray(f?.[0]) ? f : boxCorners(f);
 
-/** What's wrong with putting `box` here: [{ key, kind: 'overlap' | 'belt' | 'room' }].
-    others: [{ key, box }] (the other placed stations), wall: the belt's footprint (or null),
-    room: { x0, x1, z0, z1 } (or null). Empty = a clean spot. */
-export function conflicts(box, others, wall, room){
-  const out = [];
-  if (wall && overlaps(box, wall)) out.push({ key: 'belt', kind: 'belt' });
-  for (const o of others) if (o.box && overlaps(box, o.box)) out.push({ key: o.key, kind: 'overlap' });
-  if (room && (box[0] < room.x0 - .05 || box[1] > room.x1 + .05 || box[2] < room.z0 - .05 || box[3] > room.z1 + .05))
+/** What's wrong with putting footprint `fp` here: [{ key, kind: 'overlap' | 'belt' | 'room' }].
+    fp / others[].box: an oriented footprint (4 corners) or an axis-aligned box [x0, x1, z0, z1];
+    wall: the belt's box (or null); room: { x0, x1, z0, z1 } (or null). Empty = a clean spot. */
+export function conflicts(fp, others, wall, room){
+  const out = [], P = asPoly(fp);
+  if (wall && polysOverlap(P, asPoly(wall))) out.push({ key: 'belt', kind: 'belt' });
+  for (const o of others) if (o.box && polysOverlap(P, asPoly(o.box))) out.push({ key: o.key, kind: 'overlap' });
+  const b = bounds(P);
+  if (room && (b[0] < room.x0 - .05 || b[1] > room.x1 + .05 || b[2] < room.z0 - .05 || b[3] > room.z1 + .05))
     out.push({ key: 'room', kind: 'room' });
   return out;
 }
 export function describeConflicts(cs, label = k => k){
   if (!cs.length) return '';
   return cs.map(c => c.kind === 'belt' ? 'overlaps the belt' : c.kind === 'room' ? 'outside the room' : `overlaps ${label(c.key)}`).join(' · ');
+}
+
+/* ---- undo: a small stack of layout snapshots (per song id) ---- */
+export function makeHistory(limit = 40){
+  let id = null, stack = [];
+  return {
+    /** remember `layout` (the state BEFORE an edit) for song `songId` */
+    push(songId, layout){ if (songId !== id){ id = songId; stack = []; } stack.push(sanitizeLayout(layout)); if (stack.length > limit) stack.shift(); },
+    /** the last remembered layout for `songId`, or null */
+    pop(songId){ return songId === id && stack.length ? stack.pop() : null; },
+    size(songId){ return songId === id ? stack.length : 0; },
+  };
 }
 
 /* ---- persistence (storage injected: localStorage in the browser; any {getItem,setItem,removeItem}) ---- */

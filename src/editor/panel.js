@@ -16,6 +16,7 @@ export function makeMapPanel({ machines, onPick, onAuto, onClose }){
     <p class="mp-song"></p><p class="mp-lede">who plays what — change one and the whole room re-solves</p>
     <div class="mp-rows"></div>
     <footer><span class="mp-status"></span><button class="mp-auto" title="back to the importer's own routing">AUTO</button></footer>
+    <p class="mp-strain" hidden></p>
     <details class="mp-notes"><summary></summary><ul></ul></details>`;
   document.body.appendChild(el);
   const rowsEl = el.querySelector('.mp-rows'), statusEl = el.querySelector('.mp-status'), notesEl = el.querySelector('.mp-notes');
@@ -23,7 +24,8 @@ export function makeMapPanel({ machines, onPick, onAuto, onClose }){
   el.querySelector('.mp-auto').addEventListener('click', () => onAuto());
   let cur = null;
 
-  function render({ title, sources, mapping, authored, custom, warnings = [], status = '', busy = false }){
+  const strainEl = el.querySelector('.mp-strain');
+  function render({ title, sources, mapping, authored, custom, warnings = [], status = '', busy = false, strain = [], strained = () => false }){
     cur = { sources, mapping };
     el.querySelector('.mp-song').textContent = title;
     el.querySelector('.mp-auto').disabled = !custom || busy;
@@ -31,11 +33,14 @@ export function makeMapPanel({ machines, onPick, onAuto, onClose }){
     rowsEl.textContent = '';
     for (const s of sources){
       const t = mapping[s.id] ?? OFF;
-      const row = document.createElement('div'); row.className = 'mp-row' + (t === OFF ? ' off' : '');
+      const hot = t !== OFF && strained(s.id);
+      const row = document.createElement('div'); row.className = 'mp-row' + (t === OFF ? ' off' : '') + (hot ? ' strain' : '');
+      if (hot) row.title = 'this machine is straining to play its part (see below)';
       row.style.setProperty('--c', colorOf(t));
       const info = document.createElement('div'); info.className = 'mp-info';
       const nm = document.createElement('span'); nm.className = 'mp-name'; nm.textContent = s.name; nm.title = s.name;
       const meta = document.createElement('span'); meta.className = 'mp-meta'; meta.textContent = `${s.gm} · ${s.count} note${s.count === 1 ? '' : 's'}`;
+      if (hot) meta.textContent = `⚠ straining · ${meta.textContent}`;
       info.append(nm, meta);
       const cv = document.createElement('canvas'); cv.className = 'mp-spark'; cv.width = 192; cv.height = 52;
       spark(cv, s, colorOf(t), t === OFF);
@@ -51,6 +56,8 @@ export function makeMapPanel({ machines, onPick, onAuto, onClose }){
       row.append(info, cv, selEl);
       rowsEl.appendChild(row);
     }
+    strainEl.hidden = !strain.length;
+    strainEl.textContent = strain.length ? `⚠ ${strain.join(' · ')} — the part asks more than the machine can physically do; try another machine or thin the part` : '';
     statusEl.textContent = busy ? 're-solving the room…' : status;
     statusEl.classList.toggle('warn', /needs|room for|can't|couldn/.test(status));
     notesEl.hidden = !warnings.length;

@@ -302,8 +302,14 @@ export function monoChain(events, loopBeats, name = 'voice', warnings = []){
   // a belt voice sits where a phone can hear it (the importer's bass rule): mean into C3..C6
   const mean = ons.reduce((s, [, e]) => s + e.midi, 0) / ons.length;
   const shift = mean < 48 ? 12 * Math.ceil((48 - mean) / 12) : mean > 84 ? -12 * Math.ceil((mean - 84) / 12) : 0;
-  const notes = ons.map(([b, e], i) => [midiToName(Math.max(12, Math.min(119, e.midi + shift))), tidy((i + 1 < ons.length ? ons[i + 1][0] : loopBeats) - b)]);
-  return { delay: ons[0][0], notes };
+  const notes = ons.map(([b, e], i) => [midiToName(Math.max(12, Math.min(119, e.midi + shift))), i + 1 < ons.length ? tidy(ons[i + 1][0] - b) : 0]);
+  // the LAST note closes the loop exactly: whatever the (rounded) others leave, summed in the
+  // order the lock check sums them — so delay + Σbeats === loopBeats to the last bit, not to ~1e-13
+  const delay = ons[0][0];
+  const prev = notes.slice(0, -1).reduce((a, [, d]) => a + d, 0);
+  notes[notes.length - 1][1] = loopBeats - delay - prev;
+  if (prev + notes[notes.length - 1][1] + delay !== loopBeats) notes[notes.length - 1][1] = (loopBeats - prev) - delay;
+  return { delay, notes };
 }
 
 /* =================== the target menu =================== */

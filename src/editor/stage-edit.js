@@ -3,8 +3,13 @@
    drag mechanism; human curation over auto-layout").
 
    Key E (or the EDIT pill) enters it: the camera goes free and lifts to
-   an overview, every movable machine shows its measured FOOTPRINT on a
-   floor grid with a name tag. Click one to select it; drag it across the
+   a PLAN VIEW that fits every machine (a wider lens from under the
+   ceiling; on a phone held upright the room's long axis runs up the
+   screen), every movable machine shows its FOOTPRINT on a floor grid
+   with a name tag. A footprint is the machine's own box, measured once
+   per build in its LOCAL frame at the count-in pose (the pose the room
+   solve measures), and drawn TURNED with it — an oriented rectangle, so
+   a machine at 45° is judged by what it occupies (placement.js: SAT). Click one to select it; drag it across the
    floor (a horizontal plane at the grab height — the grabbed point stays
    under the pointer), turn it with the ring handle or Q / E (15° steps),
    everything snapped to a ½-unit grid (hold Shift for free). A footprint
@@ -26,7 +31,7 @@
      orbits the camera as usual;
    · Q / E are swallowed (capture) only while a machine is selected.
    ============================================================ */
-import { snap, snapYaw, conflicts, describeConflicts, moveBox } from './placement.js';
+import { snap, snapYaw, conflicts, describeConflicts, footprint, boxCorners, bounds, inPoly } from './placement.js';
 
 const C = { idle: 0x6c7aa0, hover: 0xcfd6e6, sel: 0xffb764, bad: 0xff4d5e, belt: 0x3d6dff };
 const GIZMO_ORDER = 990;
@@ -34,6 +39,7 @@ const GIZMO_ORDER = 990;
 export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {} }){
   let on = false, pieces = [], sel = null, hover = null, drag = null, snapOn = true;
   let prevMode = null, prevMax = null, prevPolar = null;
+  const local = new Map();                              // key → { rel, top } — each machine's LOCAL box, measured once per build
   const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), _v = new THREE.Vector3(), plane = new THREE.Plane();
 
   /* ---- gizmo layer: grid + footprints + rotation ring (drawn over everything) ---- */
@@ -51,11 +57,15 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     grid.add(seg(major, new THREE.LineBasicMaterial({ color: 0x7b8cc4, transparent: true, opacity: .16, depthWrite: false, fog: false })));
   }
   const rectGeo = () => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(15), 3)); return g; };
-  const setRect = (line, fill, b, y) => {
+  /* an oriented footprint (4 corners, boxCorners order: local x runs c0→c1, local z c1→c2) */
+  const setRect = (line, fill, poly, y, yaw = 0) => {
     const p = line.geometry.attributes.position;
-    [[b[0], b[2]], [b[1], b[2]], [b[1], b[3]], [b[0], b[3]], [b[0], b[2]]].forEach(([x, z], i) => p.setXYZ(i, x, y, z));
+    [...poly, poly[0]].forEach(([x, z], i) => p.setXYZ(i, x, y, z));
     p.needsUpdate = true; line.geometry.computeBoundingSphere();
-    fill.position.set((b[0] + b[1]) / 2, y - .01, (b[2] + b[3]) / 2); fill.scale.set(Math.max(.01, b[1] - b[0]), 1, Math.max(.01, b[3] - b[2]));
+    const cx = poly.reduce((a, q) => a + q[0], 0) / 4, cz = poly.reduce((a, q) => a + q[1], 0) / 4;
+    fill.position.set(cx, y - .01, cz); fill.rotation.y = yaw;
+    fill.scale.set(Math.max(.01, Math.hypot(poly[1][0] - poly[0][0], poly[1][1] - poly[0][1])), 1,
+                   Math.max(.01, Math.hypot(poly[2][0] - poly[1][0], poly[2][1] - poly[1][1])));
   };
   const unitPlane = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
   // the belt's footprint (fixed; for reference)
@@ -73,23 +83,32 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   const tagsEl = document.createElement('div'); tagsEl.className = 'se-tags'; tagsEl.hidden = true; document.body.appendChild(tagsEl);
   const bar = document.createElement('div'); bar.className = 'se-bar'; bar.hidden = true;
   bar.innerHTML = `<b>STAGE EDIT</b><span class="se-hint"></span>
-    <span class="se-btns"><button data-a="ccw" title="turn left 15° (Q)">↺ Q</button><button data-a="cw" title="turn right 15° (E)">E ↻</button>
-    <button data-a="snap" class="on" title="snap to the ½-unit grid / 15° (hold Shift to place freely)">SNAP</button>
-    <button data-a="reset" title="forget this song's layout — back to the solved stage">RESET LAYOUT</button>
-    <button data-a="done" class="done" title="leave stage edit (Esc)">DONE</button></span>`;
+    <span class="se-btns"><button data-a="ccw" title="turn left 15° (Q / Shift+R)">↺<i> Q</i></button><button data-a="cw" title="turn right 15° (E / R)"><i>E </i>↻</button>
+    <button data-a="undo" title="undo the last move (⌘Z / Ctrl+Z)">↶<i> UNDO</i></button>
+    <button data-a="snap" class="on" title="snap to the ½-unit grid / 15° (hold Shift to place freely)">⌗<i> SNAP</i></button>
+    <button data-a="reset" title="forget this song's layout — back to the solved stage">⟲<i> RESET LAYOUT</i></button>
+    <button data-a="done" class="done" title="leave stage edit (Esc)">✓<i> DONE</i></button></span>`;
   document.body.appendChild(bar);
   const hintEl = bar.querySelector('.se-hint');
   bar.addEventListener('click', e => {
     const a = e.target.closest('button')?.dataset.a;
     if (a === 'ccw') turn(-1, e.shiftKey); else if (a === 'cw') turn(1, e.shiftKey);
-    else if (a === 'snap'){ snapOn = !snapOn; e.target.classList.toggle('on', snapOn); }
+    else if (a === 'undo'){ select(null); host.undo(); }
+    else if (a === 'snap'){ snapOn = !snapOn; e.target.closest('button').classList.toggle('on', snapOn); }
     else if (a === 'reset'){ select(null); host.resetLayout(); }
     else if (a === 'done') toggle(false);
   });
 
   /* ---- the pieces: every movable machine, its pivot + measured footprint ---- */
-  function refresh(){
-    const keep = sel?.key;
+  /* measure every machine's LOCAL box now (main calls this right after a build: the count-in pose,
+     the pose the room solve measured) — never re-measured live, so animated parts can't jitter it */
+  function measureAll(){
+    local.clear();
+    for (const p of host.pieces()) local.set(p.key, measureLocal(p));
+  }
+  function refresh({ reset = false } = {}){
+    const keep = reset ? null : sel?.key;
+    if (reset){ hover = null; drag = null; }
     if (on) haze(true);
     for (const p of pieces){ gizmo.remove(p.line, p.fill); p.line.geometry.dispose(); p.el.remove(); }
     pieces = host.pieces().map(p => {
@@ -102,22 +121,30 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       return piece;
     });
     const wb = host.wall();
-    if (wb && !wb.isEmpty()){ setRect(beltLine, beltFill, [wb.min.x, wb.max.x, wb.min.z, wb.max.z], 0); beltLine.visible = beltFill.visible = true; }
+    if (wb && !wb.isEmpty()){ setRect(beltLine, beltFill, boxCorners([wb.min.x, wb.max.x, wb.min.z, wb.max.z]), 0); beltLine.visible = beltFill.visible = true; }
     else beltLine.visible = beltFill.visible = false;
     sel = pieces.find(p => p.key === keep) || null;
     check(); paint();
   }
   const pivotOf = p => p.kind === 'kit' ? host.kitPivot() : { x: p.obj.position.x, z: p.obj.position.z };
   const deckOf = p => p.deckY ?? p.obj.position.y;
-  function measure(p){
+  const yawOf = p => p.canRotate ? p.obj.rotation.y : 0;
+  /* the machine's box in its OWN frame: un-turned for the measurement, then restored */
+  function measureLocal(p){
+    const yaw = p.obj.rotation.y, turned = p.canRotate && Math.abs(yaw) > 1e-9;
+    if (turned){ p.obj.rotation.y = 0; p.obj.updateMatrixWorld(true); }
     const b = host.visBox(p.obj), c = pivotOf(p);
-    p.rel = b.isEmpty() ? [-1, 1, -1, 1] : [b.min.x - c.x, b.max.x - c.x, b.min.z - c.z, b.max.z - c.z];
-    p.top = b.isEmpty() ? deckOf(p) + 3 : Math.min(b.max.y, deckOf(p) + 14);
+    if (turned){ p.obj.rotation.y = yaw; p.obj.updateMatrixWorld(true); }
+    return { rel: b.isEmpty() ? [-1, 1, -1, 1] : [b.min.x - c.x, b.max.x - c.x, b.min.z - c.z, b.max.z - c.z],
+             top: b.isEmpty() ? deckOf(p) + 3 : Math.min(b.max.y, deckOf(p) + 14) };
   }
-  const boxOf = p => { const c = pivotOf(p); return moveBox(p.rel, c.x, c.z); };
+  function measure(p){ const m = local.get(p.key) || measureLocal(p); local.set(p.key, m); p.rel = m.rel; p.top = m.top; }
+  /** the piece's footprint where it stands now: 4 world XZ corners, turned with it */
+  const fpOf = p => { const c = pivotOf(p); return footprint(p.rel, c.x, c.z, yawOf(p)); };
+  const wallBox = () => { const wb = host.wall(); return wb && !wb.isEmpty() ? [wb.min.x, wb.max.x, wb.min.z, wb.max.z] : null; };
   function check(){
-    const wb = host.wall(), wall = wb && !wb.isEmpty() ? [wb.min.x, wb.max.x, wb.min.z, wb.max.z] : null;
-    for (const p of pieces) p.bad = conflicts(boxOf(p), pieces.filter(o => o !== p).map(o => ({ key: o.key, box: boxOf(o) })), wall, host.room);
+    const wall = wallBox();
+    for (const p of pieces) p.bad = conflicts(fpOf(p), pieces.filter(o => o !== p).map(o => ({ key: o.key, box: fpOf(o) })), wall, host.room);
   }
   function paint(){
     for (const p of pieces){
@@ -125,7 +152,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       const col = bad ? C.bad : isSel ? C.sel : isHov ? C.hover : C.idle;
       p.line.material.color.setHex(col); p.line.material.opacity = isSel || bad ? 1 : isHov ? .9 : .6;
       p.fill.material.color.setHex(col); p.fill.material.opacity = isSel ? .16 : bad ? .14 : isHov ? .1 : .05;
-      setRect(p.line, p.fill, boxOf(p), deckOf(p) + .06);
+      setRect(p.line, p.fill, fpOf(p), deckOf(p) + .06, yawOf(p));
       p.el.classList.toggle('sel', isSel); p.el.classList.toggle('bad', bad); p.el.classList.toggle('hov', isHov);
     }
     const s = sel;
@@ -169,8 +196,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     for (const p of pieces){                            // …or its footprint on the floor
       plane.set(_v.set(0, 1, 0), -(deckOf(p) + .06));
       const hit = ray.ray.intersectPlane(plane, new THREE.Vector3());
-      const b = boxOf(p);
-      if (hit && hit.x >= b[0] && hit.x <= b[1] && hit.z >= b[2] && hit.z <= b[3]){
+      if (hit && inPoly([hit.x, hit.z], fpOf(p))){
         const d = hit.distanceTo(ray.ray.origin);
         if (!best || d < best.d) best = { piece: p, d, point: hit };
       }
@@ -249,8 +275,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   }
   function setYaw(p, yaw){
     if (!p.canRotate || Math.abs(yaw - p.obj.rotation.y) < 1e-6) return;
-    p.obj.rotation.y = yaw; p.obj.updateMatrixWorld(true);
-    measure(p);
+    p.obj.rotation.y = yaw; p.obj.updateMatrixWorld(true);   // (the local box turns with it: nothing to re-measure)
   }
   function turn(dir, free){
     if (!sel) return;
@@ -273,6 +298,13 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     if (/^(input|textarea|select)$/i.test(e.target?.tagName || '') || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
     if (on && sel && (k === 'q' || k === 'e')){ e.preventDefault(); e.stopPropagation(); turn(k === 'q' ? -1 : 1, e.shiftKey); return; }
+    // R is "rotate" to anyone moving furniture: here it turns the selection (Shift+R back) instead of
+    // cycling the room under you; M (machines off) would hide what you're placing — both held while editing
+    if (on && (k === 'r' || k === 'm')){
+      e.preventDefault(); e.stopPropagation();
+      if (k === 'r'){ if (sel) turn(e.shiftKey ? -1 : 1, false); else { hintEl.textContent = 'pick a machine, then R / Q / E turn it (the room stays put while you edit)'; hintEl.className = 'se-hint'; } }
+      return;
+    }
     if (k === 'e' && !e.repeat){
       // (outside stage edit, the FREE camera owns E — its descend key — so there the EDIT pill enters)
       if (!on && cam.mode === 'free') return;
@@ -282,8 +314,10 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   }, { capture: true });
 
   /* ---- enter / leave ---- */
+  const veilUp = () => { const o = document.getElementById('overlay'); return !!o && !o.classList.contains('gone'); };
   function toggle(want = !on){
     if (want === on) return;
+    if (want && veilUp()) return;                       // before the play tap the veil owns the screen (§5) — and the free eye isn't live yet
     on = want;
     gizmo.visible = on; tagsEl.hidden = bar.hidden = !on;
     document.body.classList.toggle('stage-editing', on);
@@ -294,6 +328,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       haze(true); refresh(); overview();
     } else {
       sel = hover = drag = null; dom.style.cursor = ''; haze(false);
+      cam.freeFov = null; lowerCeiling();
       cam.orbit.maxDistance = prevMax ?? cam.orbit.maxDistance; cam.orbit.maxPolarAngle = prevPolar ?? cam.orbit.maxPolarAngle;
       if (prevMode && prevMode !== 'free') cam.mode = prevMode;
     }
@@ -308,24 +343,94 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     if (thin){ if (scene.fog.density !== EDIT_FOG) fogBase = scene.fog.density; scene.fog.density = Math.min(fogBase ?? EDIT_FOG, EDIT_FOG); }
     else if (fogBase != null){ scene.fog.density = fogBase; fogBase = null; }
   }
-  /* a high three-quarter view over everything movable + the belt */
+  /* the PLAN VIEW: steeply down over everything movable + the belt, fitted BY CONSTRUCTION —
+     numerically: every footprint corner (and every name tag) is projected and the eye backs off
+     until they all land inside the screen, minus the toolbar's band, then re-centres on them.
+     The eye stays inside the room (under the ceiling — the walls/ceiling are part of the look and
+     stay); when that's too close to frame it all at the normal lens, the lens widens instead
+     (cam.freeFov, up to MAX_FOV) and the eye stands up straighter (a wide lens tilted is lopsided:
+     the near half of the floor would get far less of the screen than the far half). On a phone
+     held upright the eye swings round so the room's LONG axis runs up the screen. */
+  const MAX_FOV = 76, NDC = .93, LIFT_D = 170;
+  /* the ceiling lift: when nothing frames the whole floor from under the ceiling (a phone held
+     upright; a big room), the eye rises through it — the room's CEILING-LEVEL meshes (whatever sits
+     wholly up there: the lid, trusses, lamps) are hidden while editing, put back on the way out */
+  let lifted = [];
+  function liftCeiling(ceilY){
+    const g = host.roomGroup?.(); if (!g) return;
+    const b = new THREE.Box3();
+    g.updateWorldMatrix(true, true);
+    g.traverse(o => {
+      if (!(o.isMesh || o.isInstancedMesh || o.isLine || o.isPoints) || !o.visible || !o.geometry) return;
+      if (o.isInstancedMesh){ o.computeBoundingBox(); b.copy(o.boundingBox).applyMatrix4(o.matrixWorld); }
+      else { if (!o.geometry.boundingBox) o.geometry.computeBoundingBox(); b.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld); }
+      if (b.min.y > ceilY){ o.visible = false; lifted.push(o); }
+    });
+  }
+  function lowerCeiling(){ for (const o of lifted) o.visible = true; lifted = []; }
+  const _e = new THREE.Vector3(), _a = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3();
   function overview(){
-    const pts = pieces.map(p => boxOf(p)), wb = host.wall();
-    if (wb && !wb.isEmpty()) pts.push([wb.min.x, wb.max.x, wb.min.z, wb.max.z]);
-    if (!pts.length) return;
-    const x0 = Math.min(...pts.map(b => b[0])), x1 = Math.max(...pts.map(b => b[1])), z0 = Math.min(...pts.map(b => b[2])), z1 = Math.max(...pts.map(b => b[3]));
-    const aim = new THREE.Vector3((x0 + x1) / 2, 0, (z0 + z1) / 2);
-    const aspect = dom.clientWidth / Math.max(1, dom.clientHeight), tanV = Math.tan(THREE.MathUtils.degToRad(cam.camera.fov / 2));
-    // look down steeply (a phone held upright: nearly plan view); back off until the room's width
-    // AND depth fit — then pull in along the same line if that would leave the room (it crops)
-    const dir = new THREE.Vector3(0, aspect < 1 ? .94 : .78, aspect < 1 ? .34 : .62).normalize();
-    const D0 = Math.max((x1 - x0) / 2 / (tanV * aspect), (z1 - z0) * .5 / tanV) * 1.08 + 4;
+    const polys = pieces.map(fpOf), wall = wallBox();
+    if (wall) polys.push(boxCorners(wall));
+    if (!polys.length) return;
+    const deck = pieces.length ? pieces.reduce((a, p) => a + deckOf(p), 0) / pieces.length : 0;
+    const pts = polys.flat().map(([x, z]) => new THREE.Vector3(x, deck, z));
+    for (const p of pieces){ const c = pivotOf(p); pts.push(new THREE.Vector3(c.x, p.top + 2, c.z)); }   // the tags float above
+    const [x0, x1, z0, z1] = bounds(polys.flat());
+    const W = dom.clientWidth, H = Math.max(1, dom.clientHeight), aspect = W / H;
+    const side = aspect < 1 && x1 - x0 > z1 - z0;        // portrait + a wide room: x runs up the screen
+    // the toolbar's band (NDC): frame the plan in the rest of the screen
+    const br = bar.getBoundingClientRect(), barH = bar.hidden ? 0 : Math.min(H * .3, br.bottom > 0 && br.top < H / 2 ? br.bottom + 8 : H - br.top + 8);
+    const atTop = br.top < H / 2, band = 2 * barH / H;
+    const yLo = -NDC + (atTop ? 0 : band), yHi = NDC - (atTop ? band : 0);
     const lim = host.roomBox || { y1: Infinity, z1: Infinity };
-    // (a phone held upright can't fit a full room from inside it: it frames the middle — the belt
-    //  and its nearest neighbours — and the rest is a drag of the empty floor away)
-    const k = Math.min(1, (lim.y1 - aim.y) / (dir.y * D0), dir.z > 1e-6 ? (lim.z1 - aim.z) / (dir.z * D0) : 1);
-    const eye = aim.clone().addScaledVector(dir, D0 * Math.max(.2, k));
-    cam.camera.position.copy(eye); cam.target.copy(aim); cam.orbit.target.copy(aim); cam.orbit.update();
+    const c = cam.camera, fov0 = c.fov;
+    // project every point from an eye at aim + dir·D with this lens → its NDC extents
+    const extents = (aim, dir, D, fov) => {
+      c.fov = fov; c.updateProjectionMatrix();
+      c.position.copy(_e.copy(aim).addScaledVector(dir, D)); c.lookAt(aim); c.updateMatrixWorld(true);
+      let a = Infinity, b = -Infinity, lo = Infinity, hi = -Infinity, behind = false;
+      for (const q of pts){ _a.copy(q).project(c); if (_a.z > 1 || _a.z < -1) behind = true; a = Math.min(a, _a.x); b = Math.max(b, _a.x); lo = Math.min(lo, _a.y); hi = Math.max(hi, _a.y); }
+      return { a, b, lo, hi, behind };
+    };
+    const fits = e => !e.behind && e.b - e.a <= 2 * NDC && e.hi - e.lo <= yHi - yLo;
+    let best = null;
+    // under the ceiling first (lens 55° → MAX_FOV); then, if nothing fit, from above it at the normal lens
+    const tries = [];
+    for (let fov = 55; fov <= MAX_FOV + 1e-6; fov += 7) tries.push({ fov, lift: false });
+    for (let fov = 55; fov <= 69; fov += 7) tries.push({ fov, lift: true });
+    for (const { fov, lift } of tries){
+      if (best) break;
+      const tilt = THREE.MathUtils.degToRad(Math.max(4, 24 - Math.max(0, fov - 55) * .45));
+      const dir = side ? new THREE.Vector3(Math.sin(tilt), Math.cos(tilt), 0) : new THREE.Vector3(0, Math.cos(tilt), Math.sin(tilt));
+      const maxD = lift ? LIFT_D : Math.max(6, (lim.y1 - deck) / dir.y);
+      const aim = new THREE.Vector3((x0 + x1) / 2, deck, (z0 + z1) / 2);
+      let D = maxD;
+      for (let pass = 0; pass < 3; pass++){
+        // the nearest eye that fits (binary search), then re-centre the aim on what it sees
+        let lo = 4, hi = maxD;
+        if (!fits(extents(aim, dir, hi, fov))) { D = hi; break; }
+        for (let i = 0; i < 22; i++){ const m = (lo + hi) / 2; if (fits(extents(aim, dir, m, fov))) hi = m; else lo = m; }
+        D = hi * 1.02;
+        const e = extents(aim, dir, D, fov);
+        const dx = (e.a + e.b) / 2, dy = (e.lo + e.hi) / 2 - (yLo + yHi) / 2;
+        if (Math.abs(dx) < .01 && Math.abs(dy) < .01) break;
+        // move the aim across the floor by that much of the view (screen right / screen up, laid flat)
+        _r.setFromMatrixColumn(c.matrixWorld, 0).setY(0).normalize();
+        _u.setFromMatrixColumn(c.matrixWorld, 1).setY(0).normalize();
+        const half = D * Math.tan(THREE.MathUtils.degToRad(fov / 2));
+        aim.addScaledVector(_r, dx * half * aspect).addScaledVector(_u, dy * half / Math.max(.3, dir.y));
+      }
+      const e = extents(aim, dir, Math.min(D, maxD), fov);
+      if (fits(e) || (lift && fov + 7 > 69)) best = { aim, dir, D: Math.min(D, maxD), fov, lift };
+    }
+    c.fov = fov0; c.updateProjectionMatrix();
+    cam.freeFov = best.fov;
+    const eye = best.aim.clone().addScaledVector(best.dir, best.D);
+    lowerCeiling();
+    if (best.lift) liftCeiling(lim.y1 - 9);           // (y1 = ceiling − 2: anything wholly above ~ceiling − 11)
+    else if (Number.isFinite(lim.z1)) eye.z = Math.min(eye.z, lim.z1);
+    c.position.copy(eye); cam.target.copy(best.aim); cam.orbit.target.copy(best.aim); cam.orbit.update();
   }
 
   /* per frame: keep the name tags over their machines */
@@ -342,15 +447,19 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     }
   }
 
-  return { toggle, refresh, update, get on(){ return on; }, get selected(){ return sel?.key || null; },
-           /* dev/test: the live footprints + conflicts */
-           state: () => pieces.map(p => ({ key: p.key, box: boxOf(p).map(v => +v.toFixed(2)), yaw: +p.obj.rotation.y.toFixed(3), bad: p.bad.map(b => b.key) })),
+  function syncUndo(n){ const b = bar.querySelector('[data-a=undo]'); b.disabled = !n; b.title = n ? `undo the last move (⌘Z / Ctrl+Z) · ${n} step${n === 1 ? '' : 's'}` : 'nothing to undo'; }
+
+  return { toggle, refresh, update, overview, measureAll, syncUndo, get on(){ return on; }, get selected(){ return sel?.key || null; },
+           /* dev/test: the live footprints (oriented corners + their bounds) + conflicts */
+           state: () => pieces.map(p => { const fp = fpOf(p); return { key: p.key, box: bounds(fp).map(v => +v.toFixed(2)), corners: fp.map(q => q.map(v => +v.toFixed(2))),
+             rel: p.rel.map(v => +v.toFixed(2)), yaw: +yawOf(p).toFixed(3), bad: p.bad.map(b => b.key) }; }),
+           get fov(){ return cam.camera.fov; },
            select: key => select(pieces.find(p => p.key === key) || null),
            /* dev/test: where a piece's deck centre (or its turn knob) is on screen, in CSS px */
            screenOf(key, what = 'deck'){
              const p = pieces.find(q => q.key === key); if (!p) return null;
              if (what === 'knob'){ if (!knob.visible || sel !== p) return null; _v.copy(knob.position); }
-             else { const c = pivotOf(p), b = boxOf(p); _v.set((b[0] + b[1]) / 2, deckOf(p) + .1, (b[2] + b[3]) / 2); }
+             else { const fp = fpOf(p); _v.set(fp.reduce((a, q) => a + q[0], 0) / 4, deckOf(p) + .1, fp.reduce((a, q) => a + q[1], 0) / 4); }
              _v.project(cam.camera);
              const r = dom.getBoundingClientRect();
              return { x: r.left + (_v.x + 1) / 2 * r.width, y: r.top + (1 - _v.y) / 2 * r.height };

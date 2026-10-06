@@ -204,3 +204,59 @@ describe('stage placement', () => {
     expect(P.overlaps(mb, bb, 0)).toBe(false);
   });
 });
+
+describe('stage edit — oriented footprints, undo, share ids (polish pass)', () => {
+  it('a footprint turns WITH its machine (no growing axis-aligned box)', () => {
+    const rel = [-4, 4, -1, 1];
+    const f0 = P.footprint(rel, 10, 5, 0);
+    expect(P.bounds(f0)).toEqual([6, 14, 4, 6]);
+    const f90 = P.footprint(rel, 10, 5, Math.PI / 2).map(([x, z]) => [+x.toFixed(9), +z.toFixed(9)]);
+    expect(P.bounds(f90)).toEqual([9, 11, 1, 9]);              // 8 × 2 turned → 2 × 8, same area
+    const f45 = P.footprint(rel, 0, 0, Math.PI / 4);
+    const area = poly => Math.abs(poly.reduce((a, [x, z], i) => { const [x2, z2] = poly[(i + 1) % poly.length]; return a + x * z2 - x2 * z; }, 0)) / 2;
+    expect(area(f45)).toBeCloseTo(16, 9);
+  });
+  it('SAT: a turned machine clear of a box is clear, though its axis-aligned bounds overlap it', () => {
+    const bar = P.footprint([-5, 5, -.5, .5], 0, 0, Math.PI / 4);   // a long thin diagonal
+    const corner = [3, 5, 3, 5];                                    // sits in the bar's AABB, off the bar itself
+    expect(P.overlaps(P.bounds(bar), corner)).toBe(true);
+    expect(P.polysOverlap(bar, P.boxCorners(corner))).toBe(false);
+    expect(P.conflicts(bar, [{ key: 'bells', box: corner }], null, null)).toEqual([]);
+    expect(P.conflicts(bar, [{ key: 'bells', box: [-1, 1, -1, 1] }], null, null)).toEqual([{ key: 'bells', kind: 'overlap' }]);
+    // the old axis-aligned API still answers the same
+    expect(P.conflicts([-8, -6, 0, 1], [], [-10, -5, -2, 2], null)).toEqual([{ key: 'belt', kind: 'belt' }]);
+    expect(P.polysOverlap(P.boxCorners([0, 2, 0, 2]), P.boxCorners([2, 4, 0, 2]))).toBe(false);   // a shared edge
+    expect(P.inPoly([0, 0], bar)).toBe(true); expect(P.inPoly([3, -3], bar)).toBe(true); expect(P.inPoly([4, 4], bar)).toBe(false);
+  });
+  it('undo history: per song, newest first, bounded', () => {
+    const h = P.makeHistory(3);
+    h.push('a', {}); h.push('a', { bells: { x: 1, z: 2, yaw: 0 } });
+    expect(h.size('a')).toBe(2); expect(h.size('b')).toBe(0);
+    expect(h.pop('a')).toEqual({ bells: { x: 1, z: 2, yaw: 0 } });
+    expect(h.pop('b')).toBe(null);
+    expect(h.pop('a')).toEqual({}); expect(h.pop('a')).toBe(null);
+    for (let i = 0; i < 5; i++) h.push('a', { bells: { x: i, z: 0, yaw: 0 } });
+    expect(h.size('a')).toBe(3);
+    h.push('b', {}); expect(h.size('a')).toBe(0);               // another song: a fresh stack
+  });
+  it('share-link edit slots are keyed by content, not label', async () => {
+    const { fnv1a } = await import('../src/editor/index.js');
+    const a = { ...SONGS['fur-elise'], stage: { musicbox: [3, 4] } }, b = { ...SONGS['fur-elise'], stage: { musicbox: [-3, 4] } };
+    expect(fnv1a(JSON.stringify(a))).not.toBe(fnv1a(JSON.stringify(b)));
+    expect(fnv1a(JSON.stringify(a))).toBe(fnv1a(JSON.stringify({ ...a })));
+  });
+  it('a part turned into a harmony belt closes the loop EXACTLY (not to ~1e-13)', () => {
+    let n = 0;
+    for (const S of Object.values(SONGS)){
+      const L = sum(S.melody);
+      for (const s of M.songSources(S)){
+        if (!s.id.startsWith('part:')) continue;
+        const m = { ...M.defaultSongMapping(S), [s.id]: 'belt' };
+        for (const r of ['alto', 'bass']) if (m[r] === 'belt') m[r] = 'off';
+        const { song } = M.applySongMapping(S, m);
+        for (const r of ['alto', 'bass']) if (song[r] && !S[r]){ const d = chain(song[r]); expect(sum(d.notes) + (d.delay || 0)).toBe(L); n++; }
+      }
+    }
+    expect(n).toBeGreaterThan(5);
+  });
+});

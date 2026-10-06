@@ -8,14 +8,28 @@
    builds the world; nothing here touches a solve.
 
    Persistence: localStorage, per song (cascade:map:<id>, cascade:stage:<id>).
+   A share link's id is a hash of ITS OWN content (shared:<fnv1a>): two links
+   of the same tune never share an edit slot, so a link always opens as its
+   author made it until you edit it yourself.
    Share links: the share payload is the EFFECTIVE song (a mapping is baked
    into it) + song.stage = the layout.
+
+   iOS (CLAUDE.md §5): a re-map rebuilds SYNCHRONOUSLY inside the select's
+   change event and primes the new sample bank there (a gesture); the panel
+   never opens over the play veil (it waits for the veil tap).
    ============================================================ */
 import { makeMapPanel } from './panel.js';
 import { makeStageEdit } from './stage-edit.js';
 import { midiSources, defaultMidiMapping, applyMidiMapping, songSources, defaultSongMapping, applySongMapping,
-         setTarget, sameMapping, loadMapping, saveMapping } from './mapping.js';
-import { placeSlot, sanitizeLayout, encodeLayout, loadLayout, saveLayout } from './placement.js';
+         setTarget, sameMapping, loadMapping, saveMapping, sanitizeMapping, targetsFor, machineOf } from './mapping.js';
+import { placeSlot, sanitizeLayout, encodeLayout, loadLayout, saveLayout, makeHistory } from './placement.js';
+
+/** a short stable hash of a string (FNV-1a 32 → base36) */
+export function fnv1a(str){
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++){ h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(36);
+}
 
 const store = (() => { try { return window.localStorage; } catch (e){ return null; } })();
 
@@ -33,10 +47,30 @@ const store = (() => { try { return window.localStorage; } catch (e){ return nul
 export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
   let midi = null;                                   // { parsed, label, id } — the last MIDI import
   let curKey = null, curId = null, lastWarnings = [], status = '', busy = false, panelWanted = false;
+  let builtId = null, builtKeys = '';                // what the last build was (song id + its movable pieces)
   const memo = new Map();                            // `${id}|${mapping}` → { song, warnings }
   const ignoreSongStage = new Set();                 // ids whose shipped song.stage was reset this session
+  const history = makeHistory();                     // stage edit's undo (layout snapshots, this song)
+  const sharedIds = new WeakMap();                   // a shared song object → its content hash
 
-  const idOf = key => key === 'imported' && midi ? midi.id : key === 'shared' ? `shared:${songs[key]?.label}` : key;
+  // a share link is keyed by ITS CONTENT, not its label: friend A's Für Elise and friend B's are
+  // different slots (and an unedited link is always exactly what its author sent)
+  const sharedId = S => { if (!sharedIds.has(S)) sharedIds.set(S, `shared:${fnv1a(JSON.stringify(S))}`); return sharedIds.get(S); };
+  const idOf = key => key === 'imported' && midi ? midi.id : key === 'shared' && songs.shared ? sharedId(songs.shared) : key;
+
+  /* the instruments' own build-time complaints (the marimba's carriage solve logs "carriage limits
+     exceeded" when a part asks more of the robot than it can do): tapped while a world builds, so
+     the MAP panel can say which machine is straining — the log itself still goes to the console */
+  let building = false, strain = [];
+  const machineKeys = new Set(machines.map(m => m.key));
+  {
+    const warn = console.warn.bind(console);
+    console.warn = (...a) => {
+      const m = building && typeof a[0] === 'string' && /^\[([a-z][\w-]*)\]$/i.exec(a[0]);
+      if (m && machineKeys.has(m[1])) strain.push({ key: m[1], msg: a.slice(1).join(' ') });
+      warn(...a);
+    };
+  }
   const isMidi = key => key === 'imported' && !!midi;
   const labels = Object.fromEntries(machines.map(m => [m.key, m.label]));
 
@@ -53,6 +87,7 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
   /** the EFFECTIVE song for a key: the original, or re-mapped (memoised) */
   function song(key){
     curKey = key; curId = idOf(key);
+    building = true; strain = [];                    // (main builds the world right after asking: see built())
     const orig = songs[key];
     if (!orig) return orig;
     const m = loadMapping(store, curId);
@@ -83,8 +118,12 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
   const panel = makeMapPanel({
     machines,
     onPick(id, target){
-      const key = host.key(), src = sources(key);
+      const key = host.key(), src = sources(key), source = src.find(s => s.id === id);
+      // only what the row actually offers (a stray value — '' from a select set to nothing — is refused)
+      const offered = source && targetsFor(source, machines, { authored: !isMidi(key) }).some(g => g.options.some(o => o.value === target));
+      if (!offered){ status = `can't route "${source?.name ?? id}" there`; renderPanel(); return; }
       const r = setTarget(mappingFor(key), id, target, src);
+      r.mapping = { ...defaults(key), ...sanitizeMapping(r.mapping) };
       if (sameMapping(r.mapping, mappingFor(key))){ status = r.note; renderPanel(); return; }
       if (isMidi(key)){                              // try it before committing: a map that can't make a song is refused
         try { applyMidiMapping(midi.parsed, r.mapping, { label: midi.label }); }
@@ -98,26 +137,35 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     onClose(){ panel.show(false); syncButtons(); },
   });
   const labelOf = t => t === 'lead' ? 'the belt lead' : t === 'belt' ? 'a harmony belt' : t.startsWith('lead+') ? `the belt lead + ${labels[t.slice(5)] || t.slice(5)}` : labels[t] || t;
+  /* the re-solve runs SYNCHRONOUSLY, inside the select's change event (or the AUTO click): that is a
+     user gesture, so host.rebuild's primeSamples() unlocks the new machine's sample bank right here —
+     on the iOS element path (§5 round 4) a bank primed outside a gesture stays silent until the next
+     tap. (~0.4–0.8 s on a big import: the panel shows it in the cursor, not a painted spinner.) */
   function resolve(){
-    busy = true; renderPanel();
-    // two frames: the "re-solving" state paints before the (synchronous) rebuild
-    requestAnimationFrame(() => requestAnimationFrame(() => { try { host.rebuild(false); } finally { busy = false; renderPanel(); } }));
+    busy = true; document.body.classList.add('ed-busy');
+    try { host.rebuild(false); }
+    finally { busy = false; document.body.classList.remove('ed-busy'); renderPanel(); }
   }
   function renderPanel(){
     if (!panel.open) return;
     const key = host.key();
     if (!songs[key]) return;
     const m = mappingFor(key);
+    const strained = new Set(strain.map(w => w.key));
     panel.render({ title: `${songs[key].label}${isMidi(key) ? ' · MIDI import' : ''}`, sources: sources(key), mapping: m,
-                   authored: !isMidi(key), custom: !sameMapping(m, defaults(key)), warnings: lastWarnings, status, busy });
+                   authored: !isMidi(key), custom: !sameMapping(m, defaults(key)), warnings: lastWarnings, status, busy,
+                   strain: strain.map(w => `${labels[w.key] || w.key} is straining: ${w.msg}`),
+                   strained: id => strained.has(machineOf(m[id])) });
   }
   function openPanel(v = !panel.open){ panel.show(v); status = ''; renderPanel(); syncButtons(); }
+  const veilUp = () => { const o = document.getElementById('overlay'); return !!o && !o.classList.contains('gone'); };
 
   /* ---- stage edit ---- */
   const stage = makeStageEdit({ THREE, scene, cam, dom, onChange: syncButtons, host: {
-    pieces: host.pieces, wall: host.wall, cx: host.cx, kitPivot: host.kitPivot, visBox: host.visBox, room: host.room, roomBox: host.roomBox,
+    pieces: host.pieces, wall: host.wall, cx: host.cx, kitPivot: host.kitPivot, visBox: host.visBox, room: host.room, roomBox: host.roomBox, roomGroup: host.roomGroup,
     place(key, entry, all){
       let L = layout();
+      history.push(curId, L);                        // (undo: the layout as it was before this move)
       if (!Object.keys(L).length)                    // the first move PINS the whole room as it stands:
         for (const p of all) L[p.key] = { x: p.x - host.cx(), z: p.z, yaw: p.yaw };   // what you see is what stays
       L = { ...L, [key]: entry };
@@ -125,8 +173,19 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
       host.restage();
       stage.refresh();
     },
-    resetLayout(){ saveLayout(store, curId, {}); ignoreSongStage.add(curId); host.rebuild(true); },
+    resetLayout(){ history.push(curId, layout()); saveLayout(store, curId, {}); ignoreSongStage.add(curId); host.rebuild(true); },
+    undo,
   } });
+  /* undo the last stage move (or reset): back to the layout before it — a rebuild holding songTime
+     (each station is re-placed from its slot; an empty layout = the solved stage again) */
+  function undo(){
+    const prev = history.pop(curId);
+    if (!prev) return false;
+    if (!Object.keys(prev).length) ignoreSongStage.add(curId); else ignoreSongStage.delete(curId);
+    saveLayout(store, curId, prev);
+    host.rebuild(true);
+    return true;
+  }
 
   /* ---- the HUD pills: MAP · EDIT (next to SHARE LINK) ---- */
   const row = document.createElement('div'); row.className = 'ed-row';
@@ -137,31 +196,65 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
   (share?.parentNode || document.getElementById('hud') || document.body).insertBefore(row, share ? share.nextSibling : null);
   mapBtn.addEventListener('click', () => openPanel());
   editBtn.addEventListener('click', () => stage.toggle());
-  function syncButtons(){ mapBtn.classList.toggle('on', panel.open); editBtn.classList.toggle('on', stage.on); }
-  addEventListener('keydown', e => { if (e.key === 'Escape' && panel.open && !stage.on) openPanel(false); });
+  /* the pills say when THIS song is no longer as authored/imported: a dot on MAP (re-mapped) /
+     EDIT STAGE (re-placed) — and SHARE LINK shows, so a customised authored song can be shared */
+  const customMap = () => !!curId && !!loadMapping(store, curId) && !sameMapping(mappingFor(curKey), defaults(curKey));
+  const customStage = () => !!curId && Object.keys(loadLayout(store, curId)).length > 0;
+  function syncButtons(){
+    mapBtn.classList.toggle('on', panel.open); editBtn.classList.toggle('on', stage.on);
+    const cm = curKey && songs[curKey] ? customMap() : false, cs = curKey ? customStage() : false;
+    mapBtn.classList.toggle('custom', cm); editBtn.classList.toggle('custom', cs);
+    mapBtn.title = cm ? 'instrument map — re-mapped (AUTO in the panel puts it back)' : 'instrument map — who plays what';
+    editBtn.title = cs ? 'move the machines (E) — this song’s stage is hand-placed' : 'move the machines around the room (E)';
+    if (share) share.hidden = !(curKey === 'imported' || curKey === 'shared' || cm || cs);
+    stage.syncUndo(history.size(curId));
+  }
+  addEventListener('keydown', e => {
+    if (e.key === 'Escape' && panel.open && !stage.on) openPanel(false);
+    // ⌘Z / Ctrl+Z: undo the last stage move (while stage edit is open; never inside a text field)
+    if (stage.on && (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !/^(input|textarea)$/i.test(e.target?.tagName || '')){
+      e.preventDefault(); e.stopPropagation(); undo();
+    }
+  }, { capture: true });
   injectStyles();
+  /* the import's panel opens on its own — but never over the play veil: the first tap on a ?midi= boot
+     must reach the veil (it builds the AudioContext inside that gesture, §5). It waits, then opens. */
+  function openWanted(){
+    if (!panelWanted || host.key() !== 'imported' || veilUp()) return;
+    panelWanted = false; openPanel(true);
+  }
 
   return {
     song, slot, kitSlot,
     /** after every buildWorld: the editors re-read the room */
     built(){
-      if (stage.on) stage.refresh();
-      if (panelWanted && host.key() === 'imported'){ panelWanted = false; openPanel(true); } else renderPanel();
+      building = false;
+      stage.measureAll();                            // each machine's local box, at the count-in pose (just built)
+      const keys = host.pieces().map(p => p.key).sort().join(',');
+      const newSong = curId !== builtId, newCast = keys !== builtKeys;
+      builtId = curId; builtKeys = keys;
+      if (newSong) status = '';
+      if (stage.on){ stage.refresh({ reset: newSong }); if (newSong || newCast) stage.overview(); }
+      if (panelWanted && host.key() !== 'imported') panelWanted = false;
+      openWanted();
+      renderPanel(); syncButtons();
     },
-    update: () => stage.update(),
+    update(){ if (panelWanted) openWanted(); stage.update(); },
+    /** does this song differ from the authored/imported one (a stored map or layout) */
+    get custom(){ return customMap() || customStage(); },
     /** a MIDI import landed (main registers its default song as 'imported') */
     midiLoaded(parsed, label, warnings = []){
       const n = parsed.tracks.reduce((s, t) => s + t.notes.length, 0);
       midi = { parsed, label, id: `midi:${label}:${n}`, warnings, def: null };
       memo.clear();
-      panelWanted = true;                            // opens on the import's own build (built())
+      panelWanted = true;                            // opens on the import's own build — once the veil is gone
     },
     /** what a share link carries for this key: the effective song + its stage */
     shareable(key){
       const S = song(key), L = layout();
       return Object.keys(L).length ? { ...S, stage: encodeLayout(L) } : S;
     },
-    openMap: openPanel, toggleEdit: v => stage.toggle(v),
+    openMap: openPanel, toggleEdit: v => stage.toggle(v), undo,
     get stage(){ return stage; }, get panel(){ return panel; },
     get id(){ return curId; },
   };
@@ -177,7 +270,16 @@ function injectStyles(){
     padding:5px 12px;border-radius:999px;cursor:pointer;transition:all .2s ease}
   .ed-pill:hover{color:var(--amber);border-color:rgba(255,183,100,.5)}
   .ed-pill.on{color:var(--amber);border-color:var(--amber);background:rgba(255,183,100,.08)}
-  .map-panel{position:fixed;top:78px;right:16px;width:min(470px,calc(100vw - 32px));max-height:calc(100vh - 190px);overflow:auto;z-index:12;
+  .ed-pill.custom::after{content:'';display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--amber);
+    margin-left:7px;vertical-align:1px;box-shadow:0 0 6px rgba(255,183,100,.8)}
+  #share[hidden]{display:none!important}
+  #overlay:not(.gone) ~ .map-panel{display:none!important}
+  body.ed-busy,body.ed-busy *{cursor:progress!important}
+  .mp-row.strain{background:rgba(255,183,100,.1);box-shadow:inset 0 0 0 1px rgba(255,183,100,.35)}
+  .mp-row.strain .mp-meta{color:var(--amber)}
+  .mp-strain{margin-top:8px;color:var(--amber);font-size:9.5px;line-height:1.45}
+  .mp-strain[hidden]{display:none}
+  .map-panel{position:fixed;top:78px;right:16px;width:min(470px,calc(100vw - 32px));max-height:calc(100vh - 190px);overflow:auto;z-index:9;
     background:rgba(7,6,14,.88);border:1px solid rgba(90,97,120,.45);border-radius:12px;padding:14px 14px 10px;color:var(--ink);
     font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:11px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
     box-shadow:0 18px 60px rgba(0,0,0,.45)}
@@ -221,6 +323,8 @@ function injectStyles(){
   .se-btns button:hover{color:var(--ink)}
   .se-btns button.on{color:var(--amber);border-color:rgba(255,183,100,.5)}
   .se-btns button.done{color:var(--amber);border-color:var(--amber)}
+  .se-btns button:disabled{opacity:.35;cursor:default}
+  .se-btns i{font-style:normal}
   .se-tags{position:fixed;inset:0;pointer-events:none;z-index:4}
   .se-tag{position:absolute;left:0;top:0;white-space:nowrap;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:9.5px;letter-spacing:.16em;
     text-transform:uppercase;color:var(--c);background:rgba(7,6,14,.72);border:1px solid rgba(90,97,120,.45);border-radius:999px;padding:3px 9px}
@@ -232,7 +336,12 @@ function injectStyles(){
     .map-panel{top:auto;bottom:12px;right:8px;left:8px;width:auto;max-height:58vh}
     .mp-row{grid-template-columns:minmax(0,1fr) 128px;grid-template-areas:"info sel" "spark spark"}
     .mp-info{grid-area:info}.mp-row select{grid-area:sel;width:128px}.mp-spark{grid-area:spark;width:100%;height:22px}
-    .se-bar{top:auto;bottom:12px;border-radius:14px}
+    .se-bar{top:10px;left:8px;right:8px;transform:none;max-width:none;border-radius:14px;gap:6px 10px;padding:7px 8px 7px 12px}
+    .se-bar .se-hint{order:3;flex-basis:100%;min-width:0;font-size:9.5px}
+    .se-btns{gap:4px}.se-btns button{padding:6px 10px;font-size:13px;letter-spacing:0}
+    .se-btns i{display:none}
+    body.stage-editing #hud{opacity:0;pointer-events:none}
+    body.stage-editing #hud *{pointer-events:none!important}
   }`;
   document.head.appendChild(css);
 }

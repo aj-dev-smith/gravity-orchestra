@@ -1116,6 +1116,7 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
     visBox: o => visBox(o),
     room: { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 },
     roomBox: { y1: ROOM.CEIL - 2, z1: ROOM.FRONT - 2 },
+    roomGroup: () => rooms.group,                         // (stage edit's plan view may lift the ceiling)
   } });
 buildWorld(sel.value);
 if (soloI) lookAtStation(soloKey);
@@ -1427,7 +1428,7 @@ sel.addEventListener('change', () => {
   buildWorld(sel.value);
   audio.primeSamples();                                 // change event is a gesture: unlock new bank
   audio.showState();
-  shareEl.hidden = !DYNAMIC.has(sel.value);
+  shareEl.hidden = !DYNAMIC.has(sel.value) && !editor.custom;   // (a re-mapped / re-placed song can be shared too)
   if (!DYNAMIC.has(sel.value)) history.replaceState(null, '', location.pathname + location.search);
 });
 

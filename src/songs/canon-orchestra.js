@@ -84,14 +84,11 @@ const pin = (line, at, v = .8) => {
   for (const [n, d] of line){ out.push([b, n, v]); b += d; }
   return out;
 };
-/** a marimba ROLL: each note re-struck every `step` beats, swelling into the next note */
-const roll = (line, at, step, v0, v1) => {
+/** a marimba ROLL: each note held for its whole value (the 4th field) — the robot
+    marimbist sustains it with a two-mallet tremolo; the line's dynamics run v0 → v1 */
+const roll = (line, at, v0, v1) => {
   let b = at; const out = [];
-  for (const [n, d] of line){
-    const k = Math.round(d / step);
-    for (let i = 0; i < k; i++) out.push([b + i * step, n, +(v0 + (v1 - v0) * i / Math.max(1, k - 1)).toFixed(2)]);
-    b += d;
-  }
+  line.forEach(([n, d], i) => { out.push([b, n, +(v0 + (v1 - v0) * i / Math.max(1, line.length - 1)).toFixed(2), d]); b += d; });
   return out;
 };
 const G = g => (g - 1) * 16;                        // beat at which ground g (1-based) starts
@@ -127,7 +124,9 @@ const S5x = [
 ];
 const S6x = [
   ['G4', 1], ['B4', .5], ['A4', .5], ['G4', 1], ['F#4', .5], ['E4', .5],
-  ...h(['F#4','B4','D5','F#5','B5','F#5','D5','B4', 'A4','C#5','F#5','A5','F#5','C#5','A4','F#4'], .25),
+  // (the F#m wave turns F#4 → A4 at its foot: the robot marimbist strikes sharps and
+  // naturals from different rows, and no mallet can hop rows between two 32nds)
+  ...h(['F#4','B4','D5','F#5','B5','F#5','D5','B4', 'A4','C#5','F#5','A5','F#5','C#5','F#4','A4'], .25),
   ['G4', 1], ['B4', .5], ['A4', .5], ['B4', 1], ['C#5', .5], ['D5', .5],
   ...h(['G4','B4','D5','G5','B5','G5','D5','B4', 'A4','B4','C#5','D5','E5','F#5','G5','A5'], .25),
 ];
@@ -188,15 +187,15 @@ export default {
 
     // the canon's THIRD voice: rolled theme, 16ths, the TRUE 32nd passage, then home
     marimba: [
-      ...roll(S1, G(4), .5, .4, .62),
-      ...roll(S2, G(5), .5, .45, .66),
+      ...roll(S1, G(4), .5, .66),
+      ...roll(S2, G(5), .55, .7),
       ...pin(S3, G(6), .72),
       ...pin(S4, G(7), .74),                  // soft mallets: the hard layer waits for the 32nds
       ...pin(S5x, G(8), .74),                 // the 32nds arrive soft…
       ...pin(S6x, G(9), .95),                 // …and the climax switches to hard mallets
       ...pin(S7, G(10), .75),
-      ...roll(S1, G(11), .5, .5, .3),
-      [CODA, 'D4', .74], [CODA, 'A4', .7],
+      ...roll(S1, G(11), .6, .35),
+      [CODA, 'D4', .74, 6], [CODA, 'A4', .7, 6],       // the final D, rolled into the breath
     ],
 
     // the canon's FOURTH voice, an octave up in starlight — enters G5, rests G11

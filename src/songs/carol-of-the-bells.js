@@ -155,7 +155,7 @@ export default {
       ...pin(ARPS, S(7), .85),
       ...pin(ARPS, S(8), .92),
       ...pin(rep(THIRD, 3), S(9), .95),
-      [105, 'E5', 1], [105, 'G5', .9],
+      [105, 'E5', 1, 3], [105, 'G5', .9, 3],         // the last chord ROLLED to the loop's end
     ],
     bass: [
       ...walk(S(3), DESC, .8), ...walk(S(4), DESC, .85), ...walk(S(5), DESC, .9),

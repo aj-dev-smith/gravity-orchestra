@@ -8,6 +8,8 @@ import { G, UP, UPY, ROLL_T, DESCENT, solveLaunch, arcPos, arcVel, padOffset, be
 import * as audio from './audio.js';
 import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } from './juice.js';
 import { makeConveyorShop, BELT_DEPTH } from './conveyor.js';
+import { makePaternosterShop, makeToneBarParts, PT } from './paternoster.js';
+import { planCrane, craneBall } from './crane.js';
 import { makeMarbleDrums, KIT_SOLO, KIT_ROOM } from './marbledrums.js';
 import { makeCameraRig } from './camera.js';
 import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
@@ -191,7 +193,12 @@ const padGeo  = new THREE.CylinderGeometry(.5,.56,.13,28);
 /* The visible belt machine. beltSpeed = DESCENT is the honesty hook: pads rise at
    DESCENT, slats scroll at DESCENT → slip-free, no state. reach=16 covers the ±14
    cull band for every song. Built per track in buildWorld, lives under tr.stage. */
-const shop = makeConveyorShop({ chrome, envMap, beltSpeed: DESCENT, bandY: STAGE_Y, reach: BELT_REACH, cull: PAD_CULL, floorY: ROOM.FLOOR });
+/* ?machine=paternoster — PROTOTYPE body swap: open roller chains + tone-plates instead of
+   the belt wall (src/paternoster.js). Same pads, same timing; render-time only. */
+const PATERNOSTER = new URLSearchParams(location.search).get('machine') === 'paternoster';
+const shop = PATERNOSTER
+  ? makePaternosterShop({ envMap, beltSpeed: DESCENT, bandY: STAGE_Y, floorY: ROOM.FLOOR })
+  : makeConveyorShop({ chrome, envMap, beltSpeed: DESCENT, bandY: STAGE_Y, reach: BELT_REACH, cull: PAD_CULL, floorY: ROOM.FLOOR });
 let machinesOn = true;                                  // key M toggles the whole machine for A/B
 
 /* The marble drum machine — one immortal ball per drum, dribbling on its own head,
@@ -337,6 +344,7 @@ function buildTrack(melody, zBase, role, delayBeats = 0, deep = false){
   // No rail, no landing pool: on the conveyor the marble is born dropping in
   // above pad 0 and dies plunging out the bottom (see ballPos / the ball loop).
 
+  const bar = PATERNOSTER ? makeToneBarParts({ envMap }) : null;   // tone-plate parts, per track
   // pads: normal bisects incoming & outgoing velocity
   const padObjs = pads.map((pad, i) => {
     const prev = (i-1+pads.length) % pads.length;
@@ -347,12 +355,23 @@ function buildTrack(melody, zBase, role, delayBeats = 0, deep = false){
     g.position.copy(pad.pos).y -= .12;
     g.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), n);
     g.scale.setScalar(radOf(pad.note) / PAD_R);          // same source of truth as the layout
-    const body = new THREE.Mesh(padGeo, new THREE.MeshStandardMaterial({
+    let body, rim;
+    if (bar){                                           // PATERNOSTER: a tuned steel tone-plate, glowing hue frame
+      body = new THREE.Mesh(bar.barGeo, new THREE.MeshStandardMaterial({
+        color: isBass ? 0xb4c0da : 0xe2e7f0, metalness:.7, roughness:.24, envMap, envMapIntensity:1.7}));
+      rim = new THREE.Mesh(bar.rimGeo, new THREE.MeshBasicMaterial({
+        color: new THREE.Color().setHSL(hueOf(pad.note), .9, .62).multiplyScalar(1.35),   // reads from the stage shot
+        transparent:true, opacity:.18, depthWrite:false}));
+      rim.position.y = .062;
+      g.add(new THREE.Mesh(bar.pinGeo, bar.brass));
+    } else {
+    body = new THREE.Mesh(padGeo, new THREE.MeshStandardMaterial({
       color: isBass ? 0x7e8db0 : 0x9aa6bd, metalness:1, roughness:.18, envMap, envMapIntensity:1.2}));
-    const rim = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
+    rim = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
       color: new THREE.Color().setHSL(hueOf(pad.note), .8, .55),
       transparent:true, opacity:.18}));
     rim.rotation.x = Math.PI/2; rim.position.y = .09;
+    }
     g.add(body, rim); stage.add(g);
     return {g, rim, body, flash:0, hue:hueOf(pad.note),
             base: g.position.clone(), n: n.clone(), qN: g.quaternion.clone(),
@@ -399,7 +418,8 @@ function buildWorld(keyName){
   // tr.origin is a real placement transform (the seed of user-placed instruments).
   // Sliding a track in x is a rigid translation; gravity is vertical, so the solved
   // physics is untouched — we add tr.origin only at render time. Common wall ⇒ z=0,y=0.
-  const GAP = 3;
+  if (PATERNOSTER) tracks.forEach(planTrackCrane);     // conserved marble: solve each voice's magnet crane
+  const GAP = PATERNOSTER ? PT.GAP : 3;
   let cursor = 0;
   tracks.forEach(tr => {
     const xs = tr.padObjs.map(po => po.base.x);
@@ -464,7 +484,27 @@ function buildWorld(keyName){
   // spawns at songTime 0 and rolls into the downbeat. skipStrikes guards the first
   // frame from retro-firing every drum edge it lands on (same as a scrub jump).
   songTime = -LEAD_IN; loopIndex = -1; skipStrikes = true;
+  if (PATERNOSTER) tracks.forEach(tr => spawnBall(tr, 0));   // the count-in: marble hangs ARMED on its magnet
   if (started) clock.start();
+}
+
+/* PATERNOSTER: the marble is CONSERVED. Solve the voice's crane (src/crane.js) for this
+   loop period, then re-aim the two pads it touches so their tilt bisects the REAL in/out:
+   the last pad launches straight up to the magnet, pad 0 catches the vertical drop. The
+   arcs themselves are untouched; only these two pads' visual normals follow the new path. */
+function planTrackCrane(tr){
+  const P = ROLL_T + LOOP_T, n = tr.pads.length, L = tr.pads[n-1], F = tr.pads[0];
+  tr.crane = planCrane({ g: -G.y, P, rollT: tr.rollT, tLast: L.t, r: RIG_OPT[tr.role].r,
+    last: { x: L.pos.x, z: L.pos.z }, first: { x: F.pos.x, z: F.pos.z } });
+  const aim = (po, vin, vout, ampV) => {
+    const nn = vout.clone().normalize().sub(vin.clone().normalize()).normalize();
+    if (nn.y < .2) nn.set(0, 1, 0);
+    po.n.copy(nn); po.qN.setFromUnitVectors(UPY, nn); po.g.quaternion.copy(po.qN);
+    if (ampV) po.amp = THREE.MathUtils.clamp(ampV.dot(nn) * .07, .05, 1.6);
+  };
+  const up = new THREE.Vector3(0, -G.y * tr.crane.Tr - DESCENT, 0);          // falling-frame launch velocity
+  if (n > 1) aim(tr.padObjs[n-1], arcVel(tr.arcs[n-2], tr.pads[n-2].dt), up, up);
+  aim(tr.padObjs[0], new THREE.Vector3(0, G.y * tr.crane.Tf - DESCENT, 0), tr.arcs[0]);
 }
 
 const noteEl = document.getElementById('note');
@@ -703,7 +743,18 @@ if (!reduceMotion){ clock.start(); started = true; }
    it's on (idx). The caller adds the per-ball render lift DESCENT·τ and fires the
    strike when idx advances. Positions are WORLD (un-lifted); the +UP marble lift
    off the pad is baked in on the arc segments. */
-function ballPos(tr, tau){
+function ballPos(tr, tau, birthT = 0){
+  if (tr.crane){                                        // PATERNOSTER: hang / drop / rise / ride the magnet
+    const c = craneBall(tr.crane, tau, birthT);
+    if (c){
+      const lift = STAGE_Y + UP.y - DESCENT * tau;      // contact level, minus the render lift main re-adds
+      const tail = c.mode === 'rise' || c.mode === 'docked';
+      return {pos: new THREE.Vector3(c.x, c.y + lift, c.z), vel: new THREE.Vector3(0, c.vy, 0),
+              plunge:false, idx: tail ? tr.pads.length - 1 : -1, nextIdx: tail ? -1 : 0,
+              prog: tail ? 0 : THREE.MathUtils.clamp((tau - tr.crane.rel) / tr.crane.Tf, 0, 1),
+              curDt: 9, nextDt: tail ? 9 : tr.pads[0].dt, crane: c.mode};
+    }
+  }
   if (tau < tr.rollT){                                  // birth: free-FALL onto pad 0 under HONEST gravity
     const p0 = tr.pads[0].pos;
     // Wait in the mouth (longer for delayed voices), then free-fall a fixed BIRTH_DROP so the
@@ -738,6 +789,7 @@ function ballPos(tr, tau){
 }
 /* Born once per loop; one strike per pad per loop. */
 function spawnBall(tr, birthT){
+  if (tr.crane && tr.balls.some(b => b.birthT === birthT)) return;   // armed early for the count-in
   const rig = checkoutRig(tr.role);
   if (!rig) return;                                     // pool exhausted — drop the ball, never crash
   tr.balls.push({rig, birthT, lastIdx:-1, splashed:false});
@@ -766,9 +818,9 @@ function animate(){
 
   let leadRender = null;
   const marblePts = [];
-  const cullDist = Math.min(PAD_CULL, DESCENT * P * .5 - .5);  // ride to the drum; never past the half-period
+  const cullDist = Math.min(PATERNOSTER ? PT.CULL : PAD_CULL, DESCENT * P * .5 - .5);  // ride to the drum; never past the half-period
   const cullC = cullDist / DESCENT;                      // …same edge, in belt-phase units
-  const innerC = cullC * .64;                            // fully deployed within this band — strike zone never animates
+  const innerC = PATERNOSTER ? PT.INNER / DESCENT : cullC * .64;   // fully deployed within this band — strike zone never animates
                                                          // (higher = a tighter, snappier unfold nearer the edge)
   tracks.forEach(tr => {
     // ---- mortal balls: render each, strike on the youngest, recycle the dead ----
@@ -776,7 +828,7 @@ function animate(){
     for (let bi = tr.balls.length - 1; bi >= 0; bi--){   // newest first
       const ball = tr.balls[bi];
       const tau = songTime - ball.birthT;
-      const r = ballPos(tr, tau);
+      const r = ballPos(tr, tau, ball.birthT);
       const rpos = r.pos.clone(); rpos.y += DESCENT * tau;   // per-ball render lift → juggles in the band
       rpos.add(tr.origin);                                   // …in its track's bay (rigs live in scene, not the stage)
       const rig = ball.rig;
@@ -796,9 +848,20 @@ function animate(){
           spawnBurst(rpos.clone().add(UP), rig.glow, 18, 4.5);
         }
       }
-      if (tau > P + FADE_TAIL || fade >= 1){ checkinRig(rig); tr.balls.splice(bi, 1); continue; }
+      if (tr.crane ? tau >= P + tr.crane.rel : (tau > P + FADE_TAIL || fade >= 1)){ checkinRig(rig); tr.balls.splice(bi, 1); continue; }
+      // PATERNOSTER hand-off: a newborn stays hidden while its predecessor still rides the magnet
+      // (they share one position at the release instant, so only one marble is ever seen)
+      const hidden = tr.crane && r.crane === 'hang' &&
+        tr.balls.some(b => b.birthT < ball.birthT && songTime - b.birthT < P + tr.crane.rel);
+      if (tr.crane && r.crane === 'docked' && !ball.docked){   // the CLACK: docking on the electromagnet
+        ball.docked = true;
+        if (!skipStrikes){
+          spawnBurst(rpos.clone().add(new THREE.Vector3(0, RIG_OPT[tr.role].r, 0)), new THREE.Color(0xff7a3a), 10, 2.2);
+          rig.squash = .6; rig.lamp.intensity = 6;
+        }
+      }
 
-      const show = (1 - fade) * (r.appear ?? 1);        // appear<1 only during the newborn's pre-fall hold
+      const show = hidden ? 0 : (1 - fade) * (r.appear ?? 1);   // appear<1 only during the newborn's pre-fall hold
       rig.halo.material.opacity = HALO_A * show;
       rig.core.material.emissiveIntensity = EMI * show + .1;
       rig.group.visible = show > .002;
@@ -817,7 +880,7 @@ function animate(){
       if (started && trailTick > .022 && playRate && fade < .5 && show > .5)
         spawnTrail(rpos, rig.glow, tr.isBass);
 
-      if (!active){ active = {r, rpos}; }                // first live one we hit is the youngest
+      if (!active && !hidden){ active = {r, rpos}; }                // first live one we hit is the youngest
     }
     tr.active = active;
     if (active){
@@ -833,7 +896,7 @@ function animate(){
       po.g.visible = true;
       po.flash *= (1 - dt*4);
       const pre = (active && idx === active.r.nextIdx) ? active.r.prog*active.r.prog : 0;
-      po.rim.material.opacity = .08 + po.flash*.5 + pre*.3;
+      po.rim.material.opacity = (PATERNOSTER ? .55 : .08) + po.flash*.5 + pre*.3;   // tone-plates wear a lit hue frame
       po.rim.scale.setScalar(1 + pre*.22 + po.flash*.12);
       po.body.material.emissive.setHSL(po.hue, .7, .06 + po.flash*.32 + pre*.07);   // a lit floor: the hero never goes dark
       po.beltY = STAGE_Y - .12 + DESCENT * c;           // un-nudged belt height — the bracket spine roots here
@@ -843,13 +906,13 @@ function animate(){
       const dep = reduceMotion ? FULL_DEPLOY : deployPose(c, innerC, cullC);
       po.g.quaternion.copy(Q_FLAT).slerp(po.qN, dep.tilt);
       _qn.copy(UPY).applyQuaternion(po.g.quaternion);   // live normal (for the flipper nudge as it unfolds)
-      const z = THREE.MathUtils.lerp(BELT_DEPTH + .15, po.base.z, dep.extend);   // belt-flush → rest depth
+      const z = THREE.MathUtils.lerp(PATERNOSTER ? PT.STOW_Z : BELT_DEPTH + .15, po.base.z, dep.extend);   // belt-flush → rest depth
       po.g.position.set(po.base.x, po.beltY, z)
         .addScaledVector(_qn, padOffset(started ? c : 0, po.amp));
     });
 
     // ---- the visible machine: scroll the belt in lock-step with the rising pads ----
-    if (machinesOn) tr.machine.update(reduceMotion ? 0 : dt);
+    if (machinesOn) tr.machine.update(reduceMotion ? 0 : dt, songTime);
   });
 
   // ---- marble drums: one ball per drum, dribbling its solved arcs ----

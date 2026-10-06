@@ -11,7 +11,9 @@
 // Parts come out in the plugin contract's format (src/instruments/README.md):
 //     song.parts[key] = [[beat, note, vel, durBeats?], ...]
 // absolute beats ∈ [0, loopBeats), lead-aligned and quantized exactly like drums.
-// Only the bowls read a duration (sustained voice), so only bowls carry one.
+// Two machines read a duration: the bowls (a sustained voice: every note carries one)
+// and the marimba (a held note ≥ `roll` beats becomes a ROLL — how a real marimbist
+// sustains — so only those notes carry one).
 
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 export const midiToName = m => NOTE_NAMES[m % 12] + (Math.floor(m / 12) - 1);
@@ -90,7 +92,8 @@ export function routeProgram(p){
              machine playing four unrelated parts at once is mush, not an arrangement
    Derived from each plugin's solve.js + demo:
      marimba   keyboard spans C..C over the played range (11.2 u) — 3 octaves keeps bars wide;
-               one dribbling marble per pitch, fast repeats fine (demo: 16ths @100)
+               a robot FOUR-MALLET marimbist: ≤ 4 notes at once (2 per hand), fast lines
+               hand off between the hands (demo: 16ths @100); a note held ≥ 1 beat ROLLS
      musicbox  tine L ∝ f^−½ clamps past ~2.5 octaves; comb spacing shrinks past ~14 tines.
                Its pin gap is NOT a constant: the cylinder turns once per LOOP, so two pins
                on one tine must sit MB_MIN_ANGLE apart = MB_MIN_ANGLE·P/2π seconds (≈ 2 s on
@@ -103,7 +106,7 @@ export function routeProgram(p){
      bowls     two rows on a 10 u deck; a bowl's size is its note (C3 big … G5 small);
                HOLD_MAX 5 s per orbit                                              */
 export const PART_SPEC = {
-  marimba:  { lo: 48, hi: 84,  center: 66, pitches: 37, poly: 6, gap: .1,  ioi: 0,  voices: 4 },
+  marimba:  { lo: 48, hi: 84,  center: 66, pitches: 37, poly: 4, gap: .1,  ioi: 0,  voices: 4, roll: 1, rollSec: .5, maxRoll: 8 },
   musicbox: { lo: 72, hi: 100, center: 84, pitches: 14, poly: 5, gap: .08, ioi: 0,  voices: 2, tines: 20 },
   bells:    { lo: 60, hi: 84,  center: 70, pitches: 10, poly: 3, gap: .36, ioi: .2, voices: 2 },
   bass:     { lo: 28, hi: 52,  center: 38, pitches: 8,  poly: 2, gap: .15, ioi: 0,  voices: 1, maxEvents: 256 },
@@ -470,10 +473,18 @@ export function shapePart(key, notes, { bpm, loopBeats, rollT = ROLL_T }){
     say(`kept the ${S.maxEvents} strongest of ${S.maxEvents + cut} notes (the machine's solve budget) — dropped ${plural(cut, 'note')}`);
   }
 
+  // a marimba ROLL holds only until the next attack (any pitch): a spread chord or a line
+  // over a held note is struck, not rolled — two hands can't sustain six voices
+  const beats = [...new Set(out.map(n => n.beat))].sort((a, b) => a - b);
+  const nextOn = b => { const i = beats.findIndex(x => x > b + 1e-9); return i >= 0 ? beats[i] : loopBeats + beats[0]; };
   const part = out.map(n => {
     const vel = Math.round(Math.max(.05, Math.min(1, n.vel)) * 100) / 100;
     const e = [n.beat, midiToName(n.midi), vel];
     if (S.sustain) e.push(Math.round(n.dur * 1000) / 1000);
+    else if (S.roll){                                    // a held note: a ROLL
+      const d = Math.min(n.dur ?? 0, nextOn(n.beat) - n.beat, S.maxRoll);
+      if (d >= S.roll && d * spb >= S.rollSec) e.push(Math.round(d * 1000) / 1000);
+    }
     return e;
   });
   return { part, warnings };

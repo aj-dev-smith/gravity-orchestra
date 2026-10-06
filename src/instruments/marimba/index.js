@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { eventTimes, makeEdge, ring, at } from '../clock.js';
 import {
-  solve, keyboard, laneHue, handsAt, malletAt, lastHit, bendAt, flexAt,
-  HEAD_R, LS, Y_W, Y_TRACK, Y_YOKE, Y_RAIL, RAIL_X0, RAIL_X1, CAR_W, NODE, MODE_GLSL,
+  solve, keyboard, laneHue, handsAt, malletAt, lastHit, bendAt, flexAt, wristDrive,
+  trayBoxes, carriageBoxes, HEAD_R, LS, Y_W, Y_TRACK, Y_YOKE, Y_RAIL, RAIL_X0, RAIL_X1, NODE, MODE_GLSL,
+  Z_G as Z0, BEAM_H, BEAM_D, RP, BELT_DZ, RC, LINK, CH_Y0, CH_H, CH_W, CH_ZC, A_MAX,
 } from './solve.js';
 import { marimbaVoice, layerId } from './voice.js';
 
@@ -18,16 +19,19 @@ import { marimbaVoice, layerId } from './voice.js';
    PLAYED BY A ROBOT four-mallet marimbist (all the motion is solved up
    front in solve.js — this file only draws what the math says):
    · a brushed-steel GANTRY beam on two towers; two CARRIAGES (left hand,
-     right hand) ride it, each clamped to its own toothed BELT over brass
-     pulleys (the pulleys turn exactly x/r — the belt is the visible cause
-     of every move), each trailing a DRAG CHAIN that folds and unfolds
-     on top of the beam;
+     right hand) ride it — each a SADDLE under the beam (a shoe on the
+     chrome guide, a plate up the beam's front or back face), clamped to its
+     own toothed BELT over brass pulleys (the pulleys turn exactly x/r — the
+     belt is the visible cause of every move; the drive motor's coil glows
+     with its torque), each trailing a DRAG CHAIN that folds and unfolds in
+     the tray on top of the beam, carried by a thin L-bracket (solve.js
+     carriageBoxes — test-proven never to pass through tray or chains);
    · under each carriage a LAZY-TONG SCISSOR spreads two z-tracks apart —
      the grip, the interval between the hand's two mallets;
    · on each track a FOREARM slides (reaching back for the sharps) and a
      WRIST MOTOR at its foot throws the shaft: prep lift ∝ velocity →
      down-stroke → contact → lossy rebound → caught. The coil glows while
-     it drives (down-stroke) and as it catches (the brake);
+     it drives (brighter for a whip) and as it catches (the brake);
    · MALLET HEADS are glowing MARBLES on flexible shafts that shiver on
      impact; fast strokes leave ghost trails; the bar bends in its true
      first mode and its resonator lights with the note.
@@ -44,14 +48,9 @@ const GLOW_COIL = new THREE.Color(0xff7a2a);   // the room's amber, for every mo
 // melody belt wall next door (the footprint is |x| ≤ 6.5; the bass end has the room)
 const KB_W = 11.2, KB_X0 = -.35;
 const FX0 = -6.32, FX1 = 5.62;                 // frame ends (x)
-const Z0 = -1.85;                              // the gantry's z (centre of the forearm tracks)
 const ZT0 = -3.48, ZT1 = -.2;                  // forearm track ends (z)
-const RP = .17;                                // belt pulley radius
-const BELT_DZ = .36;                           // belts run either side of the beam (left hand front)
 const TOOTH = .16;                             // belt tooth pitch
-const RC = .17, LINK = .13;                    // drag-chain bend radius, link pitch
 const TX0 = RAIL_X0 - .2, TX1 = RAIL_X1 + .22; // tower x
-const BEAM_H = .3, BEAM_D = .34;              // the gantry beam's section
 
 const voice = id => marimbaVoice(id);
 
@@ -59,14 +58,17 @@ export default {
   key: 'marimba',
   label: 'Marimba',
   wet: false,
-  lookHeight: 4.3,
+  lookHeight: 5.1,                  // between the bars and the gantry: the whole performer, mallets mid-frame
+  camera: { dist: 10.5, up: 7, x: -4.2 },  // a 3/4 view from the bass end, over the string bass: tongs, heads + bars read; the belts stay out
   color: '#ff8a5a',                 // director button / shot tint: lacquered rosewood amber
   directorWeight: 1.2,              // (its part is trimmed ×.38 in the mix — cue weights are velocities)
   voice,
-  // two baked velocity layers per played note (soft + hard/bright), only the ones used
+  // two baked velocity layers per played note (soft + hard/bright), only the ones a strike
+  // can ask for: a hard note's soft layer too (a roll's sustaining strokes are softer, and a
+  // stroke the wrist can't fully whip sounds as hard as it actually lands)
   voiceIds(part){
     const ids = new Set();
-    for (const e of part){ ids.add(layerId(e[1], e[2] ?? 1)); if ((e[3] ?? 0) >= 1) ids.add(layerId(e[1], (e[2] ?? 1) * .9)); }
+    for (const e of part){ ids.add(e[1]); if ((e[2] ?? 1) > .75) ids.add(layerId(e[1], e[2] ?? 1)); }
     return [...ids];
   },
 
@@ -177,6 +179,8 @@ export default {
       const box = (x, y, z, w, h, d, mat = dark, parent = frame) => {
         const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); parent.add(m); return m;
       };
+      const aabb = (b, mat) => box((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2,
+                                   b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2], mat);
       for (const end of [-1, 1]){
         const x = end < 0 ? FX0 : FX1;
         const ends = rails.map(r => new THREE.Vector3(x, r.y, end < 0 ? r.z0 : r.z1)).sort((a, b) => a.z - b.z);
@@ -195,7 +199,6 @@ export default {
       if (br) rod(new THREE.Vector3(FX0, .55, br.z0), new THREE.Vector3(FX1, .55, br.z1), .045);
 
       // ---- the GANTRY: two towers, the brushed-steel beam, its guide, the chain tray ----
-      const yTop = Y_RAIL + BEAM_H / 2;
       for (const x of [TX0, TX1]){
         for (const dz of [-.42, .42]) rod(new THREE.Vector3(x, 0, Z0 + dz), new THREE.Vector3(x, Y_RAIL + .5, Z0 + dz), .085, steel);
         box(x, Y_RAIL + .55, Z0, .3, .14, 1.15, steel);                          // tower head
@@ -204,8 +207,7 @@ export default {
       }
       box((TX0 + TX1) / 2, Y_RAIL, Z0, TX1 - TX0 + .3, BEAM_H, BEAM_D, steel);   // the beam
       box((TX0 + TX1) / 2, Y_RAIL - BEAM_H / 2 - .025, Z0, TX1 - TX0, .05, .12, chrome);   // linear guide rail
-      box((RAIL_X0 + RAIL_X1) / 2, yTop + .01, Z0, RAIL_X1 - RAIL_X0 + .2, .02, .36, dark); // chain tray floor
-      for (const dz of [-.18, .18]) box((RAIL_X0 + RAIL_X1) / 2, yTop + .06, Z0 + dz, RAIL_X1 - RAIL_X0 + .2, .1, .015, dark);
+      for (const b of trayBoxes()) aabb(b, dark);                                  // the chain tray
       // a neon strip under the beam (the signature gradient — reads from across the room)
       const stripGeo = new THREE.BoxGeometry(TX1 - TX0, .03, .03);
       paintGradient(stripGeo, -(TX1 - TX0) / 2, (TX1 - TX0) / 2);
@@ -239,21 +241,22 @@ export default {
 
       // ---- per HAND: carriage, hanger, scissor, chain; per MALLET: track, slider, forearm, wrist, shaft, head ----
       const nCell = rig.nCell, nLink = 2 * nCell, nPin = 3 * nCell + 2;
-      const carriages = add(new THREE.InstancedMesh(new THREE.BoxGeometry(CAR_W, .46, BEAM_D + .2), steel, 2));
-      const carCaps = add(new THREE.InstancedMesh(new THREE.BoxGeometry(CAR_W * .8, .08, BEAM_D + .26), brass, 2));
-      const clamps = add(new THREE.InstancedMesh(new THREE.BoxGeometry(.16, .1, BELT_DZ - BEAM_D / 2 + .05), dark, 2));
-      const brackets = add(new THREE.InstancedMesh(new THREE.BoxGeometry(.1, 1, .1), dark, 2));
+      // each carriage = a SADDLE (solve.js carriageBoxes: shoe, plate, cap, belt clamp,
+      // and the L-bracket — post + arm — that carries its drag chain), unit boxes scaled
+      const unit = new THREE.BoxGeometry(1, 1, 1);
+      const PART_MAT = { shoe: steel, plate: steel, cap: brass, clamp: dark, post: dark, arm: dark };
+      const carParts = Object.fromEntries(Object.entries(PART_MAT).map(([k, m]) => [k, add(new THREE.InstancedMesh(unit, m, 2))]));
       const hangers = add(new THREE.InstancedMesh(new THREE.CylinderGeometry(.06, .06, 1, 12), chrome, 2));
       const slots = add(new THREE.InstancedMesh(new THREE.BoxGeometry(.12, .06, 1), dark, 2));
       const links = add(new THREE.InstancedMesh(new THREE.BoxGeometry(1, .035, .06), chrome, 2 * nLink));
       const pins = add(new THREE.InstancedMesh(new THREE.CylinderGeometry(.04, .04, .12, 10), brass, 2 * nPin));
       const nChain = Math.ceil((RAIL_X1 - RAIL_X0 + .6 + Math.PI * RC) / LINK) + 1;
-      const chainLinks = add(new THREE.InstancedMesh(new THREE.BoxGeometry(LINK * .92, .075, .13), chainM, 2 * nChain));
+      const chainLinks = add(new THREE.InstancedMesh(new THREE.BoxGeometry(LINK * .92, CH_H, CH_W), chainM, 2 * nChain));
       const tracks = add(new THREE.InstancedMesh(new THREE.BoxGeometry(.09, .07, ZT1 - ZT0), steel, 4));
       const sliders = add(new THREE.InstancedMesh(new THREE.BoxGeometry(.17, .13, .26), brass, 4));
       const forearms = add(new THREE.InstancedMesh(new THREE.CylinderGeometry(.045, .045, 1, 12), chrome, 4));
-      const wrists = add(new THREE.InstancedMesh(new THREE.CylinderGeometry(.095, .095, .2, 18), dark, 4));
-      const wristCoils = add(new THREE.InstancedMesh(new THREE.CylinderGeometry(.1, .1, .09, 18, 1, true), coilM, 4));
+      const wrists = add(new THREE.InstancedMesh(new THREE.CylinderGeometry(.095, .095, .17, 18), dark, 4));    // .17 long: tight grips clear by .05
+      const wristCoils = add(new THREE.InstancedMesh(new THREE.CylinderGeometry(.1, .1, .08, 18, 1, true), coilM, 4));
       const aWG = inst(wristCoils.geometry, 'aGlow', 4, 1), aWC = inst(wristCoils.geometry, 'aCol', 4, 3);
       for (let k = 0; k < 4; k++) GLOW_COIL.toArray(aWC.array, k * 3);
       const shaftGeo = new THREE.CylinderGeometry(1, 1, 1, 8, 12);
@@ -273,7 +276,7 @@ export default {
       for (const m of meshes) m.frustumCulled = false;
       const edges = plan.mallets.map(() => makeEdge(EDGE_W));
       st = { plan, bars, start: plan.start, barMesh, aFlex, aBG, aRG, aMG, aRP, tubes, put, edges,
-             pulleys, teeth, nT, Lb, Lx, beltZ, aMoG, carriages, carCaps, clamps, brackets, hangers, slots, links, pins, nCell, nLink, nPin,
+             pulleys, teeth, nT, Lb, Lx, beltZ, aMoG, carParts, hangers, slots, links, pins, nCell, nLink, nPin,
              chainLinks, nChain, tracks, sliders, forearms, wrists, wristCoils, aWG, shafts, aBend, ferrules, heads, aHG, aHC,
              halo, per, motorCoils };
       paint(plan.start, false);                          // the ARMED pose from the first frame
@@ -297,8 +300,10 @@ export default {
         const lh = lastHit(plan, M, t);
         if (live && lh && !lh.d.armed && S.edges[k].check(lh.d.abs, lh.since, skip) && onStrike){
           const b = bars[lh.s.bar];
-          onStrike({ note: layerId(b.note, lh.s.vel), vel: lh.s.vel, pos: new THREE.Vector3(lh.s.x, b.top + .03, lh.s.z), color: b.col.getHex(),
-                     dur: 0, sparks: Math.round(2 + 5 * lh.s.vel), light: .45 + .55 * lh.s.vel, shake: 0 });
+          // the SOUND is the impact: vel as the mallet actually landed (= the authored
+          // velocity unless the wrist couldn't whip it that hard — see solve.stroke)
+          onStrike({ note: layerId(b.note, lh.vel), vel: lh.vel, pos: new THREE.Vector3(lh.s.x, b.top + .03, lh.s.z), color: b.col.getHex(),
+                     dur: 0, sparks: Math.round(2 + 5 * lh.vel), light: .45 + .55 * lh.vel, shake: 0 });
         }
         return lh;
       });
@@ -328,23 +333,24 @@ export default {
       }
       S.teeth.instanceMatrix.needsUpdate = true;
 
-      // hands
-      const Hd = plan.hands.map((H, h) => {
-        const v1 = handsAt(plan, t - .01)[h].cx;
-        return { speed: Math.abs(hs[h].cx - v1) / .01 };
-      });
+      // hands — the carriage drive's current follows its TORQUE (|a|, by central
+      // differences of the pure motion), plus a little back-EMF with speed
+      const DT = .012, hA = handsAt(plan, t - DT), hB = handsAt(plan, t + DT);
+      const Hd = [0, 1].map(h => ({
+        acc: live ? Math.abs(hB[h].cx - 2 * hs[h].cx + hA[h].cx) / (DT * DT) : 0,
+        speed: live ? Math.abs(hB[h].cx - hA[h].cx) / (2 * DT) : 0 }));
       for (const h of [0, 1]){
         const { cx, s } = hs[h];
-        put(S.carriages, h, cx, Y_RAIL, Z0, 1, 1, 1);
-        put(S.carCaps, h, cx, Y_RAIL + .25, Z0, 1, 1, 1);
-        const zc = h ? Z0 - BEAM_D / 2 - (BELT_DZ - BEAM_D / 2) / 2 - .05 : Z0 + BEAM_D / 2 + (BELT_DZ - BEAM_D / 2) / 2 + .05;
-        put(S.clamps, h, cx, Y_RAIL - RP, zc, 1, 1, 1);
-        // the chain's carriage bracket rises from the carriage top to the chain's upper run
-        const yChain = Y_RAIL + .15 + .045 + 2 * RC, zCh = Z0 + (h ? -.09 : .09);
-        put(S.brackets, h, cx, (Y_RAIL + .23 + yChain) / 2, zCh, 1, yChain - Y_RAIL - .23, 1);
-        // hanger from the carriage to the scissor's middle joints
+        for (const b of carriageBoxes(h, cx)){
+          const m = S.carParts[b.name];
+          put(m, h, (b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2,
+              b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]);
+        }
+        const zCh = Z0 + (h ? -CH_ZC : CH_ZC);
+        // hanger from the carriage's shoe to the scissor's middle joints
+        const yShoe = Y_RAIL - BEAM_H / 2 - .15;
         const dz = Math.sqrt(Math.max(0, plan.rig.link ** 2 - (s / S.nCell) ** 2));
-        put(S.hangers, h, cx, (Y_RAIL - .23 + Y_YOKE) / 2, Z0, 1, Y_RAIL - .23 - Y_YOKE, 1);
+        put(S.hangers, h, cx, (yShoe + Y_YOKE) / 2, Z0, 1, yShoe - Y_YOKE, 1);
         put(S.slots, h, cx, Y_YOKE + .05, Z0, 1, 1, plan.rig.link * 2 + .1);
         // the lazy tongs
         const cw = s / S.nCell, ang = Math.atan2(dz, cw);
@@ -356,15 +362,16 @@ export default {
         }
         for (let c = 0; c <= S.nCell; c++) for (const sd of [0, 1])
           put(S.pins, h * S.nPin + S.nCell + 2 * c + sd, cx - s / 2 + c * cw, Y_YOKE, Z0 + (sd ? dz / 2 : -dz / 2), 1, 1, 1);
-        // the drag chain
-        chain(h, cx, yChain - 2 * RC, zCh);
-        // the motor coil: current ∝ carriage speed
-        S.aMoG.array[h] = .06 + .35 * Math.min(4, Hd[h].speed / 2.5);
+        // the drag chain: lower run in the tray, the bend, the upper run back to the bracket arm
+        chain(h, cx, CH_Y0, zCh);
+        // the motor coil glows with its current: torque (accel) + a little back-EMF
+        const I = Math.min(1.6, Hd[h].acc / A_MAX + .04 * Hd[h].speed);
+        S.aMoG.array[h] = .06 + 1.4 * I;
         const mh = S.halo, ix = 4 * S.per + h;
         mh.pos.array[ix * 3] = h ? RAIL_X1 : RAIL_X0; mh.pos.array[ix * 3 + 1] = Y_RAIL; mh.pos.array[ix * 3 + 2] = S.beltZ[h] + (h ? -.36 : .36);
-        mh.alpha.array[ix] = Math.min(.8, .06 * Hd[h].speed); mh.size.array[ix] = .9;
+        mh.alpha.array[ix] = Math.min(.85, .6 * I); mh.size.array[ix] = .9;
       }
-      for (const m of [S.carriages, S.carCaps, S.clamps, S.brackets, S.hangers, S.slots, S.links, S.pins, S.chainLinks]) m.instanceMatrix.needsUpdate = true;
+      for (const m of [...Object.values(S.carParts), S.hangers, S.slots, S.links, S.pins, S.chainLinks]) m.instanceMatrix.needsUpdate = true;
       S.aMoG.needsUpdate = true;
 
       // mallets
@@ -401,16 +408,11 @@ export default {
         const b = sIdx >= 0 && M.strikes[sIdx] ? bars[M.strikes[sIdx].bar] : null;
         const col = b ? b.col : GLOW_COIL;
         col.toArray(S.aHC.array, k * 3);
-        const since = live && lh && !lh.d.armed ? lh.since : Infinity, vel = lh?.s?.vel ?? 0;
+        const since = live && lh && !lh.d.armed ? lh.since : Infinity, vel = lh?.vel ?? 0;
         S.aHG.array[k] = 1.3 + 3.5 * vel * ring(since, 10);
-        // the wrist motor's coil: drives the down-stroke, brakes the rebound
-        let drive = 0;
-        if (live && M.L){
-          const d = at(M.L, t, plan.start), j = d.next;
-          if (d.until <= M.Td[j]) drive = 1 - d.until / M.Td[j];
-          if (!d.armed && d.since <= M.sigR[d.i] * 1.6) drive = Math.max(drive, .7 * (1 - d.since / (M.sigR[d.i] * 1.6)));
-        }
-        S.aWG.array[k] = .05 + 2.2 * drive;
+        // the wrist motor's coil: throws the down-stroke (brighter for a WHIP — a short
+        // stroke thrown hard to land as loud as asked) and brakes the rebound
+        S.aWG.array[k] = .05 + 2 * (live ? wristDrive(plan, M, t) : 0);
         // halos: the head, its ghosts (only when moving fast), the contact flare
         const base = k * S.per;
         H2[base * 3] = p.x; H2[base * 3 + 1] = p.y; H2[base * 3 + 2] = p.z;

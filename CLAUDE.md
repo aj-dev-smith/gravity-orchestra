@@ -173,7 +173,8 @@ nothing more. The unifying runtime primitive is a **ball spawner** — mortal ba
 3. **INSTRUMENT PLUGINS** (`src/instruments/`, §4b) — the extensibility bet cashed in: five
    more instruments built in parallel by separate agents against one contract, each a
    different honest mechanism: **marimba** (a ROBOT four-mallet marimbist: belt-driven gantry
-   carriages, scissor-yoke grips, marble mallet heads — allocation + motion solved up front), **bells**
+   carriages, scissor-yoke grips, marble mallet heads, held notes ROLL, impact speed = loudness —
+   allocation + motion solved up front, then verified against the drive limits), **bells**
    (latched pendulum strikers + motorised catcher), **bass** (winched magnets drop heavy balls
    onto strings), **musicbox** (pinned cylinder = one revolution per loop, the cylinder IS the
    score), **bowls** (SUSTAINED — a marble orbits the rim for the note's duration).

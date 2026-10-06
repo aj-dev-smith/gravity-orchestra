@@ -28,6 +28,7 @@ export const STATIONS = {
   bells:    { x:  31,  y: 0.0, z: -4,  yaw: -.75, w: 11, d: 7 },   // far right wing
   bowls:    { x: -20,  y: -.5, z: 19,  yaw:  .95, w: 10, d: 9 },   // front-left, low
   musicbox: { x:  20,  y: -.5, z: 19,  yaw: -.95, w: 10, d: 9 },   // front-right, low
+  ricochet: { x: -30,  y: 3.0, z: -25, yaw:  .7,  w: 15, d: 15 },  // back-left corner, raised: a tall hanging sculpture seen past the belt wall's left edge, behind the bass
 };
 
 /* Fallback for an instrument with no named slot: park it out front, in a row. */

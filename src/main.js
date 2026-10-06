@@ -1008,6 +1008,7 @@ function mixRender(r, g){ return g === 1 ? r : { sr: r.sr, samples: r.samples.ma
 /* An instrument plugin's strike: sparks + a shared strike light at the contact (its
    local pos → world through the station), an optional camera punch, and its voice.
    hit = { note, vel, pos (Vector3, instrument-local), color, dur (s), shake, sparks } */
+let voiceWarned = false;
 function instStrike(rig, hit){
   const v = hit.vel ?? 1;
   const p = rig.station.localToWorld(_sp.copy(hit.pos || new THREE.Vector3()));
@@ -1019,7 +1020,7 @@ function instStrike(rig, hit){
   if (hit.shake) cam.addShake(hit.shake * v);
   if (audio.isReady() && !muted){
     const beat = (wrapP(songTime, ROLL_T + LOOP_T) - ROLL_T) / BEAT;   // loop-local beat (song.mix envelope)
-    try { audio.playVoice(`inst:${rig.I.key}:${hit.note}`, v * (rig.mix ? rig.mix.at(beat) : 1), { dur: hit.dur || 0, sp: placeAt(p) }); } catch(e){ /* audio must never break the run */ }
+    try { audio.playVoice(`inst:${rig.I.key}:${hit.note}`, v * (rig.mix ? rig.mix.at(beat) : 1), { dur: hit.dur || 0, sp: placeAt(p) }); } catch(e){ if (!voiceWarned){ voiceWarned = true; console.warn('cascade: instrument voice failed', rig.I.key, e); } }   /* audio must never break the run — but say so, once */
   }
 }
 

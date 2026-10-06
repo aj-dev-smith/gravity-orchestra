@@ -272,6 +272,8 @@ export function makeMarbleDrums({ envMap, glowTex }){
       const vHit = d.i < 0 ? 0 : Math.abs(t - d.since - pc.first) < 1e-6 ? DROP_V(DT_MAX) : L.vIn[d.i];
 
       // strike edge: the strike we most recently left, if it's fresh and not yet fired
+      // (time went backwards — a scrub, a rebuild's pose sweep: forget the "later" strike)
+      if (d.i >= 0 && t - d.since < pc.fired - 1e-6) pc.fired = -Infinity;
       if (started && d.i >= 0 && d.since <= EDGE_W){
         const at = t - d.since;
         if (at > pc.fired + 1e-6){

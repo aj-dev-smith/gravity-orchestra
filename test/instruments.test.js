@@ -44,6 +44,14 @@ describe('instrument lane clock', () => {
     expect(e.check(8, .12)).toBe(false);         // … and recorded, so it can't fire after
   });
 
+  it('time going BACKWARDS re-arms the edge (a pose sweep or scrub must not silence the next loop)', () => {
+    const e = makeEdge(.25);
+    for (const abs of [4, 30, 90]) e.check(abs, .05, true);   // main's merge sweep: the whole loop, skipped
+    expect(e.check(4, .02)).toBe(true);          // playback starts over: the early strike plays
+    expect(e.check(4, .05)).toBe(false);         // … once
+    expect(e.check(30, .01)).toBe(true);
+  });
+
   it('eventTimes / lanesByNote parse the part format', () => {
     const ev = eventTimes([[2, 'E4', .5, 1], [0, 'C4']], { rollT: 2.6, beat: .5 });
     expect(ev[0]).toMatchObject({ beat: 0, note: 'C4', vel: 1, dur: 0, t: 2.6 });

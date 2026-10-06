@@ -113,6 +113,10 @@ export function makeEdge(window = .25){
   let fired = -Infinity;
   return {
     check(abs, since, skip = false){
+      // time went BACKWARDS (a scrub, a rebuild, or main's merge sweep posing the whole loop
+      // with skip on): what fired "later" hasn't happened yet — forget it, or the first loop
+      // after the jump plays silent until it passes that point again
+      if (abs < fired - 1e-6) fired = -Infinity;
       if (!(since <= window) || !(abs > fired + 1e-6)) return false;
       fired = abs;
       return !skip;

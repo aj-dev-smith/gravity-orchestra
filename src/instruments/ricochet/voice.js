@@ -77,7 +77,8 @@ export function glassVoice(note){
 }
 
 /* the starter gate's CLINK (count-in only): a small steel mirror struck once — a short,
-   bright, metallic tick (inharmonic, ~.4 s), dry-ish so it reads as hardware, not a note */
+   bright, metallic tick (inharmonic, ~.45 s) — short and unpitched so it reads as hardware,
+   not a note (it shares the instrument's wet routing: `wet` is per-instrument) */
 let clink = null;
 export function gateClink(){
   if (clink) return clink;
@@ -96,4 +97,27 @@ export function gateClink(){
   let peak = 0; for (let i = 0; i < N; i++) peak = Math.max(peak, Math.abs(out[i]));
   for (let i = 0; i < N; i++) out[i] *= .6 / (peak || 1);
   return (clink = { samples: out, sr: SR });
+}
+
+/* a RELAY mirror's TOCK: a dark obsidian plate struck by the steel marble — no pitch to
+   speak of, just a soft, low, heavily damped knock (two stiff modes + a felted click),
+   ~.25 s, so the seam's collisions are heard (visuals drive audio) without reading as notes */
+let tock = null;
+export function relayTock(){
+  if (tock) return tock;
+  const N = Math.round(SR * .26), out = new Float32Array(N);
+  for (const [fq, a, tau] of [[310, .8, .045], [737, .35, .022], [1490, .12, .01]]){
+    const w = 2 * Math.PI * fq / SR;
+    for (let i = 0; i < N; i++) out[i] += a * Math.sin(w * i) * Math.exp(-i / (SR * tau));
+  }
+  const R = rng(1717);
+  let lp = 0;
+  for (let i = 0; i < SR * .008; i++){ lp += .25 * (R() - lp); out[i] += .4 * lp * Math.exp(-i / (SR * .0025)); }
+  const a = Math.round(SR * .001), z = Math.round(SR * .06);
+  for (let i = 0; i < a; i++) out[i] *= i / a;
+  for (let i = 0; i < z; i++) out[N - 1 - i] *= i / z;
+  out[N - 1] = 0;
+  let peak = 0; for (let i = 0; i < N; i++) peak = Math.max(peak, Math.abs(out[i]));
+  for (let i = 0; i < N; i++) out[i] *= .45 / (peak || 1);
+  return (tock = { samples: out, sr: SR });
 }

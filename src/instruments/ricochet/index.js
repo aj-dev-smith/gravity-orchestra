@@ -2,39 +2,42 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { eventTimes, makeEdge, wrapP } from '../clock.js';
 import { noteNum, arcPos } from '../../engine.js';
-import { buildOrbit, marbleAt, sinceStrike, wobble, gateLift, BALL_R, PLATE_T, GATE_R } from './solve.js';
-import { glassVoice, gateClink } from './voice.js';
+import { buildOrbit, marbleAt, sinceStrike, wobble, gateLift, BALL_R, PLATE_T, GATE_R, CABLE_R, CLEAR } from './solve.js';
+import { glassVoice, gateClink, relayTock } from './voice.js';
 
 /* ============================================================
    RICOCHET SCULPTURE — a new archetype: a FROZEN PATH.
 
-   A constellation of tuned glass plates hangs in mid-air on hair-thin
-   cables from a smoked-glass canopy. ONE chrome marble ricochets
-   between them forever — every bounce a perfect mirror reflection, so
-   it never gains or loses energy: no motors, no pistons, no magnets in
-   the loop. The canopy sits exactly at the marble's ENERGY CEILING H:
-   the height where it would come to rest; no arc can ever reach it.
+   A constellation of tuned glass plates hangs in mid-air, each on a
+   rigid chrome stem from a smoked-glass canopy. ONE chrome marble
+   ricochets between them forever — every bounce a perfect mirror
+   reflection, so it never gains or loses energy: no motors, no pistons,
+   no magnets in the loop. The canopy hangs just above (H + CEIL_GAP) the
+   marble's ENERGY CEILING H — the height where it would come to rest —
+   so no arc can ever reach it.
 
    Each note occurrence is its own plate (size = pitch, the engine's
    law; height ≈ pitch, so the sculpture reads as a score); each plate's
    tilt is forced by the two arcs it joins (n = vOut − vIn). The full
    orbit is drawn as a faint glowing wire — the frozen knot — that
    brightens just ahead of the marble. Dark obsidian RELAY mirrors carry
-   it silently across long rests (the loop seam).
+   it across long rests (the loop seam) with a soft, dark tock.
 
    Count-in: the marble hangs on the one magnet, AT the energy ceiling
    (at rest: exactly the orbit's energy), drops onto a hinged STARTER
    GATE angled to send it into the orbit with the orbit's exact
-   velocity; the gate's latch releases and it swings up out of the path
-   (a closed elastic orbit can't be entered by fixed geometry — time
-   reversibility — so something must move once). All motion = solve.js.
+   velocity; then its latch lets go and a COUNTERWEIGHT on the hinge's
+   bell-crank drops, swinging the gate up out of the path (a closed
+   elastic orbit can't be entered by fixed geometry — time reversibility
+   — so something must move once, and it moves for a visible reason).
+   All motion = solve.js.
    ============================================================ */
 
 const ICE      = 0x8fe9ff;           // signature: prism ice-cyan
 const ICE_HOT  = 0xe8fbff;
 const TRAIL_N  = 9, TRAIL_DT = .016;
 const CANOPY_PAD = .55;              // canopy rim beyond the furthest plate edge
-const ROOM_H = 58;                   // main.js ROOM: CEIL − FLOOR (the build opts carry floorY only)
+const ROOM_H = 58;                   // fallback only: main.js passes ceilY (ROOM.CEIL − station.y)
 
 /* the solve is deterministic: memoise it per (part, loop, count-in) so a song change back is instant */
 const ORBITS = new Map();
@@ -61,8 +64,9 @@ export default {
   camera: { dist: 21, up: 3.2 },
   color: '#8fe9ff',
 
-  voice: id => id === 'gate' ? gateClink() : glassVoice(id),
-  voiceIds: part => [...new Set(part.map(e => e[1])), 'gate'],
+  voice: id => id === 'gate' ? gateClink() : id === 'relay' ? relayTock() : glassVoice(id),
+  // every orbit has ≥ 1 relay (the loop seam's rest is always > DT_MAX), so always bake the tock
+  voiceIds: part => [...new Set(part.map(e => e[1])), 'gate', 'relay'],
 
   make({ envMap, glowTex }){
     let S = null;
@@ -122,48 +126,53 @@ export default {
         const a = k / 3 * Math.PI * 2 + Math.PI / 6;
         bar(V(footR * Math.cos(a), yC + .05, footR * Math.sin(a)), V(footR * .55 * Math.cos(a), top, footR * .55 * Math.sin(a)), .05, dark, 6);
       }
-      // the floor: a slim glowing ring marks the footprint; a black-glass dais on a pedestal
-      ring(footR, .02, .016, glowM);
-      const dais = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 2.1, .25, 40),
-        new THREE.MeshStandardMaterial({ color: 0x080b14, metalness: .9, roughness: .14, envMap, envMapIntensity: .8 }));
-      dais.position.y = -.12; fz(dais); group.add(dais);
-      ring(1.8, .01, .03, glowM);
-      if (floorY < -.6) bar(V(0, -.2, 0), V(0, floorY, 0), .6, dark, 20);
+      // the floor: nothing stands on it (the whole sculpture HANGS) — a slim glowing ring on the
+      // room floor marks the footprint, a smaller one marks the plumb line under the hub
+      ring(footR, floorY + .03, .02, glowM);
+      ring(1.1, floorY + .03, .03, glowM);
 
-      // ---- the cables: one hair-thin line per plate, from its hanger up into the canopy ----
-      const cableGeo = mergeGeometries(orb.rim.map(K => {
-        const len = yC - K.y;
-        return new THREE.CylinderGeometry(.012, .012, len, 4).translate(K.x, K.y + len / 2, K.z);
-      }));
-      group.add(new THREE.Mesh(cableGeo, cableM));
-      const eyeGeo = mergeGeometries(orb.rim.map(K => new THREE.SphereGeometry(.05, 8, 6).translate(K.x, yC - .02, K.z)));
+      // ---- the canopy eyes: where each rigid stem is clamped (static, merged) ----
+      const eyeGeo = mergeGeometries(orb.rim.map(K => new THREE.CylinderGeometry(.07, .09, .1, 10).translate(K.x, yC - .03, K.z)));
       group.add(new THREE.Mesh(eyeGeo, chrome));
 
-      // ---- the plates: each pivots on its hanger (the wobble), tilted by its forced normal ----
+      // ---- the plates: each welded at one rim point to a RIGID chrome stem clamped in the
+      //      canopy (a cable carries no torque — it could never hold a tilted plate, and a hit
+      //      from below would slacken it; a stem holds any forced tilt honestly). A strike
+      //      sets plate + stem RINGING about the canopy clamp (the wobble), pure fn of time. ----
       const plates = orb.nodes.map((nd, i) => {
         const relay = nd.relay;
         const k = relay ? 0 : (noteNum(nd.note) - lo) / span;
         const col = relay ? new THREE.Color(0x5f7cff) : new THREE.Color().setHSL(hueOf(k), .9, .62);
-        const piv = new THREE.Group(); piv.position.copy(orb.rim[i]); group.add(piv);
-        const body = new THREE.Group(); body.position.copy(orb.c[i]).sub(orb.rim[i]);
+        const K = orb.rim[i], top = V(K.x, yC, K.z), L = Math.max(.3, yC - K.y);
+        const piv = new THREE.Group(); piv.position.copy(top); group.add(piv);
+        // the stem + its weld collar, one geometry (one draw call per plate)
+        const stemG = mergeGeometries([
+          new THREE.CylinderGeometry(CABLE_R, CABLE_R, L, 6).translate(0, -L / 2, 0),
+          new THREE.SphereGeometry(.06, 10, 8).translate(0, -L, 0),
+        ].map(g => g.index ? g.toNonIndexed() : g));
+        piv.add(new THREE.Mesh(stemG, cableM));
+        const body = new THREE.Group(); body.position.copy(orb.c[i]).sub(top);
         body.quaternion.setFromUnitVectors(UP, orb.n[i]); piv.add(body);
         const r = orb.r[i];
         const discM = relay
           ? new THREE.MeshStandardMaterial({ color: 0x0a0c14, metalness: .95, roughness: .1, envMap, envMapIntensity: 1.1,
               emissive: col.clone(), emissiveIntensity: .05 })
           : new THREE.MeshStandardMaterial({ color: col.clone().lerp(new THREE.Color(0xffffff), .35), metalness: .65, roughness: .04,
-              envMap, envMapIntensity: 2, emissive: col.clone(), emissiveIntensity: .12, transparent: true, opacity: .62 });
+              envMap, envMapIntensity: 2, emissive: col.clone(), emissiveIntensity: .12, transparent: true, opacity: .38 });
         body.add(new THREE.Mesh(new THREE.CylinderGeometry(r, r, PLATE_T, 40), discM));
         const rimM = new THREE.MeshBasicMaterial({ color: col.clone() });
         body.add(new THREE.Mesh(new THREE.TorusGeometry(r, .022, 6, 48).rotateX(Math.PI / 2), rimM));
-        // the clevis at the hanger
-        piv.add(new THREE.Mesh(new THREE.SphereGeometry(.045, 10, 8), chrome));
-        const axis = new THREE.Vector3().crossVectors(UP, body.position).normalize();
-        if (axis.lengthSq() < .5) axis.set(1, 0, 0);
+        // ring axis: the marble's impulse pushes the plate along −n, so the stem swings that
+        // way first (a × ŷ = n_h ⇒ the plate end moves along −n_h for a positive angle)
+        const nh = V(orb.n[i].x, 0, orb.n[i].z);
+        const axis = nh.lengthSq() > 1e-6 ? new THREE.Vector3().crossVectors(UP, nh.normalize()) : V(1, 0, 0);
+        // the plate end travels ≤ .8·CLEAR (the audit's guaranteed air), so the ringing
+        // can never carry a plate into a passing arc: angle = travel / stem length
+        const wobA = .8 * CLEAR / L;
         const halo = sprite(col);
         const contact = orb.p[i].clone().addScaledVector(orb.n[i], -BALL_R);
         halo.position.copy(contact);
-        return { nd, i, relay, col, colBase: col.clone(), piv, axis, discM, rimM, halo, contact, r,
+        return { nd, i, relay, col, colBase: col.clone(), piv, axis, wobA, discM, rimM, halo, contact, r,
                  inDt: orb.nodes[(i - 1 + N) % N].dt };
       });
 
@@ -173,7 +182,7 @@ export default {
         const p0 = orb.p[i], v0 = orb.v0[i], T = nd.dt;
         const curve = new THREE.Curve(); curve.getPoint = (u, out = new THREE.Vector3()) => out.copy(arcPos(p0, v0, u * T));
         const segs = Math.max(8, Math.ceil(orb.d[i] * 4 + T * 12)), RAD = 4;
-        const tg = new THREE.TubeGeometry(curve, segs, .02, RAD, false);
+        const tg = new THREE.TubeGeometry(curve, segs, .026, RAD, false);
         const n = tg.attributes.position.count, aT = new Float32Array(n);
         for (let v = 0; v < n; v++) aT[v] = nd.t + Math.floor(v / (RAD + 1)) / segs * T;
         tg.setAttribute('aT', new THREE.BufferAttribute(aT, 1));
@@ -190,7 +199,7 @@ export default {
             float d = mod(vT - uNow + uP * 8.0, uP);          // seconds AHEAD of the marble along the knot
             float ahead = exp(-d / 0.6) * uOn;
             float behind = exp(-(uP - d) / 0.1) * uOn;
-            float k = 0.14 + 3.4 * ahead + 0.9 * behind;
+            float k = 0.26 + 3.4 * ahead + 0.9 * behind;
             gl_FragColor = vec4(uCol * k, 1.0);
           }`,
       }));
@@ -198,9 +207,9 @@ export default {
 
       // ---- the marble: chrome, a faint ice glow, a ghost trail re-sampled from the pure fn ----
       const marbleM = new THREE.MeshStandardMaterial({ color: 0xf2f6fb, metalness: 1, roughness: .06, envMap, envMapIntensity: 1.8,
-        emissive: new THREE.Color(ICE), emissiveIntensity: .15 });
+        emissive: new THREE.Color(ICE), emissiveIntensity: .35 });
       const marble = new THREE.Mesh(new THREE.SphereGeometry(BALL_R, 32, 24), marbleM); group.add(marble);
-      const mHalo = sprite(ICE); mHalo.scale.setScalar(BALL_R * 5); mHalo.material.opacity = .35;
+      const mHalo = sprite(ICE); mHalo.scale.setScalar(BALL_R * 7.5); mHalo.material.opacity = .6;   // the HERO: legible at the director's distance
       const trail = Array.from({ length: TRAIL_N }, () => sprite(ICE));
 
       // ---- the magnet (count-in only) — hangs from the canopy, holds the marble at H ----
@@ -238,7 +247,21 @@ export default {
         // swing about the hinge axis (along the marble's travel), the way that tucks it in under the canopy
         const park = sg => hinge.clone().add(armTip.clone().applyAxisAngle(hv, sg * Math.PI / 2));
         const sign = Math.hypot(park(1).x, park(1).z) < Math.hypot(park(-1).x, park(-1).z) ? 1 : -1;
-        gate = { hingeG, hv, sign, gateM, halo: sprite(ICE) };
+        // the visible CAUSE of the swing: a bell-crank counterweight. At rest its lever is level,
+        // held by a latch pawl; when the latch lets go the bob falls to hang plumb — and the same
+        // quarter-turn of the hinge lifts the gate up flat under the canopy.
+        const lever = V(0, -1, 0).applyAxisAngle(hv, -sign * Math.PI / 2), LEV = .62;
+        const levM = new THREE.Mesh(new THREE.CylinderGeometry(.028, .028, LEV, 8), chrome);
+        levM.position.copy(lever).multiplyScalar(LEV / 2); levM.quaternion.setFromUnitVectors(UP, lever); hingeG.add(levM);
+        const bob = new THREE.Mesh(new THREE.SphereGeometry(.15, 18, 14), dark);
+        bob.position.copy(lever).multiplyScalar(LEV); hingeG.add(bob);
+        const pawl = hinge.clone().addScaledVector(lever, LEV);
+        bar(V(pawl.x, pawl.y + .16, pawl.z), V(pawl.x, yC, pawl.z), .03, chrome);           // the latch hanger
+        const latchM = new THREE.MeshStandardMaterial({ color: 0x1a2230, emissive: new THREE.Color(ICE), emissiveIntensity: .6 });
+        const latch = new THREE.Mesh(new THREE.BoxGeometry(.1, .08, .2), latchM);
+        latch.position.set(pawl.x, pawl.y + .2, pawl.z); latch.quaternion.setFromUnitVectors(V(0, 0, 1), hv); group.add(latch);
+        bar(V(hinge.x, hinge.y + .05, hinge.z), V(hinge.x, yC, hinge.z), .045, dark);         // the hinge bracket
+        gate = { hingeG, hv, sign, gateM, latchM, halo: sprite(ICE) };
         gate.halo.position.copy(en.E);
       }
 
@@ -259,8 +282,11 @@ export default {
       // ---- strikes (each fires once; nothing before the first downbeat ever happened) ----
       if (started && m.phase === 'orbit' && (!en || m.abs >= en.tFirst - 1e-6) && S.edge.check(m.abs, m.since, skipStrikes)){
         const pl = plates[m.i];
-        if (!pl.relay) onStrike && onStrike({ note: pl.nd.note, vel: pl.nd.vel, pos: pl.contact.clone(), color: pl.col.getHex(), dur: 0,
+        if (!onStrike) {}
+        else if (!pl.relay) onStrike({ note: pl.nd.note, vel: pl.nd.vel, pos: pl.contact.clone(), color: pl.col.getHex(), dur: 0,
           shake: pl.inDt > 1 ? .02 + .02 * pl.nd.vel : 0, sparks: Math.round(4 + 6 * pl.nd.vel), light: .8 + .6 * pl.nd.vel });
+        // a relay is a real collision too (visuals drive audio): a soft dark tock, no sparks
+        else onStrike({ note: 'relay', vel: .3, pos: pl.contact.clone(), color: 0x5f7cff, dur: 0, shake: 0, sparks: 0, light: .2 });
       }
       if (started && en && t >= en.tE && S.gateEdge.check(en.tE, t - en.tE, skipStrikes))
         onStrike && onStrike({ note: 'gate', vel: .7, pos: en.E.clone(), color: ICE, dur: 0, shake: 0, sparks: 10, light: .9 });
@@ -274,7 +300,7 @@ export default {
         pl.rimM.color.copy(pl.colBase).multiplyScalar(.7 + 3.5 * fl);
         pl.halo.material.opacity = Math.min(1, 1.1 * fl);
         pl.halo.scale.setScalar(pl.r * (2.2 + 3 * fl));
-        const w = isFinite(s) ? wobble(s, P, .07 * (.4 + .6 * v)) : 0;
+        const w = isFinite(s) ? wobble(s, P, pl.wobA * (.4 + .6 * v)) : 0;
         pl.piv.quaternion.copy(_q.setFromAxisAngle(pl.axis, w));
       }
 
@@ -286,13 +312,13 @@ export default {
       // ---- the marble's glow + ghost trail (its own past, re-sampled) ----
       const sp = m.vel.length();
       const sinceHit = inOrbit ? m.since : Infinity;
-      S.marbleM.emissiveIntensity = .15 + 1.6 * Math.exp(-sinceHit * 14);
+      S.marbleM.emissiveIntensity = .35 + 1.6 * Math.exp(-sinceHit * 14);
       S.trail.forEach((s, j) => {
         const tj = t - (j + 1) * TRAIL_DT;
         if (!started || tj < S.start || m.phase === 'hang'){ s.material.opacity = 0; return; }
         s.position.copy(marbleAt(orb, tj).pos);
         const f = 1 - (j + 1) / (TRAIL_N + 1);
-        s.material.opacity = .4 * f * Math.min(1, sp / 6);
+        s.material.opacity = .45 * f * (.35 + .65 * Math.min(1, sp / 6));   // a ghost even at the apex
         s.scale.setScalar(BALL_R * 3.4 * (.4 + .6 * f));
       });
 
@@ -311,6 +337,7 @@ export default {
         S.gate.gateM.emissiveIntensity = .1 + (sE >= 0 ? 3 * Math.exp(-sE * 7) : 0);
         S.gate.halo.material.opacity = sE >= 0 ? Math.exp(-sE * 6) : 0;
         S.gate.halo.scale.setScalar(1.6);
+        S.gate.latchM.emissiveIntensity = lift > 0 ? .05 : .6;                  // armed: lit; released: dark
       }
     }
 

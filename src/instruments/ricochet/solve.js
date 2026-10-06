@@ -24,7 +24,7 @@
        deterministic position-based relaxation in PLAN — an arc's plan
        path is a straight segment (constant horizontal velocity), so the
        hop lengths are rigid rods and the arcs are cheap to test — pushes
-       plates out of every other arc, off every cable, apart from each
+       plates out of every other arc, off every stem, apart from each
        other and into the footprint. Exact finish: headings from the
        relaxed plan, exact lengths d, and a min-norm Newton solve on the
        headings so the polygon CLOSES (Σ d·e^{iφ} = 0) to 1e-12. Every
@@ -39,9 +39,15 @@
    longer than DT_MAX is split evenly by DARK RELAY MIRRORS (silent
    obsidian plates — same physics, no note): this always happens at the
    loop seam (ROLL_T + tail rest) and for very long notes. Documented clamp.
-   Each plate hangs from ONE rim point on a hair-thin cable to the canopy;
-   which rim point is chosen per plate so no arc ever brushes a cable.
-   Long parts (> ~56 plates) get a footprint that grows ∝ √plates.
+   Each plate is held by ONE rigid chrome STEM, welded to a rim point and
+   rising straight up into the canopy (a cable can't hold a tilted plate —
+   it carries no torque — and a plate struck from below would slacken it;
+   a rigid stem takes torque and compression, so any forced tilt is honest).
+   Which rim point is chosen per plate so no arc ever brushes a stem.
+   Long parts (> ~56 plates) get a footprint that grows ∝ √plates; if no
+   seed clears, the footprint escalates ×1.12 (≤ ESCALATE rounds, count-based).
+   A repeated pitch is spread vertically (golden-ratio offsets) so a motif
+   doesn't stack its plates on one shelf.
 
    Count-in: a periodic elastic orbit CANNOT be entered by a fixed
    obstacle course (time-reversibility: the orbit's backward extension
@@ -63,7 +69,7 @@ export const PLATE_K = 1.05;              // plate radius = PAD_R·PLATE_K·pitc
 export const RELAY_R = .42;               // dark relay mirror radius
 export const GATE_R  = .4;                // starter-gate mirror radius
 export const MARGIN  = .75;               // every apex stays ≥ this below the energy ceiling H
-export const DT_MAX  = 1.5;               // longest single hop (s); longer gaps are split by relays
+export const DT_MAX  = 2.2;               // longest single hop (s); longer gaps are split by relays
 export const DT_MIN  = .06;               // monophonic: events closer than this collapse to one
 export const Y_LO = 1.8, Y_SPAN = 7;    // pitch → height band (lowest played note at Y_LO)
 export const H_MIN = 1.1;                 // no plate below this (the deck)
@@ -158,10 +164,20 @@ export function heightAux(nodes, rOf){
   const N = nodes.length;
   const played = nodes.filter(n => !n.relay).map(n => noteNum(n.note));
   const lo = Math.min(...played), span = Math.max(1, Math.max(...played) - lo);
+  // a REPEATED pitch is spread vertically (its k-th occurrence offset by a golden-ratio
+  // sequence) and held more loosely, so a repeated motif doesn't stack its plates on one
+  // shelf where every arc between them skims the rest. The narrower the part's range, the
+  // more spread (a one-note part still needs a 3-D cloud). Pitch still reads as height.
+  const occ = new Map(), VAR = Y_SPAN * Math.max(.07, .3 / Math.sqrt(new Set(played).size));
+  const off = nodes.map(n => {
+    if (n.relay) return 0;
+    const k = occ.get(n.note) || 0; occ.set(n.note, k + 1);
+    return VAR * (((k * .6180339887 + .5) % 1) - .5) * 2;
+  });
   return {
     dt: nodes.map(n => n.dt),
-    target: nodes.map(n => n.relay ? Y_LO + .5 * Y_SPAN : Y_LO + Y_SPAN * (noteNum(n.note) - lo) / span),
-    wT: nodes.map(n => n.relay ? .004 : .05),
+    target: nodes.map((n, i) => n.relay ? Y_LO + .5 * Y_SPAN : Y_LO + Y_SPAN * (noteNum(n.note) - lo) / span + off[i]),
+    wT: nodes.map((n, i) => n.relay ? .004 : off[i] ? .035 : .05),
     dmin: nodes.map((n, i) => 1.35 * (rOf(n) + rOf(nodes[(i + 1) % N]))),
   };
 }
@@ -229,13 +245,13 @@ export function placeFrom(nodes, h, X, rOf, hang = true){
   // the plate's surface touches the marble at p − n·BALL_R; its centre sits half a thickness further in
   const c = p.map((pi, i) => pi.clone().addScaledVector(nrm[i], -(BALL_R + PLATE_T / 2)));
   const geo = { p, v0, vIn, n: nrm, r, c };
-  if (hang){ const { H } = hops(h, dt); geo.rim = chooseHangers(nodes, geo, H + 1, hang === true ? HANG_CANDS : hang); }
+  if (hang){ const { H } = hops(h, dt); geo.rim = chooseHangers(nodes, geo, H + CEIL_GAP, hang === true ? HANG_CANDS : hang); }
   return geo;
 }
 
-/* ---- the hanger: each plate hangs from ONE rim point on a thin cable straight up to
-   the canopy. Which rim point is free (the plate is held rigid by its clevis), so pick
-   the one whose cable column stays farthest from every arc that passes above it. ---- */
+/* ---- the hanger: each plate is welded at ONE rim point to a rigid stem straight up to
+   the canopy (rigid ⇒ any tilt is statically honest). Which rim point is free, so pick
+   the one whose stem column stays farthest from every arc that passes above it. ---- */
 export const HANG_CANDS = 40;
 export function rimPoint(geo, i, ang, f = .92){
   const n = geo.n[i];
@@ -266,13 +282,13 @@ export function chooseHangers(nodes, geo, ceil, cands = HANG_CANDS){
           if (dd < m) m = dd;
         }
       }
-      for (let b = 0; b < N; b++){                           // the cable must not pierce a plate above
+      for (let b = 0; b < N; b++){                           // the stem must not pierce a plate above
         if (b === i || geo.c[b].y <= K.y) continue;
         if (Math.hypot(geo.c[b].x - K.x, geo.c[b].z - K.z) > geo.r[b] + CAP) continue;
         const dd = discDist(V(K.x, geo.c[b].y, K.z), geo.c[b], geo.n[b], geo.r[b]) + BALL_R;
         if (dd < m) m = dd;
       }
-      // prefer the high side of the plate (a cable from the low rim would cross the plate itself)
+      // prefer the high side of the plate (a stem from the low rim would cross the plate itself)
       const score = m + .15 * (K.y - geo.c[i].y) / geo.r[i];
       if (score > bestScore){ bestScore = score; best = K; }
     }
@@ -291,13 +307,14 @@ export function discDist(q, c, n, r){
 }
 
 /* ---- the plan relaxation: headings are free, so let the chain of fixed-length hops
-   settle (position-based, deterministic) until no arc grazes a foreign plate or cable,
+   settle (position-based, deterministic) until no arc grazes a foreign plate or stem,
    no two plates crowd, and everything sits inside the footprint. The horizontal path
    of an arc is a straight segment (constant horizontal velocity), so this is cheap. ---- */
-export const FOOT_R = 6.2;                 // plan radius every plate + cable stays inside
-export const CABLE_R = .02;
-const PUSH_CLR = .22, CABLE_CLR = .14, PUSH_K = 1;
-export function relaxPlan(nodes, h, d, rOf, X0, { iters = 240, raw = false, footR = FOOT_R } = {}){
+export const FOOT_R = 6.2;                 // plan radius every plate + stem stays inside
+export const CABLE_R = .025;              // the rigid chrome STEM each plate hangs from (name kept: the audit's 'cable')
+const PUSH_CLR = .22, CABLE_CLR = .14, PUSH_K = 1, SHELL_K = .07;
+export const SHELL = .7;
+export function relaxPlan(nodes, h, d, rOf, X0, { iters = 240, raw = false, footR = FOOT_R, shell = SHELL_K } = {}){
   const N = nodes.length, dt = nodes.map(n => n.dt);
   const x = new Float64Array(N), z = new Float64Array(N);
   X0.forEach(([a, b], i) => { x[i] = a; z[i] = b; });
@@ -305,15 +322,15 @@ export function relaxPlan(nodes, h, d, rOf, X0, { iters = 240, raw = false, foot
   const vy = h.map((hi, i) => (h[(i + 1) % N] - hi) / dt[i] + .5 * g * dt[i]);
   const S = d.map(di => 2 + Math.ceil(di / .25));          // arc samples ≤ .25 u apart
   const cx = new Float64Array(N), cy = new Float64Array(N), cz = new Float64Array(N);
-  const kx = new Uint8Array(N);                                  // cable known yet?
+  const kx = new Uint8Array(N);                                  // stem known yet?
   const OFF = BALL_R + PLATE_T / 2;
-  const ox = new Float64Array(N), oz = new Float64Array(N);   // each cable's plan offset from its ball point
+  const ox = new Float64Array(N), oz = new Float64Array(N);   // each stem's plan offset from its ball point
   const grid = new Map(), seen = new Int32Array(N); let stampN = 0;
   const CELL = Math.max(1.2, Math.max(...r) + BALL_R + PUSH_CLR), NEED_C = BALL_R + CABLE_R + CABLE_CLR;
   let calm = 0;
   for (let it = 0; it < iters; it++){
     let moved = 0;
-    if (it % 50 === 25){                                    // where would the cables hang right now?
+    if (it % 50 === 25){                                    // where would the stems hang right now?
       const geo = placeFrom(nodes, h, Array.from(x, (xi, i) => [xi, z[i]]), rOf, 12);
       geo.rim.forEach((K, i) => { ox[i] = K.x - x[i]; oz[i] = K.z - z[i]; kx[i] = 1; });
     }
@@ -326,7 +343,7 @@ export function relaxPlan(nodes, h, d, rOf, X0, { iters = 240, raw = false, foot
       const l = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
       cx[i] = x[i] - nx / l * OFF; cy[i] = h[i] - ny / l * OFF; cz[i] = z[i] - nz / l * OFF;
     }
-    // (1) arcs vs foreign plates (≈ spheres) + their cables. A uniform plan grid of plate
+    // (1) arcs vs foreign plates (≈ spheres) + their stems. A uniform plan grid of plate
     //     centres keeps this ~linear: each arc sample only meets the plates in its 3×3 cells.
     grid.clear();
     for (let m = 0; m < N; m++){
@@ -345,7 +362,7 @@ export function relaxPlan(nodes, h, d, rOf, X0, { iters = 240, raw = false, foot
           if (!cell) continue;
           for (const m of cell){
             if (m === i || m === j) continue;
-            if (seen[m] !== stamp){                         // once per (arc, plate): its cable's closest approach
+            if (seen[m] !== stamp){                         // once per (arc, plate): its stem's closest approach
               seen[m] = stamp;
               if (kx[m]){
                 const ex = bx - ax, ez = bz - az, L2 = ex * ex + ez * ez || 1e-9, Kx = x[m] + ox[m], Kz = z[m] + oz[m];
@@ -372,7 +389,7 @@ export function relaxPlan(nodes, h, d, rOf, X0, { iters = 240, raw = false, foot
         }
       }
     }
-    // (2) plates vs plates (and a lower plate's cable vs a higher plate)
+    // (2) plates vs plates (and a lower plate's stem vs a higher plate)
     for (let a = 0; a < N; a++) for (let b = a + 1; b < N; b++){
       const dx = x[a] - x[b], dz = z[a] - z[b], hd2 = dx * dx + dz * dz;
       let need = Math.max(r[a], r[b]) + CABLE_CLR + .12;
@@ -382,9 +399,14 @@ export function relaxPlan(nodes, h, d, rOf, X0, { iters = 240, raw = false, foot
       moved += k * hd;
       x[a] += dx * k; z[a] += dz * k; x[b] -= dx * k; z[b] -= dz * k;
     }
-    // (3) the footprint
+    // (3) the footprint — and a weak pull onto a HOLLOW SHELL (plates prefer r ≈ SHELL·footR),
+    //     so the arcs cross an open interior instead of threading a packed core: the frozen
+    //     knot reads through the glass from any side. Fades out over the run (it only shapes).
+    const kS = shell * Math.max(0, 1 - it / (iters * .6));
     for (let i = 0; i < N; i++){
-      const l = Math.sqrt(x[i] * x[i] + z[i] * z[i]), lim = footR - r[i];
+      let l = Math.sqrt(x[i] * x[i] + z[i] * z[i]);
+      if (kS && l > 1e-6){ const f = 1 + kS * (SHELL * footR - l) / l; x[i] *= f; z[i] *= f; l *= f; }
+      const lim = footR - r[i];
       if (l > lim){ x[i] *= lim / l; z[i] *= lim / l; }
     }
     // (4) the hop lengths (stiff: two Gauss–Seidel passes)
@@ -395,7 +417,7 @@ export function relaxPlan(nodes, h, d, rOf, X0, { iters = 240, raw = false, foot
       if (pass) err = Math.max(err, Math.abs(L - d[i]));
       x[i] += ex * c; z[i] += ez * c; x[j] -= ex * c; z[j] -= ez * c;
     }
-    // settled: nothing pushed and the hops hold their lengths (after the cables are known)
+    // settled: nothing pushed and the hops hold their lengths (after the stems are known)
     calm = moved < 1e-4 && err < 1e-3 && it > 30 ? calm + 1 : 0;
     if (calm >= 6) break;
   }
@@ -417,7 +439,7 @@ export function relaxPlan(nodes, h, d, rOf, X0, { iters = 240, raw = false, foot
 }
 
 /* ---- the honesty audit: min air between the marble and every FOREIGN plate and
-   every cable, and between plates; plus the footprint ---- */
+   every stem, and between plates; plus the footprint ---- */
 export function audit(nodes, geo, { step = .02, ceil = Infinity } = {}){
   const N = nodes.length;
   let arcPlate = Infinity, plates = Infinity, arcCable = Infinity, foot = 0, worst = null;
@@ -433,7 +455,7 @@ export function audit(nodes, geo, { step = .02, ceil = Infinity } = {}){
         if (dd < arcPlate){ arcPlate = dd; worst = { arc: i, plate: k, s }; }
       }
     }
-    // cables: EXACT. The plan path is a straight line at constant speed, the cable a vertical
+    // stems: EXACT. The plan path is a straight line at constant speed, the stem a vertical
     // line from its rim point up; the arc is above y0 on one time interval → clamp into it.
     const vx = v0.x, vz = v0.z, h2 = vx * vx + vz * vz || 1e-12;
     for (let k = 0; k < N; k++){
@@ -466,7 +488,7 @@ export function audit(nodes, geo, { step = .02, ceil = Infinity } = {}){
       }
     }
   }
-  // a lower plate's cable must not pierce a higher plate
+  // a lower plate's stem must not pierce a higher plate
   let cablePlate = Infinity;
   for (let a = 0; a < N; a++) for (let b = 0; b < N; b++){
     if (a === b || geo.c[b].y <= geo.rim[a].y) continue;
@@ -488,28 +510,39 @@ export const scoreOf = (a, footMax = FOOT_MAX) => Math.min(a.arcPlate, a.plates,
 export const footFor = N => FOOT_MAX * Math.max(1, Math.sqrt(N / 56));
 /* a FIXED number of starts (never a time budget: the layout must not depend on machine speed) */
 export const startsFor = N => N > 60 ? 3 : N > 40 ? 6 : SEEDS.length;
+export const ESCALATE = 4;                 // footprint growth rounds when nothing clears (×1.12 each)
+export const CEIL_GAP = 1.0;               // the canopy hangs this far above the energy ceiling H
 export function buildOrbit(events, { P, start = -Infinity, rOf: rOfIn } = {}){
   const nodes = makeNodes(events, P);
   const sizer = plateSizer(nodes.filter(n => !n.relay).map(n => n.note));
   const rOf = rOfIn || (n => n.relay ? RELAY_R : sizer(n.note));
   const h = solveHeights(nodes, rOf);
   const { H, d } = hops(h, nodes.map(n => n.dt));
-  const footMax = footFor(nodes.length), footR = footMax - (FOOT_MAX - FOOT_R), sc = footMax / FOOT_MAX;
-  let best = null, tried = 0;
-  const maxTries = startsFor(nodes.length);
-  for (const R0 of SEEDS){
-    const R = R0 * sc;
-    if (R < Math.max(...d) / 2) continue;
-    const X = relaxPlan(nodes, h, d, rOf, cylinderSeed(d, R), { footR });
-    const geo = placeFrom(nodes, h, X, rOf);
-    const a = audit(nodes, geo, { step: .03, ceil: H + 1 });
-    const score = scoreOf(a, footMax);
-    tried++;
-    if (!best || score > best.score) best = { X, geo, a, score, seed: R };
-    if (score >= CLEAR || tried >= maxTries) break;
+  const foot0 = footFor(nodes.length);
+  let best = null, tried = 0, grow = 0;
+  // ESCALATION (deterministic, count-based — never a time budget): if no seed clears at
+  // this footprint, give the knot more air (×1.12 per round) and run the seeds again.
+  // Stop at the first clean layout. Only if every round fails is the least-bad kept.
+  for (let k = 0; k <= ESCALATE && !(best && best.score >= CLEAR); k++){
+    const footMax = foot0 * Math.pow(1.12, k), footR = footMax - (FOOT_MAX - FOOT_R), sc = footMax / FOOT_MAX;
+    const maxTries = k ? Math.min(3, startsFor(nodes.length)) : startsFor(nodes.length);
+    let n = 0;
+    for (const R0 of SEEDS){
+      const R = R0 * sc;
+      if (R < Math.max(...d) / 2) continue;
+      const X = relaxPlan(nodes, h, d, rOf, cylinderSeed(d, R), { footR });
+      const geo = placeFrom(nodes, h, X, rOf);
+      const a = audit(nodes, geo, { step: .03, ceil: H + CEIL_GAP });
+      const score = scoreOf(a, footMax);
+      tried++; n++;
+      // a clean layout at a bigger footprint always beats a dirty one at a smaller
+      if (!best || score > best.score) best = { X, geo, a, score, seed: R, footMax, grow: k };
+      if (score >= CLEAR || n >= maxTries) break;
+    }
   }
   const L = laneClock(nodes.map(n => n.t), P);
-  const orbit = { nodes, h, H, d, ceilY: H + 1.0, ...best.geo, X: best.X, audit: best.a, score: best.score, seed: best.seed, tried, footMax, L, P };
+  const orbit = { nodes, h, H, d, ceilY: H + CEIL_GAP, ...best.geo, X: best.X, audit: best.a, score: best.score, seed: best.seed, tried,
+                  footMax: best.footMax, grow: best.grow, L, P };
   orbit.entry = solveEntry(orbit, start);
   return orbit;
 }

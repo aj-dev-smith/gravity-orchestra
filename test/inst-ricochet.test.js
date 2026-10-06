@@ -5,9 +5,10 @@ import { arcPos, noteHz, noteNum } from '../src/engine.js';
 import {
   g, BALL_R, PLATE_T, MARGIN, DT_MAX, CLEAR, FOOT_MAX, HANG_MIN,
   makeNodes, hops, heightAux, heightCost, plateSizer, buildOrbit, marbleAt, sinceStrike, wobble, gateLift,
-  closeHeadings, discDist, audit, scoreOf,
+  closeHeadings, discDist, audit, scoreOf, ESCALATE, CLEAR as CLR, CABLE_R,
 } from '../src/instruments/ricochet/solve.js';
-import { glassVoice, gateClink } from '../src/instruments/ricochet/voice.js';
+import { glassVoice, gateClink, relayTock } from '../src/instruments/ricochet/voice.js';
+import { SONGS } from '../src/songs/index.js';
 import RICO from '../src/instruments/ricochet/index.js';
 
 const ROLL_T = 2.6, START = -2.4;
@@ -106,7 +107,8 @@ describe('ricochet: the sculpture is physically clean', () => {
     expect(a.arcCable).toBeGreaterThan(0);
     expect(a.plates).toBeGreaterThan(0);
     expect(a.cablePlate).toBeGreaterThan(0);
-    expect(a.foot).toBeLessThanOrEqual(FOOT_MAX);
+    expect(a.foot).toBeLessThanOrEqual(orb.footMax + 1e-9);
+    expect(orb.footMax).toBeLessThanOrEqual(FOOT_MAX * 1.12 ** ESCALATE + 1e-9);   // escalation is bounded
     expect(orb.score).toBeGreaterThanOrEqual(CLEAR);            // the coarse audit that chose this layout had margin
   });
   it('plate size encodes pitch only (the engine law): same note → same size, higher → smaller', () => {
@@ -201,6 +203,42 @@ describe('ricochet: other parts still build honestly', () => {
   });
 });
 
+describe('ricochet: dense + repetitive parts escalate to a CLEAN layout (never ship a pass-through)', () => {
+  const toPart = notes => { let b = 0; return notes.map(([n, d]) => { const e = [b, n, 1]; b += d; return e; }); };
+  const solve = (part, bpm, beats) => {
+    const bt = 60 / bpm, Pp = ROLL_T + beats * bt + 1.2;
+    return buildOrbit(eventTimes(part, { rollT: ROLL_T, beat: bt }), { P: Pp, start: START });
+  };
+  const mk = SONGS['mountain-king'];
+  const cases = {
+    'Mountain King melody': () => solve(toPart(mk.melody), mk.bpm, mk.melody.reduce((a, n) => a + n[1], 0)),
+    'a repeated note (32× A4)': () => solve(Array.from({ length: 32 }, (_, i) => [i, 'A4']), 120, 32),
+  };
+  for (const [name, f] of Object.entries(cases)) it(`${name}: clears every plate and stem`, () => {
+    const o = f();
+    expect(o.score).toBeGreaterThanOrEqual(CLR);
+    const a = audit(o.nodes, o, { step: .015, ceil: o.ceilY });
+    expect(Math.min(a.arcPlate, a.arcCable, a.plates, a.cablePlate)).toBeGreaterThan(0);
+    expect(a.foot).toBeLessThanOrEqual(o.footMax + 1e-9);
+  }, 60000);
+  it('the solve is deterministic (same part → bit-identical sculpture)', () => {
+    const a = f => f.p.map(p => p.toArray().join()).join('|');
+    expect(a(cases['a repeated note (32× A4)']())).toBe(a(cases['a repeated note (32× A4)']()));
+  }, 60000);
+});
+
+describe('ricochet: rigid stems (a tilted plate needs a member that carries torque)', () => {
+  it('every stem is vertical from its weld point into the canopy, and every weld point is on the plate', () => {
+    for (let i = 0; i < N; i++){
+      const K = orb.rim[i];
+      expect(K.y).toBeLessThan(orb.ceilY);
+      expect(Math.abs(K.clone().sub(orb.c[i]).dot(orb.n[i]))).toBeLessThan(1e-9);       // in the plate's plane
+      expect(K.distanceTo(orb.c[i])).toBeLessThanOrEqual(orb.r[i] + 1e-9);               // on the plate
+    }
+    expect(CABLE_R).toBeGreaterThanOrEqual(.02);
+  });
+});
+
 describe('ricochet: voice', () => {
   it('a glass ping: finite, peak ≤ .9, ~2.2 s, silent tail, pitched at the note', () => {
     for (const note of ['G#4', 'C5', 'E6']){
@@ -218,10 +256,14 @@ describe('ricochet: voice', () => {
     }
     expect(glassVoice('C5')).toBe(glassVoice('C5'));               // cached + deterministic
     expect(gateClink().samples.length).toBeGreaterThan(1000);
+    const t = relayTock();                                          // the relay mirrors' soft dark tock
+    let pk = 0; for (const x of t.samples){ expect(Number.isFinite(x)).toBe(true); pk = Math.max(pk, Math.abs(x)); }
+    expect(t.samples.length / t.sr).toBeLessThan(.4); expect(pk).toBeLessThanOrEqual(.5); expect(t.samples[t.samples.length - 1]).toBe(0);
   });
   it('the descriptor bakes every note it plays plus the gate clink', () => {
     const ids = RICO.voiceIds(RICO.demo.part);
-    expect(ids).toContain('gate');
+    expect(ids).toContain('gate'); expect(ids).toContain('relay');
+    expect(RICO.voice('relay').samples).toBeInstanceOf(Float32Array);
     for (const e of RICO.demo.part) expect(ids).toContain(e[1]);
     expect(RICO.voice('gate').samples).toBeInstanceOf(Float32Array);
   });

@@ -25,8 +25,9 @@
                  semitone UP (G#·C·G#·A# — A♭, the Neapolitan: the floor tilts), stated low
                  over the bones' pah-pah (open fifths, so the theme's A never grinds), then
                  — 84 — THE XYLOPHONE BONES: the robot marimbist takes the theme itself, dry
-                 and rattling (two hands in octaves, every long note re-struck — the
-                 skeletons' teeth), under the belt an octave up. Bass oom, hat rattles.
+                 and rattling (the right hand on the theme with the belt, every long
+                 note re-struck — the skeletons' teeth — the left hand keeping the
+                 pah-pah). Bass oom, hat rattles.
      §4 108–144  THE SAD WALTZ. Death's second theme: the slow chromatic slide G·F·E·E♭·D
                  in tall two-beat arcs, harmonised Gm · B♭ · C · Cm · G · D7 · A7 · D, the
                  bowls swelling under it (their spotlight).
@@ -36,8 +37,8 @@
                  above, a bell tolling once on D and once on G.
      §6 192–228  THE FRENZY. The waltz theme at full cry — everyone: bells pealing, crashes,
                  snare on the pahs; then a CHROMATIC WHIRLWIND (the score's whipping scales:
-                 lead up, turntable down, the marimbist sweeping two octaves in 16ths, a tom
-                 cascade), and three hammer-blows of G minor.
+                 lead up, turntable down, the marimbist doubling the lead's climb an octave
+                 down, a tom cascade), and three hammer-blows of G minor.
      §7 228–258  COCKCROW. Silence — a lone figure on the belt: the cock crows (D·D·A–F#,
                  the oboe's crow, in gesture). Everyone SCATTERS (fleeing scraps on the music
                  box, turntable and marimba). Death plays his farewell (D · B♭ A G · G · B♭ ·
@@ -46,8 +47,9 @@
 
    WHO LIVES WHERE:
      string bass  G1–D#2  7 strings (G1 G#1 A1 A#1 C2 D2 D#2 ≤ 8): the waltz's oom
-     marimba      F#3–C6  the bones: dry pah-pah fifths, the theme rattled (§3b), the 16th
-                          whirlwind (≤ 4 mallets: low notes left hand, high right)
+     marimba      F#3–C6  the bones: dry pah-pah fifths, the theme rattled (§3b: right hand
+                          on the theme, left on the pah-pah), the whirlwind in eighths
+                          (≤ 4 mallets: low notes left hand, high right)
      bowls        D3–G4   the empty fifth, the sad-waltz chords, the Dies Irae chorale
                           (≤ 15 beats = 4.75 s, under the 5 s cap; ≤ 3 notes)
      turntable    F#4–D#5 Death's other string, the frenzy's theme an octave down, the whirlwind
@@ -204,20 +206,28 @@ const turntable = [
 ];
 
 // MARIMBA — the bones (dry pah-pah); THE XYLOPHONE BONES at 84: the theme itself, rattled
-// (two hands in octaves — left G4 octave, right G5 — every long note re-struck as two
-// dry eighths: Saint-Saëns' rattling teeth); rattles at phrase ends; the whirlwind
+// (the right hand, with the belt, every long note re-struck as two dry eighths:
+// Saint-Saëns' rattling teeth) while the left hand keeps the pah-pah under it; rattles
+// at phrase ends; the whirlwind.
+// (Re-voiced for the robot four-mallet marimbist, which can't do what the old marimba
+// could: the solo was two hands in parallel OCTAVES of eighths at 189 bpm — every B♭/A♭
+// step hops both hands between the sharp and natural rows at once, beyond the carriages
+// — so the left hand drops the lower octave and plays the bones' pah-pah fifths instead;
+// the whirlwind was a two-octave chromatic 16th sweep (79 ms a note, too fast for any
+// carriage) and is now the lead's own chromatic climb in eighths an octave down; the
+// fleeing scrap drops its F (a G-minor arpeggio: the wrist couldn't whip five 16ths).)
 const rattle = (b, n, v) => [0, .5, 1, 1.5].map(o => [b + o, n, +(v * (o ? .8 : 1)).toFixed(3)]);
 const BONE_THEME = WALTZ('4', 'G4').flatMap(([n, d]) => d >= 1 ? [[n, .5], [n, .5]] : [[n, d]]);
 const boneSolo = [
-  ...pin(BONE_THEME, 84, i => i % 6 === 0 ? .78 : .6),                                // left hand
-  ...pin(tr(BONE_THEME, 12), 84, i => i % 6 === 0 ? .7 : .52),                        // right hand, an octave up
+  ...pin(tr(BONE_THEME, 12), 84, i => i % 6 === 0 ? .78 : .6),                       // right hand: the theme
+  ...W3b.marimba,                                                                     // left hand: the pah-pah
 ];
 const marimba = sortHits([
   ...W3a.marimba, ...boneSolo, ...W4.marimba, ...W5.marimba, ...W6.marimba,
   ...rattle(70, 'G5', .55), ...rattle(202, 'G5', .7), ...rattle(214, 'G#5', .72),
-  ...pin(chroma('G3', 'F#5', .25), 216, i => .5 + .45 * i / 23),       // the whirlwind sweep
+  ...pin(chroma('G3', 'F#4', .5), 216, i => .5 + .45 * i / 11),        // the whirlwind: the lead's climb, an octave down
   ...[222, 225].flatMap(b => [[b, 'G3', 1], [b, 'D4', .95], [b, 'G4', .95], [b, 'A#4', .9]]),   // hammer-blows (4 mallets)
-  ...pin([['G5', .25], ['F5', .25], ['D5', .25], ['A#4', .25], ['G4', .25]], 232, i => .45 - .06 * i),   // fleeing
+  ...pin([['G5', .25], ['D5', .25], ['A#4', .25], ['G4', .25]], 232, i => .45 - .06 * i),   // fleeing
 ]);
 
 // STRING BASS — pizzicato creeping in at midnight, under the fiddle, the waltz's oom
@@ -320,7 +330,7 @@ export default {
       [84, 'marimba', 24],    // the xylophone bones
       [144, 'lead', 30],      // Dies irae: the tallest arcs in the piece
       [191.4, 'stage', 5],    // the frenzy breaks: the whole room on one downbeat
-      [215.6, 'marimba', 6],  // the whirlwind: the marimbist sweeps two octaves
+      [215.6, 'marimba', 6],  // the whirlwind: the marimbist climbs under the lead
       [221.6, 'stage', 5],    // the hammer-blows (lightning on each)
       [228, 'lead', 18],      // the cock crows
       [252, 'stage', 6],      // everyone scatters — back to midnight

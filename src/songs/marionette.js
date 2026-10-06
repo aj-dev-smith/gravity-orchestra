@@ -25,7 +25,8 @@
 
    WHO PLAYS: lead belt (the theme), string bass (pizzicato roots on both dotted beats —
    7 strings: D2 A1 F2 G1 D#2 E2 C2), marimba (the puppets' wooden clatter: soft dry
-   dyads on the off-eighths), music box (C5–C7: the octave shadow + glints), turntable
+   dyads on the off-eighths; the final one is D·F so the four-mallet marimbist's hands
+   cross the seam cleanly), music box (C5–C7: the octave shadow + glints), turntable
    (A3–E5: the episode's melody and the return's lower octave), bowls (a soft dirge drone on A),
    bells (the funeral toll), drums (a muffled bass drum + a ticking snare: the march).
    ============================================================ */
@@ -85,7 +86,10 @@ CHART.forEach((c, i) => {
   const b = 3 * i;
   if (c === 'A7>Dm'){                             // the cadence bar: A on the first beat, D on the second
     bass.push([b, 'A1', .7], [b + 1.5, 'D2', .75]);
-    marimba.push([b + .5, 'E4', .32], [b + .5, 'G4', .3], [b + 2, 'F4', .32], [b + 2, 'A4', .3]);
+    // (the last clatter lands on D·F, the root under the mock-sob's D — not F·A, the very
+    // dyad that opens the loop: across the seam the robot marimbist's two hands converged
+    // on it and brushed, and the no-cross guard's shove broke the carriage limits)
+    marimba.push([b + .5, 'E4', .32], [b + .5, 'G4', .3], [b + 2, 'D4', .32], [b + 2, 'F4', .3]);
     return;
   }
   const v = i >= 24 ? .78 : .66;

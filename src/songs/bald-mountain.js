@@ -42,9 +42,10 @@
                  octaves, bells peal D, crashes, LIGHTNING; then the CHROMATIC
                  WHIRLWIND (the score's own chromatic scales): lead down while the alto
                  climbs (a wedge — deliberate chromatic dissonance), the marimbist sweeps
-                 the whole keyboard in 16ths, toms cascade (the kit's spotlight); two bars of diminished-7th
-                 shrieks (C#·E·G·A# then C·D#·F#·A — rolled on the marimba under the lead's
-                 chromatic falls) and…
+                 the keyboard in chromatic triplets (A5 → A#4 → F#5: 16ths are beyond
+                 the robot's carriages at this tempo), toms cascade (the kit's spotlight);
+                 two bars of diminished-7th shrieks (C#·E·G·A# then C·D#·F#·A — rolled on
+                 the marimba under the lead's chromatic falls) and…
      E  112–139  DAWN. A church bell tolls D (after 24 beats of bell silence — its
                  entrance, the camera's cut). Everything stops; the sky greys toward
                  morning. The last spirits flicker
@@ -191,12 +192,19 @@ const marimba = [
     ...roll(b + 8, ['D4', 'A4'], .52 + .08 * k), ...roll(b + 12, ['D4', 'F4', 'A4'], .55 + .08 * k),
   ]),
   // C: the bones — the dance an octave down, dry, from the second climb on
-  ...pin(tr([...CLIMB, ...FALL, ...CLIMB, ...CLIMB, ...FALL2, ...FALL2], -12), 56, i => i % 2 ? .5 : .68),
+  // (accented by the BEAT, not by note count: counting notes put the accent after FALL's
+  // 16th turn A#·A on an off-beat — a full-height stroke the wrist had no time to whip)
+  ...pin(tr([...CLIMB, ...FALL, ...CLIMB, ...CLIMB, ...FALL2, ...FALL2], -12), 56).map(([b, n]) => [b, n, Number.isInteger(b) ? .68 : .5]),
   // D: the theme's tremolo at full cry…
   ...roll(80, ['A3', 'A4', 'A5'], .8), ...roll(84, ['A3', 'A4', 'A5'], .8),
   ...roll(88, ['D4', 'F4', 'A4'], .82), ...roll(92, ['D4', 'F4', 'A4'], .85),
-  // …the whirlwind: 16ths sweeping the keyboard (A5 down to F#4 and back up to G#5)
-  ...pin([...chroma('A5', 'F#4', .25), ...chroma('F4', 'G#5', .25)], 96, i => .55 + .4 * Math.abs(Math.sin(i / 31 * Math.PI))),
+  // …the whirlwind: chromatic TRIPLETS sweeping the keyboard (A5 down to A#4 and back up
+  // to F#5), then a beat of air before the shrieks. (Re-voiced for the robot marimbist:
+  // at 142 bpm a chromatic 16th run hops each mallet between the sharp and natural rows
+  // faster than any carriage can follow, and a sweep that ends up at G#5 can't dive to the
+  // shriek's close voicing in a triplet — the triplet whirl, turned round a little early,
+  // keeps both chromatic scales inside the drive limits.)
+  ...pin([...chroma('A5', 'A#4', 1 / 3), ...chroma('A4', 'F#5', 1 / 3)], 96, i => .55 + .4 * Math.abs(Math.sin(i / 21 * Math.PI))),
   // …the diminished shrieks, rolled (C#·E·G·A#, then C·D#·F#·A — four mallets each)
   ...roll(104, ['C#4', 'E4', 'G4', 'A#4'], .85), ...roll(108, ['C4', 'D#4', 'F#4', 'A4'], .9),
 ];

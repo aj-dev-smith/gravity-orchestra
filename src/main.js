@@ -254,7 +254,7 @@ function checkinRig(rig){ rig.busy = false; rig.group.visible = false; }
 initJuice(scene);                                       // build trail / ripple / spark / dust pools
 
 /* ---- conveyor debug: static world rulers + height-over-time graph (toggle G) ---- */
-let convDbgOn = true;
+let convDbgOn = false;                                   // dev HUD — G toggles it; ships OFF
 const convRulers = new THREE.Group();                   // fixed in WORLD — never lifted, the static horizon
 {
   const mat = new THREE.LineBasicMaterial({color:0x2a4870, transparent:true, opacity:.55});

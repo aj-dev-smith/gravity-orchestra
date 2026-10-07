@@ -263,7 +263,7 @@ for (const [ri, room] of ROOMS.entries()){
   const errs = []; page.on('pageerror', e => errs.push(e.message));
   await page.goto(`${BASE}/?debug&room=${room}`, { waitUntil: 'networkidle0' });
   await page.waitForFunction(() => window.__dev && window.__dev.world, { timeout: 20000 });
-  await page.evaluate(() => { document.getElementById('overlay')?.classList.add('gone'); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'g' })); });
+  await page.evaluate(() => { document.getElementById('overlay')?.classList.add('gone'); });
   const songs = A.songs ? A.songs.split(',') : await page.evaluate(() => [...document.querySelector('select').options].map(o => o.value));
   for (const s of songs) targets.push({ song: s });
   for (const m of MIDI) targets.push({ midi: m });
@@ -275,7 +275,7 @@ for (const [ri, room] of ROOMS.entries()){
       await pg.goto(`${BASE}/?debug&room=${room}&midi=${tg.midi}`, { waitUntil: 'networkidle0' });
       await pg.waitForFunction(() => window.__dev && window.__dev.world && window.__dev.shots, { timeout: 20000 });
       await sleep(800);
-      await pg.evaluate(() => { document.getElementById('overlay')?.classList.add('gone'); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'g' })); });
+      await pg.evaluate(() => { document.getElementById('overlay')?.classList.add('gone'); });
     } else {
       await pg.evaluate(k => window.__dev.song(k), tg.song);
       await sleep(500);

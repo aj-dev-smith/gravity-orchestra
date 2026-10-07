@@ -18,22 +18,16 @@ all heading (a 3D music **creation + visualization tool**) — lives in
 
 ## ⚠️ 0. BRANCH & DEPLOY STATUS — read before you ship anything
 
-**Production ≠ `main`.** As of 2026-10-05, `v2` was fast-forwarded into `main`:
+**Production = `main`.** On 2026-10-06 the whole v2 engine (static-band conveyor, marble
+drum machine, instrument plugins, rooms, room director, creation tools, phrase-loop MIDI
+import) was fast-forwarded into `main`, the `v2` branch was deleted, and `main` was
+deployed to cascade.ajsmithhq.com. Work on feature branches off `main`.
 
-- **Production** (cascade.ajsmithhq.com) still runs the original **falling-world**
-  engine (the whole scene sinks; the marble rides it down) plus r184/bloom, MIDI
-  import, share links, recording, autostart — i.e. the old `main` tip, `255c7d2`.
-- **`main` (and `v2`) = the new engine**: the **static-band CONVEYOR** (§3) and the
-  **MARBLE DRUM MACHINE** — the second instrument archetype (§4). **NOT deployed. Do
-  not deploy it casually.**
-
-Before any deploy of `main`, the gate is:
-1. **Flip `convDbgOn` default → `false`** in `src/main.js` (the conveyor debug HUD —
-   rulers + a height-over-time graph — is ON by default for dev; ship it OFF).
-2. Confirm with the human. **No v2 deploy until a real v2 is declared ready.**
+`convDbgOn` (the conveyor debug HUD — rulers + height graph, key `G`) now defaults to
+**`false`**. Keep it off in anything you ship.
 
 `npm run deploy` builds + ships to production. It does not care which branch you're
-on. Treat it as live.
+on. Treat it as live, and confirm with the human before running it.
 
 ---
 
@@ -380,8 +374,7 @@ Dies Irae (deep canon echo, delay 5). bpm is the single tempo knob; everything r
   WASD/arrows/QE fly (disabled until picked, so it can never swallow the iOS priming tap).
   Vertical is pinned (the band is static); x/z follow with sway + spread-dolly.
 
-Dev toggles: `G` = conveyor debug HUD (rulers + height graph; `convDbgOn`, ON by default —
-**flip before deploy**, §0). `M` = machines on/off. `?debug` = a scrub bar (time is the only
+Dev toggles: `G` = conveyor debug HUD (rulers + height graph; `convDbgOn`, OFF by default). `M` = machines on/off. `?debug` = a scrub bar (time is the only
 state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machine-gunning).
 
 ---

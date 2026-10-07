@@ -33,7 +33,6 @@ if (A.song){ await page.evaluate(k => window.__dev.song(k), A.song); await new P
 if (A.cam) await page.evaluate(m => window.__dev.cam(m), A.cam);
 await page.evaluate(() => {                          // hide the veil + dev HUD clutter for clean frames
   document.getElementById('overlay')?.classList.add('gone');
-  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'g' }));
 });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const frame = async (out, t) => {

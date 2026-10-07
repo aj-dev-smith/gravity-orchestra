@@ -23,7 +23,6 @@ await page.goto(url, { waitUntil: 'networkidle0' });
 await page.waitForFunction(() => window.__dev, { timeout: 20000 });
 if (A.song) await page.evaluate(k => window.__dev.song(k), A.song);
 await page.click('#overlay').catch(() => {});
-await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'g' })));   // HUD off
 await new Promise(r => setTimeout(r, 1500));
 const fps = await page.evaluate(() => new Promise(res => { let n = 0; const t0 = performance.now();
   const f = () => { n++; if (performance.now() - t0 < 3000) requestAnimationFrame(f); else res(n / 3); }; requestAnimationFrame(f); }));

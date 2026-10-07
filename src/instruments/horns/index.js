@@ -2,9 +2,10 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { eventTimes, lanesByNote, makeEdge } from '../clock.js';
 import { noteNum } from '../../engine.js';
-import { hornLane, hornAt, fitPart, voiceIdOf, isStab, PART_LIMITS, HOLD_MAX, BALL_R, H } from './solve.js';
+import { hornLane, hornAt, heldRest, fitPart, voiceIdOf, isStab, PART_LIMITS, HOLD_MAX, BALL_R, H } from './solve.js';
 import { layoutHorns, DECK, BW, Z_B, Z_H, Y_LID, Y_C, Y_MAG, MAG_R, MAG_H, Y_BEAM, TILT, FLEX, RIM_R, SLIDE_TOP, SLIDE_X, SLIDE_Z, VALVE_Y0, VALVE_DY } from './layout.js';
 import { hornVoice } from './voice.js';
+import { restEnv, anticip, sway } from '../idle.js';
 import { bucketId, planLadder, allBucketIds } from '../sustain.js';
 
 /* every strike's [voice base, hold s] at this tempo — the build's own fit and lane solve (hold =
@@ -59,6 +60,11 @@ const COIL     = 0xa58cff;          // magnets + rams: cool violet energy (the b
 const LEATHER  = 0x3b2418;
 const NP       = 4;                 // pleat frames per bellows
 const RING_T   = .34;               // the stab shock-ring's flight (s)
+// IDLE (../idle.js): while a lane's marble hangs on its magnet the bellows BREATHE — the return
+// ram eases the lid a few cm below its stop and back (slow, one lane after another down the
+// rank), the coil + ram collar humming with it; the coil swells as the release nears. Zero within
+// .2 s of the catch and of the release: the lid is on its stop long before the marble lands.
+const BREATH_A = .04, BREATH_HZ = .3;
 
 export default {
   key: 'horns',
@@ -279,13 +285,17 @@ export default {
             sparks: stab ? Math.round(6 + 8 * vel) : Math.round(2 + 3 * vel), light: stab ? 1.2 + .6 * vel : .8 + .5 * vel });
         }
 
+        // ---- idle: the held marble's rest (catch → release; the release is tf before the strike) ----
+        const hr = heldRest(ln.lane, s), rest = hr ? restEnv(hr.since, hr.until, .2, .5) : 0;
+        const inhale = rest ? .5 - .5 * sway(t, BREATH_HZ, Math.PI / 2 + .7 * ln.k) : 0;   // ≥ 0: the lid only ever dips below its stop
+        const lidR = s.lid / S - BREATH_A * rest * inhale;
         // ---- marble, lid, ram (solve units are world units: divide by the bed scale) ----
         ln.ball.position.y = Y_C + s.y / S;
-        ln.lid.position.y = Y_LID + s.lid / S;
-        const ramTop = Y_LID - .12 + s.lid / S, ramBot = Y_LID - .58;
+        ln.lid.position.y = Y_LID + lidR;
+        const ramTop = Y_LID - .12 + lidR, ramBot = Y_LID - .58;
         ln.rod.position.y = (ramTop + ramBot) / 2; ln.rod.scale.y = Math.max(.01, ramTop - ramBot);
         // bellows body + pleats (instanced): stretched between the base and the lid
-        const yb = DECK + .08, yl = Y_LID - .1 + s.lid / S, hgt = yl - yb;
+        const yb = DECK + .08, yl = Y_LID - .1 + lidR, hgt = yl - yb;
         _m.compose(_v.set(ln.x, yb + hgt / 2, Z_B), _q.identity(), _s.set(1, hgt, 1));
         instB.body.setMatrixAt(ln.k, _m);
         for (let j = 0; j < NP; j++){
@@ -318,7 +328,7 @@ export default {
         // the coil burns while it holds the marble (a flash at the zero-speed catch); the ram's collar
         // blazes as it snaps the lid up and lobs the marble (the visible energy supply)
         let coil = 0, ram = 0;
-        if (s.held) coil = .6 + (p ? 2.4 * Math.exp(-(s.since - p.h - p.TS - ln.lane.tf) * 18) : 0);
+        if (s.held) coil = .6 * (1 + .25 * rest * sway(t, BREATH_HZ, .7 * ln.k) + .9 * anticip(hr.until, .7)) + (p ? 2.4 * Math.exp(-hr.since * 18) : 0);
         if (p && s.since >= p.h && s.since < p.h + p.TS + .2) ram = 2.6 * Math.exp(-Math.max(0, s.since - p.h - p.TS) * 25);
         ln.coilM.emissiveIntensity = .15 + 1.6 * coil + ram;
       }

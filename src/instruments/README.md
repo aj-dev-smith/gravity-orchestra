@@ -172,6 +172,19 @@ export default {
     still costs a draw call). Don't drive `material.visible` yourself on those; opt
     out with `material.userData.noFadeGate = true` (or on the object).
 
+## Rest-pose personality (`idle.js`)
+
+A resting machine should never look dead, and its next entrance should be felt coming
+(Animusic's Starship Groove robots). `idle.js` holds the shared pure curves: `restEnv(since,
+until)` (exactly 0, value and slope, within a guard of either end of a rest), `anticip(until)`,
+`sway`, `twitch`, and the `IDLE.on` switch. Each machine exports a pure REST WINDOW from its
+solve (`latchRest`, `hangRest`, `dockRest`, `heldRest`, `parkAt`, `damperRest`) and spends the
+envelope on a part with a visible cause (a coil's current, a ram, a key, the drive cable) — a
+few cm and a little glow, never a gesture that reads as a note. Lanes with no notes stay still
+(no entrance to anticipate). `test/idle.test.js` proves it: every rest window is a real rest
+clear of the lane's strikes, and the render is byte-identical with idle on/off around every
+strike. No new materials or lights.
+
 ## Dev loop
 
     npm run dev -- --port <yours>

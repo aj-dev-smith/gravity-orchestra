@@ -3,8 +3,9 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeEdge } from '../clock.js';
 import { solveRiff, stampAt, carriageAt, muteAt, ringAt, hitAt, voiceIdsFor, crossBottom, stringDrop, strikeSurface,
          STRINGS, NUT_X, BRIDGE_X, STAMP_X, STAMP_DX, stampX, STR_DZ, MUTE_X, SCALE_L, STRING_Y, FRET_H, HEAD_R, MUTE_R, HOOK_W, LIFT_Y,
-         H_PARK, V_IN, MAX_FRET, strZ, gauge, strTop, fretX, PART_LIMITS, CLEAR_UP } from './solve.js';
+         H_PARK, V_IN, MAX_FRET, latchRest, strZ, gauge, strTop, fretX, PART_LIMITS, CLEAR_UP } from './solve.js';
 import { riffVoice } from './voice.js';
+import { restEnv, anticip, sway } from '../idle.js';
 import { noteNum } from '../../engine.js';
 
 /* ============================================================
@@ -56,6 +57,11 @@ const HINGE   = { x: MUTE_X + .72, y: strTop(0) + .25 };
 const BAR_UP  = -.85;               // the mute bar's lifted swing (rad about z)
 const TRAIL_N = 3, TRAIL_DT = .016;
 const CAB     = { x: -3.3, z: -2.95, w: 4.8, h: 4.4, d: 1.1, y: .45 };   // the 4×12 behind the neck
+// IDLE (../idle.js): while a string's stamp is parked on its latch, its LIFTED fret hook hovers
+// (the carriage actuator hunting, a few mm further off the string — never toward it, never while
+// it presses) and the solenoid coil charges up before it drives the next stroke. Zero within
+// .25 s of the latch's catch and release: every press, every strike is the solved pose.
+const HOVER_A = .022, HOVER_HZ = .55;
 const FULL    = { w: 15.55, d: 6.6, cx: -.28, cz: -.26 };   // the full-size rig's XZ extent + centre (measured; scaled to the slot)
 
 export default {
@@ -362,11 +368,14 @@ export default {
         const p = stampAt(S, t, start);
         const rg = ringAt(S, t, start);
         const vel = rg.i >= 0 ? S.ev[rg.i].vel : 0;
+        // idle: the stamp parked on its latch (the rest between T_UP's catch and T_DN's drive)
+        const lr = latchRest(p), parked = lr ? restEnv(lr.since, lr.until, .25, .45) : 0;
+        const hov = parked ? HOVER_A * parked * (1 - c.p) * (.5 - .5 * sway(t, HOVER_HZ, 1.3 * s)) : 0;
         // carriage: slider rides the groove; the hook's crossbar lifts / presses
         ln.car.position.x = c.x;
-        ln.hook.position.set(c.x, crossBottom(s, c.p) - crossBottom(s, 0), ln.z);
+        ln.hook.position.set(c.x, crossBottom(s, c.p) - crossBottom(s, 0) + hov, ln.z);
         ln.padMat.emissiveIntensity = .1 + 2.4 * c.p;
-        ln.tip.position.set(c.x, crossBottom(s, c.p) + .05, ln.z);
+        ln.tip.position.set(c.x, crossBottom(s, c.p) + hov + .05, ln.z);
         ln.tip.material.opacity = .9 * c.p; ln.tip.scale.setScalar(.85);
         // string: kink under the hook + the struck span's lateral ring
         const u = ln.str.u, depth = Math.max(0, strTop(s) - crossBottom(s, c.p));
@@ -385,7 +394,8 @@ export default {
         ln.halo.position.set(stampX(s), hy - HEAD_R * .6, ln.z);
         ln.halo.material.opacity = .7 * fl; ln.halo.scale.setScalar(.5 + 1.4 * (1 - fl) * fl + .4 * fl);
         // the solenoid glows with its drive (the force making up the lossy bounce) — or holds on the latch
-        const drive = p.mode === 'hold' ? .45 : Math.min(1.4, Math.abs(p.ay + 14.5) / 420);
+        // (anticipation: a latched coil CHARGES over the last ~.7 s before it drives the stroke)
+        const drive = p.mode === 'hold' ? .45 + .5 * (lr ? anticip(lr.until, .7) : 0) : Math.min(1.4, Math.abs(p.ay + 14.5) / 420);
         ln.coilMat.emissiveIntensity = .2 + 3 * drive;
         // ghosts: the head's recent past, re-sampled from the pure fn
         const sp = Math.min(1, Math.abs(p.vy) / V_IN);

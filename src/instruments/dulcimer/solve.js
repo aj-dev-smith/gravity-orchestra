@@ -322,6 +322,21 @@ function damperIn(lane, i, s){
   if (s < h + DROP_T) return 1 - smooth01((s - h) / DROP_T);
   return smooth01((s - (gap - LIFT_LEAD)) / LIFT_T);
 }
+/** IDLE (../idle.js): while the damper felt RESTS on the string (landed after the last note's
+    drop), how long it has rested and how long until the next strike's solved lift begins:
+    { since, until } — until < 0 once that lift is under way (through to the strike, so a hover
+    can hand over to the lift without a snap); null while held up, dropping, or legato. */
+export function damperRest(lane, t, start = -Infinity){
+  const { L, n, plan } = lane;
+  if (!n) return null;
+  const c = at(L, t, start);
+  if (c.armed) return { since: Infinity, until: c.until - LIFT_LEAD };
+  const p = plan[c.i];
+  if (p.legato) return null;
+  const down = lane.hold[c.i] + DROP_T;
+  return c.since >= down ? { since: c.since - down, until: p.gap - LIFT_LEAD - c.since } : null;
+}
+
 /** the damper ramp before a strike, `until` seconds ahead (0 = down) */
 const lifting = until => smooth01((LIFT_LEAD - until) / LIFT_T);
 

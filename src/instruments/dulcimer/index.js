@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { eventTimes, makeEdge } from '../clock.js';
+import { eventTimes, makeEdge, smooth } from '../clock.js';
 import {
-  fitPart, parseNote, voiceIdOf, dulcimerLane, dulcimerAt, layoutStrings, stringLen, stringR, PART_LIMITS,
+  fitPart, parseNote, voiceIdOf, dulcimerLane, dulcimerAt, damperRest, layoutStrings, stringLen, stringR, PART_LIMITS,
   BALL_R, H, LIFT, STRIKE_U, CUP_R, SLEEVE_R, DAMP_HW, MAX_STRINGS, MAX_HOLD, A_CUP,
 } from './solve.js';
 import { grandVoice, nativeHold } from './voice.js';
 import { bucketId, planLadder, allBucketIds } from '../sustain.js';
+import { anticip } from '../idle.js';
 
 /* the fitted part → its strings (pitch → strikes with their voice id), the build's own grouping */
 function grandStrings(fit, { rollT, beat }){
@@ -72,6 +73,11 @@ const CASE_Y0 = .9;                      // case floor
 const SIDE = .4;                        // bed edge → case side
 const TAIL = .55;                        // speaking end → hitch pin
 const KEY_L = 1.25, KEY_DIP = .14;         // key length, dip (rad) when held
+// IDLE (../idle.js): the player's finger finds the key before the note — over the last second
+// of a damper's rest its key sinks a touch and the felt HOVERS a hair off the (silent, still)
+// string, then the solved lift takes over from there (max of the two: nothing snaps). Zero for
+// .15 s after the felt lands on the string: every damping contact is the solved pose.
+const HOVER = .12;                            // fraction of the full lift (≈ .05 u)
 const TRAIL_N = 3, TRAIL_DT = .022;
 const PULSE_V = 9;                       // u/s — the strike's light running along the string
 const DAMP_BACK = 1.95;                  // every damper sits this far behind the front posts
@@ -358,10 +364,12 @@ varying float vU; varying float vLen; varying float vSing; varying float vHot; v
         setI(cups, k, x, Y_CR + s.cup - BALL_R, zs);
         setI(rods, k, x, Y_CR + s.cup - BALL_R, zs);
         // damper (its felt rests ON the string top) + key (held down while the damper is up)
-        const yD = Y_SB + 2 * ln.r + LIFT * s.damp;
+        const dr = damperRest(lane, t, start);
+        const damp = dr ? Math.max(s.damp, HOVER * (dr.since === Infinity ? 1 : smooth(.15, .6, dr.since)) * anticip(Math.max(0, dr.until), 1)) : s.damp;
+        const yD = Y_SB + 2 * ln.r + LIFT * damp;
         setI(dFelt, k, x, yD, Z_D); setI(dBlock, k, x, yD, Z_D); setI(dWire, k, x, yD, Z_D);
-        setI(keys, k, x, 1.95, ZC + .02, KEY_DIP * s.damp);
-        keys.setColorAt(k, _c.copy(ln.keyC).lerp(ln.col, .6 * s.damp));
+        setI(keys, k, x, 1.95, ZC + .02, KEY_DIP * damp);
+        keys.setColorAt(k, _c.copy(ln.keyC).lerp(ln.col, .6 * damp));
 
         // the string's motion + light
         strU.uDisp.value[k] = s.vib;

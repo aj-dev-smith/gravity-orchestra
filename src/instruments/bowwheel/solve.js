@@ -245,6 +245,21 @@ export function laneAt(L, t, start = -Infinity){
   return cycleAt(q, u, geom);
 }
 
+/** IDLE (../idle.js): while the lane's marble hangs parked on its magnet (the count-in, or a
+    park cycle between its rise and its release), how long it has hung there and how long until
+    it is let go: { since, until } — null anywhere else (flight, cup, stroke). */
+export function parkAt(L, t, start = -Infinity){
+  const { geom, cyc, cs, P } = L;
+  if (t < start) t = start;
+  if (!cyc.length) return null;
+  const en = entryAt(L, start);
+  if (t < en.rel) return { since: Infinity, until: en.rel - t };
+  if (t < en.rel + geom.Tf) return null;
+  const tau = wrapP(t, P), q = cyc[lastIndex(cs, tau)], u = wrapP(tau - q.c, P);
+  if (!q.mag || u < geom.Tr || u >= q.F - geom.Tf) return null;
+  return { since: u - geom.Tr, until: q.F - geom.Tf - u };
+}
+
 export function cycleAt(q, u, geom){
   const { D, yLow, Tr, Tf } = geom;
   const F = q.F;

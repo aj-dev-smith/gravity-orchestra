@@ -440,6 +440,9 @@ export function pogoAt(S, t, start = -Infinity){
   return { y: Math.max(0, q.y), vy: q.vy, pump, vp, drive, mode: q.mode, i: q.i, since: q.since, until: q.until, armed,
            abs: armed ? -Infinity : t - q.since };
 }
+/** IDLE (../idle.js): the pogo hanging on its magnet — { since (the catch), until (the release) }
+    of that hold, from a pogoAt result; null when not hanging or the string never plays. */
+export const hangRest = p => p.mode === 'hold' && isFinite(p.until) ? { since: p.since - DT_MAX / 2, until: p.until - DT_MAX / 2 } : null;
 /** the pump's amplitude for strike i (for the tests + the render's glow) */
 export const pumpOf = (S, i) => pumpAmp(S.dv[i]);
 /** absolute time of the string's first strike at/after start */

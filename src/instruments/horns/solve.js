@@ -136,6 +136,16 @@ export function hornAt(lane, t, start = -Infinity){
   return { y: Hs - g * s4 * s4 / 2, v: -g * s4, lid: 0, lidV: 0, onLid: false, held: false, armed: false, ...c, h: p.h, breath };
 }
 
+/** IDLE (../idle.js): the marble HELD on its magnet — { since (the zero-speed catch), until (the
+    coil cuts: tf before the strike) }, from a hornAt result; null when not held. */
+export function heldRest(lane, s){
+  if (!s.held) return null;
+  const until = s.until - lane.tf;
+  if (s.armed) return { since: Infinity, until };
+  const p = lane.plan[s.i];
+  return { since: s.since - p.h - p.TS - lane.tf, until };
+}
+
 /** The air through the horn s seconds after a strike whose note speaks for h: a tongued
     attack, a hold, an exhale release. Pure; drives the bell's light. */
 export const ATTACK = .025, RELEASE = .09;

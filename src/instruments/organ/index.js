@@ -43,7 +43,8 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeEdge } from '../clock.js';
 import { fitPart, organLane, organLadder, laneAt, packetsAt, layoutPipes, strikeIds, VOICE_HOLD, RB, H_MAG, BELLOWS_R, PACKETS,
-         CONT_AT, XFADE, SHORT_MAX } from './solve.js';
+         CONT_AT, XFADE, SHORT_MAX, heldRest } from './solve.js';
+import { anticip, restEnv, sway } from '../idle.js';
 import { organVoice } from './voice.js';
 import { allBucketIds } from '../sustain.js';
 import { noteHz } from '../../engine.js';
@@ -342,8 +343,16 @@ export default {
         crowns.setColorAt(li, _c.setRGB(tint[0] * cb, tint[1] * cb, tint[2] * cb));
 
         // ---- the magnet holds (amber), the refill spring kicks (ice) ----
+        // IDLE (../idle.js): a holding coil's current BREATHES (a slow ±15 % hum, phased along the
+        // façade so the rank ripples) and swells as its release nears — the marble's entrance is
+        // telegraphed by the magnet that will let it go. Glow only: the marble is held rigid.
         const hold = st.held ? 1 : 0;
-        const ca = .04 + 2.2 * hold;
+        let ca = .04 + 2.2 * hold, pre = 0;
+        const hr = heldRest(lane, st);
+        if (hr){
+          pre = anticip(hr.until, .8);
+          ca *= 1 + .15 * restEnv(hr.since, hr.until, .1, .6) * sway(t, .45, .55 * li) + .7 * pre;
+        }
         coils.setColorAt(li, _c.setRGB(ca, ca * .55, ca * .2));
         const kk = isFinite(st.sinceKick) ? Math.exp(-st.sinceKick * 9) : 0;
         const ka = .03 + 2.4 * kk;
@@ -352,7 +361,7 @@ export default {
         // ---- the marble's halo: brightest while its weight is making the pipe speak ----
         hPos[3 * li] = x; hPos[3 * li + 1] = cupY + st.y + RB; hPos[3 * li + 2] = Z_B;
         const land = isFinite(st.sinceLand) ? Math.exp(-st.sinceLand * 7) : 0;
-        const hb = st.sounding ? .55 + .5 * land : st.held ? .28 : .2;
+        const hb = st.sounding ? .55 + .5 * land : st.held ? .28 + .3 * pre : .2;
         hCol[3 * li] = hb * (st.held ? 1 : .6); hCol[3 * li + 1] = hb * (st.held ? .7 : .88); hCol[3 * li + 2] = hb * (st.held ? .4 : 1);
       }
       for (const m of [marbles, lids, bellows]) m.instanceMatrix.needsUpdate = true;

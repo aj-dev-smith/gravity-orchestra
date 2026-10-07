@@ -43,10 +43,18 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { noteNum } from '../../engine.js';
 import { eventTimes, lanesByNote, makeEdge } from '../clock.js';
 import {
-  laneGeom, laneX, bowLane, laneAt, strokeAt, bowEnv, prepPart, wheelAngle, PART_LIMITS, HOLD_MAX,
+  laneGeom, laneX, bowLane, laneAt, parkAt, strokeAt, bowEnv, prepPart, wheelAngle, PART_LIMITS, HOLD_MAX,
   WHEEL_R, WHEEL_Y, WHEEL_Z, RIM_W, OMEGA, BALL_R, CUP_R, CUP_Y, MAG_Y, SPACING, GAP,
 } from './solve.js';
 import { bowVoice } from './voice.js';
+import { restEnv, anticip, twitch } from '../idle.js';
+
+/* IDLE (../idle.js): while a lane's marble hangs parked on its magnet, its TANGENT ROD twitches
+   toward the string — its solenoid ticks it a few cm down, the felt shoe nudging the string
+   (still TW_A < GAP clear of the turning rim: it never bows), deeper as the release
+   nears, the magnet's coil swelling with it. Zero within .2 s of the catch and of the release:
+   the cup is back at rest long before the marble lands in it. */
+const TW_A = .035, TW_HZ = .75;
 import { bucketId, planLadder, allBucketIds } from '../sustain.js';
 
 /* the part → its strings, their geometry and solved lanes — pure, shared by build() and voiceIds
@@ -388,6 +396,10 @@ export default {
         const { G, L } = ln;
         const st = laneAt(L, t, start);
         const so = strokeAt(L, t, start);
+        const pk = st.held ? parkAt(L, t, start) : null;
+        const rest = pk ? restEnv(pk.since, pk.until, .2, .5) : 0, pre = pk ? anticip(pk.until, 1.4) : 0;
+        const tw = rest ? TW_A * rest * (.4 + .6 * pre) * twitch(t, TW_HZ, 1.1 * ln.i) : 0;
+        const sR = st.s + tw;                               // the rendered rod / string travel
         // the strike: the string meets the rim (note-on), once
         if (started && so.live && ln.edge.check(so.abs, so.since, skipStrikes)){
           onStrike && onStrike({ note: bucketId(ln.note, so.cyc.hold, HOLD_MAX, ladder), vel: so.cyc.vel, pos: new THREE.Vector3(G.x, G.yPress - G.rs, WHEEL_Z + zOff),
@@ -396,18 +408,18 @@ export default {
         const env = so.live && st.contact ? bowEnv(so.since, so.cyc.hold) * (.4 + .6 * so.cyc.vel) : 0;
         bowAll = Math.max(bowAll, env);
         // string: bridge → contact (deflected by s) → tail peg
-        const yc = G.yRest - st.s;
+        const yc = G.yRest - sR;
         _a.set(G.x, G.yRest, ZF); _b.set(G.x, yc, WHEEL_Z); seg(ln.segA, _a, _b, G.rs);
         _a.set(G.x, G.yRest, ln.tail); seg(ln.segB, _b, _a, G.rs);
         ln.sMat.emissiveIntensity = .2 + 3.2 * env;
         // vibration hull: amplitude with the bow, shimmering (a pure fn of t)
         const shim = .55 + .45 * Math.abs(Math.sin(t * 2 * Math.PI * 23 + ln.i * 1.7));
         ln.lens.scale.x = (.012 + .04 * env) * shim + 1e-4;
-        ln.lens.position.y = G.yRest - st.s * .5;
+        ln.lens.position.y = G.yRest - sR * .5;
         ln.lens.material.opacity = Math.min(.8, .6 * env);
         // tangent + spring
-        ln.tan.position.y = -st.s;
-        ln.spring.scale.y = Math.max(.05, ln.sp1 - st.s - ln.sp0);
+        ln.tan.position.y = -sR;
+        ln.spring.scale.y = Math.max(.05, ln.sp1 - sR - ln.sp0);
         // the marble
         ln.ball.position.set(G.x, st.y, 0);
         ln.bMat.emissiveIntensity = .5 + 1.6 * env;
@@ -418,8 +430,8 @@ export default {
           const u = ((t - (q.c)) % P + P) % P;
           kick = Math.exp(-u * 14) * (u < q.F ? 1 : 0);
         }
-        ln.kMat.emissiveIntensity = .1 + 3.2 * kick + .45 * env;
-        ln.mMat.emissiveIntensity = .1 + 2.6 * hold;
+        ln.kMat.emissiveIntensity = .1 + 3.2 * kick + .45 * env + 1.6 * tw / TW_A;   // (it ticks the rod down)
+        ln.mMat.emissiveIntensity = .1 + 2.6 * hold * (1 + .6 * pre);
         ln.glow.material.opacity = Math.min(1, 1.1 * env);
         ln.glow.scale.setScalar(.4 + .35 * env);
 

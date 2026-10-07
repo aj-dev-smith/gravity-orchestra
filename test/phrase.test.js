@@ -271,7 +271,8 @@ describe('the LEAD is pinned: the loop keeps the whole song’s lead (two candid
   const form = POP;
   const B = [];
   { let bar = 0; for (const [k, n] of form){ for (let i = 0; i < n; i++, bar++) if (k === 'C') for (let e = 0; e < 8; e++) B.push([bar * 4 + e / 2, [86, 88, 91, 88][e % 4], .5]); } }
-  const { bytes } = compose(form, { extra: [{ name: 'Synth', program: 81, channel: 3, notes: B }] });
+  // (B is NAMED a lead too — 'Synth Lead' — so the track names can't settle it: only the pin can)
+  const { bytes } = compose(form, { extra: [{ name: 'Synth Lead', program: 81, channel: 3, notes: B }] });
   const parsed = parseMidi(bytes);
   const { song, phrase, warnings } = convertToSong(parsed);
   const B_NOTES = new Set(['D6', 'E6', 'G6']);
@@ -351,7 +352,7 @@ describe('edge windows', () => {
     expect(Math.max(...hits)).toBeGreaterThanOrEqual(24);               // bars 3–4 now live at beats 24–31
     expectHonestLoop(song, phrase);
   });
-  it('mixed meter (a 2/4 bar inside 4/4) still imports an honest loop on the dominant grid', () => {
+  it('mixed meter (a 2/4 bar inside 4/4): the grid walks the meter map and the loop is still honest', () => {
     const { bytes } = compose(POP, { meter: [{ tick: 20 * 4 * PPQ, type: 'timesig', num: 2, den: 4 }, { tick: (20 * 4 + 2) * PPQ, type: 'timesig', num: 4, den: 4 }] });
     const parsed = parseMidi(bytes);
     expect(parsed.timeSigs.length).toBe(3);

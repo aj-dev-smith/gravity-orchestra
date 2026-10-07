@@ -71,15 +71,84 @@ const SPECIAL = {
   43: 'bass',                                             // contrabass is a bass
   45: 'marimba', 46: 'marimba',                           // pizzicato strings, harp: plucked → struck bars
   47: 'bass',                                             // timpani: low, pitched, struck
+  55: 'marimba',                                          // orchestra hit: a struck stab, not a bed
   98: 'musicbox',                                         // crystal
   108: 'musicbox',                                        // kalimba: a comb of tines
   112: 'musicbox',                                        // tinkle bell
+  114: 'volley',                                          // steel drums: the volley's walls ARE a steel pan
   119: null,                                              // reverse cymbal
 };
 export function routeProgram(p){
   if (p in SPECIAL) return SPECIAL[p];
   return BY_FAMILY[Math.max(0, Math.min(127, p | 0)) >> 3];
 }
+
+/* ---- EXTENSION POINTS: machines that don't exist yet ---------------------------
+   PREFER: program → a machine, consulted BEFORE the tables above, but only once that
+   machine has a PART_SPEC entry (until then these programs fall through to their family's
+   home: guitars → belt, organs/ensembles → sustain, …). A new plugin that wants imports adds
+   its PART_SPEC and is routed here — no other edit. shape: 'any' | 'chordal' (poly ≥ LINE) |
+   'line' (poly < LINE) — a strummer takes chords, a guitar's single line stays a belt
+   candidate. (The numbers come from the corpus study, research midi-routing.md §4–§5.)
+   OVERFLOW_TO: where a machine's NATIVE voices go when it is full (instead of being
+   dropped) — a guest there, subject to that machine's own guest cap.                  */
+const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+export const PREFER = [
+  { key: 'riff',  programs: [28, 29, 30], shape: 'any' },              // muted / overdriven / distortion: riffs, chugs
+  { key: 'strum', programs: [24, 25, 26, 27], shape: 'chordal' },      // nylon / steel / jazz / clean: strummed chords
+  { key: 'organ', programs: [...range(16, 20), ...range(48, 54), ...range(61, 63), ...range(88, 95)],
+    shape: 'chordal' },                                                // sustained chords: organ, strings, choir, brass section, pads
+];
+export const OVERFLOW_TO = { volley: 'marimba' };                        // a second steel-pan voice → struck bars
+/** the PREFER machine for a voice (program + chordal?), or null while none is built */
+export function preferFor(program, chordal){
+  for (const p of PREFER){
+    if (!PART_SPEC[p.key] || !p.programs.includes(program)) continue;
+    if (p.shape === 'any' || (p.shape === 'chordal') === !!chordal) return p.key;
+  }
+  return null;
+}
+
+/* ---- TRACK NAMES: programs lie, names don't ----------------------------------
+   A sequenced file's programs are often placeholders (Master of Puppets' bass tracks are
+   programs 26/28 — jazz / muted guitar — and its vocals 31/21), while the names a person
+   typed are right. nameRole reads a TRACK name (never the GM fallback name) → a role, or
+   null when it says nothing ("ch3", "Track 2", "81", "Staff-1"):
+     'drums'    a kit (not steel drums / synth drum / melodic toms) — convert.js moves a
+                drum-named track OFF channel 10 to the drum lanes when its keys are GM drums
+     'bass'     a bass line → the string bass ("Bass (left)", "Synth Bass", "Bass Lead")
+     'lead'     the tune → the belt lead, ahead of busier voices ("Vocals", "Melody", "Lead")
+                — not a counter-melody / backing / harmony / fill / solo
+     'guitar'   a guitar ("Rhythm Guitar", "Gtr", "Riff"): a belt voice, never a "low line"
+     'sustain'  strings / choir / organ / pad / ensemble → bowls when chordal, else belt     */
+export function nameRole(name = ''){
+  const s = String(name || '').toLowerCase().trim();
+  if (!s || /^(ch|tk|track|staff|part|inst(rument)?)?[\s#_-]*\d+$/.test(s)) return null;
+  if (/\b(bass\s*drum|kick)\b/.test(s)) return 'drums';
+  if (/\b(drums?|drum\s*kit|drumset|percussion|perc|kit)\b/.test(s) && !/steel|synth\s*drum|melodic|taiko|tom/.test(s)) return 'drums';
+  if (/\b(bass|contra\s*bass|double\s*bass|basse|bajo)\b/.test(s) || /\bbass(line|es)?\b/.test(s)) return 'bass';
+  if (/\b(vocals?|voc|voice|vox|sing(er|ing)?|lyrics?|melody|melodie|lead)\b/.test(s) &&
+      !/counter|support|harmon|backing|back(ground)?\b|bgv|choir|oohs?|aahs?|\bfill|\bsolo/.test(s)) return 'lead';
+  if (/guitar|gtr|guit\b|riff|rhythm|rhthym|rythm|strum|power\s*chord/.test(s)) return 'guitar';
+  if (/string|violin|viola|cello|choir|aahs?\b|oohs?\b|organ|\bpad\b|ensemble/.test(s)) return 'sustain';
+  return null;
+}
+const NAME_HOME = { bass: 'bass', lead: 'belt', guitar: 'belt', sustain: 'sustain' };
+/** the share of a voice's onsets a machine with a same-pitch recovery `gap` (s) keeps (greedy, as
+    shapePart thins). secPerTick: the tempo. A NAMED bass goes to the string bass only if it fits
+    (≥ BASS_FIT): MoP's 8th-note bass at 220 bpm (.136 s repeats) would keep a third of its notes */
+export const BASS_FIT = .8;
+export function gapFit(notes, gap, secPerTick){
+  const by = new Map();
+  for (const n of notes){ const t = Math.round(n.tick * secPerTick * 1e6) / 1e6; if (!by.has(n.midi)) by.set(n.midi, new Set()); by.get(n.midi).add(t); }
+  let all = 0, kept = 0;
+  for (const ts of by.values()){
+    let last = -Infinity;
+    for (const t of [...ts].sort((a, b) => a - b)){ all++; if (t - last >= gap - 1e-9){ kept++; last = t; } }
+  }
+  return all ? kept / all : 1;
+}
+const isGuitar = v => (v.program >= 24 && v.program <= 31) || v.role === 'guitar';
 
 /* ---- what each machine can honestly play --------------------------------
    lo/hi     the sweet range (MIDI). Each VOICE is octave-shifted as a whole so its
@@ -125,7 +194,12 @@ export const PART_SPEC = {
               sustain: true, maxDur: 5, minDur: .3 },
   turntable: { lo: 53, hi: 89, center: 72, pitches: 24, poly: 1, gap: .1,  ioi: .1, voices: 1, maxEvents: 192 },
   ricochet:  { lo: 55, hi: 91, center: 74, pitches: 24, poly: 1, gap: .15, ioi: .15, voices: 1, maxEvents: 40, maxLoop: 60 },
+  // volley: ONE marble volleyed between two pad walls (a steel pan's voice): monophonic; a hop
+  // no quicker than VOLLEY_MIN_HOP (its solver's measured floor, GEOM.MIN_HOP); the staff is
+  // vertical so any range reads, but a pan's sweet range is G3–E6; 160 pads = editor LINE_SPEC
+  volley:    { lo: 55, hi: 88, center: 72, pitches: 24, poly: 1, gap: .2,  ioi: .2,  voices: 1, maxEvents: 160 },
 };
+export const VOLLEY_MIN_HOP = .2;   // mirrors volley GEOM.MIN_HOP (asserted in test/midi-orchestra)
 export const PICKUP_BEATS = 4;      // pre-lead notes within this many beats wrap to the loop tail
 export const OVERFLOW_VOICES = 2;   // belt voices (chordal / beyond 3 belts) the marimba takes in
 export const LEAD_INTRO = 4;        // beats of intro (beyond a pickup) a lead may cost the others
@@ -143,8 +217,17 @@ const median = a => { if (!a.length) return 0; const s = [...a].sort((x, y) => x
     to one per (onset, pitch class) first. notes: raw parse notes. */
 export function polyphony(notes, quantizeTick){
   if (!notes.length) return 0;
-  const seen = new Set(), ns = [];
-  for (const n of notes){ const k = `${quantizeTick(n.tick)}|${n.midi % 12}`; if (!seen.has(k)){ seen.add(k); ns.push(n); } }
+  const seen = new Set(), ns0 = [];
+  for (const n of notes){ const k = `${quantizeTick(n.tick)}|${n.midi % 12}`; if (!seen.has(k)){ seen.add(k); ns0.push(n); } }
+  // a POWER CHORD (root + fifth, ± octaves) is one note too — a riff's chug is a line, not comping:
+  // keep the root (the lowest) of an onset whose pitch classes are exactly {r, r + 7}
+  const at = new Map();
+  for (const n of ns0){ const q = quantizeTick(n.tick); if (!at.has(q)) at.set(q, []); at.get(q).push(n); }
+  const ns = [];
+  for (const g of at.values()){
+    if (g.length === 2 && isPowerChord(g.map(n => n.midi))) ns.push(g[0].midi < g[1].midi ? g[0] : g[1]);
+    else ns.push(...g);
+  }
   const byOnset = new Map();
   for (const n of ns){ const q = quantizeTick(n.tick); byOnset.set(q, (byOnset.get(q) || 0) + 1); }
   const chordFrac = [...byOnset.values()].filter(c => c > 1).length / byOnset.size;
@@ -156,6 +239,34 @@ export function polyphony(notes, quantizeTick){
   }
   return Math.max(chordFrac, overlaps / ns.length);
 }
+/* ---- chord → ONE note: the top, or the ROOT of a riff ------------------------
+   A one-marble line (a belt, the turntable, the ricochet, the volley) plays one note per
+   onset. For a piano / lead / brass chord the TOP note is the melody (the legacy rule). For a
+   RIFF it is not: a power chord (root + fifth, ± octaves — MoP's 0·7 ×414, 0·7·12 ×140) puts the
+   fifth or the octave on top, so a top-note line loses the riff's identity: its ROOT MOTION.
+   riffLike: a voice in the guitar/bass register (mean < RIFF.MAX_MEAN — a high voice's fifths
+   are a harmonised melody) whose chords (≥ RIFF.MIN_CHORDS) are mostly (≥ RIFF.SHARE) power
+   chords. Its every chord reduces to its LOWEST note. onsetOf(n) → the note's onset key.   */
+export const RIFF = { MAX_MEAN: 64, SHARE: .5, MIN_CHORDS: 4 };
+export function isPowerChord(midis){
+  const lo = Math.min(...midis);
+  return midis.length > 1 && midis.every(m => (m - lo) % 12 === 0 || (m - lo) % 12 === 7) && midis.some(m => (m - lo) % 12 === 7);
+}
+export function riffLike(notes, onsetOf){
+  if (!notes.length) return false;
+  const mean = notes.reduce((s, n) => s + n.midi, 0) / notes.length;
+  if (mean >= RIFF.MAX_MEAN) return false;
+  const by = new Map();
+  for (const n of notes){ const k = onsetOf(n); if (!by.has(k)) by.set(k, new Set()); by.get(k).add(n.midi); }
+  let chords = 0, power = 0;
+  for (const s of by.values()){
+    if (new Set([...s].map(m => m % 12)).size < 2) continue;      // (an octave doubling is one note, not a chord)
+    chords++;
+    if (isPowerChord([...s])) power++;
+  }
+  return chords >= RIFF.MIN_CHORDS && power >= RIFF.SHARE * chords;
+}
+
 const MONO = .25;                   // polyphony below this = a single line (strings: a melody, not a pad)
 const LINE = .35;                   // a belt voice below this still reads as a line (a harmonica's odd double-stop)
 
@@ -196,7 +307,8 @@ function makeVoices(tracks, { ppq, bpm }){
       const nm = (tr.name || '').trim();
       const base = nm && !/^ch\d+$/.test(nm) ? nm : GM_NAMES[program];      // format-0 'chN' → the instrument
       const name = byProg.size > 1 ? `${base} (${GM_NAMES[program]})` : base;
-      voices.push(voiceStats({ name, notes, program, channel: notes[0].channel }, q12, secPerTick, ppq));
+      // role: what the TRACK's own name says (never the GM fallback name)
+      voices.push(voiceStats({ name, notes, program, channel: notes[0].channel, role: nameRole(nm) }, q12, secPerTick, ppq));
     }
   }
   // names must tell voices apart in warnings: a repeated name gets its channel
@@ -234,8 +346,16 @@ function pinnedVoice(vs, pin){
   return best;
 }
 
-/** The lead rule (see above), shared by program and role routing. vs: candidates. */
-function pickLead(vs, span0, span1){
+/** The lead rule (see above), shared by program and role routing. vs: candidates.
+    A NAMED lead (nameRole 'lead': "Vocals", "Melody") is the file author's word for the tune: among
+    the candidates that pass the rules it wins over busier voices (a chugging rhythm guitar out-notes
+    a sung line 8:1), when it is a real line (≥ NAMED_MIN onsets and ≥ NAMED_SHARE of the busiest's).
+    windowed: the import will loop a PHRASE window (convert.js), where the lead's intro / tail / long
+    mid-song rests don't cost the loop anything (the window is chosen where the lead plays) — so when
+    no named lead passes the rules, one that spans ≥ NAMED_SPAN of the song may still lead (a singer
+    who enters after a long guitar intro). */
+export const NAMED_MIN = 16, NAMED_SHARE = .1, NAMED_SPAN = .25;
+function pickLead(vs, span0, span1, { windowed = false } = {}){
   const span = Math.max(1, span1 - span0);
   const intro = v => Math.max(0, v.first - PICKUP_BEATS - span0);
   const tail = v => Math.max(0, span1 - v.last);
@@ -246,10 +366,15 @@ function pickLead(vs, span0, span1){
     ok = vs.filter(v => intro(v) + tail(v) <= best + 8);
   }
   const present = ok.filter(v => v.gap <= Math.max(LEAD_GAP, span / 8));
-  return legacy(present.length ? present : ok);
+  const pool = present.length ? present : ok;
+  const busiest = Math.max(...vs.map(v => v.onsets));
+  const real = v => v.role === 'lead' && v.onsets >= Math.max(NAMED_MIN, NAMED_SHARE * busiest);
+  let named = pool.filter(real);
+  if (!named.length && windowed) named = vs.filter(v => real(v) && v.last - v.first >= NAMED_SPAN * span);
+  return legacy(named.length ? named : pool);
 }
 
-export function orchestrate(tracks, { ppq, bpm, pin = null }){
+export function orchestrate(tracks, { ppq, bpm, pin = null, windowed = false }){
   const warnings = [];
   const q12 = tick => Math.round(tick / ppq * 12) / 12;
   const voices = makeVoices(tracks, { ppq, bpm });
@@ -257,12 +382,28 @@ export function orchestrate(tracks, { ppq, bpm, pin = null }){
   const routed = [];
   for (const v of voices){
     v.home = routeProgram(v.program);
+    // the track's NAME before its program (a "Bass" played by a guitar program is a bass)
+    let byName = nameHome(v);
+    if (byName === 'bass' && v.home !== 'bass'){
+      const fit = gapFit(v.notes, PART_SPEC.bass.gap, 60 / bpm / ppq);
+      if (fit < BASS_FIT){
+        warnings.push(`"${v.name}" is named a bass, but the string bass could play only ${Math.round(fit * 100)}% of it at ${bpm} bpm ` +
+                      `(its repeats come faster than ${PART_SPEC.bass.gap}s) — it stays a belt line`);
+        byName = null;
+      }
+    }
+    if (byName && byName !== v.home){
+      warnings.push(`"${v.name}" plays as a ${v.role === 'sustain' ? 'sustained part' : v.role} by its name (its program is ${GM_NAMES[v.program]})`);
+      v.home = byName;
+    }
     if (v.home === null){
       warnings.push(`dropped "${v.name}" (${GM_NAMES[v.program]}: no instrument in the room plays sound effects)`);
       continue;
     }
     v.dest = v.home;
     if (v.home === 'sustain') v.dest = v.poly >= MONO || v.medDur >= 2 ? 'bowls' : 'belt';
+    const pref = preferFor(v.program, v.poly >= LINE);      // a purpose-built machine, once it exists
+    if (pref && v.role !== 'bass' && v.role !== 'lead') v.dest = v.home = pref;
     routed.push(v);
   }
   if (!routed.length) return { belt: [], parts: [], warnings, squashed: false, voices: 0 };
@@ -276,7 +417,7 @@ export function orchestrate(tracks, { ppq, bpm, pin = null }){
   const eligible = routed.filter(v => v.home === 'belt' || v.home === 'sustain');
   let lead = null, doubled = false;
   if (eligible.length){
-    lead = pinnedVoice(eligible, pin) || pickLead(eligible, span0, span1);
+    lead = pinnedVoice(eligible, pin) || pickLead(eligible, span0, span1, { windowed });
     if (lead.dest !== 'belt'){
       warnings.push(`"${lead.name}" leads the belt (its top line) instead of the ${lead.dest}`);
       lead.dest = 'belt';
@@ -298,6 +439,9 @@ export function orchestrate(tracks, { ppq, bpm, pin = null }){
   const put = (key, v, native) => { if (!want.has(key)) want.set(key, []); want.get(key).push({ v, native }); };
   const overflow = [];
   for (const v of routed.filter(v => v !== lead && v.dest === 'belt').sort(byScore)){
+    // a DOUBLED track (the same line panned left + right, or in octaves) is one belt, not two
+    const dup = belt.find(b => twins(b.notes, v.notes, q12));
+    if (dup){ warnings.push(`belt: "${v.name}" doubles "${dup.name}" — merged`); continue; }
     if (v.poly < LINE && belt.length < 3) belt.push(v);
     else overflow.push(v);
   }
@@ -305,17 +449,20 @@ export function orchestrate(tracks, { ppq, bpm, pin = null }){
   const loopSec = ROLL_T + (span1 - lead.first + 1) * 60 / bpm;   // ≈ the loop the machines will see
   for (const v of overflow){
     const free = k => !want.has(k);
-    if (v.poly < LINE && v.mean < 50 && free('bass')){ put('bass', v, false); v.why = 'a spare low line'; }
+    if (v.poly < LINE && lowLine(v) && free('bass')){ put('bass', v, false); v.why = 'a spare low line'; }
     else if (v.poly < LINE && v.mean >= 76 && free('musicbox')){ put('musicbox', v, false); v.why = 'a spare high line'; }
     else if (v.poly < LINE && free('turntable')){ put('turntable', v, false); v.why = 'a spare melodic line'; }
     else if (v.poly < LINE && free('ricochet') && loopSec <= PART_SPEC.ricochet.maxLoop){ put('ricochet', v, false); v.why = 'a spare melodic line'; }
+    else if (v.poly < LINE && free('volley')){ put('volley', v, false); v.why = 'a spare melodic line'; }
     else { put('marimba', v, false); v.why = v.poly >= LINE ? 'chordal — struck bars keep its chords' : 'no belt left'; }
   }
 
   // --- each machine takes its best voices (natives first), the rest are reported ---
   const parts = [];
   let vid = 0;
-  for (const key of Object.keys(PART_SPEC)){
+  // machines with an OVERFLOW_TO go first (their spare natives become guests downstream)
+  const keys = Object.keys(PART_SPEC), order = [...keys.filter(k => OVERFLOW_TO[k]), ...keys.filter(k => !OVERFLOW_TO[k])];
+  for (const key of order){
     const list = want.get(key);
     if (!list) continue;
     list.sort((a, b) => (b.native - a.native) || byScore(a.v, b.v));
@@ -326,6 +473,8 @@ export function orchestrate(tracks, { ppq, bpm, pin = null }){
       const dup = kept.find(k => covers(k.notes, v.notes, q12));
       if (dup){ warnings.push(`${key}: "${v.name}" doubles "${dup.name}" — merged`); parts.push(entry(key, v, dup.vid)); continue; }
       if (kept.length >= PART_SPEC[key].voices || (!native && guests >= OVERFLOW_VOICES && key === 'marimba')){
+        const to = native && OVERFLOW_TO[key];
+        if (to){ v.why = `the ${key} already plays ${kept.length} voice${kept.length > 1 ? 's' : ''}`; put(to, v, false); continue; }
         warnings.push(`dropped "${v.name}" (${GM_NAMES[v.program]}): the ${key} already plays ${kept.length} voice${kept.length > 1 ? 's' : ''}`);
         continue;
       }
@@ -335,8 +484,22 @@ export function orchestrate(tracks, { ppq, bpm, pin = null }){
       parts.push(entry(key, v, v.vid));
     }
   }
+  parts.sort((a, b) => keys.indexOf(a.key) - keys.indexOf(b.key));     // registry order (stable)
   return { belt: belt.map(v => ({ name: v.name, notes: v.notes })), parts, warnings, squashed: belt.some(v => v.poly >= LINE), voices: routed.length };
 }
+/** the home a voice's NAME gives it (nameRole), or null to keep its program's. A name only
+    overrules a program that agrees on register: a "Bass" track must sit low, and a "Vocals" /
+    "Guitar" / "Strings" track keeps a plugin program that already names its machine. */
+function nameHome(v){
+  if (!v.role || v.role === 'drums') return null;
+  if (v.role === 'bass') return v.mean < ROLE.BASS_MAX ? 'bass' : null;
+  const prog = routeProgram(v.program);
+  if (v.role === 'sustain') return prog === 'belt' ? 'sustain' : null;   // (a named pad keeps bowls; a "String" piano becomes sustain)
+  return prog === 'bass' || prog === 'sustain' || prog === 'belt' ? NAME_HOME[v.role] : null;   // lead / guitar → a belt voice
+}
+/** a LOW LINE (a bass line): below ROLE.LOW — or, for a guitar, below its lowest string (a "guitar"
+    whose mean sits under E2 is a mislabelled bass: MoP's bass tracks are programs 26/28) */
+export const lowLine = v => v.role === 'bass' || v.mean < (isGuitar(v) ? ROLE.GTR_LOW : ROLE.LOW);
 const entry = (key, v, voice) => ({ key, name: v.name, notes: v.notes, program: v.program, voice });
 
 /* ---- routing by ROLE: a file whose programs say nothing --------------------------
@@ -360,13 +523,22 @@ const entry = (key, v, voice) => ({ key, name: v.name, notes: v.notes, program: 
    Tetris, a game rip)? The busiest chordal voice is SPLIT into its hands: the top line
    (the melody → the lead), the bottom line (the left hand's bass → string bass) and the
    inner notes (the chords → bowls / marimba by their sustain).                         */
-export const ROLE = { LOW: 50, HIGH: 79, SPARK: .3, SUSTAIN: 1.2, SPLIT: 12 };
+/* ROLE.LOW — the bass/line register boundary. It was 50 (D3); the corpus (57 files, research
+   midi-routing.md §2) puts every bass-program voice at mean 30–42 (the octave-3 synth basses at
+   53–58 route by their program anyway) and the rhythm guitars at 42–80, six of them at 46–49 —
+   MoP's distortion rhythm guitar (47) was routed as "a low line" onto the string bass while the
+   real bass went to the belts. 46 (A#2) clears the highest bass by a major third and lets those
+   guitars be guitars; a guitar (program 24–31 / a guitar-named track) is a low line only below
+   GTR_LOW (E2, its lowest open string — a "guitar" lower than that is a mislabelled bass). The
+   lead floor stays where it was (LEAD_MIN = the old LOW + 5): who may lead did not change.
+   BASS_MAX: a "Bass"-named track goes to the string bass only if it sits below this. */
+export const ROLE = { LOW: 46, GTR_LOW: 40, LEAD_MIN: 55, BASS_MAX: 55, HIGH: 79, SPARK: .3, SUSTAIN: 1.2, SPLIT: 12 };
 
 /** Split a chordal voice into top line / bottom line / inner notes. A 2-means split of
     its pitches finds the hands (if the clusters sit < ROLE.SPLIT semitones apart there is
     only one hand: no bottom line). The top line = the highest note of each onset unless a
     higher top note is still sounding (then it's an inner voice); the bottom line mirrors it. */
-export function splitHands(notes, q12){
+export function splitHands(notes, q12, { riff = false } = {}){
   const ms = notes.map(n => n.midi);
   let c0 = Math.min(...ms), c1 = Math.max(...ms);
   for (let it = 0; it < 12; it++){
@@ -374,7 +546,7 @@ export function splitHands(notes, q12){
     if (!lo.length || !hi.length) break;
     c0 = lo.reduce((s, m) => s + m, 0) / lo.length; c1 = hi.reduce((s, m) => s + m, 0) / hi.length;
   }
-  const twoHands = c1 - c0 >= ROLE.SPLIT;
+  const twoHands = !riff && c1 - c0 >= ROLE.SPLIT;          // (a riff's octave doublings are not a left hand)
   const isUpper = n => !twoHands || Math.abs(n.midi - c0) > Math.abs(n.midi - c1);
   const line = (pool, top) => {
     const byOn = new Map();
@@ -390,13 +562,14 @@ export function splitHands(notes, q12){
     return out;
   };
   const upper = notes.filter(isUpper), lower = twoHands ? notes.filter(n => !isUpper(n)) : [];
-  const top = line(upper, true), bottom = lower.length ? line(lower, false) : new Set();
+  // (a RIFF's line is its root motion: one hand of power chords reads bottom-up — see riffLike)
+  const top = line(upper, !riff), bottom = lower.length ? line(lower, false) : new Set();
   const order = (a, b) => a.tick - b.tick || a.midi - b.midi;
   return { top: [...top].sort(order), bottom: [...bottom].sort(order),
            inner: notes.filter(n => !top.has(n) && !bottom.has(n)).sort(order) };
 }
 
-export function orchestrateByRole(tracks, { ppq, bpm, programs = false, reason = 'no program data', pin = null }){
+export function orchestrateByRole(tracks, { ppq, bpm, programs = false, reason = 'no program data', pin = null, windowed = false }){
   const warnings = [];
   const q12 = tick => Math.round(tick / ppq * 12) / 12;
   const secPerTick = 60 / bpm / ppq;
@@ -412,7 +585,10 @@ export function orchestrateByRole(tracks, { ppq, bpm, programs = false, reason =
   const tail = v => Math.max(0, span1 - v.last);
   const isLine = v => v.poly < LINE;
   const sparkly = v => v.mean >= ROLE.HIGH && v.medDur < ROLE.SPARK;   // ornament, not the tune
-  const canLead = v => isLine(v) && !v.comp && !v.low && !sparkly(v) && v.mean >= ROLE.LOW + 5 && intro(v) <= LEAD_INTRO && tail(v) <= Math.max(16, (span1 - span0) / 4);
+  // (a NAMED lead — "Vocals", "Melody" — may sit low or sparkle; on a phrase-window import its intro / tail cost nothing)
+  const named = v => v.role === 'lead' && v.onsets >= NAMED_MIN;
+  const canLead = v => isLine(v) && !v.comp && !v.low && (named(v) || (!sparkly(v) && v.mean >= ROLE.LEAD_MIN)) &&
+    ((windowed && named(v)) || (intro(v) <= LEAD_INTRO && tail(v) <= Math.max(16, (span1 - span0) / 4)));
 
   // no line that could lead: split the busiest (× longest) chordal voice into its hands
   if (!voices.some(canLead)){
@@ -421,7 +597,8 @@ export function orchestrateByRole(tracks, { ppq, bpm, programs = false, reason =
       .sort((a, b) => b.onsets * (b.last - b.first + 1) / span - a.onsets * (a.last - a.first + 1) / span);
     const v = chordal[0];
     if (v){
-      const { top, bottom, inner } = splitHands(v.notes, q12);
+      const riff = riffLike(v.notes, n => q12(n.tick));
+      const { top, bottom, inner } = splitHands(v.notes, q12, { riff });
       const sub = (suffix, notes) => voiceStats({ name: `${v.name} ${suffix}`, notes, program: v.program, channel: v.channel }, q12, secPerTick, ppq);
       const parts = [sub('(melody)', top)];
       if (bottom.length >= 4) parts.push(Object.assign(sub('(left hand)', bottom), { low: true }));
@@ -440,18 +617,21 @@ export function orchestrateByRole(tracks, { ppq, bpm, programs = false, reason =
   // each voice's SHAPE → its machines, best first
   for (const v of voices){
     if (!isLine(v) || v.comp){             // (a split's inner notes are the accompaniment, even when they arpeggiate one at a time)
-      if (v.medDur >= ROLE.SUSTAIN){ v.kind = 'a sustained chordal bed'; v.prefs = ['bowls', 'marimba']; }
+      if (v.medDur >= ROLE.SUSTAIN || v.role === 'sustain'){ v.kind = 'a sustained chordal bed'; v.prefs = ['bowls', 'marimba']; }
       else if (v.mean >= ROLE.HIGH - 3){ v.kind = 'high chords'; v.prefs = ['musicbox', 'marimba', 'bowls']; }
       else { v.kind = 'chords / arpeggios'; v.prefs = ['marimba', 'bowls']; }
-    } else if (v.mean < ROLE.LOW || v.low){ v.kind = v.low ? 'the left hand\'s bass line' : 'a low line'; v.prefs = ['bass', 'belt', 'marimba']; }
+    } else if ((lowLine(v) && v.role !== 'lead') || v.low){ v.kind = v.low ? 'the left hand\'s bass line' : v.role === 'bass' ? 'a bass line (by its name)' : 'a low line';
+      // (a named bass the string bass can't keep up with — repeats faster than its gap — rides a belt first)
+      v.prefs = v.role === 'bass' && gapFit(v.notes, PART_SPEC.bass.gap, secPerTick) < BASS_FIT ? ['belt', 'bass', 'marimba'] : ['bass', 'belt', 'marimba']; }
+    else if (programs && routeProgram(v.program) === 'volley'){ v.kind = 'a steel-pan line'; v.prefs = ['volley', 'turntable', 'alto', 'belt', 'marimba']; }
     else if (sparkly(v)){ v.kind = 'a high sparkly line'; v.prefs = ['musicbox', 'turntable', 'belt', 'marimba']; }
-    else { v.kind = 'a melodic line'; v.prefs = ['turntable', 'alto', 'ricochet', 'belt', 'marimba']; }
+    else { v.kind = 'a melodic line'; v.prefs = ['turntable', 'alto', 'ricochet', 'belt', 'volley', 'marimba']; }
   }
 
   // the lead: the legacy choice among the lines that could lead (else any line, else anyone)
   const lines = voices.filter(v => isLine(v) && !v.comp && !v.low);
   const pool = voices.filter(canLead).length ? voices.filter(canLead) : lines.length ? lines : voices;
-  const lead = pinnedVoice(voices.filter(v => !v.comp), pin) || pickLead(pool, span0, span1);
+  const lead = pinnedVoice(voices.filter(v => !v.comp), pin) || pickLead(pool, span0, span1, { windowed });
   const loopSec = ROLL_T + (span1 - lead.first + 1) * 60 / bpm;
 
   const belt = [lead];
@@ -463,6 +643,8 @@ export function orchestrateByRole(tracks, { ppq, bpm, programs = false, reason =
     let placed = false;
     for (const p of v.prefs){
       if (p === 'belt' || p === 'alto'){
+        const twin = isLine(v) && belt.find(b => twins(b.notes, v.notes, q12));
+        if (twin){ warnings.push(`belt: "${v.name}" doubles "${twin.name}" — merged`); placed = true; break; }
         if (belt.length < (p === 'alto' ? 2 : 3) && isLine(v)){ belt.push(v); route.push(`"${v.name}" → ${belt.length === 2 ? 'alto' : 'bass'} belt (${v.kind})`); placed = true; break; }
         continue;
       }
@@ -484,13 +666,19 @@ export function orchestrateByRole(tracks, { ppq, bpm, programs = false, reason =
   parts.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
   return { belt: belt.map(v => ({ name: v.name, notes: v.notes })), parts, warnings, squashed: false };
 }
-/** does voice a already play ≥ 90% of b's (onset, pitch class)s? */
-function covers(a, b, q){
-  const A = new Set(a.map(n => `${q(n.tick)}|${n.midi % 12}`));
+/** does voice a already play ≥ 90% of b's (onset, pitch class)s? exact: (onset, PITCH) */
+export function covers(a, b, q, exact = false){
+  const key = n => `${q(n.tick)}|${exact ? n.midi : n.midi % 12}`;
+  const A = new Set(a.map(key));
   let hit = 0;
-  for (const n of b) if (A.has(`${q(n.tick)}|${n.midi % 12}`)) hit++;
+  for (const n of b) if (A.has(key(n))) hit++;
   return hit >= .9 * b.length;
 }
+/** TWINS on the belt: each plays ≥ 90% of the other's exact (onset, pitch)s — the same line panned
+    left + right (MoP's bass L/R, a lead and its `"` copy). Only a true twin merges: a chordal piano
+    that CONTAINS a guitar's line is not its twin, and an octave doubling on another belt is a
+    second register the room can see (the belts never fold octaves the way a plugin's lanes do). */
+export const twins = (a, b, q) => covers(a, b, q, true) && covers(b, a, q, true);
 
 /* ---- the music box's comb: pins on one tine sit ≥ minGap apart ------------
    buildComb deals one pitch's strikes round-robin onto the fewest twin tines (≤ MB_TWINS)
@@ -549,6 +737,14 @@ export function shapePart(key, notes, { bpm, loopBeats, rollT = ROLL_T }){
     return { part: [], warnings };
   }
 
+  // a RIFF voice (power chords in the low register) reduces to its root on a one-marble machine
+  const riffV = new Set();
+  if (S.poly === 1){
+    const vs = new Map();
+    for (const n of ns){ const v = n.voice ?? 0; if (!vs.has(v)) vs.set(v, []); vs.get(v).push(n); }
+    for (const [v, list] of vs) if (riffLike(list, n => n.beat)) riffV.add(v);
+  }
+
   // 2. octave-transpose each VOICE toward the machine's centre, 3. fold strays
   const byVoice = new Map();
   for (const n of ns){ const v = n.voice ?? 0; if (!byVoice.has(v)) byVoice.set(v, []); byVoice.get(v).push(n.midi); }
@@ -566,7 +762,7 @@ export function shapePart(key, notes, { bpm, loopBeats, rollT = ROLL_T }){
     let m = n.midi + shiftOf.get(n.voice ?? 0);
     while (m < S.lo){ m += 12; folded++; }
     while (m > S.hi){ m -= 12; folded++; }
-    return { ...n, midi: m };
+    return { ...n, midi: m, raw: n.midi };
   });
   if (folded) say(`folded ${plural(folded, 'note')} by octaves into ${midiToName(S.lo)}–${midiToName(S.hi)}`);
 
@@ -606,13 +802,17 @@ export function shapePart(key, notes, { bpm, loopBeats, rollT = ROLL_T }){
   ns = [...uniq.values()].sort((a, b) => a.beat - b.beat || a.midi - b.midi);
 
   // 6. chord thinning: ≤ poly notes per onset — the outer voices first, then the loudest
-  let thinned = 0;
+  let thinned = 0, roots = 0;
   let groups = [];
   for (const n of ns){ const g = groups[groups.length - 1]; if (g && g.beat === n.beat) g.ns.push(n); else groups.push({ beat: n.beat, ns: [n] }); }
   for (const g of groups){
     if (g.ns.length <= S.poly) continue;
     const lo = g.ns[0], hi = g.ns[g.ns.length - 1];
-    if (S.poly === 1){ thinned += g.ns.length - 1; g.ns = [hi]; continue; }   // a single marble: the top line
+    if (S.poly === 1){                                   // a single marble: the top line — a riff's root
+      const root = g.ns.every(n => riffV.has(n.voice ?? 0)) ? g.ns.reduce((a, b) => (b.raw ?? b.midi) < (a.raw ?? a.midi) ? b : a) : null;
+      if (root && root !== hi) roots++;
+      thinned += g.ns.length - 1; g.ns = [root || hi]; continue;
+    }
     const inner = g.ns.slice(1, -1).sort((a, b) => b.vel - a.vel).slice(0, Math.max(0, S.poly - 2));
     thinned += g.ns.length - 2 - inner.length;
     g.ns = [lo, ...inner, hi].slice(0, S.poly).sort((a, b) => a.midi - b.midi);
@@ -635,7 +835,8 @@ export function shapePart(key, notes, { bpm, loopBeats, rollT = ROLL_T }){
       active.push(...g.ns); active.sort((a, b) => a.beat - b.beat);
     });
   }
-  if (thinned) say(`thinned ${plural(thinned, 'chord note')} (≤ ${S.poly} per onset)`);
+  if (thinned) say(`thinned ${plural(thinned, 'chord note')} (≤ ${S.poly} per onset)` +
+                  (roots ? ` — kept the ROOT of ${plural(roots, 'power chord')} (a riff's line is its root motion)` : ''));
   if (released) say(`released ${plural(released, 'note')} early (≤ ${S.poly} sounding at once)`);
 
   // 8. lane recovery (same pitch) and 9. part-wide sparseness (bells)

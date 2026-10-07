@@ -2,8 +2,8 @@
 // returns { song, warnings }
 
 import { GM_DRUMS, drumByGm } from '../drumkit.js';
-import { orchestrate, orchestrateByRole, shapePart, PART_SPEC, ROLL_T } from './orchestra.js';
-import { PHRASE, barGrid, findPhrase, vocalLead } from './phrase.js';
+import { orchestrate, orchestrateByRole, shapePart, PART_SPEC, ROLL_T, nameRole, riffLike } from './orchestra.js';
+import { PHRASE, barGrid, barAt, barStart, findPhrase, vocalLead } from './phrase.js';
 
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 // stable lane order for the emitted drums block (registry order → consistent
@@ -40,7 +40,8 @@ export function windowBpm(tempos, ppq, b0, b1) {
   return spans[spans.length - 1].bpm;
 }
 
-const BUDGET_W = .25;          // phrase re-rank: score cost of overflowing a solve budget by a full budget
+const BUDGET_W = .25;
+const DRUM_NAMED = .9;         // a drum-NAMED track off channel 10 is percussion when this share of its keys are GM drums          // phrase re-rank: score cost of overflowing a solve budget by a full budget
 const mmss = s => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
 
 /* opts.window — WHICH PART of the song becomes the loop (phrase.js):
@@ -67,11 +68,19 @@ export function convertToSong(parsed, opts = {}) {
   // Drums are defined as channel 9, gathered from EVERY input track. The melodic
   // pipeline below runs only on what's left; the drum lanes are built in step 12
   // once we know the lead's timeline offset and the loop length.
+  // A track NAMED as a kit ("Drums", "Percussion" — orchestra nameRole) but written on another
+  // channel is percussion too, when its keys are GM drum keys (≥ DRUM_NAMED of its notes map):
+  // played as melody it would be a belt of drum-key gibberish.
   const drumNotes = [];
   const melodicTracks = inputTracks
     .map(tr => {
       const mel = [];
       for (const n of tr.notes) (n.channel === 9 ? drumNotes : mel).push(n);
+      if (mel.length && nameRole(tr.name) === 'drums' && mel.filter(n => drumByGm(n.midi)).length >= DRUM_NAMED * mel.length) {
+        warnings.push(`"${tr.name.trim()}": a drum track on channel ${mel[0].channel + 1} (not 10) — played on the drum machine by its name`);
+        drumNotes.push(...mel);
+        return { ...tr, notes: [] };
+      }
       return { ...tr, notes: mel };
     })
     .filter(tr => tr.notes.length > 0);
@@ -113,7 +122,10 @@ export function convertToSong(parsed, opts = {}) {
     // auto router too — the creation tools' instrument-mapping panel (src/editor/mapping.js)
     // routes by hand, or spies on what auto would do
     // (a phrase window's second pass PINS the whole song's lead: o.pin — see step 4b)
-    const ro = { ppq, bpm, ...(opts._pin ? { pin: opts._pin } : {}) };
+    // windowed: this import will loop a PHRASE window (a long song on 'auto', or a chosen window), so
+    // the lead rule may hand the belt to a named lead ("Vocals") that enters late (see pickLead)
+    const ro = { ppq, bpm, ...(opts._pin ? { pin: opts._pin } : {}),
+                 ...(!opts._phrase && willWindow(parsed, opts, melodicTracks, drumNotes, bpm) ? { windowed: true } : {}) };
     const r = opts.router ? opts.router(melodicTracks, ro, autoRoute) : autoRoute(melodicTracks, ro);
     beltTracks = r.belt;
     routed = r.parts;
@@ -149,12 +161,15 @@ export function convertToSong(parsed, opts = {}) {
 
   // --- step 2: monophonic reduction per track ---
   // group by quantized onset, keep highest midi pitch per group
+  // (orchestra mode: a RIFF — power chords in the guitar register — keeps its ROOT, the lowest
+  // note: its top is a fifth or an octave, its identity is the root motion. orchestra.riffLike.)
   const monoTracks = beltTracks.map(tr => {
+    const riff = orchestra && riffLike(tr.notes, n => quantize(n.tick * beatsPerTick));
     const byOnset = new Map();
     for (const n of tr.notes) {
       const onsetBeats = quantize(n.tick * beatsPerTick);
       const existing = byOnset.get(onsetBeats);
-      if (!existing || n.midi > existing.midi) {
+      if (!existing || (riff ? n.midi < existing.midi : n.midi > existing.midi)) {
         byOnset.set(onsetBeats, n);
       }
     }
@@ -163,7 +178,8 @@ export function convertToSong(parsed, opts = {}) {
     const chordCount = tr.notes.length - byOnset.size;
     if (chordCount > 0) {
       const label = tr.name || '(unnamed)';
-      warnings.push(`${label}: kept top note of ${chordCount} chord${chordCount > 1 ? 's' : ''}`);
+      warnings.push(riff ? `${label}: kept the root (lowest note) of ${chordCount} chord${chordCount > 1 ? 's' : ''} — power chords: a riff's line is its root motion`
+                         : `${label}: kept top note of ${chordCount} chord${chordCount > 1 ? 's' : ''}`);
     }
 
     // sorted by onset
@@ -264,7 +280,8 @@ export function convertToSong(parsed, opts = {}) {
     if (bass) bass = { ...bass, onsets: bass.onsets.filter(n => inWin(n.onset)) };
     // the HONEST lead figures, measured on what the belt will play: the share of the window's bars
     // the lead STRIKES in, and its longest rest (the seam's wrap included) in beats
-    const struck = new Set(lead.onsets.map(n => Math.floor((n.onset - phrase.startBeat) / phrase.barBeats + 1e-9)));
+    const struck = new Set(lead.onsets.map(n => phrase.barLines ? barAt({ starts: phrase.barLines }, n.onset)
+                                                                 : Math.floor((n.onset - phrase.startBeat) / phrase.barBeats + 1e-9)));
     phrase.leadFrac = struck.size / phrase.bars;
     const on = lead.onsets.map(n => n.onset);
     let gap = on.length ? W - (on[on.length - 1] - on[0]) : W;
@@ -531,11 +548,9 @@ function sayPhrase(w, warnings) {
    on the final belt) … The song's END is where its notes end — a note after PHRASE.SILENCE_BARS
    empty bars is stray (a sequencer's forgotten event), and at most PHRASE.MAX_BARS bars are
    analysed, so one stray event at hour 2 can't make the O(bars²) detector freeze the tab. */
-function pickWindow({ parsed, opts, bpm, lead, melodicTracks, drumNotes, beatsPerTick, warnings, setFinish }) {
-  const want = opts.window ?? 'auto';
-  if (want === 'full') return null;
+/** the song's END: the last note before a long silence (PHRASE.SILENCE_BARS empty bars — the rest is stray) */
+function songEnd(parsed, melodicTracks, drumNotes) {
   const grid0 = barGrid(parsed.timeSigs || [], parsed.ppq, 0);
-  // the song's span: the last note before a long silence (the rest is stray)
   const ticks = [];
   for (const tr of melodicTracks) for (const n of tr.notes) ticks.push(n.tick);
   for (const n of drumNotes) ticks.push(n.tick);
@@ -543,20 +558,39 @@ function pickWindow({ parsed, opts, bpm, lead, melodicTracks, drumNotes, beatsPe
   const silence = PHRASE.SILENCE_BARS * grid0.barBeats * parsed.ppq;
   let endTick = ticks[0] ?? 0, stray = 0;
   for (let i = 1; i < ticks.length; i++) { if (ticks[i] - ticks[i - 1] > silence) { stray = ticks.length - i; break; } endTick = ticks[i]; }
+  return { endTick, stray };
+}
+/** will this import loop a phrase window? (an object window, or 'auto' on a song past PHRASE.AUTO_SEC —
+    the same test pickWindow makes; it can still fall back to the whole song if no window holds) */
+function willWindow(parsed, opts, melodicTracks, drumNotes, bpm) {
+  const want = opts.window ?? 'auto';
+  if (want === 'full') return false;
+  if (typeof want === 'object' && want) return true;
+  const { endTick } = songEnd(parsed, melodicTracks, drumNotes);
+  return (endTick / parsed.ppq + 1) * 60 / bpm > PHRASE.AUTO_SEC;
+}
+
+function pickWindow({ parsed, opts, bpm, lead, melodicTracks, drumNotes, beatsPerTick, warnings, setFinish }) {
+  const want = opts.window ?? 'auto';
+  if (want === 'full') return null;
+  const { endTick, stray } = songEnd(parsed, melodicTracks, drumNotes);
+  // the bar grid: the dominant meter, or the WALKED meter map when its bar lines really move (phrase.barGrid)
   const grid = barGrid(parsed.timeSigs || [], parsed.ppq, endTick);
   const songBeats = endTick * beatsPerTick + 1;
   const songSec = songBeats * 60 / bpm;
-  const totalBars = Math.max(1, Math.floor((endTick * beatsPerTick - grid.origin) / grid.barBeats + 1e-9) + 1);
+  const totalBars = Math.max(1, barAt(grid, endTick * beatsPerTick) + 1);
   const pin = new Set(lead.src);
+  const tempos = (parsed.tempos || []).map(e => ({ beat: e.tick / parsed.ppq, bpm: e.bpm }));
   const finish = w => {
-    w.startBeat = grid.origin + (w.fromBar - 1) * grid.barBeats;
-    w.endBeat = w.startBeat + w.bars * grid.barBeats;
+    w.startBeat = barStart(grid, w.fromBar - 1);
+    w.endBeat = barStart(grid, w.fromBar - 1 + w.bars);
+    if (grid.starts) w.barLines = Array.from({ length: w.bars + 1 }, (_, i) => barStart(grid, w.fromBar - 1 + i));
     // the engine has ONE tempo: a window plays at the tempo IT is written in (a ballad section of a
     // multi-tempo song must not loop at the rock section's speed) — the beat-weighted median of
     // the tempo map over the window, like parse's dominant tempo over the song
     const wb = windowBpm(parsed.tempos || [], parsed.ppq, w.startBeat, w.endBeat);
     w.bpm = wb && Math.abs(wb - bpm) / bpm > .02 ? Math.max(40, Math.min(220, wb)) : bpm;
-    w.sec = w.bars * grid.barBeats * 60 / w.bpm;
+    w.sec = grid.starts ? (w.endBeat - w.startBeat) * 60 / w.bpm : w.bars * grid.barBeats * 60 / w.bpm;
     w.totalBars = totalBars; w.songSec = songSec; w.barBeats = grid.barBeats; w.songBpm = bpm;
     return w;
   };
@@ -593,7 +627,7 @@ function pickWindow({ parsed, opts, bpm, lead, melodicTracks, drumNotes, beatsPe
 
   if (opts.phraseProbe) opts.phraseProbe({ events, grid, bpm, songSec });   // dev / test hook: the detector's input
   const pg = lead.src.find(n => n.program != null)?.program ?? 0;
-  const best = findPhrase(events, { barBeats: grid.barBeats, origin: grid.origin, bpm, vocal: vocalLead(pg, lead.name) });
+  const best = findPhrase(events, { barBeats: grid.barBeats, origin: grid.origin, starts: grid.starts, tempos, bpm, vocal: vocalLead(pg, lead.name) });
   if (!best) {
     warnings.push(`phrase: no loopable ${PHRASE.LENGTHS[0]}–${PHRASE.LENGTHS[PHRASE.LENGTHS.length - 1]}-bar window keeps the lead playing — imported the whole song (${mmss(songSec)})`);
     return null;

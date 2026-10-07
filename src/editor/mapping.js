@@ -104,7 +104,13 @@ export function fitLine(key, notes, { bpm, loopBeats, spec = LINE_SPEC[key] || L
 }
 /** fit material to ANY plugin: the orchestra's own fit when it has a spec, else a line */
 export function fitMachine(key, notes, { bpm, loopBeats }){
-  return PART_SPEC[key] ? shapePart(key, notes, { bpm, loopBeats }) : fitLine(key, notes, { bpm, loopBeats });
+  if (!PART_SPEC[key]) return fitLine(key, notes, { bpm, loopBeats });
+  const r = shapePart(key, notes, { bpm, loopBeats });
+  // a machine with its own honesty pass (the volley's solver) still runs it after the orchestra's fit
+  const refine = LINE_SPEC[key]?.refine;
+  if (!refine || !r.part.length) return r;
+  const x = refine(r.part, { bpm, loopBeats });
+  return { part: x.part, warnings: [...r.warnings, ...x.warnings.map(w => `${key}: ${w}`)] };
 }
 
 /* =================== MIDI sources =================== */

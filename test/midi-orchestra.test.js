@@ -107,11 +107,12 @@ describe('parseMidi — program + duration', () => {
 describe('routeProgram — GM program → room instrument', () => {
   const cases = {
     musicbox: [8, 9, 10, 98, 108, 112],
-    marimba: [11, 12, 13, 15, 45, 46, 113, 114, 115],
+    marimba: [11, 12, 13, 15, 45, 46, 55, 113, 115],                 // 55 orchestra hit: a struck stab
+    volley: [114],                                                    // steel drums: the volley is a steel pan
     bells: [14],
     bass: [32, 33, 34, 35, 36, 37, 38, 39, 43, 47],
     bowls: [88, 89, 90, 91, 92, 93, 94, 95, 96, 99],
-    sustain: [16, 19, 20, 40, 41, 42, 44, 48, 49, 50, 52, 53],
+    sustain: [16, 19, 20, 40, 41, 42, 44, 48, 49, 50, 52, 53, 54],
     belt: [0, 1, 4, 6, 21, 22, 23, 24, 25, 30, 56, 60, 65, 68, 73, 80, 81, 104, 107, 110],   // 21–23: accordion / harmonica = reed melody
   };
   for (const [dest, progs] of Object.entries(cases)){

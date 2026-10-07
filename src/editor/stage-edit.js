@@ -443,7 +443,12 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       _v.set(c.x, p.top + .8, c.z).project(cam.camera);
       const vis = _v.z < 1 && Math.abs(_v.x) < 1.1 && Math.abs(_v.y) < 1.1;
       p.el.style.display = vis ? '' : 'none';
-      if (vis) p.el.style.transform = `translate(${((_v.x + 1) / 2 * W).toFixed(1)}px, ${((1 - _v.y) / 2 * H).toFixed(1)}px) translate(-50%, -100%)`;
+      if (!vis) continue;
+      // a tag never hangs off the screen edge (a phone's overview puts the corner machines right
+      // at it): its centre is held half its own width in from either side (width measured once)
+      const hw = (p.tagW ||= p.el.offsetWidth) / 2 + 4;
+      const x = hw * 2 < W ? Math.min(W - hw, Math.max(hw, (_v.x + 1) / 2 * W)) : (_v.x + 1) / 2 * W;
+      p.el.style.transform = `translate(${x.toFixed(1)}px, ${((1 - _v.y) / 2 * H).toFixed(1)}px) translate(-50%, -100%)`;
     }
   }
 

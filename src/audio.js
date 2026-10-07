@@ -205,6 +205,13 @@ export function rebuildBank(tracks, drumLanes = [], voices = []){
   const idle = typeof requestIdleCallback === 'function' ? cb => requestIdleCallback(cb, { timeout: 1000 }) : cb => setTimeout(cb, 16);
   const step = () => {
     if (gen !== bankGen) return;                         // a newer bank replaced this one
+    // PERF (phones): while the LIVE path is healthy no element plays, so the background pass
+    // has nothing to serve — on a phone it was eating whole frames for seconds after every song
+    // change (Blob + createObjectURL of ~150 WAVs). It sleeps and re-checks; the moment the
+    // context is not running-and-ticking (never built, zombie, interrupted) it carries on, and an
+    // element that has to play before its WAV exists encodes it on the spot (ready → realSrc),
+    // exactly as before. Nothing in the unlock dance changes.
+    if (liveOK()){ setTimeout(step, 1000); return; }
     const t0 = performance.now();
     while (todo.length && performance.now() - t0 < 6) realSrc(todo.shift());
     if (!todo.length){ bankStat.lazyDoneMs = Math.round(performance.now() - bankStat.t0); return; }
@@ -215,6 +222,7 @@ export function rebuildBank(tracks, drumLanes = [], voices = []){
   idle(step);
 }
 let bankGen = 0;
+const liveOK = () => !!ctx && ctx.state === 'running' && ctx.currentTime > .05;   // (the same test every play* uses)
 const wavSpec = new WeakMap();                           // <audio> → what its real WAV is, until it is made
 /* the element's real sample URL, encoding it now if the idle pass hasn't reached it yet */
 function realSrc(a){

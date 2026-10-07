@@ -440,6 +440,18 @@ Dies Irae (deep canon echo, delay 5). bpm is the single tempo knob; everything r
 Dev toggles: `G` = conveyor debug HUD (rulers + height graph; `convDbgOn`, OFF by default). `M` = machines on/off. `?debug` = a scrub bar (time is the only
 state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machine-gunning).
 
+- **Perf (render-time only — all A/B-able by URL flag).** `mergestatic.js` bakes still parts per
+  material AND parts rigid on a moving carriage (piston head, valve slide: merged into the carriage's
+  frame); single-material parts with geometry groups (every Box/Cylinder) merge too (`?norigid` = the
+  old merge). `raybvh.js` routes big-mesh raycasts (the shot solve) through a BVH — identical hits
+  (`?nobvh`; `scripts/same-solve.mjs` proves every shot unchanged). The iOS WAV bank's background
+  encode sleeps while the live Web Audio path is healthy (it was eating phone frames for seconds per
+  song change). `?batch=1` = opt-in 2D BatchedMesh mirror (no CPU win measured headless; try it on a
+  real phone). Tools: `scripts/perf-audit.mjs` (per song: build, first-frame stall, frame/CPU ms,
+  calls, heap; `--profile phone` = 390×844@3 + CPU 4×; `--tap 1`; `--prof 1 --incl 1` hot functions),
+  `perf-breakdown.mjs` (draws per machine), `perf-firstsecs.mjs`, `merge-ab.mjs`, `batch-ab.mjs`.
+  Headless numbers swing ±50 % with machine load — compare interleaved runs only.
+
 ---
 
 ## 8. Known issues / honest limitations

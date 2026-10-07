@@ -27,6 +27,8 @@ import { recSupported, startRecording } from './record.js';
 import { spatialize } from './spatial.js';
 import { velLook } from './dynamics.js';
 import { mergeStatic, watchFrozen, pruneFrozen, frozenStats } from './mergestatic.js';
+import { installRayBVH, rayBVHStats } from './raybvh.js';
+if (!/[?&]nobvh(=|&|$)/.test(location.search)) installRayBVH();   // PERF (raybvh.js): the build's shot solves raycast big meshes through a BVH — same hits (?nobvh: A/B)
 import { makeEditor } from './editor/index.js';
 import { planEdit, shotAt, signatureOf } from './directorplan.js';
 import { RIDE, ridePose, rideMoments, rideWindowAt } from './ridecam.js';
@@ -191,6 +193,15 @@ const xrLit = []; let xrLitAge = 0, xrSaved = new Float32Array(0);   // (xrRende
    no-bloom glow boost, the rooms' lighter XR variants. ?xrdetail=full = the un-reduced A/B. */
 const xrLite = new URLSearchParams(location.search).get('xrdetail') !== 'full';
 const xrDetail = makeXRDetail(), xrBatch = makeXRBatch();
+/* FLAT BATCH (2D): the same mirror as the headset's (src/xrbatch.js) — every opaque machine part
+   that shares a look is copied into one BatchedMesh per look right before the screen render and
+   hidden for that one render. Same parts, same matrices, same materials: the picture is the same,
+   in about half the draw calls. OPT-IN (?batch=1) — measured in headless Chrome (desktop and a
+   4×-throttled phone profile) the mirror's own per-frame copy + per-instance culling cost what the
+   saved calls did (CPU ms per frame unchanged, ±1 ms), so it stays off until a real phone GPU driver
+   says otherwise. __dev.batchAB() proves a frame against the originals (scripts/batch-ab.mjs). */
+let BATCH_2D = new URLSearchParams(location.search).get('batch') === '1';
+const flatBatch = makeXRBatch();
 let xrOn = false, xrMode = null;                                       // (presenting — xrSession keeps it; buildWorld re-applies plugin xr hooks)
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
@@ -423,6 +434,7 @@ function hangLow(root){
    ones that are invisible at opacity 0 (shader materials draw by their own uniforms: skipped) */
 let fadeMats = [], fadeWarm = 0, fadeTick = 0, perfOff = false;
 const NO_MERGE = new URLSearchParams(location.search).has('nomerge');
+const RIGID = new URLSearchParams(location.search).has('norigid') ? { rigid: false, groups: false } : { rigid: true, groups: true };   // ?norigid: A/B — the merge as it was (no carriage merge, no multi-group parts)
 let mergeStats = null;                                  // dev: what the static merge baked (__dev.merge)
 function collectFadeMats(root){
   const out = new Set();
@@ -433,7 +445,7 @@ function collectFadeMats(root){
 function disposeTree(root){
   root.traverse(o => {
     if (o.geometry) o.geometry.dispose();
-    for (const m of [].concat(o.material || [])) if (m !== chrome){ if (m.map) m.map.dispose(); m.dispose(); }
+    for (const m of [].concat(o.material || [])) if (m !== chrome){ if (m.map) m.map.dispose(); if (m.emissiveMap) m.emissiveMap.dispose(); m.dispose(); }
   });
 }
 
@@ -449,6 +461,7 @@ function buildWorld(keyName){
       if (o.geometry) o.geometry.dispose();
       if (o.material && o.material !== chrome){
         if (o.material.map) o.material.map.dispose();   // per-song belt CanvasTextures — don't leak
+        if (o.material.emissiveMap) o.material.emissiveMap.dispose();   // (the paternoster's per-track warm wash)
         o.material.dispose();
       }
     });
@@ -632,11 +645,11 @@ function buildWorld(keyName){
     const times = Array.from({ length: 48 }, (_, k) => -LEAD_IN + (k + .37) / 48 * (P0 + LEAD_IN));
     mergeStats = { merged: 0, removed: 0 };
     mergeStats.frozen = 0;
-    const add = r => { mergeStats.merged += r.merged; mergeStats.removed += r.removed; mergeStats.frozen += r.frozen || 0; };
+    const add = r => { mergeStats.merged += r.merged + (r.rigid?.merged || 0); mergeStats.removed += r.removed + (r.rigid?.removed || 0); mergeStats.frozen += r.frozen || 0; mergeStats.rigid = (mergeStats.rigid || 0) + (r.rigid?.removed || 0); };
     const RUN = { started: true, skipStrikes: true, onStrike(){} };   // (started: the LIVE pose — !started is the armed hold)
     // (the last arg re-poses for the count-in; parts still across the sweep AND that pose stop auto-updating their matrices)
-    instLive.forEach(r => add(mergeStatic(r.station, t => r.inst.update(t, P0, 0, RUN), times, () => r.inst.update(-LEAD_IN, P0, 0, POSE0))));
-    if (drumGroup) add(mergeStatic(drumGroup, t => drumKit.update(t, P0, 0, RUN), times, () => drumKit.update(-LEAD_IN, P0, 0, POSE0)));
+    instLive.forEach(r => add(mergeStatic(r.station, t => r.inst.update(t, P0, 0, RUN), times, () => r.inst.update(-LEAD_IN, P0, 0, POSE0), RIGID)));
+    if (drumGroup) add(mergeStatic(drumGroup, t => drumKit.update(t, P0, 0, RUN), times, () => drumKit.update(-LEAD_IN, P0, 0, POSE0), RIGID));
   }
 
   // a full room is deep: thin the haze so the back tier still reads from the wide shot
@@ -1148,7 +1161,12 @@ function partMix(S, key){
   const base = g01(Math.max(...m.map(s => s[1])));
   return { base, at: beat => { let g = m[0][1]; for (const [b, v] of m) if (beat >= b) g = v; return base > 0 ? g01(g) / base : 0; } };
 }
-function mixRender(r, g){ return g === 1 ? r : { sr: r.sr, samples: r.samples.map(x => x * g) }; }
+function mixRender(r, g){                               // (a plain loop: TypedArray.map + a closure was ~10× slower on a full room)
+  if (g === 1) return r;
+  const s = r.samples, out = new Float32Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s[i] * g;
+  return { sr: r.sr, samples: out };
+}
 /* a voice's pitch (Hz) for the spatial pan width (low voices sit near the centre): the plugin's own
    voiceHz(id) when it has one (a chord id, a tiered id), else the FIRST pitch in the id ('E2+B2:m',
    'C4|choir', 'stab:D4', 'C4:e:p' — ids list chord notes low → high), else 0 (full width) */
@@ -1511,7 +1529,15 @@ function animate(){
   watchFrozen();                                        // re-check a slice of the frozen still parts (mergestatic.js)
   if (xr.presenting) xrRender();                        // XR: straight to the headset (no composer; ACES still applies)
   else {
-    composer.render();
+    if (BATCH_2D && world){
+      if (flatBatch.root !== world || flatBatch.stale > 12){ flatBatch.build(world); if (!flatBatch.group.parent) scene.add(flatBatch.group); }
+      scene.updateMatrixWorld();                        // (poses current BEFORE the batch copies them; the render skips its own pass)
+      flatBatch.before(); flatBatch.group.visible = true;
+      scene.matrixWorldAutoUpdate = false;
+      composer.render();
+      scene.matrixWorldAutoUpdate = true;
+      flatBatch.after(); flatBatch.group.visible = false;   // (only ever drawn by this render: never in a headset frame, a raycast, a probe)
+    } else composer.render();
     gov.frame(frameT0, started && playRate > 0 && document.visibilityState === 'visible');   // adaptive resolution (perfgov.js)
   }
   for (let i = frameTaps.length - 1; i >= 0; i--) if (frameTaps[i]()) frameTaps.splice(i, 1);   // (dev: renderInfo counts frames HERE — XR has no window rAF)
@@ -1821,7 +1847,7 @@ if (new URLSearchParams(location.search).has('debug')){
       if (lastWide?.eye) test('stage', lastWide.eye, lastWide.aim);
       return out;
     },
-    get layout(){ return lastLayout; }, get wide(){ return lastWide; }, get merge(){ return mergeStats; }, frozen: () => frozenStats(),
+    get layout(){ return lastLayout; }, get wide(){ return lastWide; }, get merge(){ return mergeStats; }, frozen: () => frozenStats(), rayBVH: () => rayBVHStats(),
     get editor(){ return editor; }, xr: xr.dev,
     xrPerf: () => ({ lite: xrLite, batch: xrBatch.stats, detail: xrDetail.stats }),   // the VR detail profile at work (scripts/xr-perf.mjs)                    // creation tools: .openMap() .toggleEdit() .stage.state() .stage.select(k)
     // staging-audit handles (scripts/staging-audit.mjs): the live camera, the song's world, the live marbles
@@ -1832,6 +1858,25 @@ if (new URLSearchParams(location.search).has('debug')){
     roomSolids: () => roomSolids(rooms.group).map(s => s.box),   // the room's standing geometry, as the shot solve sees it
     hung: () => instLive.filter(r => r.slot.hang).map(r => ({ key: r.I.key, box: solidBox(r.station, drawn) })),   // (solid: the merged cable/glow batches aren't bulk)
     hang: () => instLive.filter(r => r.slot.hang).map(r => ({ key: r.I.key, wallTop: +stageWall.max.y.toFixed(2), low: +hangLow(r.station).toFixed(2), y: +r.station.position.y.toFixed(2) })),
+    set rigid(v){ RIGID.rigid = RIGID.groups = !!v; },   // (A/B of the extended merge: takes effect on the next song build)
+    set batch(v){ BATCH_2D = !!v; }, get batch(){ return BATCH_2D && flatBatch.stats; },
+    // the flat batch's honesty probe: THIS frame (drawn batched) read back, then the same frame re-drawn
+    // with every original part instead — per-pixel difference of the two (same state, same instant)
+    batchAB(){
+      return new Promise(res => frameTaps.push(() => {
+        if (!BATCH_2D) { res({ off: true }); return true; }
+        const gl = renderer.getContext(), w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+        const A = new Uint8Array(w * h * 4), B = new Uint8Array(w * h * 4);
+        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, A);
+        const st = flatBatch.stats;
+        scene.matrixWorldAutoUpdate = false; composer.render(); scene.matrixWorldAutoUpdate = true;
+        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, B);
+        let max = 0, changed = 0, sum = 0; const pts = [];
+        for (let i = 0; i < A.length; i += 4){ let m = 0; for (let c = 0; c < 3; c++){ const d = Math.abs(A[i + c] - B[i + c]); sum += d; if (d > m) m = d; } if (m > max) max = m; if (m > 8){ changed++; if (pts.length < 400) pts.push([(i >> 2) % w, h - 1 - ((i >> 2) / w | 0), m]); } }
+        res({ w, h, max, changed, meanAbs: +(sum / (w * h * 3)).toFixed(4), batch: st, pts });
+        return true;
+      }));
+    },
     renderInfo(n = 10){
       return new Promise(res => {
         const I = renderer.info; I.autoReset = false; I.reset();

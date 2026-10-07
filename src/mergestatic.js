@@ -11,7 +11,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
    in the station's own frame (the station never moves after staging).
 
    Conservative by construction — a mesh is left alone if it is
-   transparent, instanced/skinned/morphed, multi-material, mirrored, has
+   transparent, instanced/skinned/morphed, multi-material (an ARRAY), mirrored, has
    a custom shader (ShaderMaterial or onBeforeCompile: it may read
    object-space positions), its own onBeforeRender, or opts out with
    userData.noMerge (on the mesh or its material). Materials are SHARED,
@@ -22,14 +22,18 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 const DEFAULT_OBC = THREE.Material.prototype.onBeforeCompile;
 const DEFAULT_OBR = THREE.Object3D.prototype.onBeforeRender;
 
-function mergeable(o){
+/* (geometry GROUPS — a Box's 6 faces, a Cylinder's side + caps — only mean something to a material
+   ARRAY: with one material three.js draws the whole draw range and ignores them, raycasts likewise.
+   So a single-material part with groups merges like any other (the merged geometry has none);
+   opts.groups = false restores the old refusal, for A/B.) */
+function mergeable(o, groupsOK = true){
   if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh || !o.geometry?.attributes?.position) return false;
   if (o.userData.noMerge || o.morphTargetInfluences || o.onBeforeRender !== DEFAULT_OBR) return false;
   const m = o.material;
   if (!m || Array.isArray(m) || m.transparent || m.isShaderMaterial || m.userData?.noMerge) return false;
   if (m.onBeforeCompile !== DEFAULT_OBC) return false;
   if (!(m.isMeshStandardMaterial || m.isMeshBasicMaterial || m.isMeshLambertMaterial || m.isMeshPhongMaterial)) return false;
-  if (o.geometry.groups?.length > 1 || Object.keys(o.geometry.morphAttributes || {}).length) return false;
+  if ((!groupsOK && o.geometry.groups?.length > 1) || Object.keys(o.geometry.morphAttributes || {}).length) return false;
   return true;
 }
 const drawnUnder = (o, root) => { for (let p = o; p; p = p.parent){ if (!p.visible) return false; if (p === root) return true; } return true; };
@@ -37,20 +41,25 @@ const drawnUnder = (o, root) => { for (let p = o; p; p = p.parent){ if (!p.visib
 /** root: a built station group (already placed). pose(t): poses it at songTime t (a pure fn).
     times: the songTimes to prove stillness over. rest (optional): re-poses the station for
     the count-in after the sweep — given it, every part whose LOCAL transform held still across
-    the sweep AND the rest pose is also FROZEN (see freezeStill). Returns { merged, removed, frozen }. */
-export function mergeStatic(root, pose, times, rest){
+    the sweep AND the rest pose is also FROZEN (see freezeStill), and parts rigid on a moving carriage
+    are baked onto it (mergeRigid; opts.rigid = false skips that). Returns { merged, removed, frozen, rigid }. */
+export function mergeStatic(root, pose, times, rest, { rigid = true, groups = true } = {}){
   root.updateMatrixWorld(true);
   const cand = [], locals = [];
-  root.traverse(o => { if (o !== root && mergeable(o)) cand.push({ o, m: o.matrixWorld.clone(), v: drawnUnder(o, root), live: true });
-                       if (rest) locals.push({ o, m: o.matrix.clone(), still: true }); });
+  root.traverse(o => { if (o !== root && mergeable(o, groups)) cand.push({ o, m: o.matrixWorld.clone(), v: drawnUnder(o, root), mat: o.material, live: true });
+                       if (rest) locals.push({ o, m: o.matrix.clone(), vis: o.visible, still: true, shown: true }); });
   for (const t of (cand.length >= 2 || rest) ? times : []){
     pose(t);
     root.updateMatrixWorld(true);
-    for (const c of cand) if (c.live && (!c.m.equals(c.o.matrixWorld) || drawnUnder(c.o, root) !== c.v)) c.live = false;
-    for (const l of locals) if (l.still && !l.m.equals(l.o.matrix)) l.still = false;
+    for (const c of cand) if (c.live && (!c.m.equals(c.o.matrixWorld) || drawnUnder(c.o, root) !== c.v || c.o.material !== c.mat)) c.live = false;
+    for (const l of locals){ if (l.still && !l.m.equals(l.o.matrix)) l.still = false; if (l.shown && l.o.visible !== l.vis) l.shown = false; }
   }
   const res = cand.length < 2 ? { merged: 0, removed: 0 } : mergeStill(root, pose, times, cand);
-  if (rest){ rest(); res.frozen = freezeStill(root, locals); }
+  if (rest){
+    rest();
+    res.rigid = rigid ? mergeRigid(root, cand, locals) : { merged: 0, removed: 0 };
+    res.frozen = freezeStill(root, locals);
+  }
   return res;
 }
 function mergeStill(root, pose, times, cand){
@@ -76,6 +85,56 @@ function mergeStill(root, pose, times, cand){
     mesh.name = 'merged-static';
     for (const o of list) o.parent.remove(o);            // (never rendered yet: nothing uploaded to dispose)
     root.add(mesh);
+    merged++; removed += list.length;
+  }
+  return { merged, removed };
+}
+
+/* ---- RIGID SUBASSEMBLIES: the same proof, one level down ----
+   A part that rides a moving carriage (a drum head on its piston, a valve cap on its slide, a
+   hammer on its arm) is NOT still in the world — but it is still RELATIVE to the carriage: its
+   own transform and every transform between it and the carriage never change. Such parts are
+   one rigid body, so they are baked the same way, one mesh per material, in the CARRIAGE'S
+   frame and parented to it: the carriage's motion carries the merged mesh exactly as it carried
+   the parts. The carriage ("anchor") is the nearest ancestor whose own transform moves.
+   The proof runs over the sweep AND the count-in rest pose (a part that moves only while armed
+   stays loose), drawn-ness must hold still on the whole path to the anchor (every object's
+   own `visible` constant), and the material must never be swapped. Everything mergeable() bars
+   stays barred (transparent, custom shaders, noMerge — and noMerge on any ancestor below the anchor). */
+function mergeRigid(root, cand, locals){
+  const L = new Map(locals.map(l => [l.o, l]));
+  const still = o => { const l = L.get(o); return !!l && l.still && l.shown && l.m.equals(o.matrix); };
+  root.updateMatrixWorld(true);
+  const groups = new Map(), _m = new THREE.Matrix4();
+  for (const c of cand){
+    if (c.live || !c.o.parent || !c.mat || c.o.material !== c.mat) continue;   // (world-still parts went to mergeStill)
+    if (!still(c.o) || !c.o.visible) continue;
+    let a = c.o.parent, ok = true;
+    for (; a && a !== root; a = a.parent){
+      if (a.userData.noMerge){ ok = false; break; }
+      if (!still(a)) break;                               // the carriage: the first ancestor that moves
+      if (!a.visible){ ok = false; break; }               // (never drawn: leave it as it is)
+    }
+    if (!ok || !a || a === root) continue;                // (a === root: the station itself never moves — mergeStill's case)
+    if (!L.has(a)) continue;
+    const rel = _m.copy(a.matrixWorld).invert().multiply(c.o.matrixWorld);
+    if (rel.determinant() < 0) continue;                  // mirrored: merging would flip its winding
+    const g = c.o.geometry, attrs = Object.keys(g.attributes).sort().join(',');
+    const key = `${a.id}|${c.o.material.uuid}|${c.o.renderOrder}|${c.o.castShadow}|${c.o.receiveShadow}|${c.o.frustumCulled}|${attrs}|${g.index ? 'i' : 'n'}`;
+    (groups.get(key) || groups.set(key, { a, list: [] }).get(key)).list.push({ o: c.o, rel: rel.clone() });
+  }
+  let merged = 0, removed = 0;
+  for (const { a, list } of groups.values()){
+    if (list.length < 2) continue;
+    const geos = list.map(({ o, rel }) => o.geometry.clone().applyMatrix4(rel));
+    const geo = mergeGeometries(geos, false);
+    geos.forEach(g => g.dispose());
+    if (!geo) continue;
+    const src = list[0].o, mesh = new THREE.Mesh(geo, src.material);
+    mesh.castShadow = src.castShadow; mesh.receiveShadow = src.receiveShadow; mesh.renderOrder = src.renderOrder; mesh.frustumCulled = src.frustumCulled;
+    mesh.name = 'merged-static';
+    for (const { o } of list) o.parent.remove(o);
+    a.add(mesh);
     merged++; removed += list.length;
   }
   return { merged, removed };

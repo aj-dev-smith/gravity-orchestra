@@ -34,6 +34,7 @@ const CASES = {
   seam:     [[.1, .5], [11.5, .6]],                          // across the loop seam
   drone:    [[2, 30]],                                       // longer than the voice: clamped
   crowded:  [[0, 1], [1, 1], [2, 1], [3, 1], [4, 1], [5, 1], [6, 1], [7, 1], [8, 1], [9, 1], [10, 1], [11, 1]],   // never rests: a magnet gap is forced
+  midpark:  [[1, .9], [2, .9], [3, .9], [8, 1], [10.6, 2]], // the only park is mid-loop; the seam is a hop
 };
 const synth = Object.fromEntries(Object.entries(CASES).map(([k, hits]) => {
   const G = laneGeom('D4', 0);
@@ -160,6 +161,28 @@ describe('bowwheel: the flight grammar', () => {
     }
   });
 
+  it('the first loop is never silent: the armed marble drops for the first stroke it can reach, every stroke after it plays', () => {
+    for (const { L, P, name } of allLanes){
+      const en = liveFrom(L, START);
+      const lead = L.geom.Tf + T_PRESS;
+      expect(en, name).toBeGreaterThanOrEqual(START);
+      for (const q of L.cyc) for (let m = -1; m < 2; m++){
+        const a = q.on + m * P;
+        if (a < START) continue;
+        const so = strokeAt(L, a + 1e-6, START);
+        if (a - lead >= START - 1e-9) expect(so.live, name + ' @' + a.toFixed(2)).toBe(true);   // reachable → it plays
+        else expect(so.live, name).toBe(false);                                                 // too close to START → skipped
+      }
+      // the entry drop: off the magnet at rest, free fall, into the cup at rest
+      const r = laneAt(L, en + 1e-6, START), f = laneAt(L, en + L.geom.Tf - 1e-6, START);
+      expect(r.phase, name).toBe('fall'); expect(Math.abs(r.vy), name).toBeLessThan(1e-3);
+      expect(Math.abs(f.y - CUP_Y), name).toBeLessThan(1e-3);
+    }
+    // the case that used to sound nothing until the mid-loop park: strokes at 1/2/3 s play in loop 1
+    const { L } = synth.midpark;
+    for (const a of [1, 2, 3]) expect(strokeAt(L, a + 1e-6, START).live).toBe(true);
+  });
+
   it('a pickup (negative beat) wraps into the loop and still lands on its beat', () => {
     const beat = .5, P = ROLL_T + 16 * beat + 1.2;
     const ev = eventTimes([[-1, 'G4', .7, .8], [4, 'G4', .7, 1]], { rollT: ROLL_T, beat });
@@ -197,6 +220,25 @@ describe('bowwheel: thinning & merging (robust to imported parts)', () => {
     const r = lanesOf(many.slice(0, 400), 120, 100);
     for (const { L } of r.lanes) for (const q of L.cyc) expect(q.F).toBeGreaterThanOrEqual(F_MIN - 1e-9);
     expect(prepPart(undefined).events).toEqual([]);
+  });
+  it('a dense RANDOM part (500 events, any range, odd durations) stays honest end to end', () => {
+    let seed = 7; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const ev = Array.from({ length: 500 }, () => [r() * 64 - 2, ['C', 'C#', 'D', 'E', 'F', 'G', 'A', 'B'][Math.floor(r() * 8)] + (1 + Math.floor(r() * 7)), r(), r() * 4]);
+    const { P, lanes } = lanesOf(ev, 120, 64);
+    expect(lanes.length).toBeLessThanOrEqual(MAX_STRINGS);
+    for (const { L, G, note } of lanes){
+      let prev = null;
+      for (let t = START; t < P + 4; t += .002){
+        const st = laneAt(L, t, START), c = clearances(L, st);
+        expect(Math.min(c.cup, c.magnet, c.rim), note).toBeGreaterThan(-1e-6);
+        if (prev) expect(Math.abs(st.y - prev.y) + Math.abs(st.s - prev.s), note).toBeLessThan(.04);
+        prev = st;
+      }
+      for (const q of L.cyc){
+        const st = laneAt(L, q.on + P + 1e-9, START);
+        expect(st.contact && Math.abs(st.s - G.D) < 1e-6, note).toBe(true);
+      }
+    }
   });
   it('PART_LIMITS mirrors the solver', () => {
     expect(PART_LIMITS.gap).toBeCloseTo(MIN_REPEAT, 3);

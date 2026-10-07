@@ -34,7 +34,7 @@
    Everything is a closed-form function of songTime.
    ============================================================ */
 import { G, noteNum } from '../../engine.js';
-import { laneClock, at, firstAt, lastIndex, wrapP } from '../clock.js';
+import { laneClock, at, lastIndex, wrapP, nextAbs } from '../clock.js';
 
 export const g = -G.y;                                   // |gravity| = 14.5
 const TAU = Math.PI * 2;
@@ -175,7 +175,7 @@ export function bowLane(notes, P, geom){
     });
   };
   fit();
-  // …and at least ONE flight per loop parks at the magnet (that's where the count-in waits):
+  // …and at least ONE flight per loop parks at the magnet (each string visibly rests once a loop):
   // the longest gap is stretched by shortening the stroke before it; if even that can't
   // reach F_MAX, the note after it is dropped (thinned) and we try again.
   for (;;){
@@ -204,13 +204,25 @@ export function bowLane(notes, P, geom){
   const cs = cyc.map(q => q.c);
   const Lon = laneClock(cyc.map(q => q.on), P);
   const onIdx = Lon.s.map(s => cyc.find(q => Math.abs(q.on - s) < 1e-6));
-  const Lrel = laneClock(cyc.filter(q => q.mag).map(q => q.c + q.rel), P);
-  return { geom, P, cyc, cs, Lon, onIdx, Lrel, strokes: st };
+  return { geom, P, cyc, cs, Lon, onIdx, strokes: st };
 }
 
-/* The first moment the lane goes live after `start`: the first magnet release. Until then
-   the marble hangs ARMED on its magnet, the rod up, the string quiet. */
-export const liveFrom = (L, start) => firstAt(L.Lrel, start);
+/* The ENTRY: the marble hangs ARMED on its magnet through the count-in (rod up, string quiet)
+   and is released for the FIRST stroke it can reach after `start` — whatever that stroke's own
+   cycle is (a hop or a park): the release lands it in the cup T_PRESS before that onset, exactly
+   like a park's release. (Waiting for the loop's first PARK instead would leave every stroke
+   before it silent for the whole first loop.) From the landing on, the lane is its cyclic solve.
+   Memoized on L. → { rel (release, abs), on (the entry stroke's onset, abs) } */
+export function entryAt(L, start){
+  if (!isFinite(start) || !L.cyc.length) return { rel: -Infinity, on: -Infinity };
+  if (L._enStart === start) return L._en;
+  const lead = L.geom.Tf + T_PRESS;
+  let on = Infinity;
+  for (const q of L.cyc){ const a = nextAbs(q.on, start + lead, L.P); if (a < on) on = a; }
+  L._enStart = start; L._en = { rel: on - lead, on };
+  return L._en;
+}
+export const liveFrom = (L, start) => entryAt(L, start).rel;
 
 /* ---- the lane at songTime t ----
    { s (rod/string travel 0..D), sv (its speed, +down), y (marble centre), vy, phase
@@ -219,8 +231,13 @@ export const liveFrom = (L, start) => firstAt(L.Lrel, start);
 export function laneAt(L, t, start = -Infinity){
   const { geom, cyc, cs, P } = L;
   if (t < start) t = start;
-  const live = liveFrom(L, start);
-  if (!cyc.length || t < live) return { s: 0, sv: 0, y: MAG_Y, vy: 0, phase: 'armed', held: true, onCup: false, contact: false, cyc: null };
+  if (!cyc.length) return { s: 0, sv: 0, y: MAG_Y, vy: 0, phase: 'armed', held: true, onCup: false, contact: false, cyc: null };
+  const en = entryAt(L, start);
+  if (t < en.rel) return { s: 0, sv: 0, y: MAG_Y, vy: 0, phase: 'armed', held: true, onCup: false, contact: false, cyc: null };
+  if (t < en.rel + geom.Tf){                             // the entry drop (no kick: it falls from the magnet)
+    const w = t - en.rel;
+    return { s: 0, sv: 0, y: MAG_Y - .5 * g * w * w, vy: -g * w, phase: 'fall', held: false, onCup: false, contact: false, cyc: null };
+  }
   const tau = wrapP(t, P);
   const k = lastIndex(cs, tau);
   const q = cyc[k];
@@ -255,7 +272,7 @@ export function strokeAt(L, t, start = -Infinity){
   const c = at(L.Lon, t, start);
   if (c.armed) return { live: false, since: Infinity, abs: -Infinity, cyc: null };
   const q = L.onIdx[c.i];
-  return { live: c.abs >= liveFrom(L, start) - 1e-9, since: c.since, abs: c.abs, cyc: q };
+  return { live: c.abs >= entryAt(L, start).on - 1e-9, since: c.since, abs: c.abs, cyc: q };
 }
 
 /* The bowed string's visible vibration (0..1 × vel): it exists only while the string is on

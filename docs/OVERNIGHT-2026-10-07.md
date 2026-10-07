@@ -3,8 +3,8 @@
 Everything below is on the **`overnight`** integration branch, merged from the `ov/*` feature
 branches. It is **not merged to `main`, not deployed, and not pushed**. Every feature was built by
 one agent and reviewed by a second; the reviewers' fixes are in. The full suite is green
-(44 files, 2481 tests) apart from the staging fixture, which needs one regeneration on the merged
-tree (see Known issues). `npm run build` passes.
+(44 files, 2489 tests, after the staging fixture was regenerated on the merged tree in `4902a60`).
+`npm run build` passes.
 
 The rules held: everything is solved up front, time is the only state, motion is honest, the iOS
 audio internals are untouched, and the physics was never changed for visuals. All music in the repo
@@ -90,7 +90,7 @@ hit says `[beat, vel, chokeBeats]`. A closed hat chokes a ringing open hat. Try 
 
 | room | try it | what it is |
 |---|---|---|
-| **Metal Arena** (`arena`) | `/?song=forge` (its home), or `/?song=mountain-king&room=arena` | A black stage, box truss, 43 par cans with beams through the haze, a 144-lamp blinder wall, amp stacks and phone-lit seating. **Pyro, CO2 and blinders are a cue sheet solved from the song's drum lanes at load**: crash = flame jets, loop downbeat or drums returning = CO2, kick on a bar = a jet pair. Every flame and ember is a closed-form function of "seconds since fired", so scrubbing is exact. It adds no lights and costs about 30 draw calls. |
+| **Metal Arena** (`arena`) | `/?song=forge` (its home), or `/?song=mountain-king&room=arena` | A black stage, box truss, 37 par cans with beams through the haze, a 144-lamp blinder wall, amp stacks and phone-lit seating. **Pyro, CO2 and blinders are a cue sheet solved from the song's drum lanes at load**: crash = flame jets, loop downbeat or drums returning = CO2, kick on a bar = a jet pair. Every flame and ember is a closed-form function of "seconds since fired", so scrubbing is exact. It adds no lights and costs about 26 draw calls. |
 | **Starship** (`starship`) | `/?song=finale` (its home) | A plated deck under a ribbed glass canopy, engine nacelles that pulse with the beat, star streaks and nebulae. **Only the sky banks**: about 5.7° per 4-bar phrase, alternating, level through the breath. The deck and the instruments never move. Streaks repeat exactly every wrap period, so there is no drift or snap. |
 
 ---
@@ -142,7 +142,7 @@ ring through the breath into the downbeat.
 - **Ride cam** (`src/ridecam.js`, the **RIDE** button). You sit just behind the lead marble and look
   where it's going. It's comfort-limited: the horizon never rolls and view rotation is capped. The
   director rides the loop's biggest flight sparingly (share ≤ 0.14; on short loops only every n-th
-  pass). Try `/?song=toccata` with AUTO (it rides the 6.5-beat pedal lob), or press RIDE on any song.
+  pass). Try `/?song=toccata` with AUTO (it rides the 6.5-beat pedal lob), or press RIDE on any multi-track song (single-track songs like Prelude in C hide the camera buttons).
 
 ---
 
@@ -208,8 +208,10 @@ The head is never moved by the director or the ride cam. TOUR teleports between 
 
 - **Nothing was heard on a real iPhone or worn on a real Quest 2.** The iOS buckets were checked by
   tests and bank composition; XR only by emulator draw-call counts.
-- **Staging fixture**: `test/fixtures/staging-rooms.json` must be regenerated once on the final merged
-  tree (campfire is missing). That is the only red test. Command: CLAUDE.md §1.
+- **Staging fixture**: `test/fixtures/staging-rooms.json` was regenerated on the merged tree
+  (`4902a60`, 7 rooms incl. campfire). Re-run it (CLAUDE.md §1) after ANY new song / station / room.
+- **Volley has no song**: the Daybreak Engine plays every pre-tonight plugin except the volley; hear it
+  with `/?solo=volley` (or an import that overflows to it).
 - **The wide shot goes steep when the gallery is used.** Forge in the arena frames its star small at
   top-left and the kit under the button bar. An import's signature machine isn't moved to the front.
 - **Timbre gaps**: saxes on the horns sound brassy; a guitar line that lands on a *belt* sounds like

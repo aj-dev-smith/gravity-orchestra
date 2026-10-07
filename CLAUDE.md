@@ -96,7 +96,7 @@ on. Treat it as live, and confirm with the human before running it.
     src/main.js      scene, rigs, buildWorld, ballPos, animate(), controls — the orchestrator
     test/            Vitest: engine ballistics, song lock-rule, drum validation, MIDI,
                      layout overlap, share round-trip, every plugin's honesty suite, staging
-                     audit, director, XR (44 files / 2481 tests, 2026-10-07; ~3 min)
+                     audit, director, XR (44 files / 2489 tests, 2026-10-07; ~2–3 min)
     docs/OVERNIGHT-2026-10-07.md   the night's changelog: what each new machine / room / song
                      is and the URL to try it
     VISION.md        the product north star (vision, not spec)
@@ -532,7 +532,8 @@ first note instead of stranding at the loop tail. Covered in `test/midi.test.js`
 
 Catalog (25 — `src/songs/index.js` SONGS; the menu reads SONG_GROUPS shelves; the house song is
 Daybreak Engine, Danse Macabre through October, pinned to Daybreak under `?debug`):
-- **Showcase**: Daybreak Engine (original, every pre-tonight machine in the room).
+- **Showcase**: Daybreak Engine (original; every pre-tonight plugin EXCEPT volley — no hand-authored
+  song plays the volley yet: `?solo=volley` or an import that overflows to it).
 - **Tonight's machines** (2026-10-07, all PD or original): **finale** Starship Groove (original
   space-funk, 10 plugin machines + full kit, starship) · **forge** Forge of the Marble King (original
   thrash, riff star + horns + organ + bass, arena; the anvil B-major rings through the breath, V → i
@@ -633,7 +634,7 @@ parallel song branches, so merge the key lists and regenerate the fixture ONCE o
   VR DETAIL PROFILE (xrdetail/xrbatch, `?xrdetail=full` = off) mirrors the machines' opaque parts into
   one BatchedMesh multi-draw per look, skips sub-~7-px parts (never balls) + dim glows, boosts glow for
   the missing bloom (descriptor `xrGlow`, optional `inst.xr(on)`), and rooms offer `xr(on)` variants
-  (studio: no per-eye Reflector). Full room from the wide ~1430 → ~450–530 calls/frame (both eyes).
+  (studio: no per-eye Reflector). Daybreak (the full room) from the wide 1451 → 555 calls/frame, both eyes (docs/XR.md table).
   The head is never moved by the director / ride cam — TOUR teleports (blink); Y = in-world menu.
 
 Dev toggles: `G` = conveyor debug HUD (rulers + height graph; `convDbgOn`, OFF by default). `M` = machines on/off. `R` = next room. `?debug` = a scrub bar (time is the only

@@ -54,8 +54,9 @@
      §6  96–112 25–28  THE RETURN. The hook again, everyone (bar 28 = bar 4's climb).
      §7 112–128 29–32  THE ANVIL. Stop-time: C · C · C · B (horns + crash + kick in
                        unison), a 16th B chug run under a tom cascade (high → floor), the
-                       belt's harmonic-minor run (B C D# E F# G A A#) — and B major, rung
-                       through the 7-beat breath, back to E.
+                       belt's run up B Phrygian-dominant (B C D# E F# G A, A# the
+                       leading note back to B) — and B major, rung through the 7-beat
+                       breath, back to E.
 
    WHO LIVES WHERE:
      riff forge   E2–E5  power chords root–5th–octave (E5 = E2 B2 E3 …), palm-muted root
@@ -164,7 +165,7 @@ const TREM = [['E5', 2], ['C5', 1], ['A4', 1], ['G4', 1.5], ['A4', .5], ['G4', 1
 {
   let b = 80;
   for (const [n, d] of TREM){
-    for (let k = 0; k < d * 4; k++) riff.push([r5(b + k / 4), n, v3(k % 4 ? .62 : .8), .4]);
+    for (let k = 0; k < d * 4; k++) riff.push([r5(b + k / 4), n, v3(k % 4 ? .62 : .8), .32]);   // > .3 = open, not a chug; .4 bled the last E4 into bar 23's B
     b += d;
   }
   for (const n of P5.A) riff.push([80, n, .95, 2]);
@@ -213,7 +214,7 @@ const melody = [
   ['E5', 1.5], ['B4', .5], ['A#4', .5], ['A4', .5], ['G4', .5], ['F#4', .5],
   ['G5', 1.5], ['A5', .5], ['G5', 1], ['F#5', 1],
   ['E5', 2], ['G5', .5], ['A5', .5], ['A#5', .5], ['B5', .5],
-  // §7 stop-time, the harmonic-minor run, the anvil
+  // §7 stop-time, the Phrygian-dominant run, the anvil
   ['E5', .75], ['E5', .75], ['E5', .5], ['D#5', 2],
   ['B4', .5], ['C5', .5], ['D#5', .5], ['E5', .5], ['F#5', .5], ['G5', .5], ['A5', .5], ['A#5', .5],
   ['B5', 1],
@@ -251,7 +252,11 @@ const chord = (b, ch, v, d, choir = false) => {
 };
 chord(64, 'C', .7, 4); chord(68, 'B', .72, 4); chord(72, 'Em', .78, 8);
 chord(80, 'Am', .82, 4, true); chord(84, 'C', .85, 4, true); chord(88, 'B', .9, 8, true);
-chord(120, 'B', 1, 7.6, true);                                            // the anvil, held through the breath
+chord(120, 'B', .62, 7.6, true);                                          // the anvil, held through the breath
+// (review: at full velocity the organ + choir ALONE in the breath measured −11 dB RMS — 4 dB
+//  louder than the whole band in §1 (−15), so the main riff came back in UNDER the chord it
+//  resolves. The hit at 120 is carried by the forge, horns, crash and bass; the organ is the
+//  ring, and it now sits just under the riff it hands the loop back to.)
 sortHits(organ);
 
 // ---- DRUMS ---------------------------------------------------------------------------
@@ -264,7 +269,7 @@ const backbeat = (b0, v = .86) => D.snare.push([b0 + 1, v], [b0 + 3, v]);
     const b0 = 4 * i; kickWith(bar, b0); backbeat(b0);
     for (let k = 0; k < 8; k++) D.hat.push([b0 + k / 2, k % 2 ? .3 : .45]);
   });
-  D.crash.push([0, .9]);
+  D.crash.push([0, 1]);                                       // the loop's arrival: V → i lands here
   // §2 / §6 — the hook: ride quarters, crash every two bars and on the C held
   for (const s0 of [16, 96]){
     const bars = s0 === 16 ? [H1, R2, H1, H4] : [H1, R2, H1, R4];
@@ -320,7 +325,7 @@ const mix = {
   riff:  1,
   bass:  .72,
   horns: [[0, .85], [80, .7], [112, .85]],
-  organ: [[0, .7], [120, .8]],
+  organ: [[0, .7]],
 };
 
 export default {

@@ -44,6 +44,7 @@ const EXPECTED_KEYS = [
   'bald-mountain',
   'danse-macabre',
   'marionette',
+  'toccata-loft',
 ];
 
 describe('SONGS catalogue', () => {

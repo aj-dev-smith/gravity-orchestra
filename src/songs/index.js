@@ -15,6 +15,7 @@ import morningMood from './morning-mood.js';
 import baldMountain from './bald-mountain.js';
 import danseMacabre from './danse-macabre.js';
 import marionette from './marionette.js';
+import toccataLoft from './toccata-loft.js';
 
 export const SONGS = {
   'daybreak-engine': daybreakEngine,
@@ -34,6 +35,7 @@ export const SONGS = {
   'bald-mountain': baldMountain,
   'danse-macabre': danseMacabre,
   'marionette': marionette,
+  'toccata-loft': toccataLoft,
 };
 
 /* The picker's SHELVES — data, not engine. One table: shelf label → song keys, in menu
@@ -47,6 +49,7 @@ export const SONG_GROUPS = [
   ['Classics', ['fur-elise', 'ode-to-joy', 'canon-in-d', 'greensleeves', 'gymnopedie',
                 'prelude-in-c', 'mountain-king', 'toccata', 'dies-irae']],
   ['Drum showcase', ['backbeat']],
+  ["Tonight's machines", ['toccata-loft']],
 ];
 
 /** [[label, [keys…]], …] for every key in `songs`: shelved ones in shelf order, the rest under 'More'. */

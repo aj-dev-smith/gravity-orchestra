@@ -23,6 +23,10 @@ drum machine, instrument plugins, rooms, room director, creation tools, phrase-l
 import) was fast-forwarded into `main`, the `v2` branch was deleted, and `main` was
 deployed to cascade.ajsmithhq.com. Work on feature branches off `main`.
 
+**The 2026-10-07 overnight wave lives on the `overnight` integration branch** (merged from
+`ov/*` feature branches) — NOT merged to `main`, NOT deployed. What it is and how to try each
+piece: [`docs/OVERNIGHT-2026-10-07.md`](docs/OVERNIGHT-2026-10-07.md).
+
 `convDbgOn` (the conveyor debug HUD — rulers + height graph, key `G`) now defaults to
 **`false`**. Keep it off in anything you ship.
 
@@ -54,9 +58,24 @@ on. Treat it as live, and confirm with the human before running it.
                      clock.js (shared lane clock / strike edge / event parsing), stations.js
                      (render-time placement: origin + yaw + footprint). Each <key>/ has
                      solve.js (pure) + voice.js (pure DSP) + index.js (render) and
-                     test/inst-<key>.test.js. Shipped: marimba, bells, bass, musicbox, bowls.
+                     test/inst-<key>.test.js. Shipped (15): marimba, bells, bass, musicbox,
+                     bowls, turntable, ricochet, volley + (2026-10-07) riff, strum, pogo,
+                     organ, horns, bowwheel, dulcimer (§4). sustain.js = the shared iOS
+                     DURATION-BUCKET ladder ('<base>~<hold>' ids, §4b) — test/sustain.test.js.
     src/drumkit.js   the drum REGISTRY: canonical name ↔ GM note ↔ mix gain. One source
-                     of truth for the song validator, audio, render, future MIDI import.
+                     of truth for the song validator, audio, render, MIDI import.
+    src/cymbals.js   pure cymbal DSP: clawd-o-matic's metal() (40–160 inharmonic modes + noise
+                     bands) → crash / ride ×2 / rideBell / china / splash / hatOpen / clap. One
+                     render feeds live hitDrum AND the iOS WAV. Pose math: drumparts.js
+                     (cymbalPose / cymbalPiston). test/cymbals.test.js.
+    src/dynamics.js  pure: belt velocity (3rd melody element), velGain = THE velocity law for the
+                     belt pluck + drums, legacyVel/legacyLane. test/dynamics.test.js.
+    src/ridecam.js   pure RIDE-THE-BALL pose (ridePose / rideMoments / rideWindowAt): eye on the
+                     smoothed marble path LAG behind, aim LOOK ahead, comfort-limited. ridecam.test.js.
+    src/rooms/       ROOMS (index.js registry, R cycles, ?room=<key>): grid, cathedral, studio,
+                     void, graveyard + arena (Metal Arena — arena-cues.js solves pyro/CO2/
+                     blinders from the drum lanes at load, pure, test/arena.test.js) + starship
+                     (sky banks per phrase, deck never moves — test/room-starship.test.js).
     src/midi/        MIDI import: parse.js (type-0/1 → tracks, FAITHFUL — keeps every
                      channel incl. 9, with velocity) + convert.js (→ song JSON, quantized,
                      lock-rule-correct; channel 9 → drum lanes via drumByGm — see §6)
@@ -76,17 +95,30 @@ on. Treat it as live, and confirm with the human before running it.
     src/songs/*.js   one module per song (the comments are sacred), aggregated by index.js
     src/main.js      scene, rigs, buildWorld, ballPos, animate(), controls — the orchestrator
     test/            Vitest: engine ballistics, song lock-rule, drum validation, MIDI,
-                     layout overlap, share round-trip (177 tests)
+                     layout overlap, share round-trip, every plugin's honesty suite, staging
+                     audit, director, XR (44 files / 2481 tests, 2026-10-07; ~3 min)
+    docs/OVERNIGHT-2026-10-07.md   the night's changelog: what each new machine / room / song
+                     is and the URL to try it
     VISION.md        the product north star (vision, not spec)
     docs/PLAN-*.md   design notes: PLAN-{real,seamless}-conveyor (how the static band
                      was reasoned out) + PLAN-staging (instrument/room/support/placement
                      abstractions + the human-curation-over-auto-layout decision)
 
     npm run dev            # vite dev server (add --host to reach a phone on the LAN)
-    npm run dev:xr         # https (self-signed) + LAN host → a Quest can open it (docs/XR.md)
-    node scripts/xr-shot.mjs  # IWER-emulated Quest 2 in headless Chrome: enter VR, teleport, stereo shot, XR draw calls
                            #   ?solo=<instrument> = that plugin's own demo, camera on its station
-    node scripts/shot.mjs  # headless screenshots (own browser per call — parallel-agent safe)
+                           #   ?song=<key> · ?room=<key|off> · ?midi=<url> · ?debug (__dev + scrub bar)
+                           #   share links are #s=<deflate-b64url>
+    npm run dev:xr         # https (self-signed) + LAN host → a Quest can open it (docs/XR.md)
+    node scripts/xr-shot.mjs  # IWER-emulated Quest 2 in headless Chrome: enter VR, teleport, stereo shot
+    node scripts/xr-perf.mjs  # XR draw calls per song × pad (--detail full = profile off)
+    node scripts/shot.mjs  # headless screenshots (own browser per call — parallel-agent safe;
+                           #   puppeteer-core is a devDependency — if it's missing, `npm i`)
+    node scripts/staging-audit.mjs --base http://localhost:<port> --norun 1 \
+        --rooms grid,cathedral,studio,void,graveyard,arena,starship \
+        --fixture test/fixtures/staging-rooms.json   # regenerate the staging fixture (every song ×
+                           #   room + the 2 MIDI fixtures; the test pins the room list) — re-run on the
+                           #   MERGED tree after ANY new song / station / room (one whole-file rewrite)
+    node scripts/director-audit.mjs  # every song's shot shares
     npm test               # vitest — run after ANY song or engine edit
     npm run build          # → dist/  (hashed assets; what deploy.sh ships)
     npm run build:single   # → marble-cascade.html  (self-contained viral artifact)
@@ -184,7 +216,41 @@ nothing more. The unifying runtime primitive is a **ball spawner** — mortal ba
    allocation + motion solved up front, then verified against the drive limits), **bells**
    (latched pendulum strikers + motorised catcher), **bass** (winched magnets drop heavy balls
    onto strings), **musicbox** (pinned cylinder = one revolution per loop, the cylinder IS the
-   score), **bowls** (SUSTAINED — a marble orbits the rim for the note's duration).
+   score), **bowls** (SUSTAINED — a marble orbits the rim for the note's duration). Then
+   **turntable** (one marble reads a record), **ricochet** (a FROZEN elastic orbit — one marble,
+   phosphor plates), **volley** (two pad walls trade one marble across a flying court — steel pan).
+
+   **2026-10-07 — seven more, built in parallel overnight** (docs/OVERNIGHT-2026-10-07.md). They
+   fall into two FAMILIES that share solve ideas (not code — each plugin stays one folder):
+   - **The GUITAR family — a fretboard + a striker per string.** A fret CARRIAGE per string slides
+     to the luthier fret `L·(1−2^(−f/12))` and presses (pitch is position); a beam search fingers
+     notes onto strings within the carriage/striker drive limits, run twice so the seam agrees.
+     **riff** (Riff Forge: six strings, a solenoid STAMP per string lands on the beat at V_IN and
+     rebounds e·V_IN, Hermite hops between hits, latch-park > .5 s; felt palm-mute bar; chord =
+     ONE voice id 'E2+B2+E3'; Karplus-Strong → 3-stage tanh amp → 4×12 cab), **pogo** (Pogo Bass:
+     four strings E1–G2, a pogo stick per string bouncing on `dribbleLane` gravity — hop =
+     |G|·gap²/8, > 1 s parks on a boom magnet, a pump supplies Δv; KS + split-pickup comb + an
+     ~800 Hz growl path so the line reads on phones), **strum** (Marble Autoharp: one string per
+     pitch, ONE marble plectrum on a cable-driven carriage sweeps the whole fan like a real
+     autoharp — string j releases at the marble's flight time to it, a 2-D stick-and-slip pluck;
+     felts on solenoids are the chord shape AND the note-off; down on the beat, up on the "and").
+   - **The SUSTAIN family — duration is a visible distance.** The note lasts exactly as long as a
+     solved motion takes, and all five fire iOS duration buckets (§4b). **organ** (Light Organ:
+     a pipe + bellows + conserved marble per pitch; the marble's weight sinks the lid at s/dur, so
+     the pipe sounds while the bellows empties; gap → RIDE the refilling lid / HOP a solved arc /
+     PARK on its magnet; a light packet 7×dur long runs up the pipe; organ / '|choir' / '|pad'),
+     **horns** (Bellows Horns: a magnet drops each horn's marble onto its bellows lid, the lid
+     sinks for the note (speed ∝ 1−(s/h)³, never accelerating down), a ram throws it back at
+     note-off; tuba/trombone/trumpet by register with real slide positions + valve fingerings;
+     'stab:' ids for short accents), **bowwheel** (Bow Wheel: a hurdy-gurdy — a rosined wheel at
+     constant ω, a marble drops into each string's tangent cup and its weight presses the string
+     onto the rim exactly on the beat; held = bowed; note-off launches it to hop back or park),
+     **dulcimer** (Marble Grand: a real piano action made of marbles — a piston kicks the hammer
+     ball UP into the string at the 1/7 point, lossy rebound into a waiting cup, double-escapement
+     repetition lever, dampers lift 85 ms before; modal stiff-string voice, ':p' soft layer, ':e'
+     FM Rhodes), and the older **bowls**.
+   **Real cymbals** joined the kit the same night (§4 Status). Every family machine exports
+   `PART_LIMITS` and is a MIDI routing target (§6, `src/midi/orchestra.js` PREFER / LINE_HOME).
 
 **The generalization to hold onto:** a hit = **a target + a launch solve**. The melody
 swaps "next pad" for the target; a drum swaps in a stationary drum. Future instruments
@@ -216,8 +282,21 @@ song can get one, and **MIDI import now generates drums from channel 9** (§6).
   {build(part, timing) → Group, update(songTime, P, dt, {started, skipStrikes, onStrike})},
   demo}` + optional staging hints `color / camera / lookHeight`.
 - main.js runs ONE generic loop: build each part inside its station group, update per frame,
-  route `onStrike({note, vel, pos, color, dur, shake})` → sparks + a SHARED constant-size
-  strike-light pool + `audio.playVoice('inst:<key>:<note>', vel, {dur})`.
+  route `onStrike({note, vel, pos, color, dur, shake, sparks, light})` → sparks + a SHARED
+  constant-size strike-light pool (a hit with `light < .2` SKIPS the pool — a strum's or chord's
+  faint inner strings must not steal another machine's flash) + `audio.playVoice('inst:<key>:<note>',
+  vel · song.mix, {dur})`.
+- Seams added 2026-10-07 (README has the detail): `voiceIds(part, {beat, bpm, rollT, P, loopBeats})`
+  — the tempo, so a plugin can name voices by a note's length in SECONDS exactly as build() will;
+  optional `voiceHz(id)` (pan width for chord / suffixed ids — default = the FIRST pitch in the id,
+  audio.js's regex now tolerates '~'); `PART_LIMITS` on the descriptor (orchestra.js imports it —
+  never copy the numbers); `xrGlow` / `inst.xr(on)` for the headset; a station may be RAISED onto
+  the rear GALLERY (build() is re-called with floorY ≈ −36 — legs stretch, nothing else changes).
+  Timbre / articulation rides ON THE NOTE ID (there is no per-event timbre field) — §6.
+- **clock.js makeEdge re-arms when the clock goes BACKWARDS** (finale fix): main's static-merge
+  sweep poses every station at 48 songTimes; a first strike within .25 s before one of those poses
+  used to stay "fired" and went silent on loop 1 (finale's bells, daybreak's beat-0 bell). Forward
+  playback never re-fires (within one strike abs + since is songTime + const).
 - Audio: one pure `voice()` render feeds BOTH the live path (AudioBuffer, gain = vel, `dur`
   release) and the iOS `<audio>` bank (WAV) — iOS-war internals untouched. The sample path can't
   release at `dur` (el.volume is ignored), so SUSTAINED plugins (organ, bowwheel, horns, dulcimer,
@@ -243,7 +322,13 @@ song can get one, and **MIDI import now generates drums from channel 9** (§6).
   (`signatureOf`: the present, varied, heavy pitched station — MoP's riff, never the belt or the kit):
   pull ×SIG + a floor, its own cap (.34) enforced by a bisected per-beat PRICE (a damped pull jumps).
   Hand-authored songs opt in with `director.signature: '<key>'`; their edits are otherwise unchanged. Songs with stations open on `auto`;
-  others keep free-look. `stage` = the wide shot.
+  others keep free-look. `stage` = the wide shot. The edit also plans RIDES (§7 ride cam).
+  Composer gotchas (scar tissue from tonight's 8 songs): a key that appears ANYWHERE in
+  `director.at` is exempt from its share cap for the WHOLE loop (`isFixedKey`) — in a dense band one
+  scripted `stage` or station took 35–42 % (The Entertainer uses weights only, for this reason);
+  `director.shots.<key>` (a re-framed station shot `{x, up, dist}`) is keyed by the PLUGIN key
+  (`bass`), not its camera key (`strings`) — a camera key there is silently ignored; `song.barBeats`
+  (Mars = 5) makes the edit prefer that meter's bar lines (default 4).
 - Lessons that made five parallel builds work: design FOR marbles (no feed plumbing — each lane
   owns its own ball/striker); park long gaps at the apex; lossy bounces with a visible energy
   source; honesty tests (lands on the beat, at rest at contact, no penetration) before render.
@@ -296,6 +381,27 @@ melody's echo) so they punch. Baked `renderDrumWav` for the iOS path. Known degr
 both already in this ledger: iOS drum samples play full-velocity; a dense hat run can clip
 its own tail (one `<audio>` element per drum). The webaudio path has neither.
 
+**Cymbal voices** (`src/cymbals.js`, 2026-10-07): crash / ride (2 round-robin variants) / rideBell /
+china (soft-clipped) / splash / hatOpen / clap are ONE deterministic, seeded `metal()` render at 32 kHz
+each, rendered at SONG LOAD (≈ 100 ms/voice, ≈ 330 ms a full kit on a laptop — cached per voice),
+never on the first hit. Live `hitDrum`: vel sets level AND darkness (a lowpass opening with vel²).
+iOS WAV: baked with its PEAK set to the cymbal's registry mix gain (`encodeWav` peak arg) — el.volume
+is ignored, so a crash must not ring at kick level. The last 15 % of every render (≤ .5 s) fades on a
+smoothstep (the old hard 34 ms cut gated audibly). `audio.chokeDrum(name)` = a choke edge: live path
+fades the voice; the sample path pauses the element.
+
+**Duration buckets — the iOS answer to SUSTAIN** (live voices release at `dur`; an `<audio>` element
+can't, and its volume is ignored): a sustained plugin fires `'<base>~<hold>'` (e.g. `C4~0.5`,
+`C4|choir~2`, `E4:e:p~1`) whose render is the base CUT at a ladder rung with the release BAKED in
+(§4b, `src/instruments/sustain.js`). On iOS a note therefore rings ≤ √2 × its length (or the full
+render past the top rung). main bakes the bare base LIVE-ONLY (Float32, no element) so desktop is
+unchanged. `rebuildBank` skips the `<audio>` element for `live` voices; the iOS internals are untouched.
+
+**`voiceHz` (pan width):** spatial `widthFor(hz)` narrows low voices to the centre. audio.js reads
+the voice's `hz` from the plugin's `voiceHz(id)`, else main's first-pitch parse of the id (chord ids
+'E2+B2+E3', 'C4|choir', 'stab:D4', 'E1:s', buckets '~' all parse). Before this every chord / suffixed
+id read 0 Hz and panned full width.
+
 **Song-change console noise (`ERR_FILE_NOT_FOUND` on a blob URL, + the status line flashing
 "audio: sample blocked") — fixed in `rebuildBank`'s teardown only.** Cause: a song change is a
 gesture, so main re-primes the new bank; a quick second change tears that bank down while its
@@ -347,9 +453,49 @@ plays exactly as before (centred, un-limited).
                                        //  vel 0..1 default 1 = dynamics: live audio + strike juice, never the solve)
   alto:  [...] | {delay, deep, notes}, // optional; delay = beats of rest
   bass:  [...] | {delay, notes},       // optional
-  drums: { kick:[0,1,2,3], snare:[1,3], hat:[0,.5,1,...] },   // optional; see below
+  drums: { kick:[0,1,2,3], snare:[1,3], hat:[0,.5,1,...],      // optional; see below
+           china: [[3.5, .9, .5]] },   //   a hit may be [beat, vel, chokeBeats] (cymbals: the clamp chokes it)
+  parts: { organ: [[beat, 'C4|choir', vel?, durBeats?], …], … },  // plugin parts (§4b), absolute beats
+  mix:   { organ: .6, bowwheel: [[0, .6], [48, .85]] },  // AUDIO-ONLY gain per part (number, or a step
+                                       //  envelope by beat) — velocity stays dynamics (light/sparks/layer)
+  room:  'arena',                      // the room the song OPENS in (a viewer's ?room / R pick wins)
+  barBeats: 5,                         // optional meter (2–16, default 4): the director's bar lines
+  director: { at: [[beat, shotKey, holdBeats?], …],   // scripted cuts (fixed points; a hold past the last
+                                       //  note OWNS the seam's breath — Forge's anvil, Winter's freeze)
+              organ: 1.8, strum: .6,   // √-weighted pull per machine key
+              shots: { bass: {x, up, dist} },          // re-frame a station's shot (PLUGIN key!)
+              signature: 'riff' | false },             // the machine the song is ABOUT (imports pick it)
 }
 ```
+
+**Timbre / articulation live ON THE NOTE ID** (there is no per-event timbre field; every id is a
+separately baked voice, and the importer writes these from GM programs in `orchestra.js noteSuffix`):
+
+| plugin | id grammar | meaning |
+|---|---|---|
+| riff | `E2` · `E2:m` · `E2:c` · `E2:cm` | palm mute (or every durBeats ≤ .3) · clean amp · both. Notes on one beat are ONE hit: the plugin fires a single chord voice `E2+B2+E3(:flags)`, low → high |
+| strum | `E3` · `E3\|n` · `E3\|h` | steel · nylon · harp (ONE variant per part — a mixed part strings a pitch twice) |
+| organ | `C4` · `C4\|choir` · `C4\|pad` | principal · 3-singer choir · 3-saw pad (aliases vox/voice/aah, strings/synth/ensemble) |
+| horns | `C4` · `stab:C4` | held (≤ 2.6 s) · short accented stab (≤ .5 beat) |
+| dulcimer | `C4` · `C4:e` · (`:p`) | piano · FM Rhodes tine; `:p` = soft layer, chosen by the plugin from vel |
+| pogo | `E1` · `:s` · `:p` · `:y` | fingered · slap · pick · synth (saw+square, resonant LP) |
+| any sustain | `<base>~<hold>` | iOS duration bucket — FIRED by the plugin, never authored |
+
+**MIDI routing contract** (`src/midi/orchestra.js`, research: midi-routing.md): `PART_SPEC.<key>` is
+built FROM the plugin's `PART_LIMITS` (a test asserts they match). `PREFER` (program + SHAPE: chordal /
+riff / riffOnly / sustain / any; first match wins, only for a machine with a PART_SPEC) runs before the
+GM family table: 27–30 riff (27 only on power chords) · chordal 24–27 + harp 46 strum (only if its
+.2 s strum spacing keeps ≥ 85 %) · 33–39 pogo (32, the upright, stays on the string bass) · 40–44,
+48–51 sustained bowwheel · 16–20, 52–54 sustained + 21–23 chordal + 88–95 organ (≤ 8 pitches with
+long notes stays bowls) · chordal 56–71 horns. `LINE_HOME` sends a spare LINE to its family machine
+(guitar → riff, piano → dulcimer, brass → horns, strings → bowwheel, organ → organ) before the
+generic chain. `OVERFLOW_TO` (upstream-first, a loop throws): riff → marimba, pogo → bass, strum →
+dulcimer → marimba, bowwheel → organ, horns → organ, organ → bowls, volley → marimba. Track NAMES beat
+programs (`nameRole`: a "Bass" on a guitar program → pogo if it keeps ≥ BASS_FIT .7 of its notes);
+belt twins merge only when each covers ≥ 90 % of the other; a copy that lags a few ms merges; a line
+with < `BELT_MIN` 4 notes never gets a belt or a machine of its own. The lead is still chosen by family
+(a chordal lead keeps its machine AND plays its top line on the belt). Program-less files route by
+ROLE (bed → organ/bowls, comping → dulcimer/strum, power-chord riffs → riff, electric bass → pogo).
 
 **Belt velocity** (optional 3rd element, `src/dynamics.js`): one velocity law (`velGain`) for the belt
 pluck AND the drums — the old `.35 + .65·v` line from v = .5 up (existing grooves unchanged, measured
@@ -384,10 +530,29 @@ stands): the render places beat `b` at `ROLL_T + b·BEAT`, so a negative beat la
 marble's roll-in window and butts up against the downbeat — the intro tom roll leads into the
 first note instead of stranding at the loop tail. Covered in `test/midi.test.js`.
 
-Catalog (9): Für Elise (duo), Ode to Joy (trio thirds), Canon in D (true canon), Greensleeves
-(6/8), Gymnopédie 1, Prelude in C (single track — camera buttons auto-hide), Mountain King
-(accelerando — **now with a kick/snare/hat groove**), Toccata in Dm (6.5-beat pedal lob),
-Dies Irae (deep canon echo, delay 5). bpm is the single tempo knob; everything re-solves.
+Catalog (25 — `src/songs/index.js` SONGS; the menu reads SONG_GROUPS shelves; the house song is
+Daybreak Engine, Danse Macabre through October, pinned to Daybreak under `?debug`):
+- **Showcase**: Daybreak Engine (original, every pre-tonight machine in the room).
+- **Tonight's machines** (2026-10-07, all PD or original): **finale** Starship Groove (original
+  space-funk, 10 plugin machines + full kit, starship) · **forge** Forge of the Marble King (original
+  thrash, riff star + horns + organ + bass, arena; the anvil B-major rings through the breath, V → i
+  across the seam) · **mars** (Holst, 5/4 — `barBeats: 5`, void) · **toccata-loft** (Bach BWV 565,
+  organ + bow wheel + grand, cathedral) · **entertainer** (Joplin, grand + horns + autoharp-banjo +
+  bass + brushes, studio) · **winter** (Vivaldi RV 297 i, bow wheel + harpsichord-grand + bass, void)
+  · **scarborough** (trad., D Dorian 3/4, autoharp + bow wheel + choir, cathedral) · **campfire**
+  (original folk-pop, autoharp + cello wheel + grand, cathedral). Each pins its bpm so the 3.8 s
+  breath is a whole number of beats (bpm = 60·n/3.8 — 142.1, 110.53, 94.74, 78.95, 63.16) and the
+  last chord rings THROUGH the breath into the downbeat.
+- **The Orchestra**: Canon in D — Orchestra, Carol of the Bells, Morning Mood.
+- **October** (graveyard): Danse Macabre, Night on Bald Mountain, Funeral March of a Marionette.
+- **Classics**: Für Elise (duo), Ode to Joy (trio thirds), Canon in D (true canon), Greensleeves
+  (6/8), Gymnopédie 1, Prelude in C (single track — camera buttons auto-hide), Mountain King
+  (accelerando, kick/snare/hat groove), Toccata in Dm (6.5-beat pedal lob), Dies Irae (deep canon
+  echo, delay 5).
+- **Drum showcase**: Backbeat (every kit piece incl. ride bell, a choked china, a splash).
+bpm is the single tempo knob; everything re-solves. Adding a song = SONGS + a shelf + EXPECTED_KEYS
+in test/songs.test.js + regenerate the staging fixture (§1) — those three files conflict between
+parallel song branches, so merge the key lists and regenerate the fixture ONCE on the merged tree.
 
 ---
 
@@ -423,6 +588,40 @@ Dies Irae (deep canon echo, delay 5). bpm is the single tempo knob; everything r
   snaps — possible only because the whole timeline is known. **free** hands over orbit-drag +
   WASD/arrows/QE fly (disabled until picked, so it can never swallow the iOS priming tap).
   Vertical is pinned (the band is static); x/z follow with sway + spread-dolly.
+- **Ride cam** (`src/ridecam.js` pure, `camera.js` 'ride', the RIDE button after FIXED; manual RIDE
+  follows the lead): the eye sits on the SMOOTHED belt-marble path LAG .3 s behind, raised and pushed
+  back, aiming LOOK .55 s ahead — the path is ballPos + the render lift, so the pose is a pure fn of
+  songTime (scrub-exact). Comfort: low-passed positions, yaw = tanh of mean sideways travel (≤ ±36°),
+  a soft edge limit, the horizon NEVER rolls, eye ≥ 3.2 u in front of the marble's plane, 1.2 s ease
+  in/out; peak view rotation ≤ 1.36 rad/s on real songs (test budget 1.6). The DIRECTOR rides
+  sparingly: `rideMoments` (apex × the loop's biggest flight — crane hops count), ≤ 1 per 20 s,
+  trimmed to the flight (`rideSpan`, ≤ 6.5 s), share cap .14 but never below one ride; on short
+  loops `rideEvery` = ⌈share / RIDE_LONGRUN .22⌉ rides only every n-th pass (`round(base/P) %
+  rideEvery` — still pure). Reduced-motion viewers never get directed rides; XR never moves the head
+  (a ride in TOUR lands you on the lead pad). Only BELT marbles are ridden (instrument lobs: open).
+- **Gallery staging tier** (`stations.js layoutStations`, main `rig.raise` + `stageFrame`): the
+  floor was full at 14 machines, so a raised rear GALLERY sits `GALLERY_DROP` (2 u) under the belt's
+  top housing (y ≈ 13.7) — the audience sees it over the paternoster. riff / strum / horns / pogo
+  have gallery slots either side of the hung organ loft; dulcimer + bowwheel take the front CORNERS.
+  Pass order: floor at margin 1 → .7 → .45, then the gallery opens to any station, borrowing depth
+  last. Gallery machines avoid every hung footprint (organ, chandelier, court) AND the space behind
+  it; drums + turntable never go up; a station the user pins behind the belt goes up. A raised
+  station is rebuilt with a low floorY so its legs reach the room floor. `stageFrame` keeps every
+  front-row machine's full width + `FRONT_KEEP` .25 of its front half (corner machines are no longer
+  cut in half). Only stations with events are placed. Shared-file scar: STATIONS is the one edit a
+  new floor plugin can't avoid — run the slot search against test/stations.test.js (1–3 bays ±
+  turntable) or every other station's solved position moves.
+- **Rooms** (`src/rooms/`): each room is pure set dressing in the static world — `FLOOR` stays
+  `STAGE.FLOOR` (HW/BACK/FRONT/CEIL may widen, as the studio and arena do), NO lights of its own
+  (14 lights in every room), constant pools, per-frame work = uniforms only, scrub-safe. `rooms.cue()`
+  gets `{beat, rollT, P, drums, melody, loopBeats, start}` at song load: **arena** turns the drum
+  lanes into a fixed cue sheet over 8 flame jets + 4 CO2 cannons + a blinder wall (crash → every
+  free jet; loop downbeat / drums returning / a bar that jumps → CO2; kick on a downbeat → one pair,
+  alternating; a device never re-fires while burning, across the seam too; no drums → the melody's
+  long notes fire), every flame/ember a closed-form fn of "seconds since fired". **starship** banks
+  only the SKY (≈ 5.7° per 4-bar phrase, alternating, level through the breath; `loopBeat()` counts
+  from each loop's downbeat — the 1.2 s seam tail isn't whole beats); star streaks move `z0 + v·t mod
+  L` with every speed n·L/T_WRAP and songTime mod T_WRAP on the CPU (no float drift, no snap).
 
 - **WebXR** (`xr.js`, docs/XR.md): render-time framing only. The loop is `renderer.setAnimationLoop`
   (a headset has no window rAF); while presenting main renders scene→camera directly (no composer —
@@ -437,8 +636,11 @@ Dies Irae (deep canon echo, delay 5). bpm is the single tempo knob; everything r
   (studio: no per-eye Reflector). Full room from the wide ~1430 → ~450–530 calls/frame (both eyes).
   The head is never moved by the director / ride cam — TOUR teleports (blink); Y = in-world menu.
 
-Dev toggles: `G` = conveyor debug HUD (rulers + height graph; `convDbgOn`, OFF by default). `M` = machines on/off. `?debug` = a scrub bar (time is the only
-state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machine-gunning).
+Dev toggles: `G` = conveyor debug HUD (rulers + height graph; `convDbgOn`, OFF by default). `M` = machines on/off. `R` = next room. `?debug` = a scrub bar (time is the only
+state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machine-gunning) + `window.__dev`:
+`song(k)`, `t`, `rate`, `cam(mode)`, `station(key, dist, up)`, `strikes()` (strikes per machine + any
+fired id with no baked voice — the sound sweep), `director()` (cuts, shares, rides, rideEvery,
+signature), `ride(t)`, `occlusion()`, `audioProbe()`, `xrPerf()`.
 
 ---
 
@@ -472,7 +674,67 @@ state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machi
   starts negative, so the machine runs solo before the marble spawns (and the pickup fill plays
   ahead of the downbeat). It's a feel knob — one const; tune freely.
 - Greensleeves uses the F#/dorian variant; Gymnopédie is the theme stated twice; Canon's late
-  cycles are faithful-in-gesture simplifications.
+  cycles are faithful-in-gesture simplifications. Mars (no score to hand — the fanfare, the 5/2 theme
+  and the recap are faithful in SHAPE) and Winter (arranged from memory) say so in their headers.
+
+**Still open after the 2026-10-07 overnight** (the reviewers' "remaining", minus what later merges
+fixed — the 6 station-layout test failures, puppeteer-core, the light-pool seam, voiceHz, voiceIds
+tempo, the blob-URL console noise and the forced breath wide shot are all FIXED):
+- **Nothing tonight was heard on a real iPhone or worn on a real Quest 2.** iOS buckets were checked
+  by unit tests + bank composition; XR by IWER draw-call counts only (GPU time, `WEBGL_multi_draw` on
+  Quest Browser, the first-frame batch/shader stall — Bald Mountain ≈ 3,200 parts — unmeasured).
+  docs/XR.md §0 is the headset checklist.
+- **iOS sustain, still coarse**: a bucket rings ≤ √2 × the note (or the full render past the top rung);
+  a part over BUCKET_CAP coarsens (Mars's organ loses its 2 s rung → 1.6–3 s notes ring 5.2 s); bowls
+  have no rung between 2 s and their 5.5 s hold; the non-bucket plugins (strum, riff, pogo, bass, …)
+  ring their full render on iOS whatever `dur` says (Campfire's intro picks, open riff chords); a
+  repeated id still cuts its own tail. A stale priming `play()` rejecting after teardown costs one extra re-prime.
+- **No loop-sustain seam**: voices must render ≤ ~4.5–6 s, so the bowwheel caps a stroke at 3.9 s,
+  horns hold 2.6 s, the riff's open chord rings 1.6 s (Forge's anvil is carried by organ + horns);
+  the organ fakes long holds with a crossfaded '/c' continuation (≈ 1 s overlap on iOS).
+- **Timbre gaps**: horns choose timbre by REGISTER only — routed saxes / reeds sound like brass; the
+  belt keys notes only by note, so a guitar riff that lands on a BELT sounds like the music box; the
+  dulcimer's ':e' e-piano is ≈ 6–9 dB hotter than the piano at equal velocity (matters in mixed parts).
+- **Bake cost on dense imports**: every distinct riff chord is its own id (~6.5 ms; a 640-hit part
+  with no repeats ≈ 4 s); a 3-timbre organ import ≈ 190 ids ≈ 60 MB Float32; cymbals ≈ 330 ms at load
+  (more on a phone — render ride variant 2 lazily if it bites). Consider capping chords / timbres.
+- **Staging**: with the gallery in use the wide `stage` shot goes steep (eye y ≈ 34) — Forge in the
+  arena frames its star (the riff) small top-left on the gallery and the kit runs under the button bar
+  (its anvil script covers the climax); the starship tutti wide is high and steep; the portrait stage
+  shot frames only belt + hung + turntable; all-14-machines on 3 bays is crowded (riff behind horns,
+  ~3 u of front depth borrowed). An import's SIGNATURE machine isn't moved to the front — Arena MoP's
+  riff stands on the gallery. Stage edit decides gallery height only at rebuild. Winter's grand is
+  cropped bottom-left in the Void's wide.
+- **Director**: whole-song imports give `ride` .28–.39 (cap .14 — pre-existing); some rooms can't fit
+  every cap (Piano Man's dulcimer .41 vs .34) — the least-over edit wins; a signature's first shot can
+  open ~3 beats early on an idle machine (the director pre-cuts); `shares.ride` is one pass — divide
+  by `rideEvery`; a key anywhere in `director.at` is cap-exempt all loop (§4b).
+- **MIDI import**: the MAP panel can show a merged BELT twin as "off" (it plays — the twin carries
+  it) and a drum-named non-ch-10 track as "off"; a hand re-mapping in MAP feeds shapePart notes without
+  program/duration, so timbre/articulation flags (':m', '|n', ':e') are lost; volley thinning on
+  auto-import isn't reported; GM gives no choke signal (imports never choke a cymbal); GM 31 harmonics
+  spare lines land on the riff; the D2 bass centre drops Sweet Child's bass an octave on pogo AND
+  string bass; phrase `lenFit` scores jump at the 30 / 75 s edges (fixing it moves 8 corpus windows);
+  MoP loops the verse riff (bars 89–120), not the intro; GM-named exports ("Lead 1 (square)") feed
+  `nameRole`.
+- **The loop seam has ~1.5 s of near-silence** (`P = ROLL_T + LOOP_T` + the 1.2 s tail) — by design,
+  but it's audible on recorded rock loops; songs that end on a stop (The Entertainer) add their own.
+- **Honest-motion compromises (documented, tested)**: the pogo's foot follows the string's strike
+  point (≤ .05 u off pure ballistics when a carriage presses/lifts); the cymbal clamp grips around
+  every strike though the audio doesn't choke (it sounds better); the autoharp re-plucks any string
+  still ringing as it sweeps (Campfire's intro: 47 soft "brushes" a loop); extreme strum flips can hit
+  ~50 000 u/s² on dense random parts (position continuous; needs an asymmetric-flip solve); the
+  bowwheel forces one park per loop per string (can shorten a legato line); at 220 bpm the pogo/riff
+  hops are ~.03 u — fast chugs read through flashes, not motion.
+- **Rooms**: starship banks on 4-beat groups from beat 0 (a 6/8 song banks in 4s) and its rail
+  chase jumps part of a beat once a loop in the breath; arena fog/floor pools read grey-blotchy low in
+  wide shots, CO2 plumes read as solid cones, and drum-less stretches get no pyro (Canon-Orchestra
+  ≈ 60 s); AR exit restores the pre-AR room; long room/song names truncate on the VR menu; AR at true
+  scale doesn't fit a room (the band is 18.7 m up); MAP / EDIT STAGE are 2D-only.
+- Wall-clock bake-budget tests (e.g. inst-riff "bakes the whole demo fast") can flake when the
+  machine is loaded by parallel agents/suites — re-run the file alone before believing it.
+- `~/Desktop/cascade-video/capture.mjs` (local, not in the repo) still presses `g` to hide the debug
+  HUD — the HUD now defaults OFF, so that key turns it ON. Drop the line.
 
 ---
 
@@ -481,14 +743,21 @@ state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machi
 The north star is the 3D music **creation + visualization tool**: pick instruments, place
 them in the world, move/director the camera, author via MIDI import or a piano-roll / drum
 grid. Shipped toward it: repo-ification, MIDI import (**now incl. channel-9 drums**), share
-links, recording, the **conveyor + spawner** (archetype 1), and the **drum machine**
-(archetype 2). Near-term, in rough priority:
+links, recording, the **conveyor + spawner** (archetype 1), the **drum machine** (archetype 2),
+the plugin seam + 15 instruments, rooms, the room director, the MAP / EDIT STAGE creation tools,
+phrase loops — and on 2026-10-07: the guitar + sustain families (7 machines), real cymbals, MIDI
+routing to every family machine + the import's signature shot, belt dynamics, iOS duration
+buckets, the gallery tier, the ride cam, arena + starship, 8 songs, WebXR with a VR detail profile.
+Near-term, in rough priority:
 
-1. **Drums on more songs**; **more kit pieces** (toms/clap/crash/ride — registry + fallback
-   voices already exist, need geometry styling + use).
-2. **Instrument mapping + world placement** on MIDI import (creation mode 1).
-3. **Melody/drum editor** — piano-roll + drum-grid, exports the same song format (mode 2).
-4. Personal/private only: Zelda transcriptions (Nintendo IP — keep out of the public
+1. **Hear it / wear it**: a real-iPhone listen (buckets, cymbals, velocity) and the Quest 2 pass
+   (docs/XR.md §0). Everything after this depends on what those say.
+2. **Staging for the star**: put an import's signature machine front and centre (not up on the
+   gallery), and tame the steep gallery wide shot.
+3. **Timbre seams**: a reed voice for horns, a belt timbre (a guitar line on a belt), a loop-sustain
+   seam for voices (drones past 4 s), per-event timbre instead of id suffixes if it keeps growing.
+4. **Melody/drum editor** — piano-roll + drum-grid, exports the same song format (mode 2).
+5. Personal/private only: Zelda transcriptions (Nintendo IP — keep out of the public
    repo/demo), more Peer Gynt.
 
 ---

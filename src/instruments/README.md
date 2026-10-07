@@ -1,7 +1,9 @@
 # Instrument plugins — the contract
 
 An instrument is **one folder**: `src/instruments/<key>/`. The registry
-(`index.js`, a Vite glob) picks it up; **no shared file is edited to add one**.
+(`index.js`, a Vite glob) picks it up; **no shared file is edited to add one** — except ONE
+`STATIONS` slot in `stations.js` (where it stands; the floor is full — see "Gallery raise" below),
+and, if MIDI should route to it, the routing owner's `orchestra.js` entries (see `PART_LIMITS`).
 Main runs a generic loop over every registered instrument that has a part in the
 current song. Read CLAUDE.md §2–§4 first (time is the only state; visuals drive
 audio; a hit = a target + a launch solve) and study `src/marbledrums.js`, the
@@ -118,6 +120,60 @@ export default {
   demo: { bpm: 100, beats: 16, part: [[0, 'C4'], [1, 'E4', .7], ...] },
 };
 ```
+
+## The family machines (2026-10-07) — what they taught the seam
+
+Seven plugins were built in parallel overnight (riff, strum, pogo — the GUITAR family; organ, horns,
+bowwheel, dulcimer — the SUSTAIN family; CLAUDE.md §4). Their seam gaps became contract:
+
+- **`voiceIds(part, ctx)` gets the tempo** — `ctx = { beat, bpm, rollT, P, loopBeats }`. Name voices
+  by a note's length in SECONDS (a stab vs a held horn, a damped piano note, a bucket rung) with the
+  SAME pure helper build() uses, so the bake and the strikes can never disagree (`__dev.strikes()`
+  lists any fired id with no baked voice — keep it empty). No ctx (an old caller) → return a superset.
+  main calls `build()` before `voiceIds` today, but don't rely on it (the organ's old WeakMap trick
+  is gone).
+- **Timbre / articulation ride on the note id** — there is no per-event timbre field. Parse your
+  suffix tolerantly (`'E2:m'`, `'C4|choir'`, `'C4:e'`, `'stab:C4'`, `'E1:s'`) and document the grammar
+  in solve.js; the importer writes it (`src/midi/orchestra.js noteSuffix`) and the MAP panel keeps it.
+  One id = one baked voice: a variant that is a separate STRING (strum `|n`) must be one per part.
+- **`voiceHz(id)`** (optional): the id's pitch for the pan width. The default parses the FIRST pitch
+  in the id, so list chord notes low → high (`'E2+B2+E3'`) and you rarely need it.
+- **`light < .2` skips the shared strike-light pool** — a strum / chord fires one bright strike for
+  the chord and faint ones (`light: .12`) for the inner strings; draw those flashes locally.
+- **`PART_LIMITS`** (export from solve.js, re-export on the descriptor): `{lo, hi, center, pitches,
+  poly, gap, ioi, voices, maxEvents, sustain, minDur, maxDur}` + anything your fitter needs. The
+  ROUTING CONTRACT: orchestra.js builds `PART_SPEC.<key>` FROM it (imports it; a test asserts the
+  match — never copy numbers), routes programs to you in `PREFER` (program + shape) / `LINE_HOME`
+  (spare lines of your family) / `OVERFLOW_TO` (where you spill when full; no loops), and writes your
+  suffixes in `noteSuffix`. Your build() must still FIT ANY input itself — fold out-of-range notes by
+  octaves, cap lanes (rarest first), thin repeats under `gap`, clamp durations, drop the softest past
+  `maxEvents`, skip garbage, NEVER throw — and `console.warn('[<key>] …')` what it did. Stress-test
+  500 random events + garbage in your test file.
+- **Sustained voices fire DURATION BUCKETS** (below) — a plugin whose notes have a held length longer
+  than ~.5 s and a render longer than that should.
+- **Gallery raise / floorY**: a crowded room may raise your station onto the rear gallery; build() is
+  called again with floorY ≈ −36. Grow legs/plinth to floorY; nothing else may change. Measure your
+  footprint honestly (`STATIONS` w/d) — `test/stations.test.js` runs every key at once in 1–3 bays.
+- **Count-in pose**: during the LEAD_IN every lane is ARMED (marble on its magnet / latch); a lane
+  whose first reachable stroke is mid-loop must ENTER honestly (bowwheel `entryAt`: release from the
+  magnet so the fall lands at rest before the first stroke) — or loop 1 is silent there.
+- **Metal shader gotcha**: `pow(0.0, y)` in a fragment shader returned NaN on Metal and bloom smeared
+  it over the whole frame (black screen). Use `x*x`-style forms.
+
+### Duration buckets (src/instruments/sustain.js)
+
+The iOS `<audio>` path plays a WAV to its end (no `dur` release, `el.volume` ignored). So a sustained
+note fires `'<base>~<hold>'`: its render = the base render CUT at a rung of the ladder `[.5, 1, 2]` s
+with the release baked in (`cutHold`, `relFor`). The fired rung is the one nearest the note's hold in
+LOG time (≤ √2 off below 2.8 s) — or the bare base when the render's own hold is nearer.
+- Plan ONE ladder per part from the same `[base, hold]` pairs in build() AND voiceIds (`planLadder`,
+  `bucketIds`). A part over `BUCKET_CAP` (40) bucket ids coarsens: `[.5, 2]` → `[.6]` → none; pass a
+  `floor` to never go below a rung (the organ floors at `[.6]` — it replaced its old per-note '/s' tier).
+- Without a tempo, `allBucketIds` = every rung of every base (a superset).
+- main bakes a '~' id's bare BASE live-only (Float32, no `<audio>`); the live path plays the base and
+  releases at `dur` exactly, so desktop sounds as before. Bucket cuts are slices (cheap); horns
+  re-render the exhale natively with the same seed.
+- Users today: organ, bowwheel, horns, dulcimer, bowls. test/sustain.test.js runs the shared checks.
 
 ## Timing (same as the drums)
 

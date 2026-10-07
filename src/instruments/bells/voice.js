@@ -14,6 +14,7 @@
    marble's impact sits on the attack. Long ring (~4.4 s), cosine-faded to zero.
    ============================================================ */
 import { noteHz } from '../../engine.js';
+import { voiceCache } from '../voicecache.js';
 
 export const SR = 32000;
 export const DUR = 4.4;
@@ -32,7 +33,7 @@ const MODES = [
 
 function rng(seed){ let s = seed >>> 0 || 1; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296) * 2 - 1; }
 
-const cache = new Map();
+const cache = voiceCache();   // (bounded to the song in use — ../voicecache.js)
 export function bellVoice(note){
   if (cache.has(note)) return cache.get(note);
   const f = noteHz(note), N = Math.round(SR * DUR);

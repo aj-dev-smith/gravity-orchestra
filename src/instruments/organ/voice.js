@@ -47,6 +47,7 @@
 import { noteHz } from '../../engine.js';
 import { parseId, CONT_AT, MAX_DUR, VOICE_HOLD } from './solve.js';
 import { splitBucket, cutHold, relFor } from '../sustain.js';
+import { voiceCache } from '../voicecache.js';
 
 export const SR = 22050;
 export const HOLD = VOICE_HOLD, REL = .7, LEN = HOLD + REL;            // the LONG render
@@ -224,7 +225,7 @@ function renderRaw(base, n, t0){
   const fn = id.timbre === 'choir' ? renderChoir : id.timbre === 'pad' ? renderPad : renderOrgan;
   return { raw: fn(f, rnd, n, t0), timbre: id.timbre };
 }
-const longCache = new Map(), cache = new Map();
+const longCache = voiceCache(), cache = voiceCache();   // (bounded to the song in use — ../voicecache.js)
 function longRender(base){
   if (longCache.has(base)) return longCache.get(base);
   const n = Math.round(SR * LEN), { raw, timbre } = renderRaw(base, n, 0);

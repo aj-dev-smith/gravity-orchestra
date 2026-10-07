@@ -63,7 +63,9 @@ export default {
   // PURE DSP, deterministic, no AudioContext: one render feeds BOTH the live
   // Web Audio path (AudioBuffer, gain = vel) and the iOS <audio> fallback (WAV).
   // id = an event's note field. Keep peak ≤ ~.9; keep it short (≤ ~3 s) — every
-  // unique id in the song is pre-rendered on song load. sr 22050–44100.
+  // unique id in the song is pre-rendered on song load (on the bank's bake budget). sr 22050–44100.
+  // Its LEVEL is what plays on iOS too (the WAV keeps it — src/wavlevel.js). Memoise renders in a
+  // `voiceCache()` (../voicecache.js), never a plain Map: main frees what the next song doesn't use.
   voice(id){ return { samples, sr }; },
   // optional: the unique ids to bake (default: unique e[1]). ctx = { beat, bpm, rollT, P, loopBeats }
   // (main passes the song's tempo + loop: bucket voices by a note's length in SECONDS, exactly as

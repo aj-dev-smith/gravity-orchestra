@@ -29,6 +29,7 @@
    Notes are sharps-only names, low → high, joined by '+'.
    ============================================================ */
 import { noteNum } from '../../engine.js';
+import { voiceCache } from '../voicecache.js';
 
 export const SR = 32000;
 export const OPEN_LEN = 1.6;          // s: an open hit's render (the live path releases at `dur`)
@@ -258,7 +259,7 @@ function gate(key, sr, { open = .02, close = .008, hold = .012, rel = .016 } = {
   return g;
 }
 
-const cache = new Map();
+const cache = voiceCache();   // (bounded to the song in use — ../voicecache.js)
 /** One whole HIT (a chord or single note, open / muted / clean) → { samples, sr }. Cached per id. */
 export function riffVoice(id){
   if (cache.has(id)) return cache.get(id);

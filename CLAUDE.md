@@ -230,6 +230,18 @@ song can get one, and **MIDI import now generates drums from channel 9** (§6).
   on the live path and releases at `dur` exactly, as before. Measured (all songs + demos): WAV bank
   −12 %, Float32 sources +32 %, bake time ≈ unchanged (cuts are slices; horns re-render natively).
   `test/sustain.test.js`.
+- **Voice LOAD cost + levels (audio QA sweep, 2026-10-07 — `node scripts/audio-sweep.mjs [--solo]`
+  renders one steady-state loop per song OFFLINE and reports peak / LUFS / limiter / silence /
+  strikes / bake ms + MB / each machine's level under the mix while it plays).** Three rules fell out:
+  · **bake budget** — rebuildBank renders voices (soonest machine first) + the cymbals for
+    `BAKE_SYNC_MS` (250) and the rest in idle slices; a voice asked for early renders on the spot.
+    A full room used to block the song build 1–1.7 s on a laptop (finale ≈ 300 ids).
+  · **bounded caches** — every voice.js caches in `voiceCache()` (`src/instruments/voicecache.js`);
+    main sweeps what the current build didn't touch (browsing all songs held ~480 MB of heap, now ~230).
+    A plain `new Map()` render cache in a plugin fails `test/voicecache.test.js`.
+  · **the iOS WAV keeps the render level** (`src/wavlevel.js`) — voice WAVs used to be
+    peak-normalised, which silently undid `song.mix`, the dulcimer's soft layer and the riff's
+    RMS level on iOS. `song.mix` is now a bank GAIN (applied as the render is wrapped), not a copy.
 - **Room director** (src/directorplan.js, pure + tested; main `syncDirector` → camera.js plays it back):
   the song is data, so the loop's whole EDIT is solved at song load. Every machine — **the belt is
   just one of them, no protagonist floor** (AJ: "I don't see the belt as too special") — is scored

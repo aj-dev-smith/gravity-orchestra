@@ -30,6 +30,7 @@
    ============================================================ */
 import { noteNum } from '../../engine.js';
 import { splitBucket, cutHold, relFor } from '../sustain.js';
+import { voiceCache } from '../voicecache.js';
 
 export const SR = 32000;
 export const PEAK = .8;
@@ -122,7 +123,7 @@ export function nativeHold(id){
   return durFor(m) * (ep ? .85 : 1) * (1 - TAIL);
 }
 const DAMP_REL = .3;                         // the felt landing: ≈ the live path's τ .12 release
-const cache = new Map();
+const cache = voiceCache();   // (bounded to the song in use — ../voicecache.js)
 /** id = pitch [':e' tine e-piano] [':p' soft layer] [~hold: the DAMPER drops at hold s — a duration
     bucket, the iOS sample's baked note-off]  →  { samples: Float32Array, sr } */
 export function grandVoice(id){

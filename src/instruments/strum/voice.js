@@ -21,6 +21,7 @@
    Peak ≤ .86, ends in exact zero, ≤ 3 s.
    ============================================================ */
 import { parseId, pickU } from './solve.js';
+import { voiceCache } from '../voicecache.js';
 
 export const SR = 44100;
 const TAU = 2 * Math.PI;
@@ -48,7 +49,7 @@ const BODY = {
 };
 export const durOf = m => Math.max(1.8, Math.min(3, 3 - (m - 40) * .02));
 
-const cache = new Map();
+const cache = voiceCache();   // (bounded to the song in use — ../voicecache.js)
 export function strumVoice(id){
   if (cache.has(id)) return cache.get(id);
   const p = parseId(id) || parseId('A3');

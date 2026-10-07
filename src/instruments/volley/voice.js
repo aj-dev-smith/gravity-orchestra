@@ -16,9 +16,10 @@
    High notes are small, stiff domes: they ring shorter.
    ============================================================ */
 import { noteHz, noteNum } from '../../engine.js';
+import { voiceCache } from '../voicecache.js';
 
 export const SR = 44100;
-const cache = new Map();
+const cache = voiceCache();   // (bounded to the song in use — ../voicecache.js)
 
 function mulberry32(a){
   return () => {

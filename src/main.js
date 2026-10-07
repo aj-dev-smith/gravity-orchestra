@@ -27,6 +27,7 @@ import { spatialize } from './spatial.js';
 import { mergeStatic, watchFrozen, pruneFrozen, frozenStats } from './mergestatic.js';
 import { makeEditor } from './editor/index.js';
 import { planEdit, shotAt } from './directorplan.js';
+import { RIDE, ridePose, rideMoments, rideWindowAt } from './ridecam.js';
 import { makeFollow, solveShots as solveShotsIn, resolveRoom, solidBox, roomSolids } from './shotrig.js';
 import { makeXR } from './xr.js';
 import { U_PER_M } from './xrplan.js';
@@ -102,7 +103,7 @@ scene.fog = new THREE.FogExp2(0x07060e, 0.026);
    + WASD/QE fly controls, and the per-frame framing. main just feeds it the live
    marbles each frame and the tracks on each song change. */
 const cam = makeCameraRig({ stageY: STAGE_Y, fixedZMax: FIXED_ZMAX,
-                            dom: renderer.domElement, camsEl: document.getElementById('cams'), pathBlocked });
+                            dom: renderer.domElement, camsEl: document.getElementById('cams'), pathBlocked, ridePose: rideCam });
 /* does the straight line a → b pass through any drawn machine part? (the director asks once
    per cut: a glide that would dolly through geometry becomes a hard cut) */
 function pathBlocked(a, b){
@@ -840,6 +841,9 @@ function syncDirector(S, view){
   const beltHits = [];
   tracks.forEach(tr => tr.pads.forEach(pd => beltHits.push({ t: wrapP(tr.rollT + pd.t, P),
     w: .5 + Math.min(1.5, Math.max(0, pd.dt - 1) * .6) + (pd.dt <= .15 ? .4 : 0) })));
+  // RIDES: the long, tall flights the camera may ride (ridecam.js) — sparingly, and never for a
+  // reduced-motion viewer (the manual RIDE button stays theirs to pick)
+  rides = reduceMotion ? [] : rideMoments(flightsOf(P));
   plan = planEdit(planIn = {
     voices: [...cues.map(c => ({ key: c.key, hits: c.cue, weight: dirWeight(S, c.owner) })),   // (the song's pull only:
              // salience is relative to each machine's own norm, so sparse voices need no boost)
@@ -847,7 +851,10 @@ function syncDirector(S, view){
     grid: { t0: ROLL_T, beat: BEAT, end: seamFrom },
     fixed: script.map(c => ({ t: c.t, len: c.hold, key: c.key })),
     wides: moments.filter(m => m.n >= ENSEMBLE_N).map(m => m.t),
+    rides,
   });
+  rideWins = plan.rides; rideEvery = plan.rideEvery;    // (the windows it chose — fixed points of the edit — and
+                                                        //  on which loop passes: a short loop rides every k-th one)
   // the wide STAGE shot. A full room (instrument plugins on stage): a LOW front-left
   // three-quarter view (the angle the room reads as a machine-hall, not a floor plan) —
   // bowls + drums in the foreground, the belt and the back tier behind — and the song
@@ -878,6 +885,59 @@ function syncDirector(S, view){
   cam.syncStations(shots, wide, { auto: !soloKey, openWide: full && !soloKey, openUntil: ROLL_T + 2 * BEAT, follow, bounds: eyeRoom(),
                    plan: { at: now => shotAt(plan, wrapP(now, P), seamFrom) } });
   xrAnchors();
+}
+/* ---- RIDE THE BALL (ridecam.js): every belt flight's launch, duration and apex (the render
+   height it climbs above the higher of its two ends — a crane hop's lob to the magnet counts),
+   sampled from ballPos, the source of truth. Static song data: solved once per song. ---- */
+let rides = [], rideWins = [], rideEvery = 1, rideDbg = null;          // (rideDbg: __dev.ride — the last pose's raw solve)
+function flightsOf(P){
+  const out = [];
+  tracks.forEach(tr => tr.pads.forEach((pd, i) => {
+    if (pd.dt < RIDE.DT_MIN || i === tr.pads.length - 1) return;   // (the last pad's flight is the seam)
+    const t0 = tr.rollT + pd.t, n = 16;
+    let top = -Infinity, y0 = 0, y1 = 0;
+    for (let k = 0; k <= n; k++){
+      const tau = t0 + pd.dt * k / n, y = ballPos(tr, tau, 0).pos.y + DESCENT * tau;
+      if (k === 0) y0 = y; if (k === n) y1 = y; top = Math.max(top, y);
+    }
+    out.push({ t: wrapP(t0, P), dt: pd.dt, apex: top - Math.max(y0, y1), role: tr.role });
+  }));
+  return out;
+}
+/* The ride pose at songTime st — a pure fn of it. directed: inside a planned ride window only
+   (eased in/out of the chase); else the manual RIDE mode on the lead. The marble path is this
+   loop's ball, clamped to its life on screen (from its visible birth fall — or, on a crane belt,
+   its magnet hang — to its last landing; the plunge / seam hop are held, and the new loop's first
+   frame is a cut). Guarded: never inside a tone-plate, a machine, or out through the room. */
+const _rE = new THREE.Vector3(), _rA = new THREE.Vector3(), _rP = new THREE.Vector3(), _rd = new THREE.Vector3();
+const _ride = { eye: new THREE.Vector3(), aim: new THREE.Vector3(), fov: RIDE.FOV };
+function rideCam(st, directed){
+  if (!started || st < 0 || !tracks.length) return null;
+  const P = ROLL_T + LOOP_T, now = wrapP(st, P), base = st - now;
+  let win = null, tr = tracks[0];
+  if (directed){
+    const w = rideWindowAt(rideWins, now); if (!w || Math.round(base / P) % rideEvery) return null;
+    win = { t0: base + w.t0, t1: base + w.t1 }; tr = tracks.find(t => t.role === w.role) || tr;
+  }
+  const lo = base + (tr.crane ? 0 : tr.rollT - BIRTH_FALL + .3), hi = base + tr.rollT + tr.total - .05;   // (from its visible fall / magnet hang)
+  const path = s => { const tau = Math.min(hi, Math.max(lo, s)) - base, p = ballPos(tr, tau, base).pos;
+    return [p.x + tr.origin.x, p.y + DESCENT * tau + tr.origin.y, p.z + tr.origin.z]; };
+  const r = ridePose(path, st, win, RIDE, camera.aspect);
+  rideDbg = { raw: r, ball: path(st), tr: tr.role, win };
+  const eye = _rE.fromArray(r.eye), aim = _rA.fromArray(r.aim);
+  // the tone-plates keep moving (they rise through the band): a soft push off any plate the eye nears
+  for (const po of tr.padObjs){
+    if (!po.g.visible) continue;
+    po.g.getWorldPosition(_rP); const d = eye.distanceTo(_rP), R = 2.1;
+    if (d < R) eye.addScaledVector(_rd.subVectors(eye, _rP).normalize(), R - d);
+  }
+  // never inside a machine (step toward the marble until clear) nor out through the room
+  const inBox = () => followRig.boxes.some(b => eye.x > b[0] - .6 && eye.x < b[1] + .6 && eye.y > b[2] - .6 && eye.y < b[3] + .6 && eye.z > b[4] - .6 && eye.z < b[5] + .6);
+  for (let k = 0; k < 8 && inBox(); k++) eye.lerp(aim, .25);
+  const rm = eyeRoom();
+  eye.set(Math.min(rm.x1, Math.max(rm.x0, eye.x)), Math.min(rm.y1, Math.max(rm.y0, eye.y)), Math.min(rm.z1, Math.max(rm.z0, eye.z)));
+  _ride.eye.copy(eye); _ride.aim.copy(aim);
+  return _ride;
 }
 /* VR teleport pads (src/xrplan.js): every solved shot eye + the wide + one per belt bay, kept
    clear of every machine's box. Cheap (no rays) — re-run whenever the director re-solves. */
@@ -1634,6 +1694,7 @@ if (new URLSearchParams(location.search).has('debug')){
     station(key, dist, up){ return lookAtStation(key, dist, up); },
     instruments: () => instLive.map(r => r.I.key),
     cam(m){ cam.mode = m; }, get shot(){ return cam.shot; },
+    ride(t = songTime, directed = true){ const p = rideCam(t, directed); return p && { eye: p.eye.toArray(), aim: p.aim.toArray(), ...rideDbg }; },
     // room layout probe: world-space XZ boxes of every station, the drum machine and the belt bays
     boxes(deep){
       const bx = o => { const b = visBox(o, true); return b.isEmpty() ? null : [b.min, b.max].map(v => [+v.x.toFixed(1), +v.y.toFixed(1), +v.z.toFixed(1)]); };
@@ -1645,7 +1706,7 @@ if (new URLSearchParams(location.search).has('debug')){
       return out;
     },
     director(){ const B = t => +((t - ROLL_T) / BEAT).toFixed(2);   // the room director's static cues, in beats
-      return { cuts: plan ? plan.cuts.map(c => [B(c.t), c.key]) : [], shares: plan ? Object.fromEntries(Object.entries(plan.shares).map(([k, v]) => [k, +v.toFixed(3)])) : {},
+      return { rides: rideWins.map(w => [+w.t0.toFixed(2), +w.t1.toFixed(2), w.role]), rideEvery, cuts: plan ? plan.cuts.map(c => [B(c.t), c.key]) : [], shares: plan ? Object.fromEntries(Object.entries(plan.shares).map(([k, v]) => [k, +v.toFixed(3)])) : {},
                wide: moments.filter(m => m.n >= ENSEMBLE_N).map(m => B(m.t)),
                script: script.map(c => [c.key, B(c.t), +(c.hold / BEAT).toFixed(2)]), seamFrom: B(seamFrom) }; },
     get planIn(){ return planIn; },                   // (dev: the edit solve's inputs — tune directorplan.js offline)

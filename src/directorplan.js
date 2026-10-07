@@ -34,17 +34,29 @@ export const PLAN = {
   LOOK: 4,              // beats the salience window looks ahead (the camera arrives before the moment)
   REST: 8,              // beats of silence before the next hit counts as an ENTRANCE
   ENTER: 2.5,           // an entrance's pull (×1–2 by the length of the rest)
-  CAP: { belt: .18, stage: .16, station: .24 },  // max share of the loop's shot time (scripted time is exempt;
+  CAP: { belt: .18, stage: .16, station: .24, ride: .14 },  // max share of the loop's shot time (scripted time is exempt;
                         // a room too small to fit every cap just stays balanced — all over-cap pulls damp together)
   STAGE_BASE: .5,       // the wide's floor pull (a breather when nothing's special)
+  RIDE_PRE: 1.0, RIDE_POST: .8, RIDE_MAX: 6.5,   // s — a ride's window around its flight (rideSpan)
+  RIDE_WMIN: .3,        // a flight weaker than this (ridecam w: apex × the loop's best) is never ridden
+  RIDE_EVERY: 20,       // s of music per ride candidate (≥ 1 a loop)
+  RIDE_LONGRUN: .22,    // the rides' share of the LONG RUN: a short loop whose one ride is a bigger slice than
+                        // this rides only every rideEvery-th pass (the other passes keep the belt's framing)
+  RIDE_W: 3.2,         // a RIDE (ridecam.js — the camera behind a marble on a long, tall flight):
+                        // its pull per beat of the flight at full apex (w = 1). Never covered
+                        // (an optional spectacle, not a machine) and capped at CAP.ride — sparingly (a short loop still
+                        // fits ONE: the cap never falls below a single minimum-hold shot).
 };
 
 /* voices: [{key, hits:[{t, w}], weight?, belt?}] — hit times in loop-local seconds; weight =
    the song's authored pull (song.director.<key>), applied as √weight.
    grid: {t0, beat, end, bar?} — the downbeat, the beat (s), where the music's grid ends.
    fixed: [{t, len, key}] — scripted shots (s). wides: [t] — big ensemble downbeats (s).
-   Returns {cuts:[{t, key}], shares:{key: fraction}, sal} — cuts sorted, the first at t0. */
-export function planEdit({ voices, grid, fixed = [], wides = [], opts = {} }){
+   rides: [{t, dt, w}] — long flights worth riding (ridecam.rideMoments: launch, duration, apex pull).
+   Returns {cuts:[{t, key}], shares:{key: fraction}, sal, rides:[{t0, t1, t, dt, role}], rideEvery} — cuts
+   sorted, the first at t0; rideEvery: the rides play on every rideEvery-th loop pass only (sparing over the
+   long run — the off passes' 'ride' shots fall back to the belt; a pure fn of the loop index). */
+export function planEdit({ voices, grid, fixed = [], wides = [], rides = [], opts = {} }){
   const o = { ...PLAN, ...opts, CAP: { ...PLAN.CAP, ...(opts.CAP || {}) } };
   const { t0, beat, end } = grid, bar = grid.bar || 4;
   const N = Math.max(1, Math.floor((end - t0) / beat + 1e-6));
@@ -99,9 +111,32 @@ export function planEdit({ voices, grid, fixed = [], wides = [], opts = {} }){
   const hold = Math.round(o.MIN_HOLD / beat);        // (a big downbeat earns a whole shot's worth of wide, not a blink)
   for (const t of wides){ const s = slot(t); for (let d = -1; d <= hold; d++) if (s + d >= 0 && s + d < N) st[s + d] = Math.max(st[s + d], o.STAGE_BASE + (d < 0 ? 3 : 4 - 2 * d / hold)); }
   sal.stage = st;
+  // the RIDE: the flight's own beats (and the beat before its launch — the cut lands, the eye
+  // settles, then the marble leaves). Not a voice: it takes no part in the others' exposure.
+  // SPARING: only the loop's best few flights are candidates at all — w ≥ RIDE_WMIN, at most one
+  // per RIDE_EVERY s of music, never two whose windows would touch (best first, earlier on ties)
+  const cand = [];
+  for (const r of [...rides].filter(r => r.w >= o.RIDE_WMIN).sort((x, y) => y.w - x.w || x.t - y.t)){
+    if (cand.length >= Math.max(1, Math.floor(N * beat / o.RIDE_EVERY))) break;
+    if (!cand.some(c => r.t - o.RIDE_PRE < c.t + c.dt + o.RIDE_POST + o.MIN_HOLD && c.t - o.RIDE_PRE < r.t + r.dt + o.RIDE_POST + o.MIN_HOLD)) cand.push(r);
+  }
+  if (cand.length){
+    const rd = new Float64Array(N);
+    for (const r of cand){
+      const s0 = slot(r.t), s1 = Math.max(s0, slot(r.t + r.dt - 1e-6));
+      for (let s = s0 - 1; s <= s1; s++) if (s >= 0 && s < N) rd[s] = Math.max(rd[s], r.w * (s < s0 ? .6 : 1));
+    }
+    // a ride is the BELT's spectacle, so it is priced against the belt's own pull at that beat:
+    // the loop's big flight (w → 1) outbids the belt's chase; a merely-long arc (small w) doesn't
+    const bs = sal.belt;
+    sal.ride = Float64Array.from(rd, (w, s) => w > 0 ? (bs ? bs[s] : 0) * (.6 + .6 * w) + o.RIDE_W * w : 0);
+  }
 
   const keys = Object.keys(sal), K = keys.length;
-  const capOf = k => k === 'belt' ? o.CAP.belt : k === 'stage' ? o.CAP.stage : o.CAP.station;
+  // (the cap never falls below ONE ride of the loop's longest candidate: a short loop still fits it)
+  const rideCap = Math.max(o.CAP.ride, (Math.round(o.MIN_HOLD / beat) + 1) / N,
+    ...cand.map(r => (Math.ceil(Math.min(r.dt + o.RIDE_PRE + o.RIDE_POST, o.RIDE_MAX) / beat) + 1) / N));
+  const capOf = k => k === 'belt' ? o.CAP.belt : k === 'stage' ? o.CAP.stage : k === 'ride' ? rideCap : o.CAP.station;
   const fixedKey = new Array(N).fill(null);
   for (const c of fixed){
     if (!keys.includes(c.key)){ keys.push(c.key); sal[c.key] = new Float64Array(N); }
@@ -120,7 +155,10 @@ export function planEdit({ voices, grid, fixed = [], wides = [], opts = {} }){
     for (const [a, b, k] of forced) for (let s = a; s < b; s++) if (!fk[s]) fk[s] = k;
     // prefix sums of scaled salience + of "a slot fixed to some OTHER key"
     const pre = keys.map(k => { const p = new Float64Array(N + 1); for (let s = 0; s < N; s++) p[s + 1] = p[s] + sal[k][s] * mult[k]; return p; });
-    const bad = keys.map(k => { const p = new Int32Array(N + 1); for (let s = 0; s < N; s++) p[s + 1] = p[s] + (fk[s] && fk[s] !== k ? 1 : 0); return p; });
+    // (a fixed RIDE is only ever its own window: outside it there is no marble flight to ride)
+    const onlyFixed = k => k === 'ride' && !sal.ride.some(v => v > 0);
+    const bad = keys.map(k => { const p = new Int32Array(N + 1), of = onlyFixed(k);
+      for (let s = 0; s < N; s++) p[s + 1] = p[s] + ((fk[s] && fk[s] !== k) || (of && fk[s] !== k) ? 1 : 0); return p; });
     const nfix = new Int32Array(N + 1); for (let s = 0; s < N; s++) nfix[s + 1] = nfix[s] + (fk[s] ? 1 : 0);
     // state (k, p) at beat b: the shot ending at b is k, the one before it p (KK = none —
     // the loop's first shot). Second order so an A-B-A PING-PONG (a short B between two
@@ -185,7 +223,7 @@ export function planEdit({ voices, grid, fixed = [], wides = [], opts = {} }){
   const sharesOf = segs => { const sh = {}; for (const [a, b, k] of segs) sh[k] = (sh[k] || 0) + (b - a) / N; return sh; };
   const isFixedKey = k => fixedKey.includes(k);
 
-  const missingOf = sh => keys.filter(k => k !== 'stage' && !sh[k] && sal[k].some(v => v > 0) && !forced.some(f => f[2] === k));
+  const missingOf = sh => keys.filter(k => k !== 'stage' && k !== 'ride' && !sh[k] && sal[k].some(v => v > 0) && !forced.some(f => f[2] === k));
   // COVERAGE: a machine that plays but never got the camera takes its best free window
   // (the machine with the FEWEST free windows chooses first — two machines can want the same gap)
   const windows = k => {
@@ -220,7 +258,44 @@ export function planEdit({ voices, grid, fixed = [], wides = [], opts = {} }){
     segs = solve();
   }
   const cuts = segs.map(([a, , k]) => ({ t: t0 + a * beat, key: k }));
-  return { cuts, shares: sharesOf(segs), sal, N, forced };
+  if (cand.length){
+    // THE RIDES the solve chose become FIXED points: each planned 'ride' shot is re-cut to the
+    // flight it is for (rideSpan — its launch to its landing, never a ride cut off mid-lob), and
+    // the edit is re-solved around them (exempt from the caps, like a script)
+    const userFixed = fixed.map(c => [c.t, c.t + c.len]);
+    const wins = [];
+    segs.forEach(([a, b, k]) => {
+      if (k !== 'ride') return;
+      const w = rideSpan(cand, t0 + a * beat, t0 + b * beat, { t0, beat, end: t0 + N * beat }, o);
+      if (w && !userFixed.some(([x, y]) => w.t0 < y && w.t1 > x) && !wins.some(v => w.t0 < v.t1 && w.t1 > v.t0)) wins.push(w);
+    });
+    const out = planEdit({ voices, grid, wides, rides: [], opts,
+      fixed: [...fixed, ...wins.map(w => ({ t: w.t0, len: w.t1 - w.t0, key: 'ride' }))] });
+    const share = wins.reduce((a, w) => a + w.t1 - w.t0, 0) / (N * beat);
+    return { ...out, rides: wins, rideEvery: Math.max(1, Math.ceil(share / o.RIDE_LONGRUN - 1e-9)) };
+  }
+  return { cuts, shares: sharesOf(segs), sal, N, forced, rides: [], rideEvery: 1 };
+}
+
+/* A planned ride shot [a, b) → the window it actually rides: the best flight inside it (w ×
+   overlap), from RIDE_PRE s before its launch (the cut lands, the eye settles) to RIDE_POST s
+   after it lands — the leads squeezed (to ≥ .4 s) so the window fits RIDE_MAX — at least
+   MIN_HOLD, snapped OUT to beats, inside the grid. → {t0, t1, t, dt, role} | null */
+export function rideSpan(rides, a, b, { t0, beat, end }, o = PLAN){
+  let best = null;
+  for (const r of rides){
+    const ov = Math.min(b, r.t + r.dt) - Math.max(a, r.t);
+    if (ov > 0 && (!best || r.w * ov > best.w * best.ov)) best = { ...r, ov };
+  }
+  if (!best) return null;
+  let pre = o.RIDE_PRE, post = o.RIDE_POST;
+  const over = pre + best.dt + post - o.RIDE_MAX;
+  if (over > 0){ const k = Math.max(0, 1 - over / (pre + post - .8)); pre = .4 + (pre - .4) * k; post = .4 + (post - .4) * k; }
+  let s = best.t - pre, e = best.t + best.dt + post;
+  if (e - s < o.MIN_HOLD){ const pad = (o.MIN_HOLD - (e - s)) / 2; s -= pad; e += pad; }
+  const snapA = Math.max(0, Math.floor((s - t0) / beat + 1e-6)), snapB = Math.min(Math.round((end - t0) / beat), Math.ceil((e - t0) / beat - 1e-6));
+  if (snapB <= snapA) return null;
+  return { t0: t0 + snapA * beat, t1: t0 + snapB * beat, t: best.t, dt: best.dt, role: best.role };
 }
 
 /* The planned shot at loop-local time `now`: the last cut at or before it ('stage' before

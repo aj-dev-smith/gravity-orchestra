@@ -14,13 +14,17 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
      free  — hand it to the user: orbit-drag, zoom, and a WASD/
              arrows/QE fly rig (the seed of roaming a room).
      all / lead / alto / bass — follow that marble (or all).
+     ride  — RIDE THE BALL: sit just behind the lead marble on its
+             own solved path, looking where it's going (ridecam.js —
+             a pure fn of songTime). The director also cuts to a
+             ride, sparingly, for a long tall flight (plan.ride).
    ============================================================ */
 
 const CAMCOLORS = {
   auto:'#ffe9c9', fixed:'#7fe3c8', free:'#ff8fd0',
-  all:'#cfd6e6', lead:'#ffaa55', alto:'#c08bff', bass:'#66aaff', stage:'#9fe8ff',
+  all:'#cfd6e6', lead:'#ffaa55', alto:'#c08bff', bass:'#66aaff', stage:'#9fe8ff', ride:'#ffd36e',
 };
-const FIXED_OK = new Set(['all', 'auto', 'fixed', 'free', 'stage']);
+const FIXED_OK = new Set(['all', 'auto', 'fixed', 'free', 'stage', 'ride']);
 /* DIRECTOR over STATIONS (instrument plugins + the drum machine): the song is data, so
    main solves the loop's whole EDIT at song load (directorplan.js — what's special about
    each machine, beat by beat → a shot list) and the rig plays it back. A far jump is a
@@ -49,7 +53,10 @@ const PAN_KEYS = {
   e: [0, 1, 0], q: [0, -1, 0],                               // E lifts the eye up, Q drops it down
 };
 
-export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = null }){
+/* ridePose(songTime, directed) → {eye, aim, fov} (THREE.Vector3s) | null — main's RIDE solve
+   (ridecam.js over ballPos). directed: only inside a planned ride window (eased in/out);
+   otherwise the manual RIDE mode's free-running pose on the lead. */
+export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = null, ridePose = null }){
   const BASE_FOV = 55;
   let freeFov = null;                                         // a lens override for the free eye (stage edit's plan view)
   const camera = new THREE.PerspectiveCamera(BASE_FOV, innerWidth/innerHeight, .1, 200);
@@ -157,7 +164,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
       box.appendChild(b);
     };
     ['auto', ...(stations.length ? ['stage'] : []), 'free'].forEach(m => add(core, m));
-    ['fixed', ...(multi ? ['all', ...curTracks.map(t => t.role)] : []), ...stations.map(st => st.key)].forEach(m => add(more, m));
+    ['fixed', ...(curTracks.length ? ['ride'] : []), ...(multi ? ['all', ...curTracks.map(t => t.role)] : []), ...stations.map(st => st.key)].forEach(m => add(more, m));
     // a mouse wheel scrolls the strip sideways (only when it actually overflows)
     more.addEventListener('wheel', e => {
       if (more.scrollWidth <= more.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
@@ -228,7 +235,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
     }
 
     // DIRECTOR: the timeline is known, so cut to the action before it happens
-    let effMode = mode;
+    let effMode = mode, rideNow = null;
     if (mode === 'auto'){
       let want = 'all', score = 1.0;
       tracks.forEach(tr => {
@@ -247,8 +254,12 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
       } else allFailSince = null;
       const allBad = time < allBadUntil;
       if (want === 'all' && allBad) want = heaviest(marblePts);
+      rideNow = (ridePose && plan?.at && songTime >= openUntil && ridePose(songTime, true)) || null;
       if (!stations.length){
-        if (want !== autoWant && (time - lastCut > 2.2 || (autoWant === 'all' && allBad))){
+        // (a planned RIDE is a solved cut — it overrides the track vote's hysteresis both ways)
+        if (rideNow){ if (autoWant !== 'ride'){ autoWant = 'ride'; lastCut = time; cutNow = true; } }
+        else if (autoWant === 'ride'){ autoWant = want; lastCut = time; cutNow = true; }
+        else if (want !== autoWant && (time - lastCut > 2.2 || (autoWant === 'all' && allBad))){
           autoWant = want; lastCut = time;
         }
       } else if (songTime < openUntil){                      // the opening reveal: hold the wide
@@ -257,10 +268,11 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
         // (main's directorplan: the shot for this beat, a pure function of songTime — so the
         // cut lands on the same beat every loop and scrubbing is exact)
         const isSt = k => stations.some(st => st.key === k);
-        const k = plan ? plan.at(songTime) : 'stage';
+        const k0 = plan ? plan.at(songTime) : 'stage';
+        const k = k0 === 'ride' && !rideNow ? 'belt' : k0;  // (a ride that doesn't play this pass, or has no marble: its belt)
         let pick = k;
         if (k === 'belt'){                                    // the belt: whichever framing is live (lead / alto / all…)
-          const onBelt = autoWant !== 'stage' && !isSt(autoWant);
+          const onBelt = autoWant !== 'stage' && autoWant !== 'ride' && !isSt(autoWant);
           pick = !marblePts.length ? 'stage'
             : onBelt && time - lastCut < BELT_HOLD && !(autoWant === 'all' && allBad) ? autoWant : want;
         } else if (k !== 'stage' && !isSt(k) && !marblePts.length) pick = 'stage';   // a scripted belt role, no marble live
@@ -274,6 +286,17 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
     // hold a fixed stage view, follow the chosen marble, or frame them all
     const sway = (reduceMotion || mode === 'fixed') ? 0 : Math.sin(time*.21);
     let ideal = _ideal, aim = _aim;
+    const ride = effMode !== 'ride' || !ridePose ? null : mode === 'auto' ? rideNow : ridePose(songTime, false);
+    if (ride){
+      // RIDE: the pose IS the solve (a pure fn of songTime — already smoothed, comfort-limited
+      // and guarded); no sway, no lerp lag (it would let the marble run out of frame), no shake.
+      // Entering it is always a CUT (a glide into a moving chase reads as a lurch).
+      camPos.copy(ride.eye); camTarget.copy(ride.aim);
+      lens(ride.fov, dt, true);
+      cutNow = false; shakeAmp = 0;
+      camera.position.copy(camPos); camera.lookAt(camTarget);
+      return;
+    }
     if (mode === 'fixed'){
       // STATIONARY WORLD CAM: a held pose that frames the whole pad field — no chase,
       // no sway, no shake. Glides into place once (shared lerp below) then holds dead still.
@@ -290,7 +313,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
       const fit = Math.min(shot.fitMax ?? Infinity, Math.pow(Math.max(1, 1.5 / camera.aspect), .6));   // fitMax: the eye can't leave the room
       aim.copy(shot.aim);
       ideal.copy(shot.eye).sub(aim).multiplyScalar(fit).applyAxisAngle(_Y, sway * .12).add(aim);
-    } else followPose(effMode, marblePts, sway, ideal, aim, true);
+    } else followPose(effMode === 'ride' ? 'lead' : effMode, marblePts, sway, ideal, aim, true);   // (ride, nothing to ride yet: chase the lead)
     // a director cut GLIDES only when it's short AND the glide's straight line is clear air —
     // never a dolly through a machine (main's pathBlocked raycasts the world); otherwise CUT
     // …and a cut that changes LENS is a cut too (a glide keeps its focal length: a dolly that

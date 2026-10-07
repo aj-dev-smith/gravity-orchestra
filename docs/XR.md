@@ -17,7 +17,7 @@ Tick these off in order. Each one is a few minutes. Write down what felt wrong; 
 - [ ] Install **OVR Metrics Tool** (or turn on the browser's FPS overlay) so you can read real frame times. The emulator can't.
 
 **Comfort and scale (10 min)**
-- [ ] **Für Elise**. Tap **ENTER VR**. You should hear sound within a second and land on the lead belt's pad, eyes level with the strike band. Does a long lob read as real gravity (1 unit = 0.68 m)?
+- [ ] **Für Elise** (`?song=fur-elise&xr`). Tap **ENTER VR**. You should hear sound within a second and land on the lead belt's pad, eyes level with the strike band. Does a long lob read as real gravity (1 unit = 0.68 m)?
 - [ ] Right stick up, aim at a pad, release. The blink should be quick and never a glide. Try the **STAGE** pad: it's about 16 m up. Is the solid brass disc under you enough, or do you want a railing?
 - [ ] Snap-turn (right stick ← →). 30° steps. Too big? Too small?
 - [ ] Press **A** for the tour. Every cut should be a blink, never a camera move. Ride-cam shots land you on the belt pad; the headset is never flown.
@@ -29,9 +29,9 @@ Tick these off in order. Each one is a few minutes. Write down what felt wrong; 
 
 **Performance: the real reason for the test (15 min)**
 Draw calls per frame, both eyes, under the emulator, with the detail profile on (it's on by default):
-- [ ] **Daybreak Engine** (the full room, about 555 from the wide, 313 from the belt). Stand on STAGE and watch. Does it hold 72 Hz? Note the OVR Metrics GPU and CPU %.
-- [ ] **Forge of the Marble** (Metal Arena, about 506 / 385). Watch a crash: the pyro, CO2 and blinders are all firing.
-- [ ] **The Entertainer** (Midnight Studio, about 500 / 320). In VR the studio's mirror floor becomes a plain glossy floor, because the mirror would re-render the scene for each eye.
+- [ ] **Daybreak Engine** (`?song=daybreak-engine`, the full room, about 555 from the wide, 313 from the belt). Stand on STAGE and watch. Does it hold 72 Hz? Note the OVR Metrics GPU and CPU %.
+- [ ] **Forge of the Marble King** (`?song=forge`, Metal Arena, about 506 / 385). Watch a crash: the pyro, CO2 and blinders are all firing.
+- [ ] **The Entertainer** (`?song=entertainer`, Midnight Studio, about 500 / 320). In VR the studio's mirror floor becomes a plain glossy floor, because the mirror would re-render the scene for each eye.
 - [ ] A/B the profile: add `&xrdetail=full` to the URL (everything at full detail, as before tonight). Does it feel worse? Do you spot anything the profile drops that you miss?
 - [ ] If the GPU is the bottleneck (high GPU %, low CPU), try `&xrscale=0.8`. If you have spare headroom, try `&xrhz=90`.
 
@@ -106,8 +106,8 @@ The wrist label on the back of your left hand shows the song, the pad (`→ PAD`
 2. Throw yourself to **STAGE** (the wide). You'll be high up on a catwalk pad, so check how the height feels. Then try the bass belt's pad.
 3. Press **A** for the tour. The pads follow the director's edit (≥ 3 s per shot).
 4. Press **B**, then scrub with the left stick. Strikes are suppressed while scrubbing, and the machines re-derive instantly.
-5. **Mountain King**: the belt plus the marble drums. Stand on the drums' pad. Then Y → Starship: only the sky banks.
-6. **Daybreak Engine** (the default full room). This is the **perf stress test** (see §5). The detail profile brings it from about 1450 to about 555 draw calls from the wide. Tell us whether it holds 72 Hz.
+5. **Mountain King** (`?song=mountain-king`): the belt plus the marble drums. Stand on the drums' pad. Then Y → Starship: only the sky banks.
+6. **Daybreak Engine** (`?song=daybreak-engine` — the house song, except through October when the page opens on Danse Macabre).  This is the **perf stress test** (see §5). The detail profile brings it from about 1450 to about 555 draw calls from the wide. Tell us whether it holds 72 Hz.
 7. Turn your head while a strike sounds. The pan follows your head and distance follows the pad you stand on. This is the live Web Audio path; the Quest Browser is Chromium, so the iOS sample path is never used there.
 8. Optional: **ENTER AR** (shown in the Quest browser, or with `?ar`). This is experimental. It gives grayscale passthrough, with no room, no sky and no fog, and the machines float at true scale in your space. It's the same pads and controls. The band is 18.7 m up, so it's a first look, not a design.
 
@@ -142,7 +142,7 @@ URL knobs: `?xrhz=90` (target frame rate, default 72), `?xrscale=0.8` (framebuff
   | Für Elise (grid) | stage / belt | 592 / 455 | **193 / 163** |
   | Mountain King (grid) | stage / belt | 614 / 379 | **244 / 143** |
   | Daybreak Engine (grid, full room) | stage / belt | 1451 / 679 | **555 / 313** |
-  | Forge of the Marble (arena) | stage / belt | 1081 / 823 | **506 / 385** |
+  | Forge of the Marble King (arena) | stage / belt | 1081 / 823 | **506 / 385** |
   | The Entertainer (studio) | stage / belt | 1273 / 853 | **500 / 320** |
 
   The worst case is about 280 per eye, inside the 300–500 per eye a Quest 2 wants at 72 Hz. Triangles are unchanged (about 1M per frame for the full room, both eyes). If the GPU is the limit, `?xrscale=0.8` is the first knob; foveation is already at its maximum (1). Real frame timing needs the headset: use `chrome://inspect` → Performance, or OVR Metrics Tool. `__dev.xrPerf()` (with `?debug`) shows what the profile is doing: parts batched and drawn, parts drawing as themselves mid-flash, parts hidden, glows dimmed.

@@ -32,7 +32,8 @@ const line = (base, n, step = 1, len = step) => Array.from({ length: n }, (_, i)
 describe('drums: the kit merges GM notes that are "another of the same thing"', () => {
   it('the other kick / snare, pedal hat, shakers, extra cymbals, hand drums all land on a lane', () => {
     const want = { 35: 'kick', 40: 'snare', 37: 'snare', 44: 'hat', 54: 'hat', 69: 'hat', 70: 'hat', 82: 'hat',
-                   52: 'crash', 55: 'crash', 57: 'crash', 53: 'ride', 59: 'ride', 81: 'hatOpen',
+                   57: 'crash', 59: 'ride', 81: 'hatOpen',
+                   49: 'crash', 51: 'ride', 52: 'china', 53: 'rideBell', 55: 'splash', 46: 'hatOpen',   // the real cymbals
                    60: 'tomHigh', 62: 'tomMid', 64: 'tomLow', 41: 'floorHigh' };
     for (const [gm, lane] of Object.entries(want)) expect(drumByGm(+gm), `GM ${gm}`).toBe(lane);
     for (const gm of [56, 75, 76, 77]) expect(drumByGm(gm), `GM ${gm}`).toBeUndefined();   // no piece reads as these

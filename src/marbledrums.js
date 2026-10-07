@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { dribbleAt, dribblePiston, firstStrike } from './engine.js';
 import { styleOf, kitPieces, pieceLane, clutchFrom, wireBuzz, shockAges, shockRing, DROP_V, DT_MAX, MAG_H, HW,
-         kitFrame, stairTreads, pieceFloor, STANDS, TRIPOD, HAT, hatLinkage } from './drumparts.js';
+         kitFrame, stairTreads, pieceFloor, STANDS, TRIPOD, HAT, hatLinkage,
+         cymbalSchedule, cymbalPose, cymbalPiston, cymbalPivot, cymbalUnder, clampLip, CLAMP } from './drumparts.js';
 import { V, fz, bar, kitMaterials, buildDrum, buildWires, cymbalProfile, cymbalGeometry, bronze,
          buildMagnet, buildArch, buildDeck, buildStair, coilSpring, freeze } from './drumlook.js';
 
@@ -36,7 +37,11 @@ import { V, fz, bar, kitMaterials, buildDrum, buildWires, cymbalProfile, cymbalG
    one ball, its CLUTCH (pedal → rocker → pull-tube → bottom cymbal,
    a return spring) solved from the merged hat/hatOpen sequence so the
    pair is open exactly on open hits — pedal down = closed, like a real one; the KICK lands and a SHOCKWAVE rings out across the
-   riser floor's grille.
+   riser floor's grille. THE CYMBALS (crash, ride + its bell, china, splash) hang on
+   booms; each ball strikes its ZONE (edge / bow / bell — drumparts CYMBALS), the cymbal
+   then SWINGS as a damped pendulum about the rod tip, and a magnet CLAMP under the bell
+   levels it before every strike, parks it when the swing dies and CHOKES it on cue
+   (drumparts cymbalPose — a pure fn of songTime).
 
    Every frame is re-derived from songTime (time is the only state).
    ============================================================ */
@@ -57,7 +62,7 @@ const TRAIL_N    = 9;       // ghost-trail samples per ball
 const TRAIL_DT   = .016;    // seconds between ghost samples
 const RIPPLE_K   = .016;    // membrane wave amplitude per unit impact speed…
 const RIPPLE_MAX = .13;     // …capped
-const WOBBLE     = { hat: .09, crash: .26, ride: .18 };   // cymbal wobble (rad) at full impact
+const WOBBLE     = { hat: .09 };   // hi-hat wobble (rad) at full impact (the hung cymbals swing per drumparts SWING)
 const LIGHTS     = 4;       // strike-light pool (a constant count → no shader recompiles)
 const LIGHT_PEAK = 9;       // strike-light intensity at full velocity
 const TRIM_BASE  = 1.1;     // a stair nosing's resting glow (it flashes on its tom's strike)
@@ -77,13 +82,13 @@ export function makeMarbleDrums({ envMap, glowTex }){
   let pieces = [];
   let start = -Infinity;
   let lights = [], lightIdx = 0;
-  let deckU = null, kickPc = null;
+  let deckU = null, kickPc = null, cyms = [];
 
   /* Rebuild for a song. spec = song.drums; {rollT, beat, P, cx, start, slot}. Returns the
      group for the caller to put under `world` (disposed on the next song change). */
   function build(spec, { rollT, beat, P, cx, start: s0 = -Infinity, slot = KIT_SOLO }){
     const group = new THREE.Group();
-    pieces = []; start = s0; lights = []; deckU = null; kickPc = null;
+    pieces = []; start = s0; lights = []; deckU = null; kickPc = null; cyms = [];
     if (!spec || !Object.keys(spec).length) return group;
 
     const K = V(cx + slot.x, RISER_TOP, slot.z);
@@ -144,7 +149,7 @@ export function makeMarbleDrums({ envMap, glowTex }){
       return h;
     };
 
-    const buildCymbalPiece = (p, st, c) => {
+    const buildHatPiece = (p, st, c) => {
       const Pf = cymbalProfile(st.r), geo = cymbalGeometry(st.r), mat = bronze(st, envMap);
       const group = new THREE.Group(); group.position.copy(c); kit.add(group);
       const tilt = new THREE.Group(); group.add(tilt);   // the wobble pivot — at the contact point
@@ -199,36 +204,71 @@ export function makeMarbleDrums({ envMap, glowTex }){
         board.position.z = -HAT.pedalL / 2; pedal.add(board);
         const link = new THREE.Mesh(new THREE.CylinderGeometry(.015, .015, 1, 6), mats.chrome); kit.add(link);
         Object.assign(h, { bot, rocker, spring, pedal, link, under: Pf.under });
-      } else {
-        // a cymbal on a BOOM: its rod into a sleeve at the boom tip; the boom from a stand outside
-        const rodL = ROD_VIS + .5;
-        const rod = new THREE.Mesh(new THREE.CylinderGeometry(.04, .04, rodL, 10), mats.chrome);
-        rod.position.y = -Pf.under - .04 - rodL / 2; group.add(rod);
-        const sTop = c.y - Pf.under - .04 - ROD_VIS, sBot = sTop - .55;
-        const sl = fz(new THREE.Mesh(new THREE.CylinderGeometry(.09, .1, .55, 16), mats.dark));
-        sl.position.set(c.x, (sTop + sBot) / 2, c.z); kit.add(sl);
-        const S = STANDS[p.key] || { x: c.x + (c.x > 0 ? 1.4 : -1.4), z: c.z + 1.2 };   // (drumparts: the layout knows the stands)
-        const tip = V(c.x, sBot, c.z), joint = V(S.x, sBot - .55, S.z);
-        const dir = tip.clone().sub(joint).normalize();
-        const tail = joint.clone().addScaledVector(dir, -.7);
-        kit.add(fz(bar(tail, tip, .05, mats.chrome)));                                           // the boom arm
-        const cw = fz(new THREE.Mesh(new THREE.SphereGeometry(.15, 16, 12), mats.iron)); cw.position.copy(tail); kit.add(cw);
-        const kn = fz(new THREE.Mesh(new THREE.SphereGeometry(.1, 16, 12), mats.iron)); kn.position.copy(joint); kit.add(kn);
-        kit.add(fz(bar(V(S.x, .5, S.z), joint, .055, mats.chrome)));                             // the stand post
-        for (let k = 0; k < 3; k++){ const a = k * 2.094 + .3;
-          kit.add(fz(bar(V(S.x, .55, S.z), V(S.x + TRIPOD * Math.sin(a), .02, S.z + TRIPOD * Math.cos(a)), .03, mats.chrome, 8))); }
       }
       return h;
     };
 
+    /* a HUNG cymbal (crash / ride / china / splash): on a boom, swinging about its rod tip,
+       the magnet CLAMP under its bell. Built once per cymbal — the ride bell's ball shares
+       the ride's. */
+    const buildHung = p => {
+      const on = p.cym, st = styleOf(on), Pf = cymbalProfile(st.r);
+      const mat = bronze(st, envMap), geo = cymbalGeometry(st.r, !!st.inverted);
+      const group = new THREE.Group(); group.position.set(p.cx, p.bell, p.cz); kit.add(group);   // rides the piston
+      const pivotY = cymbalPivot(on);
+      const tilt = new THREE.Group(); tilt.position.y = pivotY; group.add(tilt);   // the swing pivot: the rod tip
+      const top = new THREE.Mesh(geo, mat); top.position.y = -pivotY; tilt.add(top);
+      // the CLAMP: a copper-wound ring pot with a felt lip, sliding on the rod; it rises
+      // CLAMP.gap into the bell mouth to grip (clamp-local y = 0 is the felt's top)
+      const lipR = clampLip(on), clampY = cymbalUnder(on, lipR);
+      const clamp = new THREE.Group(); clamp.position.y = clampY; group.add(clamp);
+      const felt = new THREE.Mesh(new THREE.TorusGeometry(lipR, .022, 8, 32), mats.felt);
+      felt.rotation.x = Math.PI / 2; felt.position.y = -.022; clamp.add(felt);
+      const pot = new THREE.Mesh(new THREE.CylinderGeometry(lipR + .035, lipR + .05, .15, 28, 1, true), mats.chrome);
+      pot.position.y = -.12; clamp.add(pot);
+      for (let k = 0; k < 2; k++){
+        const w = new THREE.Mesh(new THREE.TorusGeometry(lipR + .055, .02, 8, 28), mats.copper);
+        w.rotation.x = Math.PI / 2; w.position.y = -.09 - k * .055; clamp.add(w);
+      }
+      const coilMat = new THREE.MeshStandardMaterial({ color: 0x331a10, emissive: new THREE.Color(0xff5a1e), emissiveIntensity: .15 });
+      const coil = new THREE.Mesh(new THREE.TorusGeometry(lipR + .04, .016, 8, 28), coilMat);
+      coil.rotation.x = Math.PI / 2; coil.position.y = -.2; clamp.add(coil);
+      const collar = new THREE.Mesh(new THREE.CylinderGeometry(.065, .065, .1, 14), mats.iron);
+      collar.position.y = -.22; clamp.add(collar);
+      for (let k = 0; k < 3; k++){ const a = k * 2.094 + .4;   // spokes: collar → pot
+        clamp.add(bar(V(0, -.21, 0), V((lipR + .03) * Math.sin(a), -.17, (lipR + .03) * Math.cos(a)), .016, mats.iron, 6)); }
+      // the rod: from the pivot down, past the clamp, into the boom's sleeve
+      const sleeveTop = clampY - CLAMP.gap - .32 - ROD_VIS;   // group-local
+      const rodL = pivotY - sleeveTop + .5;
+      const rod = new THREE.Mesh(new THREE.CylinderGeometry(.035, .035, rodL, 10), mats.chrome);
+      rod.position.y = pivotY - rodL / 2; group.add(rod);
+      const sTop = p.bell + sleeveTop, sBot = sTop - .55;
+      const sl = fz(new THREE.Mesh(new THREE.CylinderGeometry(.09, .1, .55, 16), mats.dark));
+      sl.position.set(p.cx, (sTop + sBot) / 2, p.cz); kit.add(sl);
+      const S = STANDS[on] || { x: p.cx + (p.cx > 0 ? 1.4 : -1.4), z: p.cz + 1.2 };
+      const tip = V(p.cx, sBot, p.cz), joint = V(S.x, sBot - .55, S.z);
+      const dir = tip.clone().sub(joint).normalize();
+      const tail = joint.clone().addScaledVector(dir, -.7);
+      kit.add(fz(bar(tail, tip, .05, mats.chrome)));                                           // the boom arm
+      const cw = fz(new THREE.Mesh(new THREE.SphereGeometry(.15, 16, 12), mats.iron)); cw.position.copy(tail); kit.add(cw);
+      const kn = fz(new THREE.Mesh(new THREE.SphereGeometry(.1, 16, 12), mats.iron)); kn.position.copy(joint); kit.add(kn);
+      kit.add(fz(bar(V(S.x, .5, S.z), joint, .055, mats.chrome)));                             // the stand post
+      for (let k = 0; k < 3; k++){ const a = k * 2.094 + .3;
+        kit.add(fz(bar(V(S.x, .55, S.z), V(S.x + TRIPOD * Math.sin(a), .02, S.z + TRIPOD * Math.cos(a)), .03, mats.chrome, 8))); }
+      return { group, tilt, face: top, bronze: mat, clamp, clampY, coil: coilMat, bell: p.bell, depth: Pf.under };
+    };
+
     const mags = [];
+    const byCym = new Map();
     for (const p of layout){
       const st = styleOf(p.key);
       const meta = pieceLane(p, spec, { rollT, beat, P, dtMax: DT_MAX });
       const c = V(p.x, p.lift, p.z);                     // contact, kit-local
       const world = c.clone().add(K);
       const floorY = pieceFloor(p);
-      const head = st.kind === 'cymbal' ? buildCymbalPiece(p, st, c) : buildDrumPiece(p, st, c, floorY);
+      let cy = null;
+      if (p.cym){ cy = byCym.get(p.cym); if (!cy){ cy = { on: p.cym, head: buildHung(p), members: [], parts: [], choked: -Infinity }; byCym.set(p.cym, cy); cyms.push(cy); } }
+      const head = cy ? cy.head : st.kind === 'cymbal' ? buildHatPiece(p, st, c) : buildDrumPiece(p, st, c, floorY);
       const mag = buildMagnet(c, H, st, mats, glowTex);
       kit.add(mag.group); mags.push(mag);
       const ball = buildBall(st, envMap, glowTex);
@@ -242,10 +282,12 @@ export function makeMarbleDrums({ envMap, glowTex }){
                    wobbleA: WOBBLE[p.key] ?? .12, wobbleAxis: pieces.length * 2.4,
                    drum: { contact: world, style: { ball: st.glow } },   // the shape main's drumStrike reads
                    trim: seats.find(q => q.lane === p.key)?.trimMat,   // a tom's stair nosing
-                   fired: -Infinity, flash: 0 };
+                   cym: cy, fired: -Infinity, flash: 0 };
       pieces.push(pc);
+      if (cy){ cy.members.push(pc); cy.parts.push({ L, meta, rho: p.rho, dir: p.dir, vInMax: pc.vInMax }); }
       if (p.key === 'kick') kickPc = pc;
     }
+    for (const cy of cyms) cy.C = cymbalSchedule(cy.on, cy.parts, P, { dtMax: DT_MAX });   // the swing, solved up front
     kit.add(buildArch(F, mats));
 
     // the STRIKE LIGHTS: a small round-robin pool — every hit throws its colour into the room
@@ -290,14 +332,15 @@ export function makeMarbleDrums({ envMap, glowTex }){
       }
       pc.flash *= Math.exp(-dt * 9);
 
-      // the head on its piston (its rod rides with it; the sleeve stays put)
-      head.group.position.y = c.y + off;
+      // the head on its piston (its rod rides with it; the sleeve stays put) — a hung
+      // cymbal is posed once for all its balls, below
+      if (!pc.cym) head.group.position.y = c.y + off;
       if (head.membrane){
         head.face.material.emissiveIntensity = .04 + 2.4 * pc.flash;   // coated white; the drum's colour only on the strike
         head.membrane.uAge.value = d.i < 0 ? 99 : d.since;
         head.membrane.uAmp.value = Math.min(RIPPLE_MAX, RIPPLE_K * vHit);
       }
-      if (head.bronze) head.bronze.emissiveIntensity = .05 + 1.5 * pc.flash;
+      if (head.bronze && !pc.cym) head.bronze.emissiveIntensity = .05 + 1.5 * pc.flash;
       if (pc.trim) pc.trim.emissiveIntensity = TRIM_BASE + 5 * pc.flash;   // the step lights as its tom sounds
 
       // SNARE WIRES: the rattle under the bottom head
@@ -327,7 +370,7 @@ export function makeMarbleDrums({ envMap, glowTex }){
       // cymbal: a precessing WOBBLE about the bell. It grows from zero at the strike and is
       // tapered back to level by the next one, so every contact lands on a level cymbal.
       // A closed hi-hat is clamped — it barely moves; open, it swings free.
-      if (head.tilt){
+      if (head.tilt && !pc.cym){
         let th = 0, ph = 0;
         if (d.i >= 0 && started){
           const s = d.since, gap = d.since + d.until;
@@ -380,6 +423,31 @@ export function makeMarbleDrums({ envMap, glowTex }){
       pc.mag.coil.material.emissiveIntensity = .15 + 3.0 * on;
       pc.mag.halo.material.opacity = Math.min(1, .5 * on);
       pc.mag.halo.scale.setScalar(pc.mag.haloS * (1 + .35 * Math.max(0, on - 1)));
+    }
+    // THE HUNG CYMBALS: one pose per cymbal from all its balls — the piston (each ball's,
+    // quieted at the others' contacts), the damped swing, the clamp
+    for (const cy of cyms){
+      const h = cy.head;
+      h.group.position.y = h.bell + (started ? cymbalPiston(cy.members, t, start) : 0);
+      const q = started ? cymbalPose(cy.C, t, start) : { rx: 0, rz: 0, k: 1, i: -1 };
+      // CHOKE edge: the clamp grabs the CYMBAL on cue (the merged schedule's choke — the same
+      // one cymbalPose grips with), so every lane it sounds (the ride AND its bell) is cut
+      if (q.i >= 0){
+        const ck = cy.C.choke[q.i];
+        if (t < cy.choked - 1e-6) cy.choked = -Infinity;
+        if (ck < Infinity && q.since >= ck && q.since - ck <= EDGE_W){
+          const at = t - q.since + ck;
+          if (at > cy.choked + 1e-6){
+            cy.choked = at;
+            if (!skipStrikes && onStrike) for (const m of cy.members) onStrike({ lane: m.key, choke: true, vel: 0, drum: m.drum });
+          }
+        }
+      }
+      h.tilt.rotation.set(q.rx, 0, q.rz);
+      h.clamp.position.y = h.clampY - CLAMP.gap * (1 - q.k);
+      let fl = 0; for (const m of cy.members) fl = Math.max(fl, m.flash);
+      h.bronze.emissiveIntensity = .05 + 1.5 * fl;
+      h.coil.emissiveIntensity = .15 + 2.2 * q.k * q.k;   // the coil lights while it grips
     }
     for (const Lt of lights){                            // strike lights: a hard flash, a quick decay
       Lt.age += dt;

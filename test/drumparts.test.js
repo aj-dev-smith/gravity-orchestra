@@ -3,7 +3,7 @@ import { dribbleLane, dribbleAt, G } from '../src/engine.js';
 import { GM_DRUMS } from '../src/drumkit.js';
 import { SONGS } from '../src/songs/index.js';
 import { kitPieces, pieceLane, spiralSeats, styleOf, SPIRAL, BACK, kitFrame, shellPoint, shellRungs, deckOutline,
-         stairTreads, treadOutline, pieceReach, magnetTop, STANDS, TRIPOD, HAT, hatLinkage,
+         stairTreads, treadOutline, pieceReach, pieceDisc, pieceStand, magnetTop, STANDS, TRIPOD, HAT, hatLinkage,
          clutchFrom, CLUTCH, wireBuzz, shockRing, shockAges, SHOCK } from '../src/drumparts.js';
 import { KIT_SOLO } from '../src/marbledrums.js';
 
@@ -31,8 +31,8 @@ const SOLO_BELTS = {
 function footprint(spec){
   const ps = kitPieces(spec), F = kitFrame(ps), out = [];
   for (const p of ps){
-    out.push([p.x, p.z, pieceReach(p), p.key]);
-    if (STANDS[p.key]) out.push([STANDS[p.key].x, STANDS[p.key].z, TRIPOD, p.key + ' stand']);
+    const D = pieceDisc(p); if (D) out.push([D[0], D[1], D[2], p.key]);
+    const S = pieceStand(p); if (S) out.push([S.x, S.z, TRIPOD, p.key + ' stand']);
     if (p.key === 'hat') out.push([p.x, p.z + HAT.heelZ + .1, .22, 'hat pedal']);
   }
   for (const t of stairTreads(ps)) for (const [x, z] of treadOutline(t)) out.push([x, z, 0, 'tread ' + t.key]);
@@ -57,8 +57,8 @@ describe('kit layout', () => {
 
   for (const [name, spec] of sets) it(`${name}: no two pieces share air (heads, tripods, stands)`, () => {
     const ps = kitPieces(spec);
-    const disc = ps.flatMap(p => [[p.x, p.z, pieceReach(p), p.key, p],
-      ...(STANDS[p.key] ? [[STANDS[p.key].x, STANDS[p.key].z, .12, p.key + ' stand', null]] : [])]);
+    const disc = ps.flatMap(p => { const D = pieceDisc(p), S = pieceStand(p);
+      return [...(D ? [[D[0], D[1], D[2], p.cym || p.key, p]] : []), ...(S ? [[S.x, S.z, .12, (p.cym || p.key) + ' stand', null]] : [])]; });
     for (let i = 0; i < disc.length; i++) for (let j = i + 1; j < disc.length; j++){
       const a = disc[i], b = disc[j];
       if (!a[4] && !b[4]) continue;
@@ -108,7 +108,9 @@ describe('kit layout', () => {
     for (const th of F.tilts) for (let k = 0; k <= 200; k++) pts.push(shellPoint(F, F.xc - F.X0 + 2 * F.X0 * k / 200, th));
     for (const r of rungs) for (let k = 0; k <= 40; k++) pts.push(shellPoint(F, r.x, r.th1 * k / 40));
     for (const q of pts) for (const p of ps){
-      if (Math.hypot(q.x - p.x, q.z - p.z) > pieceReach(p) + .25) continue;
+      const D = pieceDisc(p);                                            // the piece, and (a cymbal) its ball's column
+      const near = (D && Math.hypot(q.x - D[0], q.z - D[1]) <= D[2] + .25) || Math.hypot(q.x - p.x, q.z - p.z) <= .45;
+      if (!near) continue;
       expect(q.y - .2, `${p.key} under the shell at x=${q.x.toFixed(2)}`).toBeGreaterThan(magnetTop(p));
     }
   });

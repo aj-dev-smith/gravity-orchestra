@@ -9,7 +9,7 @@ const every = (from, to, step) => {
    can tune the drum instrument's look & feel. The engine needs a melodic spine (it
    drives loop length / timeline-zero / the camera), so there's a minimal low riff on
    the lead conveyor — deliberately sparse, the drums are the star. 16-beat loop; all
-   drum hits live in [0,16). Exercises kick / snare / hat / crash / ride and a five-tom
+   drum hits live in [0,16). Exercises kick / snare / hat / crash / ride (+ its bell) / a choked china / a splash and a five-tom
    descending fill into the loop seam. */
 export default {
   label: 'Backbeat', sub: 'a groove — drum-kit showcase', bpm: 96,
@@ -26,9 +26,14 @@ export default {
     snare: [2, 6, 10],
     // steady eighths through the groove, stopping for the fill
     hat:   every(0, 14, .5),
-    // crash accents the top of each bar; ride marks the second half
+    // crash accents the top of each bar; ride marks the second half, its BELL on the &s
     crash: [[0, 1], [8, .85]],
     ride:  [8, 9, 10, 11, 12, 13],
+    rideBell: [[8.5, .6], [9.5, .55], [10.5, .6], [11.5, .55], [12.5, .65], [13.5, .6]],
+    // the china STABS on 4 and is CHOKED half a beat later (the magnet clamp grabs it);
+    // a splash answers on the & of 6
+    china:  [[4, .9, .5]],
+    splash: [[6.5, .75]],
     // a fast five-tom cascade into the loop — high→low, reading as a tonal sweep
     tomHigh:   [14],
     tomHiMid:  [14.25],

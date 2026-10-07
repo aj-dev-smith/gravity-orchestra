@@ -5,3 +5,4 @@ dist-single/
 *.log
 .vite/
 .playwright-mcp/
+.claude/worktrees/

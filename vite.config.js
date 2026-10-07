@@ -15,6 +15,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: single ? [viteSingleFile()] : xr ? [basicSsl()] : [],
     ...(xr ? { server: { host: true } } : {}),
+    test: { exclude: ['**/node_modules/**', '.claude/**', 'dist/**'] },   // workflow worktrees live under .claude/
     build: {
       outDir: single ? 'dist-single' : 'dist',
       emptyOutDir: true,

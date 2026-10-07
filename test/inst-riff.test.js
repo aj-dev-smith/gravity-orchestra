@@ -254,6 +254,11 @@ describe('riff render (headless build + update)', () => {
     expect(fired.length).toBe(R.hits.length);
     const ids = new Set(voiceIdsFor(DEMO.part));
     for (const h of fired){ expect(ids.has(h.note)).toBe(true); expect(Number.isFinite(h.dur) && h.dur > 0).toBe(true); }
+    // camera shake is an ACCENT: only ringing chords (the demo's two big open chords), never the chugs / stabs
+    const shaken = fired.filter(h => h.shake > 0);
+    expect(shaken.length).toBeGreaterThan(0);
+    expect(shaken.length).toBeLessThanOrEqual(3);
+    for (const h of shaken){ expect(h.dur).toBeGreaterThanOrEqual(.6); expect(h.note.includes(':m')).toBe(false); }
     expect(count()).toEqual(before);
     g.updateMatrixWorld(true);
     const b = new THREE.Box3().setFromObject(g);

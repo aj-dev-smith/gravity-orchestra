@@ -335,9 +335,11 @@ export default {
       if (started && hc.i >= 0 && edge.check(hc.abs, hc.since, skipStrikes)){
         const h = R.hits[hc.i], k = h.asg.length;
         _v.set(h.asg.reduce((a, x) => a + stampX(x.s), 0) / k, strTop(0), h.asg.reduce((a, x) => a + strZ(x.s), 0) / k).applyMatrix4(deck.matrix).applyMatrix4(rig.matrix);
-        const big = !h.mute && k >= 2;
+        // the camera only shakes for a RINGING chord (the big open E, not every chug of a thrash riff —
+        // a riff fires several hits a second; shaking on each would be a seizure, not an accent)
+        const big = !h.mute && k >= 2 && h.dur >= .6;
         onStrike && onStrike({ note: h.id, vel: h.vel, pos: _v.clone(), color: SIG, dur: h.dur,
-          shake: big && h.vel > .85 ? .035 + .01 * k : 0, sparks: h.mute ? 2 + k : 5 + 3 * k, light: h.mute ? .55 : .9 + .15 * k });
+          shake: big && h.vel > .85 ? .03 + .01 * k : 0, sparks: h.mute ? 2 + k : 5 + 3 * k, light: h.mute ? .55 : .9 + .15 * k });
       }
       // the amp: cones punch with the last hit, tubes + grille glow with it
       let loud = 0, pump = 0;

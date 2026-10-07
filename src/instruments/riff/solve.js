@@ -412,7 +412,7 @@ export function carriageAt(S, t, start = -Infinity){
   if (S.keys.length === 1) return { x: S.keys[0].x, p: S.keys[0].p, vx: 0, vp: 0, armed: true };
   const first = S.n ? firstAt(S.L, start) : Infinity;
   if (t < first){
-    const e0 = S.ev[S.L.s.indexOf(+wrapP(first, S.P).toFixed(9))] || S.ev[0];
+    const e0 = S.ev[lastIndex(S.L.s, wrapP(first + 1e-7, S.P))] || S.ev[0];   // (a float-tolerant lookup, never indexOf)
     const lead = (e0.X !== null ? SETTLE + T_LIFT : SETTLE) + .002;
     if (t < first - lead){ const q = sampleKeys(S.keys, first - lead, S.P); return { x: q.x, p: q.p, vx: 0, vp: 0, armed: true }; }
   }
@@ -486,7 +486,7 @@ export function muteAt(B, t, start = -Infinity){
   if (t < start) t = start;
   if (B.keys.length === 1) return { d: B.keys[0].p, vd: 0 };
   const first = firstAt(B.L, start);
-  if (t < first){ const j = (B.L.s.indexOf(+wrapP(first, B.P).toFixed(9)) + B.hits.length) % B.hits.length;
+  if (t < first){ const j = lastIndex(B.L.s, wrapP(first + 1e-7, B.P));   // the first hit (float-tolerant: never indexOf)
     return { d: B.hits[j].mute ? 1 : 0, vd: 0 }; }
   const q = sampleKeys(B.keys, t, B.P);
   return { d: q.p, vd: q.vp };

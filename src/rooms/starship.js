@@ -26,7 +26,7 @@ import { STAGE, rng, canvasTex, radialTex, beamMat, instanced, trs } from './com
    STAGE.CEIL and every long rib / rail spans > 40 u (the shot solve reads
    them as the hall's shell, not standing obstacles); the glass is a
    transparent shader (never an occluder). Owns no lights.
-   Perf: ~16 draw calls, all instanced/merged; per frame = a handful of
+   Perf: ~21 draw calls, all instanced/merged; per frame = a handful of
    uniforms + 72 instance colours. No allocation.
    ============================================================ */
 
@@ -71,12 +71,18 @@ export function bankAt(songTime, cues){
   const s = k % 2 ? -1 : 1;
   return s * BANK.roll * (x < e ? s5(x / e) : x > ph - e ? s5((ph - x) / e) : 1);
 }
+/* loop-local beat count at songTime (negative in the roll-in). The loop P = roll-in + the song's
+   beats + a breath that is NOT a whole number of beats, so anything that pulses on the beat must
+   count from the loop's own downbeat — counting from songTime 0 drifts off the music after loop 1. */
+export function loopBeat(songTime, cues){
+  if (!cues || !(cues.beat > 0) || !(cues.P > 0)) return NaN;
+  const { rollT = 0, beat, P } = cues;
+  return ((((songTime % P) + P) % P) - rollT) / beat;
+}
 /* the beat thump for the engines: 1 on each beat, decaying (0 before the downbeat) */
 export function beatPulse(songTime, cues){
-  if (!cues || !(cues.beat > 0) || !(cues.P > 0)) return 0;
-  const { rollT = 0, beat, P } = cues;
-  const u = ((songTime % P) + P) % P, b = (u - rollT) / beat;
-  if (b < 0) return 0;
+  const b = loopBeat(songTime, cues);
+  if (!(b >= 0)) return 0;
   return Math.exp(-(b - Math.floor(b)) * 5);
 }
 
@@ -484,7 +490,7 @@ export default {
         haloMat.opacity = .28 + .16 * thump + .4 * energy;
         plume.material.uniforms.uGain.value = plumeBase * (.75 + .35 * thump + .9 * energy);
         // deck running lights: a pulse travels aft once per beat
-        const b = cues && cues.beat > 0 ? ((t - (cues.rollT || 0)) / cues.beat) : t * 2;
+        const lb = loopBeat(t, cues), b = lb === lb ? lb : t * 2;   // the loop's own beats (no cue: 120 bpm)
         const fb = b - Math.floor(b);
         for (let i = 0; i < runPts.length; i++){
           const zz = (runPts[i].z - DECK_Z0 + BOW) / (DECK_Z1 - DECK_Z0 + BOW);   // 0 bow → 1 stern

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import starship, { bankAt, beatPulse, streakZ, skyClock, BANK, STREAK, T_WRAP } from '../src/rooms/starship.js';
+import starship, { bankAt, beatPulse, loopBeat, streakZ, skyClock, BANK, STREAK, T_WRAP } from '../src/rooms/starship.js';
 import { ROOMS, ROOM_KEYS } from '../src/rooms/index.js';
 
 /* The Starship deck's moving sky is a pure fn of songTime: the banking turns land on bar lines,
@@ -59,6 +59,18 @@ describe('starship room', () => {
     const c = SONGS[1];
     for (let t = -2.4; t < 2 * c.P; t += .013){ const p = beatPulse(t, c); expect(p).toBeGreaterThanOrEqual(0); expect(p).toBeLessThanOrEqual(1); }
     expect(beatPulse(c.rollT + 3 * c.beat + 1e-9, c)).toBeCloseTo(1, 6);
+  });
+
+  it('beat-locked lights count the LOOP\'s beats: every downbeat of every loop is beat 0 (the breath never drifts them)', () => {
+    for (const c of SONGS){
+      expect(loopBeat(1, null)).toBeNaN();
+      for (const k of [0, 1, 5, 40]) for (const j of [0, 3, 7]){
+        const t = k * c.P + c.rollT + j * c.beat;
+        if (j * c.beat >= c.P - c.rollT) continue;
+        expect(loopBeat(t, c)).toBeCloseTo(j, 6);
+        expect(beatPulse(t + 1e-9, c)).toBeCloseTo(1, 5);
+      }
+    }
   });
 
   it('star field: periodic in T_WRAP, moving aft, wrapping only inside the field', () => {

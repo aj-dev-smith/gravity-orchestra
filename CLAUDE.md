@@ -239,7 +239,10 @@ song can get one, and **MIDI import now generates drums from channel 9** (§6).
   (every machine that plays is seen once a loop). Scripts (`song.director.at`) are fixed points;
   `song.director.<key>` is a √-weighted hint. The seam's breath is the wide `stage` shot by default; a
   script that runs past the last note OWNS it (directorplan `held`, may wrap into the roll-in — Forge's anvil). The camera's shot is a pure function of songTime.
-  `node scripts/director-audit.mjs` prints every song's shares. Songs with stations open on `auto`;
+  `node scripts/director-audit.mjs` prints every song's shares. An IMPORT also gets a **signature**
+  (`signatureOf`: the present, varied, heavy pitched station — MoP's riff, never the belt or the kit):
+  pull ×SIG + a floor, its own cap (.34) enforced by a bisected per-beat PRICE (a damped pull jumps).
+  Hand-authored songs opt in with `director.signature: '<key>'`; their edits are otherwise unchanged. Songs with stations open on `auto`;
   others keep free-look. `stage` = the wide shot.
 - Lessons that made five parallel builds work: design FOR marbles (no feed plumbing — each lane
   owns its own ball/striker); park long gaps at the apex; lossy bounces with a visible energy

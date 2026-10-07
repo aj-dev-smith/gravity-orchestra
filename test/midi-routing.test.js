@@ -8,7 +8,7 @@ import { parseMidi } from '../src/midi/parse.js';
 import { convertToSong } from '../src/midi/convert.js';
 import { orchestrate, orchestrateByRole, shapePart, polyphony, splitHands, routeProgram, nameRole, riffLike, isPowerChord, gapFit, twins, preferFor,
          ioiFit, PREFER_FIT, overflowOrder, noteSuffix, RIFF_MUTE_SEC,
-         lowLine, PART_SPEC, PREFER, OVERFLOW_TO, ROLE, VOLLEY_MIN_HOP, BASS_FIT } from '../src/midi/orchestra.js';
+         lowLine, PART_SPEC, PREFER, OVERFLOW_TO, ROLE, VOLLEY_MIN_HOP, BASS_FIT, BELT_MIN } from '../src/midi/orchestra.js';
 import { barGrid, walkMeter, barAt, barStart, barFeatures, barSim, scoreWindows, selfSimilarity, tempoClock, PHRASE } from '../src/midi/phrase.js';
 import { fitMachine } from '../src/editor/mapping.js';
 import { GEOM as VOLLEY, buildVolley } from '../src/instruments/volley/solve.js';
@@ -188,6 +188,39 @@ describe('belt TWINS merge (one line panned L/R is one belt, not two)', () => {
   it('an octave doubling keeps its own belt (a second register the room can see)', () => {
     const { warnings } = convert(file(trk('Lead', 0, 0, tune(76, 16)), trk('Low', 0, 1, tune(52, 16))));
     expect(warnings.some(w => /doubles/.test(w))).toBe(false);
+  });
+  it('twins: a NUDGED double (a stereo copy 1/24 beat late) is still a twin; a line a beat late is not', () => {
+    const a = [N(0, 61), N(.5, 73), N(1, 68), N(1.5, 66), N(2, 78), N(2.5, 68)];
+    const nudge = d => a.map(n => ({ ...n, tick: n.tick + d }));
+    expect(twins(a, nudge(20), q)).toBe(true);                     // 20 ticks @480: rounds onto the NEXT 1/12 step
+    expect(twins(a, nudge(-20), q)).toBe(true);
+    expect(twins(a, nudge(PPQ / 2), q)).toBe(false);               // an 8th late: a canon, not a double
+  });
+  it('a lead and its nudged copy take ONE belt (no flamming twin marble a hair behind)', () => {
+    const lead = Array.from({ length: 32 }, (_, i) => [i / 2, [61, 73, 68, 66, 78, 68, 77, 68][i % 8], .5]);
+    const copy = trk('"', 30, 1, []);
+    for (const [b, m] of lead){ const t = Math.round(b * PPQ) + 20;
+      copy.events.push({ tick: t, type: 'on', note: m, vel: 90, channel: 1 }, { tick: t + PPQ / 2 - 8, type: 'off', note: m, channel: 1 }); }
+    const { song, warnings } = convert(file(trk('Lead Guitar', 30, 0, lead), copy, vibes()));
+    expect(warnings.some(w => /belt: .* doubles "Lead Guitar" — merged/.test(w))).toBe(true);
+    expect(song.alto).toBeUndefined();
+  });
+  it(`a stray line (< ${BELT_MIN} notes) takes no belt and no machine of its own`, () => {
+    const { song, warnings } = convert(file(trk('Lead', 0, 0, tune(72, 16)), trk('Fill', 30, 1, [[6, 80, 2]]),
+      trk('Alto', 0, 2, tune(64, 16).map(([b, m]) => [b + .5, m])), vibes()));
+    // before: a 1-note belt — a marble parked on one long arc. Now only the two real lines ride belts
+    const belts = ['alto', 'bass'].filter(k => song[k]).map(k => song[k].notes ?? song[k]);
+    expect(belts.length).toBe(1);
+    expect(belts[0].length).toBe(16);
+    expect(Object.keys(song.parts)).toEqual(['marimba']);         // (the vibes) — no turntable / riff for one note
+    expect(warnings.some(w => /dropped "Fill".*too few/.test(w))).toBe(true);
+  });
+  it('… and the same holds when routing by musical ROLE (no program data): a stray opens no machine', () => {
+    const { song, warnings } = convert(file(trk('Lead', null, 0, tune(72, 16)), trk('Fill', null, 1, [[6, 80, 2]]),
+      trk('Alto', null, 2, tune(64, 16).map(([b, m]) => [b + .5, m]))));
+    expect(warnings.some(w => /routed by musical role/.test(w))).toBe(true);
+    for (const hits of Object.values(song.parts ?? {})) expect(hits.length).toBeGreaterThanOrEqual(BELT_MIN);   // (was: a 1-note ricochet)
+    expect(warnings.some(w => /dropped "Fill".*too few/.test(w))).toBe(true);
   });
 });
 

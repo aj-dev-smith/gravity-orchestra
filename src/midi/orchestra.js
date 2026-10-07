@@ -623,7 +623,7 @@ export function orchestrate(tracks, { ppq, bpm, pin = null, windowed = false }){
     // a DOUBLED track (the same line panned left + right — exact pitches: an octave doubling stays a second belt) is one belt, not two
     const dup = belt.find(b => twins(b.notes, v.notes, q12));
     if (dup){ warnings.push(`belt: "${v.name}" doubles "${dup.name}" — merged`); continue; }
-    if (v.poly < LINE && belt.length < 3) belt.push(v);
+    if (v.poly < LINE && belt.length < 3 && v.onsets >= BELT_MIN) belt.push(v);
     else overflow.push(v);
   }
   for (const v of routed) if (v.dest !== 'belt' && (doubled || v !== lead || v.doubles)) put(v.dest, v, true);
@@ -632,6 +632,11 @@ export function orchestrate(tracks, { ppq, bpm, pin = null, windowed = false }){
   for (const v of overflow){
     const free = k => !want.has(k);
     const fam = lineHome(v);
+    if (v.poly < LINE && v.onsets < BELT_MIN){    // a stray few notes (a line, not chords): never a machine of their own
+      if (fam && want.has(fam) && room(fam)){ put(fam, v, false); v.why = 'a few stray notes'; }
+      else warnings.push(`dropped "${v.name}" (${GM_NAMES[v.program]}): ${v.onsets} note${v.onsets === 1 ? '' : 's'} — too few for a belt or a machine of its own`);
+      continue;
+    }
     if (v.poly < LINE && lowLine(v) && free('bass')){ put('bass', v, false); v.why = 'a spare low line'; }
     else if (v.poly < LINE && v.mean >= 76 && free('musicbox')){ put('musicbox', v, false); v.why = 'a spare high line'; }
     else if (fam && room(fam)){ put(fam, v, false); v.why = v.poly >= LINE ? `chordal — its family's machine keeps its chords` : `a spare ${GM_NAMES[v.program].toLowerCase()} line`; }
@@ -858,11 +863,12 @@ export function orchestrateByRole(tracks, { ppq, bpm, programs = false, reason =
   const route = [];
   for (const v of voices.filter(x => x !== lead).sort(byScore)){
     let placed = false;
+    const stray = isLine(v) && v.onsets < BELT_MIN;   // (as orchestrate: too few notes for a belt or a machine of their own)
     for (const p of v.prefs){
       if (p === 'belt' || p === 'alto'){
         const twin = isLine(v) && belt.find(b => twins(b.notes, v.notes, q12));
         if (twin){ warnings.push(`belt: "${v.name}" doubles "${twin.name}" — merged`); placed = true; break; }
-        if (belt.length < (p === 'alto' ? 2 : 3) && isLine(v)){ belt.push(v); route.push(`"${v.name}" → ${belt.length === 2 ? 'alto' : 'bass'} belt (${v.kind})`); placed = true; break; }
+        if (belt.length < (p === 'alto' ? 2 : 3) && isLine(v) && v.onsets >= BELT_MIN){ belt.push(v); route.push(`"${v.name}" → ${belt.length === 2 ? 'alto' : 'bass'} belt (${v.kind})`); placed = true; break; }
         continue;
       }
       if (p === 'ricochet' && loopSec > PART_SPEC.ricochet.maxLoop) continue;
@@ -870,12 +876,15 @@ export function orchestrateByRole(tracks, { ppq, bpm, programs = false, reason =
       const dup = on.find(k => covers(k.notes, v.notes, q12));
       if (dup){ warnings.push(`${p}: "${v.name}" doubles "${dup.name}" — merged`); parts.push(entry(p, v, dup.vid)); placed = true; break; }
       if (on.length >= PART_SPEC[p].voices) continue;
+      if (stray && !on.length) continue;          // a stray few notes join a machine already playing — never open one
+
       v.vid = vid++; on.push(v); kept.set(p, on);
       parts.push(entry(p, v, v.vid));
       route.push(`"${v.name}" → ${p} (${v.kind})`);
       placed = true; break;
     }
-    if (!placed) warnings.push(`dropped "${v.name}" (${v.kind}): every machine that plays it is full`);
+    if (!placed) warnings.push(stray ? `dropped "${v.name}" (${v.kind}): ${v.onsets} note${v.onsets === 1 ? '' : 's'} — too few for a belt or a machine of its own`
+                                     : `dropped "${v.name}" (${v.kind}): every machine that plays it is full`);
   }
   warnings.unshift(`routed by musical role (${reason}): "${lead.name}" leads the belt` + (route.length ? '; ' + route.join('; ') : ''));
   // registry order for the parts (stable: the same file always builds the same room)
@@ -883,12 +892,21 @@ export function orchestrateByRole(tracks, { ppq, bpm, programs = false, reason =
   parts.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
   return { belt: belt.map(v => ({ name: v.name, notes: v.notes })), parts, warnings, squashed: false };
 }
-/** does voice a already play ≥ 90% of b's (onset, pitch class)s? exact: (onset, PITCH) */
+/** a second / third BELT needs at least this many onsets in the loop: a belt is a marble chaining
+    pad to pad — a voice with one or two notes in the window (Sweet Child's 6-note fill track: ONE
+    note in the loop, a marble parked on a 28-beat arc) isn't a line, it's a stray; it overflows to a
+    machine like any spare voice. (The lead is exempt: it is the spine whatever it plays.) */
+export const BELT_MIN = 4;
+/** does voice a already play ≥ 90% of b's (onset, pitch class)s? exact: (onset, PITCH).
+    An onset matches within ±1 step of the 1/12-beat grid: a sequenced double is often NUDGED (Sweet
+    Child's lead and its `"` copy sit 20 ticks — 1/24 beat, ~20 ms — apart: a stereo double, not a
+    second line), and a 1/24-beat offset rounds onto the NEXT grid step, so exact-grid matching
+    missed it and the copy took a whole belt as a flam. */
 export function covers(a, b, q, exact = false){
-  const key = n => `${q(n.tick)}|${exact ? n.midi : n.midi % 12}`;
-  const A = new Set(a.map(key));
+  const g = n => Math.round(q(n.tick) * 12), p = n => exact ? n.midi : n.midi % 12;
+  const A = new Set(a.map(n => `${g(n)}|${p(n)}`));
   let hit = 0;
-  for (const n of b) if (A.has(key(n))) hit++;
+  for (const n of b){ const k = g(n), m = p(n); if (A.has(`${k}|${m}`) || A.has(`${k - 1}|${m}`) || A.has(`${k + 1}|${m}`)) hit++; }
   return hit >= .9 * b.length;
 }
 /** TWINS on the belt: each plays ≥ 90% of the other's exact (onset, pitch)s — the same line panned

@@ -73,6 +73,10 @@ export const STATIONS = {
   // the RIFF FORGE takes the lip of the stage like a lead guitarist: front-centre, low, its
   // 4×12 cab behind the neck (the wide shot reads it under the band's sightline)
   riff:     { x:  2,   y: -1.0, z: 26,  yaw: 0,   w: 13, d: 6 },
+  // the ORGAN LOFT: a gallery flown centred BEHIND the belt (x on the belt's axis, z behind its
+  // depth — clear of the chandelier's crown), above the housing like every hung station: the
+  // pipe façade reads over the paternoster as the room's backdrop, its light rising into the air
+  organ:    { x:   0,  y: 16,  z: -12.5, yaw: 0,  w: 20, d: 6, hang: true },
 };
 
 /* the drum machine is not a plugin, but it stands in the same amphitheater: its slot

@@ -125,7 +125,7 @@ export function nameRole(name = ''){
   const s = String(name || '').toLowerCase().trim();
   if (!s || /^(ch|tk|track|staff|part|inst(rument)?)?[\s#_-]*\d+$/.test(s)) return null;
   if (/\b(bass\s*drum|kick)\b/.test(s)) return 'drums';
-  if (/\b(drums?|drum\s*kit|drumset|percussion|perc|kit)\b/.test(s) && !/steel|synth\s*drum|melodic|taiko|tom/.test(s)) return 'drums';
+  if (/\b(drums?|drum\s*kit|drumset|percussion|perc|kit)\b/.test(s) && !/steel|synth\s*drum|melodic|taiko/.test(s)) return 'drums';
   if (/\b(bass|contra\s*bass|double\s*bass|basse|bajo)\b/.test(s) || /\bbass(line|es)?\b/.test(s)) return 'bass';
   if (/\b(vocals?|voc|voice|vox|sing(er|ing)?|lyrics?|melody|melodie|lead)\b/.test(s) &&
       !/counter|support|harmon|backing|back(ground)?\b|bgv|choir|oohs?|aahs?|\bfill|\bsolo/.test(s)) return 'lead';
@@ -225,7 +225,7 @@ export function polyphony(notes, quantizeTick){
   for (const n of ns0){ const q = quantizeTick(n.tick); if (!at.has(q)) at.set(q, []); at.get(q).push(n); }
   const ns = [];
   for (const g of at.values()){
-    if (g.length === 2 && isPowerChord(g.map(n => n.midi))) ns.push(g[0].midi < g[1].midi ? g[0] : g[1]);
+    if (g.length === 2 && Math.min(g[0].midi, g[1].midi) < RIFF.MAX_MEAN && isPowerChord(g.map(n => n.midi))) ns.push(g[0].midi < g[1].midi ? g[0] : g[1]);
     else ns.push(...g);
   }
   const byOnset = new Map();
@@ -439,7 +439,7 @@ export function orchestrate(tracks, { ppq, bpm, pin = null, windowed = false }){
   const put = (key, v, native) => { if (!want.has(key)) want.set(key, []); want.get(key).push({ v, native }); };
   const overflow = [];
   for (const v of routed.filter(v => v !== lead && v.dest === 'belt').sort(byScore)){
-    // a DOUBLED track (the same line panned left + right, or in octaves) is one belt, not two
+    // a DOUBLED track (the same line panned left + right — exact pitches: an octave doubling stays a second belt) is one belt, not two
     const dup = belt.find(b => twins(b.notes, v.notes, q12));
     if (dup){ warnings.push(`belt: "${v.name}" doubles "${dup.name}" — merged`); continue; }
     if (v.poly < LINE && belt.length < 3) belt.push(v);

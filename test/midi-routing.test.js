@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseMidi } from '../src/midi/parse.js';
 import { convertToSong } from '../src/midi/convert.js';
-import { orchestrate, orchestrateByRole, shapePart, splitHands, routeProgram, nameRole, riffLike, isPowerChord, gapFit, twins, preferFor,
+import { orchestrate, orchestrateByRole, shapePart, polyphony, splitHands, routeProgram, nameRole, riffLike, isPowerChord, gapFit, twins, preferFor,
          lowLine, PART_SPEC, PREFER, OVERFLOW_TO, ROLE, VOLLEY_MIN_HOP, BASS_FIT } from '../src/midi/orchestra.js';
 import { barGrid, walkMeter, barAt, barStart, barFeatures, barSim, scoreWindows, selfSimilarity, tempoClock, PHRASE } from '../src/midi/phrase.js';
 import { fitMachine } from '../src/editor/mapping.js';
@@ -109,6 +109,12 @@ describe('chord → one note: a RIFF keeps its root, a piano / lead chord its to
     expect(riffLike(chords(64, [[0, 7], [0, 7, 12]]), on)).toBe(false);     // parallel fifths up high: a harmonised tune
     expect(riffLike(chords(40, [[0, 4, 7], [0, 3, 7]]), on)).toBe(false);   // low triads: piano comping
     expect(riffLike(chords(40, [[0, 7]], 3), on)).toBe(false);              // too few chords to call
+  });
+  it('polyphony: a LOW power chord counts as one note; the same fifths up high stay a chord (riffLike agrees)', () => {
+    const q = t => Math.round(t / PPQ * 12) / 12;
+    const fifths = lo => Array.from({ length: 16 }, (_, i) => [lo, lo + 7].map(m => ({ tick: i * PPQ, midi: m + (i % 3), dur: PPQ * .9 }))).flat();
+    expect(polyphony(fifths(40), q)).toBeLessThan(.25);                  // a chug: a line
+    expect(polyphony(fifths(67), q)).toBeGreaterThan(.9);                // a pad / harmonised line in fifths: chordal
   });
   it('the belt: a power-chord riff plays its ROOT motion (not fifths / octaves on top)', () => {
     const roots = [40, 40, 43, 45, 40, 40, 47, 46];
@@ -246,6 +252,16 @@ describe('track NAMES before programs', () => {
     expect(pan.song.parts.volley).toBeDefined();
     const odd = convert(file(trk('Lead', 0, 0, tune(72, 8)), trk('Drums', 0, 3, tune(90, 8, .5))));
     expect(odd.song.drums).toBeUndefined();
+    // a "Percussion" staff on a PITCHED percussion program (timpani: keys 40–55 all map to kit pieces) stays melodic
+    const timp = Array.from({ length: 16 }, (_, i) => [i, [41, 48, 43, 45][i % 4], .5]);
+    const orch = convert(file(trk('Lead', 0, 0, tune(72, 8)), trk('Percussion', 47, 3, timp)));
+    expect(orch.song.drums).toBeUndefined();
+    expect(orch.warnings.some(w => /a drum track on channel/.test(w))).toBe(false);
+  });
+  it('nameRole: a kit named with "tom" / "custom" is still a kit; melodic toms are not', () => {
+    expect(nameRole('Drums (custom)')).toBe('drums');
+    expect(nameRole('Drum Kit - Toms')).toBe('drums');
+    expect(nameRole('Melodic Toms')).toBeNull();
   });
   it('"Strings" on a piano program is a sustained part (chords → the bowls)', () => {
     const pad = [0, 4, 8, 12].flatMap(b => [60, 64, 67].map(m => [b, m, 4]));

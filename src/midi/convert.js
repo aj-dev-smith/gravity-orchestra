@@ -40,8 +40,12 @@ export function windowBpm(tempos, ppq, b0, b1) {
   return spans[spans.length - 1].bpm;
 }
 
-const BUDGET_W = .25;
-const DRUM_NAMED = .9;         // a drum-NAMED track off channel 10 is percussion when this share of its keys are GM drums          // phrase re-rank: score cost of overflowing a solve budget by a full budget
+const BUDGET_W = .25;          // phrase re-rank: score cost of overflowing a solve budget by a full budget
+const DRUM_NAMED = .9;         // a drum-NAMED track off channel 10 is percussion when this share of its keys are GM drums
+// …unless its program is a PITCHED percussion instrument (chromatic percussion 8–15, timpani,
+// kalimba, tinkle bell, steel drums): a "Percussion" staff of glockenspiel / timpani is a melody,
+// and nearly every key from 35 to 81 maps to SOME kit piece, so the key test alone can't tell
+const PITCHED_PERC = p => (p >= 8 && p <= 15) || p === 47 || p === 108 || p === 112 || p === 114;
 const mmss = s => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
 
 /* opts.window — WHICH PART of the song becomes the loop (phrase.js):
@@ -76,7 +80,7 @@ export function convertToSong(parsed, opts = {}) {
     .map(tr => {
       const mel = [];
       for (const n of tr.notes) (n.channel === 9 ? drumNotes : mel).push(n);
-      if (mel.length && nameRole(tr.name) === 'drums' && mel.filter(n => drumByGm(n.midi)).length >= DRUM_NAMED * mel.length) {
+      if (mel.length && nameRole(tr.name) === 'drums' && !mel.some(n => PITCHED_PERC(n.program ?? 0)) && mel.filter(n => drumByGm(n.midi)).length >= DRUM_NAMED * mel.length) {
         warnings.push(`"${tr.name.trim()}": a drum track on channel ${mel[0].channel + 1} (not 10) — played on the drum machine by its name`);
         drumNotes.push(...mel);
         return { ...tr, notes: [] };

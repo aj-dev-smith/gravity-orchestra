@@ -40,7 +40,10 @@ export const PHRASE = {
   AUTO_SEC: 75,                 // songs at most this long import whole ('auto')
   LENGTHS: [8, 12, 16, 20, 24, 32],   // candidate window lengths, bars
   MIN_SEC: 22, MAX_SEC: 90,     // hard bounds on a window's duration (MIN relaxes if nothing fits)
-  SEC_LO: 30, SEC_HI: 75,       // the sweet spot
+  SEC_LO: 30, SEC_HI: 75,       // the sweet spot…
+  SEC_MID: 50,                  // …best here,
+  PHRASE_BEATS: 128,            // …or at 32 bars of 4/4 when that's shorter (a fast song: see scoreWindows)
+  SWEET_BEATS: 96,              // …and the floor never asks for more than 24 bars of 4/4
   LEAD_MIN: .7,                 // the lead must sound in ≥ this share of the window's bars
   LEAD_RELAX: .5,               // …relaxed to this when no window clears LEAD_MIN (a sparse, rest-heavy lead)
   REP_T: .78,                   // mean diagonal similarity that counts as "the same section again"
@@ -64,9 +67,15 @@ export const PHRASE = {
 };
 
 /** the bar grid: the DOMINANT meter (most ticks in force up to the end), as beats per bar,
-    and its origin (the bar line the dominant meter is anchored to). [] → 4/4 from 0. */
+    and its origin (the bar line the dominant meter is anchored to). [] → 4/4 from 0.
+    When the METER MAP really changes the bar lines (a riff in 4/4 + 5/8 + 2/4 — Master of
+    Puppets has 119 meter changes), one uniform grid misaligns every bar after the first odd
+    one, so no fingerprint matches its repeat: then `starts` = the bar lines walked from the map
+    (beats, ascending, the last one closing the bar that holds endTick). A map whose bar lines all
+    fall on the dominant grid (a 4/4 count-in bar before a 6/8 song) keeps the uniform grid
+    (starts: null) — exactly the old behaviour. Use barAt / barStart to read either kind. */
 export function barGrid(timeSigs = [], ppq, endTick){
-  if (!timeSigs.length) return { num: 4, den: 4, barBeats: 4, origin: 0 };
+  if (!timeSigs.length) return { num: 4, den: 4, barBeats: 4, origin: 0, starts: null };
   const spans = new Map();
   timeSigs.forEach((e, i) => {
     const t1 = i + 1 < timeSigs.length ? timeSigs[i + 1].tick : Math.max(endTick + 1, e.tick + 1);
@@ -78,7 +87,65 @@ export function barGrid(timeSigs = [], ppq, endTick){
   const best = [...spans.values()].sort((a, b) => b.w - a.w || a.first - b.first)[0];
   const barBeats = best.num * 4 / best.den;
   const origin = ((best.first / ppq) % barBeats + barBeats) % barBeats;
-  return { num: best.num, den: best.den, barBeats, origin };
+  const g = { num: best.num, den: best.den, barBeats, origin, starts: null };
+  if (spans.size < 2) return g;
+  const starts = walkMeter(timeSigs, ppq, endTick);
+  const onGrid = b => { const k = (b - origin) / barBeats; return Math.abs(k - Math.round(k)) < 1e-6; };
+  if (starts.every(b => b < origin - 1e-6 || onGrid(b))) return g;
+  g.starts = starts;
+  return g;
+}
+/** the bar lines of a meter map, in beats: from 0 (4/4 until the first time signature), each bar
+    num·4/den beats long; a meter change landing mid-bar starts a new bar there (the file says so).
+    Ends with the bar line after endTick (so bar i = [starts[i], starts[i+1])). */
+export function walkMeter(timeSigs, ppq, endTick){
+  const sig = [...timeSigs].sort((a, b) => a.tick - b.tick).map(e => ({ beat: e.tick / ppq, len: e.num * 4 / e.den }));
+  const end = endTick / ppq, starts = [];
+  let cur = 0, len = 4, k = 0;
+  for (let guard = 0; guard < 1e6; guard++){
+    while (k < sig.length && sig[k].beat <= cur + 1e-6){ len = sig[k].len; k++; }
+    starts.push(cur);
+    if (cur > end + 1e-9) break;
+    let next = cur + Math.max(1 / 12, len);
+    if (k < sig.length && sig[k].beat < next - 1e-6) next = sig[k].beat;
+    cur = next;
+  }
+  return starts;
+}
+/** the 0-based bar holding `beat` (uniform grid: may be < 0 before the origin; walked grid: past
+    its end the last bar's length repeats) */
+export function barAt(g, beat){
+  const st = g.starts;
+  if (!st) return Math.floor((beat - g.origin) / g.barBeats + 1e-9);
+  const n = st.length;
+  if (beat < st[0] - 1e-9) return -1;
+  if (beat >= st[n - 1] - 1e-9){ const L = n > 1 ? st[n - 1] - st[n - 2] : g.barBeats; return n - 1 + Math.floor((beat - st[n - 1]) / L + 1e-9); }
+  let lo = 0, hi = n - 1;                                // largest i with st[i] ≤ beat
+  while (lo < hi){ const m = (lo + hi + 1) >> 1; if (st[m] <= beat + 1e-9) lo = m; else hi = m - 1; }
+  return lo;
+}
+/** the beat bar i starts on (either grid kind; see barAt) */
+export function barStart(g, i){
+  const st = g.starts;
+  if (!st) return g.origin + i * g.barBeats;
+  const n = st.length;
+  if (i < n) return st[Math.max(0, i)];
+  const L = n > 1 ? st[n - 1] - st[n - 2] : g.barBeats;
+  return st[n - 1] + (i - n + 1) * L;
+}
+
+/** beat → seconds over a tempo map [{ beat, bpm }] (ascending; before the first change: its tempo);
+    no map (or one tempo) → beat·60/bpm */
+export function tempoClock(tempos, bpm = 120){
+  if (!tempos || !tempos.length) return b => b * 60 / bpm;
+  const T = [...tempos].sort((a, b) => a.beat - b.beat), acc = [0];
+  for (let i = 1; i < T.length; i++) acc.push(acc[i - 1] + (T[i].beat - T[i - 1].beat) * 60 / T[i - 1].bpm);
+  return b => {
+    if (b <= T[0].beat) return (b - T[0].beat) * 60 / T[0].bpm;
+    let lo = 0, hi = T.length - 1;
+    while (lo < hi){ const m = (lo + hi + 1) >> 1; if (T[m].beat <= b) lo = m; else hi = m - 1; }
+    return acc[lo] + (b - T[lo].beat) * 60 / T[lo].bpm;
+  };
 }
 
 const norm = v => { let s = 0; for (const x of v) s += x * x; s = Math.sqrt(s); return s ? v.map(x => x / s) : v; };
@@ -89,9 +156,12 @@ const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] 
     → [{ chroma, rhythm, lead: Set, leadOn, leadFirst, leadLast, leadGap, notes, drums, vn }]
     leadOn = the lead STRIKES in this bar (an onset — a note held over from an earlier bar is one
     idle flight on the belt, not activity). nBars is capped at maxBars. */
-export function barFeatures(events, { barBeats = 4, origin = 0, nBars, maxBars = PHRASE.MAX_BARS } = {}){
+export function barFeatures(events, { barBeats = 4, origin = 0, starts = null, nBars, maxBars = PHRASE.MAX_BARS } = {}){
+  // (a walked meter map: every bar keeps the dominant meter's slot count, spread over its own length,
+  // so a 5/8 bar's rhythm still compares with its repeat)
   const slots = Math.max(4, Math.round(PHRASE.SLOTS * barBeats / 4));
-  const barOf = b => Math.floor((b - origin) / barBeats + 1e-9);
+  const g = { barBeats, origin, starts };
+  const barOf = b => barAt(g, b);
   if (nBars == null){ nBars = 0; for (const e of events) nBars = Math.max(nBars, barOf(e.beat) + 1); }
   nBars = Math.min(nBars, maxBars);
   const F = Array.from({ length: nBars }, () => ({
@@ -101,10 +171,10 @@ export function barFeatures(events, { barBeats = 4, origin = 0, nBars, maxBars =
   for (const e of events){
     const i = barOf(e.beat);
     if (i < 0 || i >= nBars) continue;
-    const f = F[i], into = e.beat - origin - i * barBeats;
-    const slot = Math.min(slots - 1, Math.max(0, Math.round(into / barBeats * slots) % slots));
+    const b0 = barStart(g, i), len = barStart(g, i + 1) - b0, f = F[i], into = e.beat - b0;
+    const slot = Math.min(slots - 1, Math.max(0, Math.round(into / len * slots) % slots));
     if (e.kind === 'drum'){ f.drum[slot] += 1; f.drums++; continue; }
-    const w = (e.vel ?? .8) * Math.min(barBeats, Math.max(.25, e.dur ?? 1));
+    const w = (e.vel ?? .8) * Math.min(len, Math.max(.25, e.dur ?? 1));
     f.chroma[e.midi % 12] += w;
     f.mel[slot] += 1; f.notes++; f.low = Math.min(f.low, e.midi); f.high = Math.max(f.high, e.midi);
     if (e.kind === 'lead'){
@@ -149,8 +219,16 @@ export function selfSimilarity(F){
 
 /** Score every candidate window. → [{ fromBar (0-based), bars, sec, score, reps, best, seam, leadFrac,
     energy, terms }] best first. bpm converts bars to seconds. */
-export function scoreWindows(F, S, { barBeats = 4, origin = 0, bpm = 120, lengths = PHRASE.LENGTHS, leadMin = PHRASE.LEAD_MIN, minSec: minSec0 = PHRASE.MIN_SEC } = {}){
+export function scoreWindows(F, S, { barBeats = 4, origin = 0, starts = null, tempos = null, bpm = 120, lengths = PHRASE.LENGTHS, leadMin = PHRASE.LEAD_MIN, minSec: minSec0 = PHRASE.MIN_SEC } = {}){
   const n = F.length, at = (i, j) => S[i * n + j];
+  // a window's length in beats and SECONDS: a uniform grid at one tempo is L·barBeats·60/bpm (as ever);
+  // a walked meter map has bars of their own lengths, and a tempo map plays each bar at its own tempo
+  const g = { barBeats, origin, starts };
+  const uniformT = !starts && !(tempos && tempos.length > 1);
+  const secAt = tempoClock(tempos, bpm);
+  const barSec = uniformT ? null : Float64Array.from({ length: n + 1 }, (_, i) => secAt(barStart(g, i)));
+  const wbeats = (s, L) => uniformT ? L * barBeats : barStart(g, s + L) - barStart(g, s);
+  const wsec = (s, L) => uniformT ? L * barBeats * 60 / bpm : barSec[s + L] - barSec[s];
   // per-voice prefix sums of the accompanying notes (the budget term: the busiest voice in a window)
   const vids = [...new Set(F.flatMap(f => f.vn ? [...f.vn.keys()] : []))];
   const VP = vids.map(v => { const p = new Float64Array(n + 1); for (let i = 0; i < n; i++) p[i + 1] = p[i] + (F[i].vn?.get(v) || 0); return p; });
@@ -221,13 +299,16 @@ export function scoreWindows(F, S, { barBeats = 4, origin = 0, bpm = 120, length
   for (let i = first; i < n; i++) phaseSum[i % 4] += nov(i);
   const phase = phaseSum.indexOf(Math.max(...phaseSum));
   const out = [];
-  const secOf = L => L * barBeats * 60 / bpm;
-  const fits = lengths.filter(L => L < n * PHRASE.MAX_SHARE - 1e-9 && secOf(L) <= PHRASE.MAX_SEC);
-  const minSec = fits.some(L => secOf(L) >= minSec0) ? minSec0 : 0;   // a slow song: take what fits
+  const fits = lengths.filter(L => L < n * PHRASE.MAX_SHARE - 1e-9);
+  const okSec = (s, L) => wsec(s, L) <= PHRASE.MAX_SEC;
+  let anyLong = false;                                                // a slow song: take what fits
+  if (uniformT) anyLong = fits.some(L => okSec(0, L) && wsec(0, L) >= minSec0);
+  else for (const L of fits) for (let s = first; s + L <= n && !anyLong; s++) if (okSec(s, L) && wsec(s, L) >= minSec0) anyLong = true;
+  const minSec = anyLong ? minSec0 : 0;
   for (const L of fits){
-    const sec = secOf(L);
-    if (sec < minSec) continue;
     for (let s = first; s + L <= n; s++){
+      const sec = wsec(s, L), wb = wbeats(s, L);
+      if (sec < minSec || sec > PHRASE.MAX_SEC) continue;
       let on = 0, full = 0, d = 0, hook = 0, peak = 0, hookA = 0, hookB = 0;
       for (let k = s; k < s + L; k++){
         if (F[k].leadOn) on++; if (F[k].notes || F[k].drums) full++; d += dens[k];
@@ -244,8 +325,8 @@ export function scoreWindows(F, S, { barBeats = 4, origin = 0, bpm = 120, length
         if (prev != null) gap = Math.max(gap, f.leadFirst - prev); else firstOn = f.leadFirst;
         gap = Math.max(gap, f.leadGap); prev = f.leadLast;
       }
-      gap = Math.max(gap, L * barBeats - (prev - firstOn));
-      const gapSec = gap * 60 / bpm;
+      gap = Math.max(gap, wb - (prev - firstOn));
+      const gapSec = uniformT ? gap * 60 / bpm : gap * sec / wb;
       const gapPen = Math.min(1, Math.max(0, (gapSec - PHRASE.GAP_OK) / (PHRASE.GAP_BAD - PHRASE.GAP_OK)));
       // the solve BUDGET: the busiest accompanying voice past a plugin's budget loses its tail there
       let busy = 0; for (const p of VP) busy = Math.max(busy, p[s + L] - p[s]);
@@ -265,8 +346,14 @@ export function scoreWindows(F, S, { barBeats = 4, origin = 0, bpm = 120, length
       const after = s + L < n ? at(s + L, s) : null, before = s > 0 ? at(s - 1, s + L - 1) : null;
       const seam = after ?? before ?? .5;          // (the bar before vs the last bar: only for a window that ends the song)
       const energy = Math.min(1, d / L / p90) * (full / L);
-      const lenFit = sec < PHRASE.SEC_LO ? (sec / PHRASE.SEC_LO) ** 2 : sec > PHRASE.SEC_HI ? Math.max(0, 1 - (sec - PHRASE.SEC_HI) / 30)
-                   : 1 - .25 * Math.abs(sec - 50) / 25;
+      // the sweet spot, tempo-aware: ~30–75 s, best at 50 s — but never asking for more than a song's
+      // longest phrase: at a fast tempo (≥ ~154 bpm) 50 s is MORE than 32 bars of 4/4 (128 beats), so the
+      // best length is those 128 beats, and from ~192 bpm the floor is 96 beats (24 bars) — Master of
+      // Puppets' 32-bar riff at 220 is 35 s, its 24-bar one 26 s: real phrases, not too-short loops
+      const beatSec = sec / wb, lo = Math.min(PHRASE.SEC_LO, PHRASE.SWEET_BEATS * beatSec);
+      const mid = Math.min(PHRASE.SEC_MID, Math.max(lo, PHRASE.PHRASE_BEATS * beatSec));
+      const lenFit = sec < lo ? (sec / lo) ** 2 : sec > PHRASE.SEC_HI ? Math.max(0, 1 - (sec - PHRASE.SEC_HI) / 30)
+                   : 1 - .25 * Math.abs(sec - mid) / 25;
       const fit = lenFit * (L % 8 === 0 ? 1 : .85);   // songs phrase in 8s: a 12- or 20-bar loop cuts one in half
       const ph = ((s - phase) % 4 + 4) % 4;
       const off = .5 * (ph === 0 ? 1 : ph === 2 ? .25 : 0) + .5 * nov(s);
@@ -311,8 +398,9 @@ export function describePhrase(c, { vocal = false } = {}){
     Ties of the same material go EARLY: within PHRASE.EARLY of the best score, the first statement
     of the same section (diagonal similarity ≥ REP_T) wins — the first full chorus is the canonical
     one; a last one carries the ad-libs and the outro tag. */
-export function findPhrase(events, { barBeats = 4, origin = 0, bpm = 120, vocal = false, maxBars = PHRASE.MAX_BARS } = {}){
-  const F = barFeatures(events, { barBeats, origin, maxBars });
+export function findPhrase(events, { barBeats = 4, origin = 0, starts = null, tempos = null, bpm = 120, vocal = false, maxBars = PHRASE.MAX_BARS } = {}){
+  const g = { barBeats, origin, starts };
+  const F = barFeatures(events, { barBeats, origin, starts, maxBars });
   if (F.length < 8) return null;
   const S = selfSimilarity(F), n = F.length;
   // the lead must sound through the loop; a sparse lead (long rests between phrases) relaxes the floor once
@@ -320,7 +408,7 @@ export function findPhrase(events, { barBeats = 4, origin = 0, bpm = 120, vocal 
   // relaxed lead floor)
   let floor = PHRASE.LEAD_MIN, all = [];
   for (const t of [{}, { minSec: PHRASE.SHORT_SEC }, { leadMin: PHRASE.LEAD_RELAX }]){
-    all = scoreWindows(F, S, { barBeats, origin, bpm, ...t });
+    all = scoreWindows(F, S, { barBeats, origin, starts, tempos, bpm, ...t });
     if (all.length){ floor = t.leadMin ?? PHRASE.LEAD_MIN; break; }
   }
   if (!all.length) return null;
@@ -333,7 +421,7 @@ export function findPhrase(events, { barBeats = 4, origin = 0, bpm = 120, vocal 
     if (picks.length >= PHRASE.TRIES) break;
     if (picks.every(p => overlap(p, o) <= .5)) picks.push(o);
   }
-  const out = w => ({ ...w, startBeat: origin + w.fromBar * barBeats, endBeat: origin + (w.fromBar + w.bars) * barBeats,
+  const out = w => ({ ...w, startBeat: barStart(g, w.fromBar), endBeat: barStart(g, w.fromBar + w.bars),
                       totalBars: n, floor, label: describePhrase(w, { vocal }) });
   // SHORTER loops inside the chosen window, close in score: if it overflows a machine's solve budget
   // for real, convert.js weighs these (the same section, fewer notes per machine) against it

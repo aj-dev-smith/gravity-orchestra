@@ -192,7 +192,8 @@ describe('ROLE routing: a file whose programs say nothing still fills the room',
   });
 
   it('a full machine passes the voice down its list; nothing fits → dropped with a reason', () => {
-    const lows = [0, 1, 2, 3].map(k => trk(`Low ${k}`, null, k + 1, line(36 + k * 2, 16, 1, .5).map(([b, m]) => [b + k * .25, m, .5])));
+    // four bass-register lines (means 36–42: under ROLE.LOW 46 — the corpus's basses sit at 30–42)
+    const lows = [0, 1, 2, 3].map(k => trk(`Low ${k}`, null, k + 1, line(30 + k * 2, 16, 1, .5).map(([b, m]) => [b + k * .25, m, .5])));
     const r = orchestrateByRole(parseMidi(file(trk('Tune', null, 0, line(72, 16)), ...lows)).tracks, { ppq: PPQ, bpm: 120 });
     expect(r.parts.filter(p => p.key === 'bass').length).toBe(1);      // one string-bass voice…
     expect(r.belt.length).toBe(3);                                     // …two more low lines take the belts…
@@ -205,7 +206,8 @@ describe('ROLE routing: a file whose programs say nothing still fills the room',
   });
 
   it('ROLE thresholds are the documented ones', () => {
-    expect(ROLE).toEqual({ LOW: 50, HIGH: 79, SPARK: .3, SUSTAIN: 1.2, SPLIT: 12 });
+    // LOW 50 → 46 (a guitar: 40) — see orchestra.js ROLE; the lead floor stays at the old LOW + 5
+    expect(ROLE).toEqual({ LOW: 46, GTR_LOW: 40, LEAD_MIN: 55, BASS_MAX: 55, HIGH: 79, SPARK: .3, SUSTAIN: 1.2, SPLIT: 12 });
   });
 });
 

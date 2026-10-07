@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeEdge } from '../clock.js';
-import { prepPart, layoutStrings, solveStrum, pickAt, stringAt, damperAt, lastSounding, firstPass,
+import { prepPart, layoutStrings, solveStrum, pickAt, dockRest, stringAt, damperAt, lastSounding, firstPass,
          stringLength, stringRadius, isWound, feltFace, PART_LIMITS,
          R_TIP, H_TIP, S_PICK, S_DAMP, D_DOCK, V_HI, PULLEY_R, CAR_HW, PILLAR_OFF, PILLAR_R, PILLAR_RING } from './solve.js';
 import { strumVoice } from './voice.js';
+import { restEnv, anticip, sway } from '../idle.js';
 
 /* ============================================================
    STRUM — the MARBLE AUTOHARP. A leaning rosewood harp: a fan of open
@@ -52,6 +53,12 @@ const Z0    = .55;                 // string plane, at the bridge, toward the au
 const RAIL_N = -.66, BOARD_N = -1.08, DAMP_N = .66;
 const MAXS  = 24;
 const TRAIL_N = 6, TRAIL_DT = .006;
+// IDLE (../idle.js): a plectrum resting on a dock SWAYS — the drive motor hunts a few cm either way
+// on the magnet's soft hold, the cable and both pulleys turning with it (the carriage x feeds the
+// whole drive train, so the cause is visible). The dock's coil charges before it kicks the next
+// launch. The dock is D_DOCK (.75) clear of the fan; the sway is ±SWAY_A, zero within .2 s of the
+// catch and the launch — every pass, every pluck is the solved pose.
+const SWAY_A = .04, SWAY_HZ = .42;
 
 export default {
   key: 'strum',
@@ -268,6 +275,9 @@ export default {
       const t = started ? songTime : start;
       const q = pickAt(S, t, start);
       const speed = Math.min(1, Math.abs(q.vx) / V_HI);
+      const dr = dockRest(S, t, start);
+      const rest = dr ? restEnv(dr.since, dr.until, .2, .6) : 0;
+      const qx = q.x + (rest ? SWAY_A * rest * sway(t, SWAY_HZ) : 0);   // the rendered carriage x (idle sway on the dock)
 
       // ---- strikes: every open string the marble lets go of ----
       let total = 0;
@@ -306,12 +316,12 @@ export default {
       R.rosM.emissiveIntensity = .35 + 1.1 * Math.min(1, total / 3);
 
       // ---- the plectrum ----
-      R.car.position.set(q.x, S_PICK, 0);
+      R.car.position.set(qx, S_PICK, 0);
       const back = RAIL_N + .1, front = q.n - R_TIP + .02;
-      R.arm.scale.set(1, 1, Math.max(.02, front - back)); R.arm.position.set(q.x, S_PICK, (front + back) / 2);
-      R.marble.position.set(q.x, S_PICK, q.n);
+      R.arm.scale.set(1, 1, Math.max(.02, front - back)); R.arm.position.set(qx, S_PICK, (front + back) / 2);
+      R.marble.position.set(qx, S_PICK, q.n);
       R.marbleM.emissiveIntensity = .6 + 2.2 * speed;
-      R.halo.position.set(q.x, S_PICK, q.n + .05);
+      R.halo.position.set(qx, S_PICK, q.n + .05);
       R.halo.material.opacity = .35 + .45 * speed;
       R.halo.scale.setScalar(.75 + .6 * speed);
       R.ghosts.forEach((g, i) => {
@@ -324,16 +334,16 @@ export default {
         g.scale.setScalar(R_TIP * (3 + 2 * f));
       });
       // the drive: the cable's upper run is fixed to the carriage → pulleys turn by x / r (no slip)
-      for (const pg of R.pulleys) pg.rotation.z = -q.x / PULLEY_R;
-      const ca = R.pulX[0], cb = R.pulX[1], xa = q.x - CAR_HW + .04, xb = q.x + CAR_HW - .04;
+      for (const pg of R.pulleys) pg.rotation.z = -qx / PULLEY_R;
+      const ca = R.pulX[0], cb = R.pulX[1], xa = qx - CAR_HW + .04, xb = qx + CAR_HW - .04;
       R.cabA.scale.set(Math.max(.01, xa - ca), 1, 1); R.cabA.position.set((ca + xa) / 2, R.cY, R.cZ);
       R.cabB.scale.set(Math.max(.01, cb - xb), 1, 1); R.cabB.position.set((xb + cb) / 2, R.cY, R.cZ);
-      R.motorM.emissiveIntensity = .2 + 2.6 * speed;
+      R.motorM.emissiveIntensity = .2 + 2.6 * speed + (rest ? .6 * rest * Math.abs(Math.cos(2 * Math.PI * SWAY_HZ * t)) : 0);   // (it drives the sway)
       // the docks: lit while they hold the carriage (parked, retract/travel ends, armed)
       const parked = q.mode === 'dock' || q.mode === 'armed' || q.mode === 'retract' || q.mode === 'engage';
       R.dockMats.forEach((m, i) => {
         const near = Math.abs(q.x - (i ? S.E_hi + D_DOCK : S.E_lo - D_DOCK)) < .02;
-        m.emissiveIntensity = .2 + (parked && near ? 2.8 : 0);
+        m.emissiveIntensity = .2 + (parked && near ? 2.8 + 1.4 * (dr ? anticip(dr.until, .8) : 0) : 0);
       });
     }
 

@@ -283,11 +283,11 @@ export function organLane(notes, P, ladder = LADDER){
      { mode: 'armed'|'drop'|'hold'|'ride'|'hop'|'up'|'park'|'fall',
        y, vy   marble BOTTOM height above the lid's rest top (+ its velocity)
        lid, lidV   lid top height (≤ 0) + velocity
-       i, since, abs, armed, first   the clock (since = s since note i's onset)
+       i, since, until, abs, armed, first   the clock (since = s since note i's onset, until = s to the next)
        sounding (the pipe speaks), held (on the magnet), sinceKick, sinceLand } */
 export function laneAt(lane, t, start = -Infinity){
   const c = at(lane.L, t, start);
-  const base = { i: c.i, since: c.since, abs: c.abs, armed: c.armed, first: c.first, sounding: false, held: false,
+  const base = { i: c.i, since: c.since, until: c.until, abs: c.abs, armed: c.armed, first: c.first, sounding: false, held: false,
     sinceKick: Infinity, sinceLand: Infinity, lid: 0, lidV: 0 };
   if (c.armed){
     const u = c.until;
@@ -316,6 +316,15 @@ export function laneAt(lane, t, start = -Infinity){
   if (tau < r.tUp + r.hold) return { ...base, mode: 'park', y: H_MAG, vy: 0, held: true };
   const f = tau - r.tUp - r.hold;
   return { ...base, mode: 'fall', y: H_MAG - .5 * g * f * f, vy: -g * f };
+}
+
+/** IDLE (../idle.js): a marble HELD on its magnet — { since (it parked), until (it is let go) },
+    from a laneAt result; null when not held. (The count-in hold has no start: since = ∞.) */
+export function heldRest(lane, st){
+  if (!st.held) return null;
+  if (st.armed) return { since: Infinity, until: st.until - T_DOWN };
+  const r = lane.rec[st.i], tau = st.since - r.dur;
+  return { since: tau - r.tUp, until: r.tUp + r.hold - tau };
 }
 
 /** The light packets in flight above one pipe's mouth at t: up to PACKETS × {front, tail, vel,

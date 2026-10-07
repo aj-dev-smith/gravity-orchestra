@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeEdge } from '../clock.js';
-import { solvePogo, pogoAt, carriageAt, ringAt, voiceIdsFor, crossBottom, strikeSurface,
+import { solvePogo, pogoAt, hangRest, carriageAt, ringAt, voiceIdsFor, crossBottom, strikeSurface,
          STRINGS, NUT_X, BRIDGE_X, STAMP_DX, stampX, STR_DZ, SCALE_L, STRING_Y, FRET_H, HOOK_W,
          MAX_FRET, strZ, gauge, strTop, fretX, PART_LIMITS, FOOT_R, PLUNGE, POGO_TOP, BAR_Y, H_MAG, DT_MAX } from './solve.js';
 import { pogoVoice } from './voice.js';
+import { restEnv, anticip, sway } from '../idle.js';
 
 /* ============================================================
    POGO BASS — the electric-bass machine (an Animusic "Pogo Sticks"
@@ -48,6 +49,11 @@ const TRAIL_N = 3, TRAIL_DT = .018;
 const CAB     = { x: -3.3, z: -3.15, w: 4.3, h: 5.0, d: 1.25, y: .42 };   // the 8×10 behind the neck
 const FULL    = { w: 15.85, d: 6.82, cx: -.33, cz: -.4 };                 // the full-size rig's XZ extent + centre (measured; scaled to the slot)
 const SPRING_L = PLUNGE - .2;        // the spring's rest length (foot collar → body seat)
+// IDLE (../idle.js): a pogo hanging on its magnet BOBS on the magnet's sprung arm — the coil's
+// holding current breathes (its glow pulses in phase), so the arm gives a few cm and back. Only
+// inside a HOLD, zero (value + slope) within .2 s of the catch and of the release: the fall and
+// every landing are untouched. The air pump's ring pre-charges as a parked pogo's landing nears.
+const BOB_A = .045, BOB_HZ = .8;
 
 export default {
   key: 'pogo',
@@ -390,7 +396,10 @@ export default {
         ln.poleMat.emissiveIntensity = .05 + 3 * rg.a * (.3 + .7 * vel);
         // the POGO: foot tip = the strike surface + its flight (vertical, in gravity's frame)
         surfRig(s, c, _v);
-        const fy = _v.y + p.y;
+        // idle: hanging on the magnet → the sprung arm bobs with the coil's breathing current
+        const hr = hangRest(p), rest = hr ? restEnv(hr.since, hr.until, .2, .5) : 0;
+        const hum = rest ? sway(t, BOB_HZ, 1.9 * s) : 0, bob = BOB_A * rest * hum;
+        const fy = _v.y + p.y + bob;
         ln.foot.position.set(_v.x, fy, _v.z);
         ln.bodyG.position.set(_v.x, fy + PLUNGE + p.pump, _v.z);
         ln.spring.position.set(_v.x, fy + .2, _v.z);
@@ -398,17 +407,19 @@ export default {
         const fl = e ? Math.exp(-p.since * (e.flag === 's' ? 14 : 8)) * (.35 + .65 * e.vel) : 0;
         _c.copy(_sig).lerp(e?.flag === 's' ? _slap : _hot, Math.min(1, fl));
         ln.footMat.emissive.copy(_c); ln.footMat.emissiveIntensity = 2.2 * fl;
-        ln.pumpMat.emissiveIntensity = .3 + 3.2 * p.drive;
+        // (anticipation: the pump's ring charges as a parked pogo's landing nears — it fires there)
+        const pre = (p.mode === 'hold' || p.mode === 'drop') && isFinite(p.until) ? anticip(p.until, 1.1) : 0;
+        ln.pumpMat.emissiveIntensity = .3 + 3.2 * p.drive + 1.1 * pre;
         ln.springMat.emissiveIntensity = 1.4 * p.drive;
         ln.halo.position.set(_v.x, _v.y + .05, _v.z);
         ln.halo.material.opacity = .75 * fl; ln.halo.scale.setScalar(.6 + 1.6 * (1 - fl) * fl + .5 * fl);
         // the magnet: its shoe's face is the parked top cap (its arm rides the pickup saddle); the coil
         // glows while it holds
-        const face = _v.y + H_MAG + POGO_TOP;
+        const face = _v.y + H_MAG + POGO_TOP + bob;
         ln.shoe.position.set(_v.x, face, _v.z);
         ln.arm.position.set(_v.x, face + .16, _v.z); ln.arm.scale.y = Math.max(.05, ln.beamY - .34 - (face + .16));
         const holding = p.mode === 'hold' ? 1 : p.mode === 'drop' ? Math.max(0, 1 - (DT_MAX / 2 - p.until) * 8) : 0;
-        ln.coilMat.emissiveIntensity = .12 + 1.5 * holding;
+        ln.coilMat.emissiveIntensity = .12 + 1.5 * holding * (1 + .3 * rest * hum);
         // ghosts: the foot's recent past, re-sampled from the pure fn
         const sp = Math.min(1, Math.abs(p.vy) / 6);
         ln.ghosts.forEach((gs, j) => {

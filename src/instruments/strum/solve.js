@@ -458,6 +458,26 @@ export function pickAt(S, t, start = -Infinity){
   return { x: xb, n: NE, vx: 0, mode: 'dock', k: i, armed: false };
 }
 
+/** IDLE (../idle.js): while the plectrum sits still on a dock magnet (pickAt's 'armed' / 'dock'
+    stretches), how long it has sat there and how long until it launches: { since, until } — or
+    null anywhere else (passes, brakes, flips, the retract / travel / engage of a return). */
+export function dockRest(S, t, start = -Infinity){
+  if (!S.K) return null;
+  if (t < start) t = start;
+  const fp = firstPass(S, start);
+  if (t < fp.ts){
+    const until = fp.ts - 2 * D_DOCK / S.passes[fp.k].v - t;
+    return until >= 0 ? { since: Infinity, until } : null;
+  }
+  const { i, since } = cyc(S.passes, t, S.P, p => p.ts);
+  const p = S.passes[i], tr = p.turn, s = since - (p.te - p.ts);
+  if (s < tr.Tb || s > tr.T - tr.TL || tr.type === 'flip') return null;
+  const until = tr.T - tr.TL - s;
+  if (tr.type === 'dock') return { since: s - tr.Tb, until };
+  const u = s - tr.Tb - 2 * T_ENG - S.TR;                // a return: docked once it has re-engaged
+  return u >= 0 ? { since: u, until } : null;
+}
+
 /** Is the crossing (string j, at abs contact time) one that really happened (after the count-in)? */
 function happened(S, c, absTc, start){
   const fp = firstPass(S, start);

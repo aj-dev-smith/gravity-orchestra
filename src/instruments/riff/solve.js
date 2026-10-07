@@ -450,6 +450,11 @@ export function stampAt(S, t, start = -Infinity){
   return { ...base, ...herm(H_PARK, 0, 0, -V_IN, T_DN, T_DN - until), mode: 'drive' };
 }
 
+/** IDLE (../idle.js): the stamp parked on its latch — { since (its catch), until (its drive
+    begins) } of that rest, from a stampAt result; null when not latched or the string never
+    plays (no entrance to anticipate). */
+export const latchRest = p => p.mode === 'hold' && isFinite(p.until) ? { since: p.since - T_UP, until: p.until - T_DN } : null;
+
 /** The string's visible ring at songTime t (0..1, × the struck hit's loudness in the render):
     decays (fast under the mute bar), dies when the hook lifts, and is tapered to EXACTLY 0 by the
     next strike — the string is at rest at every contact. Also returns the vibrating span. */

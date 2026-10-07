@@ -40,6 +40,8 @@ export const PLAN = {
   RIDE_PRE: 1.0, RIDE_POST: .8, RIDE_MAX: 6.5,   // s — a ride's window around its flight (rideSpan)
   RIDE_WMIN: .3,        // a flight weaker than this (ridecam w: apex × the loop's best) is never ridden
   RIDE_EVERY: 20,       // s of music per ride candidate (≥ 1 a loop)
+  RIDE_LONGRUN: .22,    // the rides' share of the LONG RUN: a short loop whose one ride is a bigger slice than
+                        // this rides only every rideEvery-th pass (the other passes keep the belt's framing)
   RIDE_W: 3.2,         // a RIDE (ridecam.js — the camera behind a marble on a long, tall flight):
                         // its pull per beat of the flight at full apex (w = 1). Never covered
                         // (an optional spectacle, not a machine) and capped at CAP.ride — sparingly (a short loop still
@@ -51,7 +53,9 @@ export const PLAN = {
    grid: {t0, beat, end, bar?} — the downbeat, the beat (s), where the music's grid ends.
    fixed: [{t, len, key}] — scripted shots (s). wides: [t] — big ensemble downbeats (s).
    rides: [{t, dt, w}] — long flights worth riding (ridecam.rideMoments: launch, duration, apex pull).
-   Returns {cuts:[{t, key}], shares:{key: fraction}, sal} — cuts sorted, the first at t0. */
+   Returns {cuts:[{t, key}], shares:{key: fraction}, sal, rides:[{t0, t1, t, dt, role}], rideEvery} — cuts
+   sorted, the first at t0; rideEvery: the rides play on every rideEvery-th loop pass only (sparing over the
+   long run — the off passes' 'ride' shots fall back to the belt; a pure fn of the loop index). */
 export function planEdit({ voices, grid, fixed = [], wides = [], rides = [], opts = {} }){
   const o = { ...PLAN, ...opts, CAP: { ...PLAN.CAP, ...(opts.CAP || {}) } };
   const { t0, beat, end } = grid, bar = grid.bar || 4;
@@ -267,9 +271,10 @@ export function planEdit({ voices, grid, fixed = [], wides = [], rides = [], opt
     });
     const out = planEdit({ voices, grid, wides, rides: [], opts,
       fixed: [...fixed, ...wins.map(w => ({ t: w.t0, len: w.t1 - w.t0, key: 'ride' }))] });
-    return { ...out, rides: wins };
+    const share = wins.reduce((a, w) => a + w.t1 - w.t0, 0) / (N * beat);
+    return { ...out, rides: wins, rideEvery: Math.max(1, Math.ceil(share / o.RIDE_LONGRUN - 1e-9)) };
   }
-  return { cuts, shares: sharesOf(segs), sal, N, forced, rides: [] };
+  return { cuts, shares: sharesOf(segs), sal, N, forced, rides: [], rideEvery: 1 };
 }
 
 /* A planned ride shot [a, b) → the window it actually rides: the best flight inside it (w ×

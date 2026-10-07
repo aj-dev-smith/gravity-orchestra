@@ -835,7 +835,8 @@ function syncDirector(S, view){
     wides: moments.filter(m => m.n >= ENSEMBLE_N).map(m => m.t),
     rides,
   });
-  rideWins = plan.rides;                                // (the windows it chose — fixed points of the edit)
+  rideWins = plan.rides; rideEvery = plan.rideEvery;    // (the windows it chose — fixed points of the edit — and
+                                                        //  on which loop passes: a short loop rides every k-th one)
   // the wide STAGE shot. A full room (instrument plugins on stage): a LOW front-left
   // three-quarter view (the angle the room reads as a machine-hall, not a floor plan) —
   // bowls + drums in the foreground, the belt and the back tier behind — and the song
@@ -870,7 +871,7 @@ function syncDirector(S, view){
 /* ---- RIDE THE BALL (ridecam.js): every belt flight's launch, duration and apex (the render
    height it climbs above the higher of its two ends — a crane hop's lob to the magnet counts),
    sampled from ballPos, the source of truth. Static song data: solved once per song. ---- */
-let rides = [], rideWins = [], rideDbg = null;          // (rideDbg: __dev.ride — the last pose's raw solve)
+let rides = [], rideWins = [], rideEvery = 1, rideDbg = null;          // (rideDbg: __dev.ride — the last pose's raw solve)
 function flightsOf(P){
   const out = [];
   tracks.forEach(tr => tr.pads.forEach((pd, i) => {
@@ -897,7 +898,7 @@ function rideCam(st, directed){
   const P = ROLL_T + LOOP_T, now = wrapP(st, P), base = st - now;
   let win = null, tr = tracks[0];
   if (directed){
-    const w = rideWindowAt(rideWins, now); if (!w) return null;
+    const w = rideWindowAt(rideWins, now); if (!w || Math.round(base / P) % rideEvery) return null;
     win = { t0: base + w.t0, t1: base + w.t1 }; tr = tracks.find(t => t.role === w.role) || tr;
   }
   const lo = base + (tr.crane ? 0 : tr.rollT - BIRTH_FALL + .3), hi = base + tr.rollT + tr.total - .05;   // (from its visible fall / magnet hang)
@@ -1667,7 +1668,7 @@ if (new URLSearchParams(location.search).has('debug')){
       return out;
     },
     director(){ const B = t => +((t - ROLL_T) / BEAT).toFixed(2);   // the room director's static cues, in beats
-      return { rides: rideWins.map(w => [+w.t0.toFixed(2), +w.t1.toFixed(2), w.role]), cuts: plan ? plan.cuts.map(c => [B(c.t), c.key]) : [], shares: plan ? Object.fromEntries(Object.entries(plan.shares).map(([k, v]) => [k, +v.toFixed(3)])) : {},
+      return { rides: rideWins.map(w => [+w.t0.toFixed(2), +w.t1.toFixed(2), w.role]), rideEvery, cuts: plan ? plan.cuts.map(c => [B(c.t), c.key]) : [], shares: plan ? Object.fromEntries(Object.entries(plan.shares).map(([k, v]) => [k, +v.toFixed(3)])) : {},
                wide: moments.filter(m => m.n >= ENSEMBLE_N).map(m => B(m.t)),
                script: script.map(c => [c.key, B(c.t), +(c.hold / BEAT).toFixed(2)]), seamFrom: B(seamFrom) }; },
     get planIn(){ return planIn; },                   // (dev: the edit solve's inputs — tune directorplan.js offline)

@@ -268,8 +268,9 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
         // (main's directorplan: the shot for this beat, a pure function of songTime — so the
         // cut lands on the same beat every loop and scrubbing is exact)
         const isSt = k => stations.some(st => st.key === k);
-        const k = plan ? plan.at(songTime) : 'stage';
-        let pick = k === 'ride' && !rideNow ? 'belt' : k;   // (a ride with no marble on it: its belt)
+        const k0 = plan ? plan.at(songTime) : 'stage';
+        const k = k0 === 'ride' && !rideNow ? 'belt' : k0;  // (a ride that doesn't play this pass, or has no marble: its belt)
+        let pick = k;
         if (k === 'belt'){                                    // the belt: whichever framing is live (lead / alto / all…)
           const onBelt = autoWant !== 'stage' && autoWant !== 'ride' && !isSt(autoWant);
           pick = !marblePts.length ? 'stage'

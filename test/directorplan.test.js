@@ -101,6 +101,20 @@ describe('directorplan — the edit, solved up front', () => {
     expect(planEdit({ voices: room(), grid }).shares.ride).toBeUndefined();
   });
 
+  it('a short loop rides only every rideEvery-th pass: the long-run ride share stays ≤ RIDE_LONGRUN', () => {
+    const p = planEdit({ voices: room(), grid, rides: [lob] });
+    expect(p.rideEvery).toBe(1);                                   // a 48 s loop: one ~4 s ride every pass
+    const n = 28, g = { t0, beat, end: at(n) }, short = { ...lob, t: at(2) };    // a 14 s loop, the same lob
+    const v = [{ key: 'marimba', hits: every(0, n, .5) }, { key: 'bowls', hits: every(0, n, 4) }, { key: 'belt', belt: true, hits: every(0, n, 1) }];
+    const q = planEdit({ voices: v, grid: g, rides: [short] });
+    expect(q.rides.length).toBe(1);
+    const share = (q.rides[0].t1 - q.rides[0].t0) / (n * beat);
+    expect(share).toBeGreaterThan(PLAN.RIDE_LONGRUN);
+    expect(q.rideEvery).toBeGreaterThan(1);
+    expect(share / q.rideEvery).toBeLessThanOrEqual(PLAN.RIDE_LONGRUN + 1e-9);
+    expect(planEdit({ voices: room(), grid }).rideEvery).toBe(1);
+  });
+
   it('a ride never overrides a scripted shot; rideSpan squeezes a very long flight to RIDE_MAX (+ the beat snap)', () => {
     const p = planEdit({ voices: room(), grid, rides: [lob], fixed: [{ t: at(38), len: 8 * beat, key: 'stage' }] });
     expect(p.rides.length).toBe(0);

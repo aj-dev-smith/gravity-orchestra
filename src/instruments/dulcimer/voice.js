@@ -16,8 +16,9 @@
      beat of a real double-strung note;
    · the hammer itself: 5 ms of felt-dulled noise.
    The DAMPER is the live path's `dur` release (onStrike dur = the note's
-   hold — the felt dropping on the string). The iOS sample path rings the
-   full render (its documented degradation, like the bowls).
+   hold — the felt dropping on the string). The iOS sample path, which can't
+   release early, plays the strike's DURATION BUCKET ('C4~1': this render
+   with the damper's drop baked in at .5 / 1 / 2 s — ../sustain.js).
 
    TINE E-PIANO (id 'C4:e', 'C4:e:p') — keys.js ep(): 1:1 FM with a bright
    bark at the strike settling to a mellow bell, a 13.9× tine partial for
@@ -28,6 +29,7 @@
    is baked at song load). FM needs phase modulation → a sine table.
    ============================================================ */
 import { noteNum } from '../../engine.js';
+import { splitBucket, cutHold, relFor } from '../sustain.js';
 
 export const SR = 32000;
 export const PEAK = .8;
@@ -111,10 +113,26 @@ function epiano(m, vel, N, out){
 }
 
 const ID = /^([A-G]#?\d)((?::[a-z])*)$/;
+const TAIL = .34;                            // the render's raised-cosine tail (the last third)
+/** the seconds an id's render rings before its own tail fades it — a damper later than this is moot,
+    so a hold nearer it than any rung fires the bare id (../sustain.js bucketOf) */
+export function nativeHold(id){
+  const k = String(splitBucket(id).base).match(ID);
+  const m = k ? noteNum(k[1]) : 60, ep = k ? k[2].includes(':e') : false;
+  return durFor(m) * (ep ? .85 : 1) * (1 - TAIL);
+}
+const DAMP_REL = .3;                         // the felt landing: ≈ the live path's τ .12 release
 const cache = new Map();
-/** id = pitch [':e' tine e-piano] [':p' soft layer]  →  { samples: Float32Array, sr } */
+/** id = pitch [':e' tine e-piano] [':p' soft layer] [~hold: the DAMPER drops at hold s — a duration
+    bucket, the iOS sample's baked note-off]  →  { samples: Float32Array, sr } */
 export function grandVoice(id){
   if (cache.has(id)) return cache.get(id);
+  const bk = splitBucket(id);
+  if (bk.hold){
+    const r = { samples: cutHold(grandVoice(bk.base).samples, SR, bk.hold, relFor(bk.hold, DAMP_REL)), sr: SR };
+    cache.set(id, r);
+    return r;
+  }
   const k = String(id).match(ID);
   const m = k ? noteNum(k[1]) : 60;
   const flags = k ? k[2] : '';
@@ -123,7 +141,7 @@ export function grandVoice(id){
   const out = new Float32Array(N);
   if (ep) epiano(m, vel, N, out); else piano(m, vel, N, out, lcg(hash(String(id))));
   // attack ramp (no click), raised-cosine tail over the last third, exactly 0 at the end
-  const a = Math.round(SR * .0015), z = Math.round(N * .34);
+  const a = Math.round(SR * .0015), z = Math.round(N * TAIL);
   for (let i = 0; i < a; i++) out[i] *= i / a;
   for (let i = 0; i < z; i++) out[N - 1 - i] *= .5 - .5 * Math.cos(Math.PI * i / z);
   let peak = 0;

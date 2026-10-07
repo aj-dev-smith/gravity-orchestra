@@ -18,6 +18,7 @@ import { makeRoomHost } from './rooms/index.js';
 import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
 import { stationFor, layoutStations, HANG_CLEAR, hangPlace } from './instruments/stations.js';
 import { eventTimes, wrapP } from './instruments/clock.js';
+import { splitBucket } from './instruments/sustain.js';
 import { normalizeHit } from './drumkit.js';
 import { encodeSong, decodeSong } from './share.js';
 import { parseMidi } from './midi/parse.js';
@@ -575,6 +576,13 @@ function buildWorld(keyName){
     const ids = rig.I.voiceIds ? rig.I.voiceIds(part, { beat: BEAT, bpm: S.bpm, rollT: ROLL_T, P: P0, loopBeats }) : [...new Set(part.map(e => e[1]))];
     ids.forEach(id => voices.push({ key: `inst:${rig.I.key}:${id}`, wet: !!rig.I.wet, hz: voiceHzOf(rig.I, id),
       render: () => mixRender(rig.I.voice(id), rig.mix.base) }));
+    // a DURATION-BUCKET id ('C4~1', src/instruments/sustain.js) carries its release baked in for the
+    // iOS <audio> path; the live path plays its BASE and releases at `dur` exactly — so a base no
+    // strike fires bare is baked LIVE-ONLY (the Float32 source, no <audio> element / WAV)
+    const idSet = new Set(ids);
+    new Set(ids.filter(id => String(id).includes('~')).map(id => splitBucket(id).base)).forEach(b => { if (!idSet.has(b))
+      voices.push({ key: `inst:${rig.I.key}:${b}`, wet: !!rig.I.wet, hz: voiceHzOf(rig.I, b), live: true,
+        render: () => mixRender(rig.I.voice(b), rig.mix.base) }); });
   });
 
   // the SOLVE: floor stations + the kit (a hung station floats over everyone — not in it)

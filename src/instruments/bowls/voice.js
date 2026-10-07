@@ -10,12 +10,15 @@
    a whisper of contact tick, then the driven modes HOLD (with a slow
    seeded rubbing grain) for SOUND_MAX s — the longest a note's orbit can
    last (solve.js clamps it) — so the sound never dies under a rolling
-   marble. main's playVoice({dur}) releases it at the note's end.
+   marble. main's playVoice({dur}) releases it at the note's end; the iOS
+   sample path plays the note's DURATION BUCKET ('E4~1' — this render cut
+   at .5 / 1 / 2 s with the ring-down baked in, ../sustain.js).
    Low bowls get a gentle 2× partial so phone speakers (which roll off
    below ~200 Hz) still hear the pitch. Deterministic: seeded PRNG.
    ============================================================ */
 import { noteHz } from '../../engine.js';
 import { SOUND_MAX } from './solve.js';
+import { splitBucket, cutHold, relFor } from '../sustain.js';
 
 const SR = 22050;
 const LEN = 5.98;                                        // seconds rendered (contract: < 6 s)
@@ -29,6 +32,12 @@ function mulberry32(a){
 const cache = new Map();
 export function bowlVoice(note){
   if (cache.has(note)) return cache.get(note);
+  const bk = splitBucket(note);
+  if (bk.hold){                                          // a DURATION BUCKET ('E4~1'): the rubbing stops at `hold`
+    const v = { samples: cutHold(bowlVoice(bk.base).samples, SR, bk.hold, relFor(bk.hold, .4)), sr: SR };
+    cache.set(note, v);
+    return v;
+  }
   const f = noteHz(note);
   const n = Math.round(SR * LEN), out = new Float32Array(n);
   const low = f < 200;

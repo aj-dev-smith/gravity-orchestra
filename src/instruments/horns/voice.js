@@ -17,12 +17,15 @@
      TRUMPET — each its own spectrum + body formants.
 
    ids: 'C4'      = a held note (speaks HOLD_MAX s, then exhales; the live path releases at dur)
+        'C4~1'    = a DURATION BUCKET (../sustain.js): the same held note rendered to exhale at 1 s
+                (.5 / 1 / 2) — what a held strike fires, so the iOS sample path stops near its end
         'stab:C4' = a STAB (STAB_T s, accented, short exhale — also right on the iOS sample path,
                 which can't release early)
    ============================================================ */
 import { noteNum } from '../../engine.js';
 import { HOLD_MAX, STAB_T, STAB_ID } from './solve.js';
 import { family } from './layout.js';
+import { splitBucket } from '../sustain.js';
 
 export const SR = 32000;
 const TAU = 2 * Math.PI;
@@ -148,9 +151,10 @@ const cache = new Map();
 /** id = 'C4' (held) | 'stab:C4' (stab) → { samples, sr } */
 export function hornVoice(id){
   if (cache.has(id)) return cache.get(id);
-  const stab = id.startsWith(STAB_ID), note = stab ? id.slice(STAB_ID.length) : id;
+  const bk = splitBucket(id);                           // 'C4~1': a held note that exhales at 1 s (the iOS
+  const stab = bk.base.startsWith(STAB_ID), note = stab ? bk.base.slice(STAB_ID.length) : bk.base;   //  sample's baked release)
   const m = noteNum(note), fam = family(m), I = HORN[fam];
-  const dur = stab ? STAB_T : HOLD_MAX;
+  const dur = stab ? STAB_T : bk.hold ? Math.min(bk.hold, HOLD_MAX) : HOLD_MAX;
   const N = Math.round((dur + 6 * I.rel * (stab ? .7 : 1) + .03) * SR);
   const dry = new Float32Array(N);
   hornNote(dry, fam, { m, dur, vel: stab ? .95 : I.dyn, stab, seed: (m * 7919 + (stab ? 101 : 0)) >>> 0 });

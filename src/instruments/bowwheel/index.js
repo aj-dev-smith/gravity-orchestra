@@ -43,10 +43,24 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { noteNum } from '../../engine.js';
 import { eventTimes, lanesByNote, makeEdge } from '../clock.js';
 import {
-  laneGeom, laneX, bowLane, laneAt, strokeAt, bowEnv, prepPart, wheelAngle, PART_LIMITS,
+  laneGeom, laneX, bowLane, laneAt, strokeAt, bowEnv, prepPart, wheelAngle, PART_LIMITS, HOLD_MAX,
   WHEEL_R, WHEEL_Y, WHEEL_Z, RIM_W, OMEGA, BALL_R, CUP_R, CUP_Y, MAG_Y, SPACING, GAP,
 } from './solve.js';
 import { bowVoice } from './voice.js';
+import { bucketId, planLadder, allBucketIds } from '../sustain.js';
+
+/* the part → its strings, their geometry and solved lanes — pure, shared by build() and voiceIds
+   (so the DURATION BUCKET each stroke fires — '<note>~<hold>', ../sustain.js: the bow lift baked
+   into the iOS sample — is planned from the very strokes the machine plays) */
+function planBow(part, { rollT, beat, P }){
+  const prep = prepPart(part);
+  const byNote = lanesByNote(eventTimes(prep.events, { rollT, beat }));
+  const notes = Object.keys(byNote).sort((a, b) => noteNum(a) - noteNum(b));
+  const geoms = notes.map((note, i) => laneGeom(note, laneX(i, notes.length)));
+  const lanes = notes.map((note, i) => bowLane(byNote[note].map(e => ({ t: e.t, tDur: e.tDur, vel: e.vel })), P, geoms[i]));
+  const pairs = []; lanes.forEach((L, i) => L.cyc.forEach(q => pairs.push([notes[i], q.hold])));
+  return { prep, notes, geoms, lanes, pairs, ladder: planLadder(pairs, () => HOLD_MAX) };
+}
 
 export { PART_LIMITS };
 
@@ -102,20 +116,23 @@ export default {
   color: '#ff2d55',
 
   voice: id => bowVoice(id),
-  voiceIds: part => [...new Set(prepPart(part).events.map(e => e[1]))],
+  /* every stroke's id at this tempo (main passes {beat, rollT, P}); without one, every rung of every string */
+  voiceIds(part, { beat, rollT = 2.6, P } = {}){
+    if (beat > 0 && P > 0){ const pl = planBow(part, { rollT, beat, P }); return [...new Set(pl.pairs.map(([n, h]) => bucketId(n, h, HOLD_MAX, pl.ladder)))]; }
+    return allBucketIds([...new Set(prepPart(part).events.map(e => e[1]))], () => HOLD_MAX);
+  },
 
   make({ envMap, glowTex }){
-    let lanes = [], start = -Infinity, wheel = null, pulA = null, pulM = null, beltMk = null, belt = null, rimMat = null,
+    let lanes = [], start = -Infinity, ladder = [], wheel = null, pulA = null, pulM = null, beltMk = null, belt = null, rimMat = null,
       trail = null, dust = null, zOff = 0, tire = null;
 
     function build(part, { rollT, beat, P, start: s0 = -Infinity, station, floorY = -20 }){
       const group = new THREE.Group();
       lanes = []; start = s0;
-      const prep = prepPart(part);
-      const byNote = lanesByNote(eventTimes(prep.events, { rollT, beat }));
-      const notes = Object.keys(byNote).sort((a, b) => noteNum(a) - noteNum(b));
+      const pl = planBow(part, { rollT, beat, P });
+      const { prep, notes, geoms } = pl;
+      ladder = pl.ladder;
       const n = notes.length;
-      const geoms = notes.map((note, i) => laneGeom(note, laneX(i, n)));
       const span0 = n ? (n - 1) / 2 * SPACING : 0;
 
       // the machine's depth: front pulley … the longest string's tail; centre it on the slot
@@ -284,8 +301,7 @@ export default {
 
       notes.forEach((note, i) => {
         const G = geoms[i], color = laneColor(noteNum(note));
-        const evs = byNote[note].map(e => ({ t: e.t, tDur: e.tDur, vel: e.vel }));
-        const L = bowLane(evs, P, G);
+        const L = pl.lanes[i];
         const tail = ZF - G.len;
         // string: two segments (bridge → rim contact → tail), crimson-hot when bowed
         const sMat = new THREE.MeshStandardMaterial({ color: 0xb8a690, metalness: 1, roughness: .28, envMap,
@@ -374,7 +390,7 @@ export default {
         const so = strokeAt(L, t, start);
         // the strike: the string meets the rim (note-on), once
         if (started && so.live && ln.edge.check(so.abs, so.since, skipStrikes)){
-          onStrike && onStrike({ note: ln.note, vel: so.cyc.vel, pos: new THREE.Vector3(G.x, G.yPress - G.rs, WHEEL_Z + zOff),
+          onStrike && onStrike({ note: bucketId(ln.note, so.cyc.hold, HOLD_MAX, ladder), vel: so.cyc.vel, pos: new THREE.Vector3(G.x, G.yPress - G.rs, WHEEL_Z + zOff),
             color: ln.color.getHex(), dur: so.cyc.hold, shake: 0, sparks: 5, light: .7 });
         }
         const env = so.live && st.contact ? bowEnv(so.since, so.cyc.hold) * (.4 + .6 * so.cyc.vel) : 0;

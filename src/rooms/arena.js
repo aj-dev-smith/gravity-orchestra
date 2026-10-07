@@ -185,12 +185,12 @@ function flameMat(){
     vertexShader: /* glsl */`
       attribute float aJet;
       uniform float uAge[${JETS}], uVel[${JETS}], uBig[${JETS}];
-      varying vec2 vUv; varying float vA, vFace, vH;
+      varying vec2 vUv; varying float vA, vFace, vH, vC;
       void main(){
         int j = int(aJet + .5);
         float a = uAge[j], v = uVel[j], big = uBig[j];
         float H = mix(6. + 6. * v, 13. + 11. * v, big);         // column height (u)
-        float aC = mix(.32, .5, big);
+        float aC = mix(.32, .5, big); vC = aC;
         float top = H * sqrt(clamp(a / .16, 0., 1.));            // the fireball punches up fast, then holds
         float lift = max(0., a - aC);
         float y1 = top + lift * (16. + 10. * big);               // after the cut the column lifts off…
@@ -209,7 +209,7 @@ function flameMat(){
       }`,
     fragmentShader: /* glsl */`
       uniform float uTime;
-      varying vec2 vUv; varying float vA, vFace, vH;
+      varying vec2 vUv; varying float vA, vFace, vH, vC;
       ${NOISE_GLSL}
       void main(){
         if (vA < 0.) discard;
@@ -218,13 +218,13 @@ function flameMat(){
         float n = fbm(vec2(vUv.x * 7., vUv.y * 3.2 - a * 7.5 - uTime * .3));
         float n2 = fbm(vec2(vUv.x * 15. + 3., vUv.y * 6. - a * 13.));
         float tongues = smoothstep(.2, .8, n * .75 + n2 * .45 + .5 - vUv.y * 1.05);   // ragged licks, thinning to the crown
-        float cut = clamp(1. - max(0., a - .32) * 1.6, 0., 1.);
+        float cut = clamp(1. - max(0., a - vC) * 1.6, 0., 1.);   // the heat drops at the column's own cut (a big burst holds longer)
         float edge = pow(clamp(vFace, 0., 1.), 1.3);   // (clamped: MSAA extrapolates varyings past the edge → pow(<0) = NaN → bloom smears it)
         float heat = clamp((1. - vUv.y) * 1.25 * cut + .25 * n, 0., 1.);
         vec3 col = mix(vec3(.5, .05, .0), vec3(1., .36, .04), smoothstep(.15, .6, heat));
         col = mix(col, vec3(1., .78, .4), smoothstep(.75, 1., heat) * .8);
         float alpha = tongues * edge * smoothstep(0., .08, vUv.y) * (1. - smoothstep(.75, 1., vUv.y))
-                    * clamp(a / .05, 0., 1.) * clamp(1. - max(0., a - .5) / .6, 0., 1.);
+                    * clamp(a / .05, 0., 1.) * clamp(1. - max(0., a - vC) / (1.1 - vC), 0., 1.);
         gl_FragColor = vec4(col * .95, alpha * .75);
       }`,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
@@ -570,6 +570,7 @@ export default {
     };
     const fogBase = new THREE.Color(FOG), background = new THREE.Color(FOG);
     const _c = new THREE.Color();
+    const _lf = { age: Infinity, row: null }, NONE = Object.freeze({ age: Infinity, row: null });   // (lastFire fills _lf in place: no per-frame allocation)
     // how much of each family's beam shows in the air: the front wash rakes AWAY from the house (you
     // see its pools and lit machines, barely its shafts); the backlight pours at you through the haze
     const BEAM_K = { wash: .3, mid: .6, back: 1, side: .7 };
@@ -590,7 +591,7 @@ export default {
         // ---- fire ----
         let burn = 0, fog2 = 0;
         for (let j = 0; j < JETS; j++){
-          const { age, row } = S ? lastFire(S.jets[j], t, P, start) : { age: Infinity, row: null };
+          const { age, row } = S ? lastFire(S.jets[j], t, P, start, _lf) : NONE;
           const a = age === Infinity ? 99 : age, v = row ? row[1] : 0, big = row && row[2] ? 1 : 0;
           fU.uAge.value[j] = a; fU.uVel.value[j] = v; fU.uBig.value[j] = big;
           eU.uAge.value[j] = a; eU.uVel.value[j] = v;
@@ -600,7 +601,7 @@ export default {
           nozzleGlow.setColorAt(j, _c.setRGB(1.6 * L, .62 * L, .2 * L));
         }
         for (let c = 0; c < CANNONS; c++){
-          const { age, row } = S ? lastFire(S.co2[c], t, P, start) : { age: Infinity, row: null };
+          const { age, row } = S ? lastFire(S.co2[c], t, P, start, _lf) : NONE;
           const a = age === Infinity ? 99 : age;
           pU.uAge.value[c] = a; pU.uVel.value[c] = row ? row[1] : 0;
           const L = co2Level(a);
@@ -611,7 +612,7 @@ export default {
         fU.uTime.value = t; pU.uTime.value = t;
         const warm = Math.min(1, burn / 3);                     // ~3 full columns = the room glowing orange
         // ---- blinders ----
-        const bl = S ? lastFire(S.blind, t, P, start) : { age: Infinity, row: null };
+        const bl = S ? lastFire(S.blind, t, P, start, _lf) : NONE;
         const B = blindFlash(bl.age) * (bl.row ? .5 + .5 * bl.row[1] : 0);
         blindMat.color.copy(blindIdle).lerp(blindHot, B);
         blindGlow.material.uniforms.uBoost.value = .07 + 2.4 * B;

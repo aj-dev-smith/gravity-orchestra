@@ -119,8 +119,9 @@ export function solveArenaCues({ drums = null, melody = null, loopBeats, beat, P
 }
 
 /* the most recent firing of one emitter at songTime t: seconds since it fired (Infinity
-   if never / before the count-in `start`), and its row. Loop-time wrap like every strike. */
-export function lastFire(list, t, P, start = -Infinity){
+   if never / before the count-in `start`), and its row. Loop-time wrap like every strike.
+   Pass `out` (an {age, row} object) to have it filled in place: zero per-frame allocation. */
+export function lastFire(list, t, P, start = -Infinity, out = { age: Infinity, row: null }){
   const lt = ((t % P) + P) % P;
   let best = Infinity, row = null;
   for (let i = 0; i < list.length; i++){
@@ -128,5 +129,6 @@ export function lastFire(list, t, P, start = -Infinity){
     const age = ((lt - u) % P + P) % P;
     if (age < best && t - age >= start - EPS){ best = age; row = list[i]; }
   }
-  return { age: best, row };
+  out.age = best; out.row = row;
+  return out;
 }

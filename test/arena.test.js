@@ -85,6 +85,13 @@ describe('arena playback: a pure fn of songTime', () => {
     expect(lastFire(r.jets[j], -2.4, P, -2.4).age).toBe(Infinity);                  // the count-in: the rig is cold
     expect(lastFire([], 5, P).age).toBe(Infinity);
   });
+  it('fills a caller-owned out object in place (the room reads it every frame: no allocation)', () => {
+    const j = r.jets.findIndex(l => l.length), u = r.jets[j][0][0], out = { age: 0, row: null };
+    expect(lastFire(r.jets[j], u + .3, P, -2.4, out)).toBe(out);
+    expect(out.age).toBeCloseTo(.3, 9); expect(out.row).toBe(r.jets[j][0]);
+    lastFire(r.jets[j], -2.4, P, -2.4, out);
+    expect(out.age).toBe(Infinity); expect(out.row).toBe(null);
+  });
   it('scrub-safe: any order of evaluation gives the same answer (no state)', () => {
     const ts = Array.from({ length: 200 }, (_, i) => -2.4 + i * .37);
     const fwd = ts.map(t => r.jets.map(l => lastFire(l, t, P, -2.4).age));

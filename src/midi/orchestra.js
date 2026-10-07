@@ -836,6 +836,7 @@ export function orchestrateByRole(tracks, { ppq, bpm, programs = false, reason =
   const route = [];
   for (const v of voices.filter(x => x !== lead).sort(byScore)){
     let placed = false;
+    const stray = isLine(v) && v.onsets < BELT_MIN;   // (as orchestrate: too few notes for a belt or a machine of their own)
     for (const p of v.prefs){
       if (p === 'belt' || p === 'alto'){
         const twin = isLine(v) && belt.find(b => twins(b.notes, v.notes, q12));
@@ -848,12 +849,15 @@ export function orchestrateByRole(tracks, { ppq, bpm, programs = false, reason =
       const dup = on.find(k => covers(k.notes, v.notes, q12));
       if (dup){ warnings.push(`${p}: "${v.name}" doubles "${dup.name}" — merged`); parts.push(entry(p, v, dup.vid)); placed = true; break; }
       if (on.length >= PART_SPEC[p].voices) continue;
+      if (stray && !on.length) continue;          // a stray few notes join a machine already playing — never open one
+
       v.vid = vid++; on.push(v); kept.set(p, on);
       parts.push(entry(p, v, v.vid));
       route.push(`"${v.name}" → ${p} (${v.kind})`);
       placed = true; break;
     }
-    if (!placed) warnings.push(`dropped "${v.name}" (${v.kind}): every machine that plays it is full`);
+    if (!placed) warnings.push(stray ? `dropped "${v.name}" (${v.kind}): ${v.onsets} note${v.onsets === 1 ? '' : 's'} — too few for a belt or a machine of its own`
+                                     : `dropped "${v.name}" (${v.kind}): every machine that plays it is full`);
   }
   warnings.unshift(`routed by musical role (${reason}): "${lead.name}" leads the belt` + (route.length ? '; ' + route.join('; ') : ''));
   // registry order for the parts (stable: the same file always builds the same room)

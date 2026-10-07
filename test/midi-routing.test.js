@@ -214,6 +214,13 @@ describe('belt TWINS merge (one line panned L/R is one belt, not two)', () => {
     expect(Object.keys(song.parts)).toEqual(['marimba']);         // (the vibes) — no turntable / riff for one note
     expect(warnings.some(w => /dropped "Fill".*too few/.test(w))).toBe(true);
   });
+  it('… and the same holds when routing by musical ROLE (no program data): a stray opens no machine', () => {
+    const { song, warnings } = convert(file(trk('Lead', null, 0, tune(72, 16)), trk('Fill', null, 1, [[6, 80, 2]]),
+      trk('Alto', null, 2, tune(64, 16).map(([b, m]) => [b + .5, m]))));
+    expect(warnings.some(w => /routed by musical role/.test(w))).toBe(true);
+    for (const hits of Object.values(song.parts ?? {})) expect(hits.length).toBeGreaterThanOrEqual(BELT_MIN);   // (was: a 1-note ricochet)
+    expect(warnings.some(w => /dropped "Fill".*too few/.test(w))).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -631,7 +631,8 @@ function buildWorld(keyName){
   // 'night'|'dawn'], …] — the room reads them as pure fns of songTime (a room may ignore them)
   rooms.cue({ storm: Array.isArray(S.storm) ? S.storm.filter(Number.isFinite) : null,
               sky: Array.isArray(S.sky) ? S.sky.filter(c => Array.isArray(c) && Number.isFinite(c[0]) && typeof c[1] === 'string') : null,
-              rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T });
+              rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T,
+              drums: S.drums || null, melody: S.melody, loopBeats, start: -LEAD_IN });   // (the arena solves its pyro cues from these)
   curBuild = { S, view: stageView, wallW, P0, buildKit };
   placeRoom();
 

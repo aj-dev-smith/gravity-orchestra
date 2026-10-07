@@ -69,6 +69,10 @@ export const STATIONS = {
   // station HANG_CLEAR above the belt's top housing). Footprint: the deck is ~19.5 wide and
   // 2·(ZW + 1.3) deep — ZW grows with belt speed (≤ ~7 for the densest honest line) → d 16
   volley:   { x: -24,  y: 16,  z: -4,   yaw: .45, w: 20, d: 16, hang: true },
+  // the ORGAN LOFT: a gallery flown centred BEHIND the belt (x on the belt's axis, z behind its
+  // depth — clear of the chandelier's crown), above the housing like every hung station: the
+  // pipe façade reads over the paternoster as the room's backdrop, its light rising into the air
+  organ:    { x:   0,  y: 16,  z: -12.5, yaw: 0,  w: 20, d: 6, hang: true },
 };
 
 /* the drum machine is not a plugin, but it stands in the same amphitheater: its slot

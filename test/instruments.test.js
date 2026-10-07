@@ -53,6 +53,17 @@ describe('instrument lane clock', () => {
     expect(e.check(30, .01)).toBe(true);
   });
 
+  it('a sweep pose just AFTER a lane\'s first strike does not silence it when playback arrives from earlier', () => {
+    const e = makeEdge(.25);
+    e.check(6.94, .2, true);                     // a merge pose at 7.14, .2 s after the lane's only strike (skipped)
+    expect(e.check(6.94, .01)).toBe(true);       // playback from the count-in reaches it: the clock went back → it plays
+    expect(e.check(6.94, .03)).toBe(false);      // … once
+    const f = makeEdge(.25);
+    expect(f.check(4, .01)).toBe(true);
+    expect(f.check(4, Infinity)).toBe(false);    // a non-finite since never re-arms a fired strike
+    expect(f.check(4, .02)).toBe(false);
+  });
+
   it('eventTimes / lanesByNote parse the part format', () => {
     const ev = eventTimes([[2, 'E4', .5, 1], [0, 'C4']], { rollT: 2.6, beat: .5 });
     expect(ev[0]).toMatchObject({ beat: 0, note: 'C4', vel: 1, dur: 0, t: 2.6 });

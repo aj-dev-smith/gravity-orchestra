@@ -110,18 +110,24 @@ export function nextAbs(s, t, P){ return s + Math.ceil((t - s - 1e-9) / P) * P; 
    we're within `window` seconds of it (a slow frame can't skip one) and not
    suppressed (skip = a scrub jump or the first frame: record, don't fire). */
 export function makeEdge(window = .25){
-  let fired = -Infinity;
+  let fired = -Infinity, seen = -Infinity;
   return {
     check(abs, since, skip = false){
       // time went BACKWARDS (a scrub, a rebuild, or main's merge sweep posing the whole loop
       // with skip on): what fired "later" hasn't happened yet — forget it, or the first loop
-      // after the jump plays silent until it passes that point again
-      if (abs < fired - 1e-6) fired = -Infinity;
+      // after the jump plays silent until it passes that point again. Judged on the STRIKE
+      // (abs) and on the CLOCK (abs + since = the songTime of the call): a sweep pose that
+      // last looked just after a lane's FIRST strike leaves fired === that very strike, so
+      // playback arriving at it from the count-in saw "already fired" and the first loop
+      // lost it (a lane with one strike per loop, inside .25 s before one of the 48 poses)
+      const now = abs + since;
+      if (abs < fired - 1e-6 || now < seen - 1e-6) fired = -Infinity;
+      if (Number.isFinite(now)) seen = now;
       if (!(since <= window) || !(abs > fired + 1e-6)) return false;
       fired = abs;
       return !skip;
     },
-    reset(){ fired = -Infinity; },
+    reset(){ fired = -Infinity; seen = -Infinity; },
   };
 }
 

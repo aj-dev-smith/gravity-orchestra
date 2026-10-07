@@ -25,9 +25,8 @@ export const GM_DRUMS = {
   kick:    { gm: 36, gain: 1.00 },   // acoustic bass drum
   snare:   { gm: 38, gain: 0.80 },   // acoustic snare
   hat:     { gm: 42, gain: 0.45 },   // closed hi-hat — quiet by nature
-  // reserved — names a future kit + MIDI import already map onto:
-  hatOpen: { gm: 46, gain: 0.50 },
-  clap:    { gm: 39, gain: 0.70 },
+  hatOpen: { gm: 46, gain: 0.42, metal: true },   // the hi-hat's open voice (same pair, same ball — drumparts)
+  clap:    { gm: 39, gain: 0.62, metal: true },   // four hands, sampled (cymbals.js)
   // the GM tom set, low → high. `tone` is the membrane fundamental in Hz: a tom is
   // PITCHED, so a descending fill reads (and sounds) as a real cascade. ordered low→high
   // here so the render lays the kit out as a tonal sweep. The kit has ONE floor tom, so
@@ -37,8 +36,16 @@ export const GM_DRUMS = {
   tomMid:    { gm: 47, gain: 0.82, tone: 154 },   // low-mid tom
   tomHiMid:  { gm: 48, gain: 0.80, tone: 178 },   // hi-mid tom
   tomHigh:   { gm: 50, gain: 0.80, tone: 207 },   // high tom
-  crash:   { gm: 49, gain: 0.60 },
-  ride:    { gm: 51, gain: 0.50 },
+  // THE CYMBALS — real bronze (cymbals.js renders each one: inharmonic modes + noise wash).
+  // `metal` = the voice is a rendered sample (one render feeds the live AND the iOS path).
+  // Cymbals are loud and bright by nature, so their base gains sit well under the shells;
+  // velocity then sets level AND darkness per hit (audio.js). `cymbal` = the drum machine
+  // hangs a lathed cymbal for it (drumparts CYMBALS: which cymbal, where on it it's struck).
+  crash:    { gm: 49, gain: 0.50, metal: true, cymbal: true },   // struck at the EDGE
+  ride:     { gm: 51, gain: 0.40, metal: true, cymbal: true },   // struck on the BOW
+  rideBell: { gm: 53, gain: 0.40, metal: true, cymbal: true },   // the ride's BELL (same cymbal, its own ball)
+  china:    { gm: 52, gain: 0.36, metal: true, cymbal: true },   // inverted, trashy
+  splash:   { gm: 55, gain: 0.44, metal: true, cymbal: true },   // small + fast
 };
 
 /** The set of legal lane names — the song validator checks against this. */
@@ -50,7 +57,8 @@ export const DRUM_NAMES = new Set(Object.keys(GM_DRUMS));
 // ~70 % of every dropped hit; whole grooves came in as a hat-only kit.)
 //   41 low floor tom → the one floor tom          35 acoustic bass drum → kick
 //   40 electric snare, 37 side stick → snare      44 pedal hat → hat
-//   52 chinese, 55 splash, 57 crash 2 → crash     53 ride bell, 59 ride 2 → ride
+//   57 crash 2 → crash                            59 ride 2 → ride
+//   (52 china, 53 ride bell, 55 splash are real pieces now — see GM_DRUMS)
 //   54 tambourine, 69 cabasa, 70 maracas, 82 shaker, 80 mute triangle → hat (a bright
 //   shaken/struck tick on the off-beats — the hat's job); 81 open triangle → hatOpen
 //   hand drums (pitched membranes) → the tom set by register:
@@ -60,7 +68,7 @@ export const DRUM_NAMES = new Set(Object.keys(GM_DRUMS));
 // in the kit reads as them.
 const GM_MERGE = {
   41: 'floorHigh', 35: 'kick', 40: 'snare', 37: 'snare', 44: 'hat',
-  52: 'crash', 55: 'crash', 57: 'crash', 53: 'ride', 59: 'ride',
+  57: 'crash', 59: 'ride',
   54: 'hat', 69: 'hat', 70: 'hat', 82: 'hat', 80: 'hat', 81: 'hatOpen',
   60: 'tomHigh', 61: 'tomHiMid', 65: 'tomHiMid', 62: 'tomMid', 63: 'tomMid', 64: 'tomLow', 66: 'tomLow',
 };
@@ -70,8 +78,16 @@ export function drumByGm(gm){
   return GM_MERGE[gm] || Object.keys(GM_DRUMS).find(n => GM_DRUMS[n].gm === gm);
 }
 
-/** Normalize one hit: bare `beat` OR `[beat, velocity]` → {beat, vel}.
-    Velocity is 0..1 (MIDI vel/127); absent = a full-strength hit. */
+/** Normalize one hit: bare `beat` OR `[beat, velocity]` OR `[beat, velocity, choke]` →
+    {beat, vel[, choke]}. Velocity is 0..1 (MIDI vel/127); absent = a full-strength hit.
+    `choke` (cymbals) = beats after the hit at which the cymbal's magnet CLAMP grabs it —
+    the swing stops and the sound is cut (a drummer's hand on the edge). Absent = it rings
+    out its natural decay. */
 export function normalizeHit(h){
-  return Array.isArray(h) ? { beat: h[0], vel: h[1] } : { beat: h, vel: 1 };
+  if (!Array.isArray(h)) return { beat: h, vel: 1 };
+  const o = { beat: h[0], vel: h[1] ?? 1 };
+  if (h[2] > 0) o.choke = h[2];
+  return o;
 }
+/** Is this lane a cymbal the machine hangs (crash / ride / rideBell / china / splash)? */
+export const isCymbal = name => !!GM_DRUMS[name]?.cymbal;

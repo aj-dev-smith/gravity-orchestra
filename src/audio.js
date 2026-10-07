@@ -1,5 +1,6 @@
 import { noteHz } from './engine.js';
 import { GM_DRUMS } from './drumkit.js';
+import { metalVoice, VARIANTS as METAL_VARIANTS } from './cymbals.js';
 import { PAN_COMP, AIR_HZ, ROOM_MIN, widthFor } from './spatial.js';
 
 /* ---------------- audio: raw Web Audio, zero dependencies ----------------
@@ -165,6 +166,7 @@ export function rebuildBank(tracks, drumLanes = [], voices = []){
   const wanted = new Map();
   tracks.forEach(tr => tr.pads.forEach(p => wanted.set(bankKey(p.note, tr.deep), {note:p.note, bass:tr.deep})));
   drumLanes.forEach(name => wanted.set('drum:' + name, {drum:name}));   // one sample per drum lane
+  warmMetal(drumLanes);                                  // the cymbals' renders, now (song load), not on the first hit
   voiceSrc = new Map(); voiceAB = new Map();
   voices.forEach(v => {                                  // instrument plugin voices (src/instruments/*)
     if (voiceSrc.has(v.key)) return;
@@ -263,6 +265,7 @@ export function playDrum(name, vel = 1, sp){
   if (ctx && ctx.state === 'running' && ctx.currentTime > .05){
     hitDrum(name, vel, sp); lastPath = 'webaudio'; return;
   }
+  metalLive.delete(name);                                // (a choke now means the element, not an old live voice)
   const a = bank['drum:' + name];
   if (a){
     ready(a);
@@ -270,6 +273,22 @@ export function playDrum(name, vel = 1, sp){
     a.play().catch(()=>{});
     lastPath = 'samples';
   }
+}
+
+/* CYMBAL CHOKE — the drum machine's magnet clamp grabbed the cymbal (a timeline edge in
+   marbledrums, never a scheduler): cut what it is still ringing. Live path: a ~25 ms fade
+   on every voice of that cymbal still sounding. Sample path: pause its element (the only
+   control iOS honours — el.volume is ignored). */
+export function chokeDrum(name){
+  const live = metalLive.get(name);
+  if (live && ctx){
+    const t = ctx.currentTime;
+    for (const v of live){ try { v.g.gain.cancelScheduledValues(t); v.g.gain.setTargetAtTime(0, t, .008); v.src.stop(t + .06); } catch(e){} }
+    metalLive.delete(name);
+    return;
+  }
+  const a = bank['drum:' + name];
+  if (a && !a.paused){ try { a.pause(); } catch(e){} }
 }
 
 /* ---- INSTRUMENT VOICES — the plugin seam (src/instruments/README.md) ----
@@ -497,12 +516,51 @@ function getNoise(){                                    // one white-noise buffe
   for (let i = 0; i < N; i++) d[i] = Math.random() * 2 - 1;
   return noiseBuf;
 }
-const DRUM_HZ = { kick: 60, snare: 250 };                // pan-width pitch (toms use their registry tone)
+const DRUM_HZ = { kick: 60, snare: 250 };                // pan-width pitch (toms use their registry tone; metal = bright → full width)
+/* METAL voices (cymbals, open hat, clap — cymbals.js): one pure render per voice, wrapped
+   in an AudioBuffer per context. Velocity sets the level AND the darkness (a soft stroke on
+   bronze is duller, not just quieter — a lowpass that opens with vel²). Every live voice of
+   a cymbal is kept until it ends so the magnet clamp can choke it (chokeDrum). */
+let metalAB = new Map(), metalCtx = null, metalRR = {};
+const metalLive = new Map();                             // name → Set of {src, g} still ringing
+function warmMetal(names){
+  for (const n of names) if (GM_DRUMS[n]?.metal)
+    for (let v = 0; v < (METAL_VARIANTS[n] || 1); v++) try { metalVoice(n, v); } catch(e){ console.warn('cascade: metal voice failed', n, e); }
+}
+function metalBuffer(name, v){
+  if (metalCtx !== ctx){ metalAB = new Map(); metalCtx = ctx; }
+  const k = name + '#' + v;
+  let b = metalAB.get(k);
+  if (!b){
+    const r = metalVoice(name, v);
+    b = ctx.createBuffer(1, r.samples.length, r.sr);
+    b.getChannelData(0).set(r.samples);
+    metalAB.set(k, b);
+  }
+  return b;
+}
+function hitMetal(name, vel, dst, t, amp){
+  const nv = METAL_VARIANTS[name] || 1, v = (metalRR[name] = ((metalRR[name] ?? -1) + 1) % nv);
+  const src = ctx.createBufferSource(); src.buffer = metalBuffer(name, v);
+  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass';
+  lp.frequency.value = Math.min(16000, 2600 + 14000 * vel * vel); lp.Q.value = .5;
+  const g = ctx.createGain(); g.gain.setValueAtTime(amp, t);
+  src.connect(lp); lp.connect(g); g.connect(dst);
+  src.start(t);
+  const live = metalLive.get(name) || metalLive.set(name, new Set()).get(name), voice = { src, g };
+  live.add(voice);
+  src.onended = () => live.delete(voice);
+}
 function hitDrum(name, vel, sp){
   if (!ctx) return;
-  const dst = place([busOut || master], sp, MIX.send.drum, DRUM_HZ[name] || GM_DRUMS[name]?.tone || 0);   // dry bus (no echo) + a touch of room; master = fallback
+  const metal = GM_DRUMS[name]?.metal;
+  const dst = place([busOut || master], sp, MIX.send.drum, DRUM_HZ[name] || GM_DRUMS[name]?.tone || (metal ? 5000 : 0));   // dry bus (no echo) + a touch of room; master = fallback
   const t = ctx.currentTime;
   const amp = (GM_DRUMS[name]?.gain ?? .7) * (.35 + .65 * vel);
+  if (metal){
+    try { hitMetal(name, vel, dst, t, amp * (.55 + .45 * vel)); return; }   // (metal: a steeper curve — a soft cymbal tap is far quieter than a crash)
+    catch(e){ console.warn('cascade: metal hit failed', name, e); }        // → the old noise fallback below
+  }
   if (name === 'kick'){
     const o = ctx.createOscillator(); o.type = 'sine';
     o.frequency.setValueAtTime(125, t);
@@ -565,7 +623,15 @@ function hitDrum(name, vel, sp){
 /* ---- PERCUSSION (baked WAV) — the iOS fallback, same shape as renderNoteWav but
    dry (no echo) and punchy. One render per drum at full strength: el.volume is
    ignored on iOS so per-hit dynamics live only on the webaudio path (§3). ---- */
+/* the iOS bank's metal samples: the SAME render as the live path, baked to a WAV whose peak
+   is the cymbal's mix gain relative to the shells' .92 — el.volume is ignored on iOS, so a
+   crash normalized like a kick would ring at full level for 3 s over the whole mix */
+const METAL_PEAK = .92 / .8;                             // the snare's gain → .92 (the shells' level)
 function renderDrumWav(name){
+  if (GM_DRUMS[name]?.metal){
+    try { const r = metalVoice(name, 0); return encodeWav(r.samples, r.sr, Math.min(.92, GM_DRUMS[name].gain * METAL_PEAK)); }
+    catch(e){ console.warn('cascade: metal WAV failed', name, e); }
+  }
   const sr = 22050;
   const tone = GM_DRUMS[name]?.tone;
   const dur = name === 'kick' ? .4 :
@@ -613,10 +679,10 @@ function renderDrumWav(name){
 }
 /* PCM-16 mono WAV encoder, peak-normalized. (renderNoteWav keeps its own inline
    encoder verbatim — the iOS-war code is untouched; this serves the drum path.) */
-function encodeWav(s, sr){
+function encodeWav(s, sr, top = .92){
   const N = s.length;
   let peak = 0; for (let n = 0; n < N; n++) peak = Math.max(peak, Math.abs(s[n]));
-  const k = .92 / Math.max(peak, 1e-6);
+  const k = top / Math.max(peak, 1e-6);
   const buf = new ArrayBuffer(44 + N * 2), v = new DataView(buf);
   const W = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
   W(0, 'RIFF'); v.setUint32(4, 36 + N * 2, true); W(8, 'WAVE'); W(12, 'fmt ');

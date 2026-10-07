@@ -753,6 +753,10 @@ function strike(tr, i, rig){
    flash, piston and strike light are the machine's own). The KICK hits the room:
    the cannonball landing shakes the camera and punches the exposure. */
 function drumStrike(hit){
+  // a CHOKE (the cymbal's magnet clamp grabbed it — marbledrums' timeline edge): cut its sound
+  if (hit.choke){ if (audio.isReady()) try { audio.chokeDrum(hit.lane); } catch(e){} return; }
+  // a closed hat strike is the pedal CHICKING the pair shut: an open hat still ringing stops
+  if (hit.lane === 'hat' && audio.isReady()) try { audio.chokeDrum('hatOpen'); } catch(e){}
   const c = hit.drum.contact, v = hit.vel ?? 1;
   spawnBurst(c.clone().add(UP), new THREE.Color(hit.drum.style.ball),
              Math.round(5 + 7 * v), 3.0);

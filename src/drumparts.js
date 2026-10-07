@@ -1,4 +1,4 @@
-import { dribbleLane, firstStrike, G } from './engine.js';
+import { dribbleLane, dribbleAt, dribblePiston, firstStrike, G } from './engine.js';
 import { GM_DRUMS, normalizeHit } from './drumkit.js';
 
 /* ============================================================
@@ -18,8 +18,13 @@ export const STYLE = {
   snare:     { r: .72,  ball: .20, lift: 1.75, kind: 'drum',  shell: 0x0c2460, flake: 0x8fc4ff, glow: 0xbfe0ff, depth: .36 },
   clap:      { r: .58,  ball: .17, lift: 1.9, kind: 'drum',   shell: 0x3c0d55, flake: 0xff8ae0, glow: 0xffc0e8, depth: .42 },
   hat:       { r: .66,  ball: .13, lift: 2.15, kind: 'cymbal', bronze: 0xd6a656, glow: 0xfff0a8 },
+  // the hung cymbals: `lift` here = the BELL top's height (the ball lands where CYMBALS says,
+  // on the cymbal's own surface there — see cymbalSurface). china is mounted INVERTED.
   crash:     { r: .98,  ball: .16, lift: 2.75, kind: 'cymbal', bronze: 0xe2b462, glow: 0xfff6d0 },
   ride:      { r: 1.04, ball: .16, lift: 2.45, kind: 'cymbal', bronze: 0xb88a44, glow: 0xf2f8d0 },
+  rideBell:  { r: 1.04, ball: .14, lift: 2.45, kind: 'cymbal', bronze: 0xb88a44, glow: 0xffe2a0 },
+  china:     { r: .90,  ball: .16, lift: 2.55, kind: 'cymbal', bronze: 0x9c6a2e, glow: 0xffc890, inverted: true },
+  splash:    { r: .52,  ball: .12, lift: 2.85, kind: 'cymbal', bronze: 0xf0c474, glow: 0xfffbe6 },
   // the toms: a lacquer sweep down the staircase, gold at the top → deep wine at the floor
   tomHigh:   { r: .58,  ball: .18, kind: 'drum', shell: 0x6a4808, flake: 0xffd668, glow: 0xffe898, depth: .44 },
   tomHiMid:  { r: .64,  ball: .20, kind: 'drum', shell: 0x6a2c06, flake: 0xffb050, glow: 0xffdc98, depth: .48 },
@@ -53,12 +58,14 @@ export const FIXED = {
   kick:  { x: 0,     z: .65 },
   snare: { x: -2.4,  z: 1.2 },
   hat:   { x: -4.45, z: .45 },
-  crash: { x: -5.55, z: -1.5 },
+  crash: { x: -5.55, z: -1.5 },    // (cymbals: the cymbal's CENTRE — the ball strikes it per CYMBALS)
   ride:  { x: -1.65, z: -1.45 },
+  china: { x: -7.15, z: 1.0 },
+  splash:{ x: -3.35, z: -1.05 },
   clap:  { x: 1.95,  z: -1.75 },
 };
 /* boom stands for the cymbals (the stand's foot; the boom reaches over to the cymbal) */
-export const STANDS = { crash: { x: -7.15, z: -.55 }, ride: { x: .35, z: -2.0 } };
+export const STANDS = { crash: { x: -7.15, z: -.55 }, ride: { x: .35, z: -2.0 }, china: { x: -8.35, z: 2.0 }, splash: { x: -3.75, z: -2.0 } };
 export const TRIPOD = .55;                                // stand tripod reach
 export const SPIRAL = {
   C: { x: 4.6, z: -1.08 },   // the newel post
@@ -101,7 +108,10 @@ export function kitPieces(spec){
   for (const n of names){
     if (n === 'hatOpen') continue;
     if (n === 'hat') continue;
-    pieces.push({ key: n, lanes: [n] });
+    const z = CYMBALS[n];
+    // a cymbal lane strikes ITS cymbal; a lane that shares one (the ride bell) rides as a
+    // guest on the host's cymbal when the host plays too — one cymbal, two balls
+    pieces.push(z ? { key: n, lanes: [n], cym: z.on, host: z.on !== n && names.includes(z.on) ? z.on : null } : { key: n, lanes: [n] });
   }
   if (hatLanes.length) pieces.push({ key: 'hat', lanes: hatLanes });
   // seats
@@ -111,6 +121,11 @@ export function kitPieces(spec){
   for (const p of pieces){
     const st = styleOf(p.key);
     if (seats[p.key]){ const s = seats[p.key]; Object.assign(p, { x: s.x, z: s.z, lift: s.y, seat: s }); }
+    else if (p.cym){                                     // the ball's column: CYMBALS' radius + bearing off the centre
+      const C = FIXED[p.cym], z = CYMBALS[p.key], R = styleOf(p.cym).r, rho = z.rho * R, bell = styleOf(p.cym).lift;
+      Object.assign(p, { cx: C.x, cz: C.z, rho, dir: z.dir, bell,
+        x: C.x + rho * Math.sin(z.dir), z: C.z + rho * Math.cos(z.dir), lift: bell + cymbalSurface(p.cym, rho) });
+    }
     else if (FIXED[p.key]) Object.assign(p, FIXED[p.key], { lift: st.lift });
     else { Object.assign(p, { x: -1.5 * extra++, z: 3.1, lift: 1.6 }); }   // an unregistered lane: the front apron
   }
@@ -145,12 +160,21 @@ export function treadOutline(t, n = 8){
     pts.push([C.x + rr * Math.sin(a), C.z + rr * Math.cos(a)]); }
   return pts;
 }
-/* a piece's plan reach: its head, or the tripod/legs under it if wider */
+/* a piece's plan reach: its head, or the tripod/legs under it if wider (a cymbal: round its CENTRE) */
 export function pieceReach(p){
-  const r = styleOf(p.key).r;
+  const r = styleOf(p.cym || p.key).r;
   if (styleOf(p.key).kind === 'cymbal') return r;
   return Math.max(r, pieceFloor(p) ? 0 : p.key === 'kick' ? .9 : .6);
 }
+/* a piece's plan DISC [x, z, r]: what it occupies on the floor plan. A cymbal's disc is
+   round its centre (its ball strikes off-centre); a guest on a host's cymbal (the ride
+   bell on the ride) has none of its own — the host's disc is the cymbal. */
+export function pieceDisc(p){
+  if (p.host) return null;
+  return p.cym ? [p.cx, p.cz, pieceReach(p)] : [p.x, p.z, pieceReach(p)];
+}
+/* the stand a piece puts on the floor (cymbals on booms; a guest has none) */
+export const pieceStand = p => (!p.host && STANDS[p.cym || p.key]) || null;
 
 /* ---- the KIT FRAME: everything sized from the kit that is actually built. A kick +
    snare + hat gets a compact shell and deck; the full kit gets the lot. The magnet
@@ -164,8 +188,8 @@ export const shape = u => Math.pow(Math.max(0, 1 - Math.pow(Math.min(1, Math.abs
 export function kitFrame(pieces){
   const pts = [];                                         // [x, z, reach]
   for (const p of pieces){
-    pts.push([p.x, p.z, pieceReach(p)]);
-    const S = STANDS[p.key]; if (S) pts.push([S.x, S.z, TRIPOD]);
+    const D = pieceDisc(p); if (D) pts.push(D);
+    const S = pieceStand(p); if (S) pts.push([S.x, S.z, TRIPOD]);
     if (p.key === 'hat') pts.push([p.x, p.z + HAT.heelZ + .1, .22]);
   }
   for (const t of stairTreads(pieces)) for (const [x, z] of treadOutline(t)) pts.push([x, z, .05]);
@@ -179,9 +203,13 @@ export function kitFrame(pieces){
   // where the shell has dropped most), magnet pot included
   let T = 5;
   for (const p of pieces){
-    const rr = pieceReach(p) + .3;
-    const T0 = Math.hypot(magnetTop(p) + .55, Math.max(0, p.z + rr - zA)) / shape((Math.abs(p.x - xc) + rr) / X0);
-    T = Math.max(T, T0 + .1);
+    // the column to clear: the magnet's, or the whole cymbal round its centre if that reaches further
+    const cols = [[p.x, p.z, .3 + (p.cym ? 0 : pieceReach(p))]];
+    const D = pieceDisc(p); if (D && p.cym) cols.push([D[0], D[1], D[2] + .3]);
+    for (const [x, z, rr] of cols){
+      const T0 = Math.hypot(magnetTop(p) + .55, Math.max(0, z + rr - zA)) / shape((Math.abs(x - xc) + rr) / X0);
+      T = Math.max(T, T0 + .1);
+    }
   }
   const rho = x => T * shape((x - xc) / X0);
   const thOf = m => Math.asin(Math.max(-1, Math.min(1, (m.z - zA) / rho(m.x))));
@@ -213,6 +241,130 @@ export function deckOutline(F){
   return [[x0 + b, z0], [x1 - b, z0], [x1, z0 + b], [x1, z1 - c], [x1 - c, z1], [x0 + c, z1], [x0, z1 - c], [x0, z0 + b]];
 }
 
+/* ---- THE CYMBALS (pure). A cymbal is not a membrane: it hangs on a boom, its ball
+   dribbles onto a ZONE of it (crash = the EDGE, ride = the BOW, ride bell = the BELL —
+   the same ride cymbal, its own ball), and after each hit the cymbal SWINGS about its
+   pivot (the rod tip inside the bell) as a damped pendulum — a pure fn of the time since
+   the hit. Under the bell rides the CLAMP: an electromagnet ring with a felt lip that
+   rises into the bell mouth. It (a) levels the cymbal just before every strike, so every
+   ball lands on a cymbal at rest, exactly where the dribble solve says it is; (b) parks
+   it once its natural swing has died; (c) CHOKES it when the song says (a hit's `choke`,
+   drumkit normalizeHit) — the swing stops and the sound is cut. ---- */
+/* which cymbal each lane strikes, where (rho = fraction of the radius) and from which
+   bearing (rad round the centre, 0 = +z toward the audience: the strike faces the house) */
+export const CYMBALS = {
+  crash:    { on: 'crash',  rho: .82, dir: 0 },
+  ride:     { on: 'ride',   rho: .60, dir: 0 },
+  rideBell: { on: 'ride',   rho: .12, dir: Math.PI },
+  china:    { on: 'china',  rho: .78, dir: 0 },
+  splash:   { on: 'splash', rho: .74, dir: 0 },
+};
+/* the lathe profile (moved here from drumlook: pure numbers): bell dome, bow, thinning
+   edge. top(rr) = the top surface's height below the bell top (<= 0); th(rr) = thickness. */
+export function cymbalProfile(R){
+  const rb = .21 * R, bellH = .085 * R + .015, bow = .1 * R;
+  const top = rr => rr <= rb ? -bellH * (1 - Math.sqrt(Math.max(0, 1 - (rr / rb) ** 2)))
+                             : -bellH - bow * ((rr - rb) / (R - rb) * .75 + .25 * ((rr - rb) / (R - rb)) ** 2);
+  const th = rr => .03 - .018 * Math.max(0, (rr - rb) / (R - rb));
+  return { rb, bellH, bow, top, th, under: bellH + .03 };
+}
+/* the cymbal's TOP surface at radius rr, relative to its bell-top reference (styleOf.lift).
+   An inverted china is the profile flipped: a bowl whose bell points down, edge up. */
+export function cymbalSurface(on, rr){
+  const st = styleOf(on), P = cymbalProfile(st.r);
+  return st.inverted ? P.th(rr) - P.top(rr) : P.top(rr);
+}
+/* its UNDERSIDE at rr (where the clamp's felt lip meets it) */
+export function cymbalUnder(on, rr){
+  const st = styleOf(on), P = cymbalProfile(st.r);
+  return st.inverted ? -P.top(rr) : P.top(rr) - P.th(rr);
+}
+/* the swing pivot: the rod tip, touching the inside of the bell at the centre */
+export const cymbalPivot = on => cymbalUnder(on, 0);
+
+/* the swing + clamp knobs. Peak swing (rad) at full impact on the edge (it scales with how
+   far out the strike is — a bell hit barely rocks it); the pendulum's frequency drops with
+   size (f ~ 1/sqrt(r) — a big crash sways slowly, a splash shivers) and its swing decays over tau. */
+export const SWING = {
+  amp: { crash: .24, ride: .15, china: .22, splash: .2 },
+  f: r => 2.2 / Math.sqrt(r),             // Hz
+  tau: r => .55 + .45 * r,                // s
+  w2: 1.37, a2: .3,                       // the cross-axis wobble (precession) — ratio + share
+};
+export const CLAMP = { gap: .08, lip: .9, W: .16, frac: .4, lift: .06, park: .04, choke: .05 };
+export const clampLip = on => CLAMP.lip * cymbalProfile(styleOf(on).r).rb;   // the felt lip's radius
+
+const ss = u => u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u);
+/* the clamp's engagement (0 = open, 1 = gripping) `s` after a strike, `gap` before the next:
+   it lets go as the strike lands (the ball meets a FREE cymbal), re-grips to level it before
+   the next, parks it once the swing has died, and grips at once on a choke */
+export function clampAt(s, gap, tau, choke = Infinity){
+  const lift = Math.min(CLAMP.lift, gap * .2);
+  const W = Math.min(CLAMP.W, gap * CLAMP.frac);
+  const kr = 1 - ss(s / lift);
+  const kp = ss((s - (gap - W)) / (.75 * W));
+  const kd = ss((s - tau * Math.log(1 / CLAMP.park)) / .15);
+  const kc = choke < gap ? ss((s - choke) / CLAMP.choke) : 0;
+  return Math.max(kr, kp, kd, kc);
+}
+
+/* One cymbal's swing schedule: the MERGED strikes of every lane that strikes it (the ride
+   + its bell), each with its impulse (amp), bearing and choke. members: [{L, meta, rho, dir,
+   vInMax}] — meta = pieceLane(). */
+export function cymbalSchedule(on, members, P, { dtMax = DT_MAX } = {}){
+  const R = styleOf(on).r, wrap = t => ((t % P) + P) % P;
+  const all = [];
+  for (const m of members) m.L.s.forEach((s, j) => all.push({ s, A: (SWING.amp[on] ?? .15) * (m.rho / R)
+      * Math.min(1, m.L.vIn[j] / (m.vInMax || 1)) * (.5 + .5 * m.meta.vel[j]), dir: m.dir, choke: m.meta.choke?.[j] ?? Infinity }));
+  const Lm = dribbleLane(all.map(h => h.s), P, { dtMax });
+  const by = new Map();
+  for (const h of all){ const k = wrap(h.s); (by.get(k) || by.set(k, []).get(k)).push(h); }
+  const amp = [], dir = [], choke = [];
+  Lm.s.forEach((s, j) => {
+    const at = by.get(s), top = at.reduce((a, b) => (b.A > a.A ? b : a));
+    amp.push(Math.min(SWING.amp[on] ?? .15, at.reduce((a, b) => a + b.A, 0)));
+    dir.push(top.dir);
+    const c = Math.min(...at.map(h => h.choke));
+    choke.push(c < Lm.gaps[j] ? c : Infinity);
+  });
+  return { on, Lm, amp, dir, choke, omega: 2 * Math.PI * SWING.f(R), tau: SWING.tau(R) };
+}
+/* The cymbal's pose at songTime t: tilt (rx, rz — THREE's x/z rotations of the swing group
+   about the pivot; the strike side dips) and the clamp's engagement k. Armed count-in:
+   clamped level, waiting. Pure fn of t (O(log n) via dribbleAt). */
+export function cymbalPose(C, t, start = -Infinity){
+  const d = dribbleAt(C.Lm, t, start);
+  if (d.i < 0) return { rx: 0, rz: 0, k: 1, i: -1, since: Infinity, until: d.until };
+  const s = d.since, gap = s + d.until;
+  const k = clampAt(s, gap, C.tau, C.choke[d.i]);
+  const e = C.amp[d.i] * Math.exp(-s / C.tau) * (1 - k);
+  const tu = e * Math.sin(C.omega * s), tw = SWING.a2 * e * Math.sin(SWING.w2 * C.omega * s);
+  const dx = Math.sin(C.dir[d.i]), dz = Math.cos(C.dir[d.i]);
+  // rotation.x > 0 lowers +z, rotation.z > 0 raises +x: dip the strike bearing by tu, its perpendicular by tw
+  return { rx: tu * dz - tw * dx, rz: -tu * dx - tw * dz, k, i: d.i, since: s, until: d.until };
+}
+
+/* The cymbal's PISTON when more than one ball strikes it: each lane's own dribblePiston (at
+   rest at its own contacts), each QUIETED to exactly zero — position and velocity — at every
+   OTHER lane's contact, so whichever ball lands, it lands on a cymbal at rest where the solve
+   says. One lane: just its piston. members: [{L}]. */
+export const QUIET = .06;
+export function cymbalPiston(members, t, start = -Infinity){
+  if (members.length === 1) return dribblePiston(members[0].L, t, { start });
+  let y = 0;
+  for (const m of members){
+    let v = dribblePiston(m.L, t, { start });
+    if (!v) continue;
+    for (const o of members){
+      if (o === m) continue;
+      const d = dribbleAt(o.L, t, start), x = Math.min(d.since, d.until);
+      if (x < QUIET){ const u = x / QUIET; v *= 1 - (1 - u * u) ** 2; }
+    }
+    y += v;
+  }
+  return y;
+}
+
 /* ---- the HI-HAT LINKAGE, the way a real one works: the pedal PRESSED (toe down) =
    CLOSED, released (toe up) = OPEN. The struck TOP cymbal rides the piston (contact
    stays honest), so the BOTTOM one is the mover: its pull-tube runs down the stand to a
@@ -238,20 +390,22 @@ export function hatLinkage(drop){
 export function pieceLane(piece, spec, { rollT, beat, P, dtMax }){
   const hits = [];
   for (const lane of piece.lanes) for (const h of spec[lane].map(normalizeHit))
-    hits.push({ t: rollT + h.beat * beat, vel: h.vel, lane });
+    hits.push({ t: rollT + h.beat * beat, vel: h.vel, lane, choke: h.choke ? h.choke * beat : Infinity });
   const L = dribbleLane(hits.map(h => h.t), P, { dtMax });
   const wrap = t => ((t % P) + P) % P;                  // the same wrap dribbleLane keys its strikes by
   const byS = new Map();
   for (const h of hits){ const k = wrap(h.t); (byS.get(k) || byS.set(k, []).get(k)).push(h); }
-  const vel = [], lane = [], open = [];
-  for (const s of L.s){
+  const vel = [], lane = [], open = [], choke = [];
+  L.s.forEach((s, j) => {
     const at = byS.get(s);
     const o = at.some(h => h.lane === 'hatOpen');
     open.push(o);
     lane.push(piece.key === 'hat' ? (o ? 'hatOpen' : 'hat') : piece.lanes[0]);
     vel.push(Math.max(...at.map(h => h.vel)));
-  }
-  return { L, vel, lane, open };
+    const c = Math.min(...at.map(h => h.choke));      // (seconds after the strike; a choke past the next strike never happens)
+    choke.push(c < L.gaps[j] ? c : Infinity);
+  });
+  return { L, vel, lane, open, choke };
 }
 
 /* ---- the HI-HAT CLUTCH: 0 = closed, 1 = open. It sits exactly at each strike's

@@ -191,8 +191,16 @@ is part of the instrument too — we design the *sound of each hit* per instrume
 
 Status: drums are implemented (kick/snare/hat + a **five-tom set** voiced + rendered — one
 floor tom; GM 41's low floor tom is merged onto it via `GM_MERGE` in drumkit.js, as are the
-other kick/snare (35/40/37), pedal hat + shakers (→ hat), extra cymbals and hand drums (→ toms);
-clap/crash/ride reserved in the registry, voiced as fallbacks). Toms are **pitched** — each
+other kick/snare (35/40/37), pedal hat + shakers (→ hat), crash 2 / ride 2 (57/59) and hand
+drums (→ toms)). **REAL CYMBALS**: crash (49), ride (51), ride bell (53), china (52), splash (55)
+are pieces of their own, voiced by `src/cymbals.js` (clawd-o-matic's `metal()`: 40–160 inharmonic
+modes + decaying noise bands; one pure render feeds the live AND the iOS path; hatOpen + clap use
+it too). Each hangs on a boom; its ball strikes its ZONE (crash = edge, ride = bow, ride bell =
+bell — the ride's own cymbal, a second ball), the cymbal then swings as a damped pendulum, and a
+magnet CLAMP under the bell levels it before every strike, parks it, and CHOKES it when a hit says
+`[beat, vel, chokeBeats]` (the choke is a timeline edge → `audio.chokeDrum`; a closed hat strike
+chokes a ringing open hat). All pure in drumparts.js (`cymbalPose`, `cymbalPiston`), tested in
+`test/cymbals.test.js`. Toms are **pitched** — each
 carries a `tone` (Hz) in the registry and a real membrane voice (downward bend + stick
 attack), so a descending fill reads and sounds as a tonal cascade (this is what makes an
 imported intro tom roll land). **Mountain King** carries a hand-authored `drums` block; any

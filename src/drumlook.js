@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { HW, SPIRAL, shellPoint, shellRungs, deckOutline } from './drumparts.js';
+import { HW, SPIRAL, shellPoint, shellRungs, deckOutline, cymbalProfile } from './drumparts.js';
+export { cymbalProfile };
 
 /* ============================================================
    DRUM LOOK — the materials + geometry builders for the drum
@@ -204,14 +205,24 @@ export function buildWires(st, mats, glow){
    (LatheGeometry's tangent runs round the cymbal → rotate the anisotropy a quarter
    turn), swept round the cymbal as it wobbles; fine lathe grooves that break the
    reflection into rings, a polished bell. Top of the bell at local y = 0. ---- */
-export function cymbalProfile(R){
-  const rb = .21 * R, bellH = .085 * R + .015, bow = .1 * R;
-  const top = rr => rr <= rb ? -bellH * (1 - Math.sqrt(Math.max(0, 1 - (rr / rb) ** 2)))
-                             : -bellH - bow * ((rr - rb) / (R - rb) * .75 + .25 * ((rr - rb) / (R - rb)) ** 2);
-  const th = rr => .03 - .018 * Math.max(0, (rr - rb) / (R - rb));
-  return { rb, bellH, bow, top, th, under: bellH + .03 };
-}
-export function cymbalGeometry(R){
+// (cymbalProfile — the pure lathe profile — lives in drumparts.js now: the cymbal solve needs it)
+/* `inverted` (the china): the same lathe flipped top-for-bottom — a bowl, bell down, edge up —
+   with its upturned FLANGE (the last 14 % of the radius kicks up harder: the china's lip) */
+export function cymbalGeometry(R, inverted = false){
+  if (inverted){
+    const P = cymbalProfile(R), pts = [], N = 44, f0 = .86 * R;
+    const flange = rr => rr > f0 ? .45 * (rr - f0) ** 1.2 / (R - f0) ** .2 : 0;
+    const rAt = k => { const u = k / N; return R * (u < .35 ? u * u / .35 * .6 : .21 + (u - .35) / .65 * .79); };
+    // flipped: top surface y = th − top (+ flange), underside y = −top (+ flange); bell pit at y = 0
+    pts.push(new THREE.Vector2(0.0001, P.th(0)));
+    for (let k = 1; k <= N; k++){ const rr = Math.min(R, Math.max(.0002, rAt(k))); pts.push(new THREE.Vector2(rr, P.th(rr) - P.top(rr) + flange(rr))); }
+    pts.push(new THREE.Vector2(R + .006, P.th(R) / 2 - P.top(R) + flange(R)));
+    for (let k = N; k >= 1; k--){ const rr = Math.min(R, Math.max(.0002, rAt(k))); pts.push(new THREE.Vector2(rr, -P.top(rr) + flange(rr))); }
+    pts.push(new THREE.Vector2(0.0001, 0));
+    const g = new THREE.LatheGeometry(pts, 96);
+    g.computeTangents();
+    return g;
+  }
   const P = cymbalProfile(R), pts = [], N = 44;
   const rAt = k => { const u = k / N; return R * (u < .35 ? u * u / .35 * .6 : .21 + (u - .35) / .65 * .79); };   // dense through the bell
   pts.push(new THREE.Vector2(0.0001, 0));

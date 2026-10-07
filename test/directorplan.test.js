@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { planEdit, shotAt, PLAN } from '../src/directorplan.js';
+import { planEdit, shotAt, rideSpan, PLAN } from '../src/directorplan.js';
 
 // a synthetic room: 120 bpm (beat .5 s), 96 beats of music from t0 = 1
 const beat = .5, t0 = 1, N = 96, end = t0 + N * beat;
@@ -72,5 +72,42 @@ describe('directorplan — the edit, solved up front', () => {
     expect(shotAt(p, 0, end)).toBe('stage');
     expect(shotAt(p, end + .1, end)).toBe('stage');
     expect(planEdit({ voices: room(), grid }).cuts).toEqual(p.cuts);
+  });
+
+  // ---- RIDE THE BALL (ridecam.js): a long, tall flight the director may ride ----
+  const lob = { t: at(40), dt: 2.2, w: 1, role: 'bass' };       // the room's one big pedal lob (≈ 4.4 beats)
+
+  it('rides THE big flight: a ride shot covering its launch → landing, cut on beats', () => {
+    const p = planEdit({ voices: room(), grid, rides: [lob, { t: at(10), dt: .9, w: .15, role: 'lead' }] });
+    expect(p.rides.length).toBe(1);
+    const w = p.rides[0];
+    expect(w.role).toBe('bass');
+    expect(w.t0).toBeLessThanOrEqual(lob.t - .3);                 // the cut lands before the launch…
+    expect(w.t1).toBeGreaterThanOrEqual(lob.t + lob.dt);          // …and holds through the landing
+    for (const x of [w.t0, w.t1]) expect(Math.abs((x - t0) / beat - Math.round((x - t0) / beat))).toBeLessThan(1e-6);
+    expect(w.t1 - w.t0).toBeGreaterThanOrEqual(PLAN.MIN_HOLD - 1e-6);
+    expect(shotAt(p, lob.t + 1, end)).toBe('ride');
+    expect(shotAt(p, w.t0 - .01, end)).not.toBe('ride');          // only its own window
+    expect(shotAt(p, w.t1 + .01, end)).not.toBe('ride');
+    expect(p.shares.drums ?? 0).toBeGreaterThan(0);                // the rest of the edit still covers every machine
+    expect(p.shares.bells ?? 0).toBeGreaterThan(0);
+  });
+
+  it('rides are sparing: many tall flights still share at most a slice of the loop; none → no ride at all', () => {
+    const many = []; for (let b = 2; b < N - 6; b += 6) many.push({ t: at(b), dt: 1.6, w: 1, role: 'lead' });
+    const p = planEdit({ voices: room(), grid, rides: many });
+    expect(p.rides.length).toBeGreaterThan(0);
+    expect(p.shares.ride).toBeLessThanOrEqual(.25);
+    expect(planEdit({ voices: room(), grid }).shares.ride).toBeUndefined();
+  });
+
+  it('a ride never overrides a scripted shot; rideSpan squeezes a very long flight to RIDE_MAX (+ the beat snap)', () => {
+    const p = planEdit({ voices: room(), grid, rides: [lob], fixed: [{ t: at(38), len: 8 * beat, key: 'stage' }] });
+    expect(p.rides.length).toBe(0);
+    for (let b = 38; b < 46; b++) expect(shotAt(p, at(b) + .01, end)).toBe('stage');
+    const w = rideSpan([{ t: at(10), dt: 6.2, w: 1, role: 'bass' }], at(8), at(30), { t0, beat, end });
+    expect(w.t0).toBeLessThan(at(10));
+    expect(w.t1).toBeGreaterThanOrEqual(at(10) + 6.2);
+    expect(w.t1 - w.t0).toBeLessThanOrEqual(PLAN.RIDE_MAX + 2 * beat + 1e-6);
   });
 });

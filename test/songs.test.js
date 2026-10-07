@@ -57,6 +57,7 @@ const EXPECTED_KEYS = [
   'scarborough',
   'forge',
   'finale',
+  'campfire',
 ];
 
 describe('SONGS catalogue', () => {

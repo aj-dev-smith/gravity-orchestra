@@ -22,6 +22,7 @@ import winter from './winter.js';
 import scarborough from './scarborough.js';
 import forge from './forge.js';
 import finale from './finale.js';
+import campfire from './campfire.js';
 
 export const SONGS = {
   'daybreak-engine': daybreakEngine,
@@ -48,6 +49,7 @@ export const SONGS = {
   'scarborough': scarborough,
   'forge': forge,
   'finale': finale,
+  'campfire': campfire,
 };
 
 /* The picker's SHELVES — data, not engine. One table: shelf label → song keys, in menu
@@ -56,7 +58,7 @@ export const SONGS = {
    from the menu just because nobody shelved it. */
 export const SONG_GROUPS = [
   ['Showcase', ['daybreak-engine']],
-  ["Tonight's machines", ['finale', 'forge', 'mars', 'toccata-loft', 'entertainer', 'winter', 'scarborough']],
+  ["Tonight's machines", ['finale', 'forge', 'mars', 'toccata-loft', 'entertainer', 'winter', 'scarborough', 'campfire']],
   ['The Orchestra', ['canon-orchestra', 'carol-of-the-bells', 'morning-mood']],
   ['October', ['danse-macabre', 'bald-mountain', 'marionette']],
   ['Classics', ['fur-elise', 'ode-to-joy', 'canon-in-d', 'greensleeves', 'gymnopedie',

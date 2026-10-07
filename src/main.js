@@ -26,7 +26,7 @@ import { recSupported, startRecording } from './record.js';
 import { spatialize } from './spatial.js';
 import { mergeStatic, watchFrozen, pruneFrozen, frozenStats } from './mergestatic.js';
 import { makeEditor } from './editor/index.js';
-import { planEdit, shotAt } from './directorplan.js';
+import { planEdit, shotAt, signatureOf } from './directorplan.js';
 import { RIDE, ridePose, rideMoments, rideWindowAt } from './ridecam.js';
 import { makeFollow, solveShots as solveShotsIn, resolveRoom, solidBox, roomSolids } from './shotrig.js';
 import { makeXR } from './xr.js';
@@ -567,7 +567,7 @@ function buildWorld(keyName){
       body = buildAt(); station.add(body); rig.inst.update(-LEAD_IN, P0, 0, POSE0); station.updateMatrixWorld(true);
       rig.slot.y = y;
     };
-    rig.cue = eventTimes(part, { rollT: ROLL_T, beat: BEAT }).map(e => ({ t: e.t, w: e.vel }));
+    rig.cue = eventTimes(part, { rollT: ROLL_T, beat: BEAT }).map(e => ({ t: e.t, w: e.vel, id: String(e.note) }));   // (id: what it played — the director reads a hook's variety)
     rig.mix = partMix(S, rig.I.key);
     instLive.push(rig);
     // (voiceIds gets the tempo: a plugin may bucket its voices by a note's length in SECONDS)
@@ -798,17 +798,19 @@ function syncDirector(S, view){
     shots.push({ key: 'drums', owner: 'drums', color: '#ff8a3d', self: drumGroup, aim: new THREE.Vector3(kx, 3.6, kz - 2.5), eye: new THREE.Vector3(kx + 1, 11.5, kz + 12.5) });
     const cue = [];
     Object.entries(S.drums).forEach(([lane, hits]) => hits.map(normalizeHit).forEach(h =>
-      cue.push({ t: wrapP(ROLL_T + h.beat * BEAT, P), w: h.vel })));
-    cues.push({ key: 'drums', owner: 'drums', cue });
+      cue.push({ t: wrapP(ROLL_T + h.beat * BEAT, P), w: h.vel, id: lane })));
+    cues.push({ key: 'drums', owner: 'drums', cue, perc: true });
   }
   // A CHORD is one moment, not N: simultaneous hits on one station merge into one (the
   // loudest + a little for the rest) — or a pad that strikes 4-note chords reads as 4× busy
   for (const c of cues){
     const byT = new Map();
-    for (const e of c.cue){ const k = Math.round(e.t * 500); const g = byT.get(k); if (g) g.push(e.w); else byT.set(k, [e.w]); }
-    c.cue = [...byT.entries()].sort((a, b) => a[0] - b[0]).map(([k, ws]) => {
-      const mx = Math.max(...ws), sum = ws.reduce((a, b) => a + b, 0);
-      return { t: k / 500, w: mx + .3 * (sum - mx) };
+    for (const e of c.cue){ const k = Math.round(e.t * 500); const g = byT.get(k); if (g) g.push(e); else byT.set(k, [e]); }
+    c.cue = [...byT.entries()].sort((a, b) => a[0] - b[0]).map(([k, es]) => {
+      const ws = es.map(e => e.w), mx = Math.max(...ws), sum = ws.reduce((a, b) => a + b, 0);
+      // (the chord's id: its pitch heads, sorted — a riff's E5 power chord and its palm-muted chug are one shape)
+      const id = [...new Set(es.map(e => String(e.id ?? '').replace(/[:|].*$/, '')))].sort().join('+');
+      return { t: k / 500, w: mx + .3 * (sum - mx), id };
     });
   }
   // ENSEMBLE MOMENTS (pure song data, solved up front): every instant where ≥ 2 voices
@@ -845,12 +847,20 @@ function syncDirector(S, view){
   // RIDES: the long, tall flights the camera may ride (ridecam.js) — sparingly, and never for a
   // reduced-motion viewer (the manual RIDE button stays theirs to pick)
   rides = reduceMotion ? [] : rideMoments(flightsOf(P));
+  const voices = [...cues.map(c => ({ key: c.key, hits: c.cue, weight: dirWeight(S, c.owner), ...(c.perc ? { perc: true } : {}) })),   // (the song's pull only:
+                  // salience is relative to each machine's own norm, so sparse voices need no boost)
+                  { key: 'belt', belt: true, hits: beltHits, weight: dirWeight(S, 'belt') }];
+  // song.barBeats: the meter's bar length in beats (Mars is 5/4) — the edit prefers cuts on bar lines
+  const grid = { t0: ROLL_T, beat: BEAT, end: seamFrom, bar: Number.isInteger(S.barBeats) && S.barBeats >= 2 && S.barBeats <= 16 ? S.barBeats : 4 };
+  // THE SIGNATURE (directorplan signatureOf): the machine the song is about earns the edit's
+  // biggest share. song.director.signature names it (a station key or its shot key) or false
+  // for none; an IMPORT (no curator: staging 'auto') reads it off the song data — the hook.
+  const sigCfg = S.director?.signature;
+  const sig = typeof sigCfg === 'string' ? cues.find(c => c.key === sigCfg || c.owner === sigCfg)?.key ?? null
+            : sigCfg === false || S.staging !== 'auto' ? null : signatureOf(voices, grid);
+  voices.forEach(v => { if (v.key === sig) v.signature = true; });
   plan = planEdit(planIn = {
-    voices: [...cues.map(c => ({ key: c.key, hits: c.cue, weight: dirWeight(S, c.owner) })),   // (the song's pull only:
-             // salience is relative to each machine's own norm, so sparse voices need no boost)
-             { key: 'belt', belt: true, hits: beltHits, weight: dirWeight(S, 'belt') }],
-    // song.barBeats: the meter's bar length in beats (Mars is 5/4) — the edit prefers cuts on bar lines
-    grid: { t0: ROLL_T, beat: BEAT, end: seamFrom, bar: Number.isInteger(S.barBeats) && S.barBeats >= 2 && S.barBeats <= 16 ? S.barBeats : 4 },
+    voices, grid,
     fixed: script.map(c => ({ t: c.t, len: c.hold, key: c.key })),
     wides: moments.filter(m => m.n >= ENSEMBLE_N).map(m => m.t),
     rides,
@@ -1708,7 +1718,7 @@ if (new URLSearchParams(location.search).has('debug')){
       return out;
     },
     director(){ const B = t => +((t - ROLL_T) / BEAT).toFixed(2);   // the room director's static cues, in beats
-      return { rides: rideWins.map(w => [+w.t0.toFixed(2), +w.t1.toFixed(2), w.role]), rideEvery, cuts: plan ? plan.cuts.map(c => [B(c.t), c.key]) : [], shares: plan ? Object.fromEntries(Object.entries(plan.shares).map(([k, v]) => [k, +v.toFixed(3)])) : {},
+      return { rides: rideWins.map(w => [+w.t0.toFixed(2), +w.t1.toFixed(2), w.role]), rideEvery, cuts: plan ? plan.cuts.map(c => [B(c.t), c.key]) : [], signature: planIn?.voices.find(v => v.signature)?.key ?? null, shares: plan ? Object.fromEntries(Object.entries(plan.shares).map(([k, v]) => [k, +v.toFixed(3)])) : {},
                wide: moments.filter(m => m.n >= ENSEMBLE_N).map(m => B(m.t)),
                script: script.map(c => [c.key, B(c.t), +(c.hold / BEAT).toFixed(2)]), seamFrom: B(seamFrom) }; },
     get planIn(){ return planIn; },                   // (dev: the edit solve's inputs — tune directorplan.js offline)

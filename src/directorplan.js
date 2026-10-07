@@ -34,7 +34,7 @@ export const PLAN = {
   LOOK: 4,              // beats the salience window looks ahead (the camera arrives before the moment)
   REST: 8,              // beats of silence before the next hit counts as an ENTRANCE
   ENTER: 2.5,           // an entrance's pull (×1–2 by the length of the rest)
-  CAP: { belt: .18, stage: .16, station: .24, ride: .14 },  // max share of the loop's shot time (scripted time is exempt;
+  CAP: { belt: .18, stage: .16, station: .24, ride: .14, signature: .34 },  // max share of the loop's shot time (scripted time is exempt;
                         // a room too small to fit every cap just stays balanced — all over-cap pulls damp together)
   STAGE_BASE: .5,       // the wide's floor pull (a breather when nothing's special)
   RIDE_PRE: 1.0, RIDE_POST: .8, RIDE_MAX: 6.5,   // s — a ride's window around its flight (rideSpan)
@@ -42,6 +42,10 @@ export const PLAN = {
   RIDE_EVERY: 20,       // s of music per ride candidate (≥ 1 a loop)
   RIDE_LONGRUN: .22,    // the rides' share of the LONG RUN: a short loop whose one ride is a bigger slice than
                         // this rides only every rideEvery-th pass (the other passes keep the belt's framing)
+  SIG: 1.3,             // the SIGNATURE machine's pull (× its salience; signatureOf — the hook a song is about)
+  SIG_BASE: .8,         // … plus a steady floor while it plays (a riff never stops — "above its norm" alone starves it)
+  SIG_MARGIN: 1.25,     // the hook must out-score the runner-up by this much (two co-equal machines: no signature)
+  SIG_PRESENCE: .5,     // … and play in at least this share of the loop's bars
   RIDE_W: 3.2,         // a RIDE (ridecam.js — the camera behind a marble on a long, tall flight):
                         // its pull per beat of the flight at full apex (w = 1). Never covered
                         // (an optional spectacle, not a machine) and capped at CAP.ride — sparingly (a short loop still
@@ -98,6 +102,7 @@ export function planEdit({ voices, grid, fixed = [], wides = [], rides = [], opt
       const solo = share * (others <= 1 ? 1.5 : 1);
       const w = Math.sqrt(x.v.weight ?? 1);             // a song's pull is a hint, not an override
       out[s] = x.f[s] > 0 ? w * rare * (r[i][s] + ent[s] + cres + 2 * solo) : w * ent[s];
+      if (x.v.signature && x.f[s] > 0) out[s] = o.SIG * out[s] + w * o.SIG_BASE;
     }
     const k = x.v.belt ? 'belt' : x.v.key;
     sal[k] = sal[k] ? sal[k].map((v, s) => Math.max(v, out[s])) : out;
@@ -136,7 +141,8 @@ export function planEdit({ voices, grid, fixed = [], wides = [], rides = [], opt
   // (the cap never falls below ONE ride of the loop's longest candidate: a short loop still fits it)
   const rideCap = Math.max(o.CAP.ride, (Math.round(o.MIN_HOLD / beat) + 1) / N,
     ...cand.map(r => (Math.ceil(Math.min(r.dt + o.RIDE_PRE + o.RIDE_POST, o.RIDE_MAX) / beat) + 1) / N));
-  const capOf = k => k === 'belt' ? o.CAP.belt : k === 'stage' ? o.CAP.stage : k === 'ride' ? rideCap : o.CAP.station;
+  const sigKeys = new Set(V.filter(v => v.signature && !v.belt).map(v => v.key));
+  const capOf = k => k === 'belt' ? o.CAP.belt : k === 'stage' ? o.CAP.stage : k === 'ride' ? rideCap : sigKeys.has(k) ? o.CAP.signature : o.CAP.station;
   const fixedKey = new Array(N).fill(null);
   for (const c of fixed){
     if (!keys.includes(c.key)){ keys.push(c.key); sal[c.key] = new Float64Array(N); }
@@ -147,6 +153,7 @@ export function planEdit({ voices, grid, fixed = [], wides = [], rides = [], opt
   const Lmin = Math.max(1, Math.round(o.MIN_HOLD / beat)), Lmax = Math.max(Lmin, Math.ceil(o.MAX_HOLD / beat));
   const bored = Math.ceil(o.BORED / beat);
   const mult = Object.fromEntries(keys.map(k => [k, 1]));
+  const price = {};                                    // the signature's per-beat price (its cap, below)
   const forced = [];                                   // coverage: [a, b, key] forced windows
 
   const solve = () => {
@@ -154,7 +161,7 @@ export function planEdit({ voices, grid, fixed = [], wides = [], rides = [], opt
     const fk = fixedKey.slice();
     for (const [a, b, k] of forced) for (let s = a; s < b; s++) if (!fk[s]) fk[s] = k;
     // prefix sums of scaled salience + of "a slot fixed to some OTHER key"
-    const pre = keys.map(k => { const p = new Float64Array(N + 1); for (let s = 0; s < N; s++) p[s + 1] = p[s] + sal[k][s] * mult[k]; return p; });
+    const pre = keys.map(k => { const p = new Float64Array(N + 1), c = price[k] || 0; for (let s = 0; s < N; s++) p[s + 1] = p[s] + sal[k][s] * mult[k] - c; return p; });
     // (a fixed RIDE is only ever its own window: outside it there is no marble flight to ride)
     const onlyFixed = k => k === 'ride' && !sal.ride.some(v => v > 0);
     const bad = keys.map(k => { const p = new Int32Array(N + 1), of = onlyFixed(k);
@@ -240,7 +247,21 @@ export function planEdit({ voices, grid, fixed = [], wides = [], rides = [], opt
     const [a, b] = w.reduce((m, x) => x[2] > m[2] ? x : m);
     forced.push([a, b, k]);
   });
-  let segs = solve();
+  // (with a signature: every edit tried is a candidate — the one that overshoots the caps least
+  //  (inside them all, when any is) and then gives the signature the most screen time wins; the
+  //  damping/pricing walk below is just the search. A room whose caps can't all fit — a long intro
+  //  only the belt plays — still gets its least-over edit, not the walk's last step.)
+  let bestFit = null, bestOver = Infinity, bestSig = -1;
+  const keep = sg => {
+    if (!sigKeys.size) return sg;
+    const sh = sharesOf(sg);
+    if (missingOf(sh).length) return sg;
+    const ov = keys.reduce((a, k) => a + (isFixedKey(k) ? 0 : Math.max(0, (sh[k] || 0) - capOf(k) - 1e-9)), 0);
+    const v = [...sigKeys].reduce((a, k) => a + (sh[k] || 0), 0);
+    if (ov < bestOver - 1e-6 || (ov < bestOver + 1e-6 && v > bestSig + 1e-9)){ bestOver = ov; bestSig = v; bestFit = sg; }
+    return sg;
+  };
+  let segs = keep(solve());
   for (let it = 0; it < 24; it++){
     const sh = sharesOf(segs);
     const missing = missingOf(sh);
@@ -249,7 +270,38 @@ export function planEdit({ voices, grid, fixed = [], wides = [], rides = [], opt
     if (!missing.length && !over.length) break;
     over.forEach(k => { mult[k] *= .8; });
     coverAll(missing);
-    segs = solve();
+    segs = keep(solve());
+  }
+  // THE SIGNATURE's cap is a PRICE, not a damped pull. The edit is discrete (a shot is ≥ MIN_HOLD),
+  // so as a dominant pull is damped its share JUMPS (MoP's riff: .65 → .13 → .45 → .27 as it falls
+  // ×.8) and lands wherever the steps fall — often far under its cap. A price per beat of its
+  // screen time is the Lagrangian of the cap: with the rest of the edit held, the share falls
+  // MONOTONICALLY as the price rises, so a bisection finds the lowest price that fits — the most
+  // screen time the cap allows. (Then anyone the freed beats pushed over a cap is damped, re-priced.)
+  if (sigKeys.size){
+    const sigOver = k => (sharesOf(segs)[k] || 0) > capOf(k) + 1e-9;
+    for (let round = 0; round < 6; round++){
+      for (const k of sigKeys){
+        mult[k] = 1; price[k] = 0; segs = keep(solve());
+        if (!sigOver(k)) continue;
+        let lo = 0, hi = null;
+        for (let it = 0; it < 16 && (hi === null || hi - lo > .02); it++){
+          price[k] = hi === null ? Math.max(.25, 2 * lo) : (lo + hi) / 2;
+          segs = keep(solve());
+          if (sigOver(k)) lo = price[k]; else hi = price[k];
+        }
+        price[k] = hi ?? lo; segs = keep(solve());
+      }
+      const sh = sharesOf(segs), missing = missingOf(sh);
+      const over = keys.filter(k => !sigKeys.has(k) && (sh[k] || 0) > capOf(k) + 1e-9 && !isFixedKey(k));
+      if (!over.length && !missing.length) break;
+      over.forEach(k => { mult[k] *= .8; });
+      // (and a pull the first pass damped while the signature hogged the film may have room again:
+      //  the beats the price freed need a taker — a machine a whole shot under its cap recovers)
+      keys.forEach(k => { if (!sigKeys.has(k) && mult[k] < 1 && (sh[k] || 0) + Lmin / N < capOf(k)) mult[k] = Math.min(1, mult[k] / .8); });
+      coverAll(missing);
+    }
+    if (bestFit) segs = bestFit;
   }
   // (the cap damping can leave a machine unseen on its last round: coverage gets the last word)
   for (let missing = missingOf(sharesOf(segs)); missing.length; missing = missingOf(sharesOf(segs))){
@@ -275,6 +327,41 @@ export function planEdit({ voices, grid, fixed = [], wides = [], rides = [], opt
     return { ...out, rides: wins, rideEvery: Math.max(1, Math.ceil(share / o.RIDE_LONGRUN - 1e-9)) };
   }
   return { cuts, shares: sharesOf(segs), sal, N, forced, rides: [], rideEvery: 1 };
+}
+
+/* THE SIGNATURE — the machine a song is ABOUT (Master of Puppets' riff, Gangsta's Paradise's
+   strings): the one a viewer would name. The edit's salience is relative to each machine's OWN
+   norm (a quiet machine's big moment counts as much as a busy one's), which is right for a
+   curated room and exactly wrong for a hook: a riff plays all loop, never "above its norm", never
+   enters, never solos — so the drums' fills and the bass's entrance out-pull it every time.
+   An imported song has no curator to say so; this reads it off the song data:
+     hook = presence × variety × mass
+       presence — the share of the loop's bars it plays in (a hook is the loop's backbone)
+       variety  — the entropy (bits) of the SHAPES it plays (hit ids: a pitch, or a chord's
+                  pitch heads): how much there is to watch — a pedal chug is 0, a riff that moves
+                  through its power chords is several
+       mass     — its mean hit weight (velocity; a chord's mass counts — loudest + .3·rest): the
+                  hits that sit on top of the mix
+   Only PITCHED stations compete — never the belt (no protagonist floor: it keeps its own cap)
+   nor percussion (the kit's fills already earn entrances and crescendos). The winner must beat
+   the runner-up by SIG_MARGIN and play in ≥ SIG_PRESENCE of the bars, or there is no signature
+   (two co-equal machines: the edit stays balanced). → key | null. Pure. */
+export function signatureOf(voices, { t0, beat, end, bar = 4 }, opts = {}){
+  const o = { ...PLAN, ...opts };
+  const nBars = Math.max(1, Math.ceil((end - t0) / (beat * bar) - 1e-6));
+  const scored = voices.filter(v => !v.belt && !v.perc && v.hits.length).map(v => {
+    const hs = v.hits.filter(h => h.t >= t0 - 1e-6 && h.t < end);
+    const bars = new Set(hs.map(h => Math.floor((h.t - t0) / (beat * bar) + 1e-6)));
+    const cnt = new Map(); for (const h of hs){ const id = h.id ?? ''; cnt.set(id, (cnt.get(id) || 0) + 1); }
+    let H = 0; for (const c of cnt.values()){ const q = c / hs.length; H -= q * Math.log2(q); }
+    const mass = hs.reduce((a, h) => a + h.w, 0) / Math.max(1, hs.length);
+    const presence = bars.size / nBars;
+    return { key: v.key, presence, hook: presence * H * mass };
+  }).sort((a, b) => b.hook - a.hook);
+  const [best, next] = scored;
+  if (!best || best.hook <= 0 || best.presence < o.SIG_PRESENCE) return null;
+  if (next && best.hook < o.SIG_MARGIN * next.hook) return null;
+  return best.key;
 }
 
 /* A planned ride shot [a, b) → the window it actually rides: the best flight inside it (w ×

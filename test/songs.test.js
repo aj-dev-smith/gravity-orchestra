@@ -124,6 +124,15 @@ describe.each(Object.entries(SONGS))('song "%s"', (key, song) => {
         expect(beats, `beats ${beats} in ${key}.${partName}`).toBeGreaterThan(0);
       }
     });
+
+    it(`${partName}: an optional 3rd element is a velocity in [0, 1]`, () => {
+      for (const e of part.notes) {
+        expect(e.length, `${JSON.stringify(e)} in ${key}.${partName}`).toBeLessThanOrEqual(3);
+        if (e.length < 3) continue;
+        expect(typeof e[2]).toBe('number');
+        expect(e[2] >= 0 && e[2] <= 1, `vel ${e[2]} in ${key}.${partName}`).toBe(true);
+      }
+    });
   }
 
   // Lock rule: alto and bass (if present) must sum to exactly melody total.

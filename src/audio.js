@@ -1,5 +1,6 @@
 import { noteHz } from './engine.js';
 import { GM_DRUMS } from './drumkit.js';
+import { velGain } from './dynamics.js';
 import { PAN_COMP, AIR_HZ, ROOM_MIN, widthFor } from './spatial.js';
 
 /* ---------------- audio: raw Web Audio, zero dependencies ----------------
@@ -244,9 +245,11 @@ export function primeSamples(){                          // gesture-unlocks ever
   });
 }
 let lastPath = '';
-export function playNote(note, bass, sp){            // sp = {pan, gain, shelf, room} (src/spatial.js), live path only
+// vel 0..1 = the belt note's dynamics (dynamics.js velGain) — live path only: the iOS sample
+// plays full, as drum samples always have (el.volume is ignored there, §5)
+export function playNote(note, bass, sp, vel = 1){   // sp = {pan, gain, shelf, room} (src/spatial.js), live path only
   if (ctx && ctx.state === 'running' && ctx.currentTime > .05){
-    pluck(note, bass, sp); lastPath = 'webaudio'; return;
+    pluck(note, bass, sp, vel); lastPath = 'webaudio'; return;
   }
   const a = bank[bankKey(note, bass)];
   if (a){
@@ -321,14 +324,14 @@ export function playVoice(key, vel = 1, { dur = 0, sp } = {}){
   }
 }
 
-function pluck(note, bass, sp){
+function pluck(note, bass, sp, vel = 1){
   if (!ctx) return;
-  const f = noteHz(note), t = ctx.currentTime;
+  const f = noteHz(note), t = ctx.currentTime, va = velGain(vel);   // (va = 1 at full: unchanged)
   const dst = place([master], sp, MIX.send.belt, bass ? f * .5 : f);       // SPATIAL: pan/air/distance (+ room send), then the echo
   const dur = bass ? 2.6 : 1.6;
   const g = ctx.createGain();
   g.gain.setValueAtTime(.0001, t);
-  g.gain.exponentialRampToValueAtTime(bass ? .7 : .5, t + (bass ? .01 : .005));
+  g.gain.exponentialRampToValueAtTime((bass ? .7 : .5) * va, t + (bass ? .01 : .005));
   g.gain.exponentialRampToValueAtTime(.0001, t + dur);
   const o1 = ctx.createOscillator(); o1.type = bass ? 'sine' : 'triangle'; o1.frequency.value = f;
   const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * (bass ? 2.002 : 2.004);
@@ -349,7 +352,7 @@ function pluck(note, bass, sp){
   // impact transient
   const k = ctx.createOscillator(); k.type = 'square'; k.frequency.value = bass ? 700 : 2400;
   const kg = ctx.createGain();
-  kg.gain.setValueAtTime(bass ? .03 : .05, t);
+  kg.gain.setValueAtTime((bass ? .03 : .05) * va, t);
   kg.gain.exponentialRampToValueAtTime(.0001, t + .03);
   k.connect(kg); kg.connect(dst); k.start(t); k.stop(t + .05);
 }
@@ -502,7 +505,9 @@ function hitDrum(name, vel, sp){
   if (!ctx) return;
   const dst = place([busOut || master], sp, MIX.send.drum, DRUM_HZ[name] || GM_DRUMS[name]?.tone || 0);   // dry bus (no echo) + a touch of room; master = fallback
   const t = ctx.currentTime;
-  const amp = (GM_DRUMS[name]?.gain ?? .7) * (.35 + .65 * vel);
+  // velGain: the old .35 + .65·v line from v = .5 up (every groove's level unchanged), bent
+  // down below it so a pp hit is genuinely quiet (the old floor spanned only ~9 dB) — dynamics.js
+  const amp = (GM_DRUMS[name]?.gain ?? .7) * velGain(vel);
   if (name === 'kick'){
     const o = ctx.createOscillator(); o.type = 'sine';
     o.frequency.setValueAtTime(125, t);

@@ -45,6 +45,17 @@ describe('validateSong', () => {
     expect(() => validateSong(s)).toThrow(/melody/);
   });
 
+  it('belt velocity: an optional 3rd element in 0..1 (the lock rule ignores it)', () => {
+    let s = good(); s.melody[0][2] = .4;
+    expect(() => validateSong(s)).not.toThrow();
+    for (const bad of [1.5, -1, NaN, 'loud', null]){
+      s = good(); s.melody[0][2] = bad;
+      expect(() => validateSong(s)).toThrow(/melody/);
+    }
+    s = good(); s.melody[0].push(.5, 'x');
+    expect(() => validateSong(s)).toThrow(/melody/);
+  });
+
   it('rejects lock rule violations', () => {
     const s = good();
     s.bass.notes[0][1] += 0.5;

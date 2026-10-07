@@ -50,7 +50,8 @@ export const PLAN = {
 
 /* voices: [{key, hits:[{t, w}], weight?, belt?}] — hit times in loop-local seconds; weight =
    the song's authored pull (song.director.<key>), applied as √weight.
-   grid: {t0, beat, end, bar?} — the downbeat, the beat (s), where the music's grid ends.
+   grid: {t0, beat, end, bar?, loop?} — the downbeat, the beat (s), where the music's grid ends,
+   the loop period (s; lets a script that runs past the seam wrap into the next roll-in).
    fixed: [{t, len, key}] — scripted shots (s). wides: [t] — big ensemble downbeats (s).
    rides: [{t, dt, w}] — long flights worth riding (ridecam.rideMoments: launch, duration, apex pull).
    Returns {cuts:[{t, key}], shares:{key: fraction}, sal, rides:[{t0, t1, t, dt, role}], rideEvery} — cuts
@@ -62,6 +63,13 @@ export function planEdit({ voices, grid, fixed = [], wides = [], rides = [], opt
   const N = Math.max(1, Math.floor((end - t0) / beat + 1e-6));
   const slot = t => Math.floor((t - t0) / beat + 1e-6);
   const V = voices.filter(v => v.hits.length);
+  // THE SEAM'S SCRIPTS: the beat grid ends at its last whole beat (gEnd ≤ end); the breath after
+  // it (and the next loop's roll-in, before t0) is the wide 'stage' shot — UNLESS a script runs
+  // there (the forge's anvil ringing through the breath, winter's freeze). Those stretches are
+  // HELD outside the solve: the DP never sees them, shotAt plays them back.
+  const gEnd = t0 + N * beat, loop = grid.loop > 0 ? grid.loop : 0;
+  const held = [];
+  for (const c of fixed){ const a = Math.max(c.t, gEnd), b = c.t + c.len; if (b > a) held.push({ t0: a, t1: b, key: c.key }); }
 
   // ---- salience per voice per beat ----------------------------------------------------
   const raw = V.map(v => {
@@ -274,7 +282,7 @@ export function planEdit({ voices, grid, fixed = [], wides = [], rides = [], opt
     const share = wins.reduce((a, w) => a + w.t1 - w.t0, 0) / (N * beat);
     return { ...out, rides: wins, rideEvery: Math.max(1, Math.ceil(share / o.RIDE_LONGRUN - 1e-9)) };
   }
-  return { cuts, shares: sharesOf(segs), sal, N, forced, rides: [], rideEvery: 1 };
+  return { cuts, shares: sharesOf(segs), sal, N, forced, rides: [], rideEvery: 1, held, gEnd, loop };
 }
 
 /* A planned ride shot [a, b) → the window it actually rides: the best flight inside it (w ×
@@ -299,9 +307,20 @@ export function rideSpan(rides, a, b, { t0, beat, end }, o = PLAN){
 }
 
 /* The planned shot at loop-local time `now`: the last cut at or before it ('stage' before
-   the first — the loop's roll-in — and from `end` on — the seam's breath). */
+   the first — the loop's roll-in — and from `end` on — the seam's breath — unless a script
+   holds that stretch: plan.held, past the grid's last whole beat, wrapping by plan.loop). */
 export function shotAt(plan, now, end){
-  if (!plan || !plan.cuts.length || now >= end || now < plan.cuts[0].t) return 'stage';
+  if (!plan || !plan.cuts.length) return 'stage';
+  const off = now >= end || now < plan.cuts[0].t;
+  if (plan.held?.length && (off || now >= plan.gEnd)){
+    let k = null, s0 = -Infinity;                       // (overlapping holds: the latest-starting wins)
+    for (const h of plan.held){
+      const n = h.t0 <= now && now < h.t1 ? now : plan.loop && h.t0 <= now + plan.loop && now + plan.loop < h.t1 ? now + plan.loop : null;
+      if (n !== null && h.t0 > s0){ k = h.key; s0 = h.t0; }
+    }
+    if (k) return k;
+  }
+  if (off) return 'stage';
   let lo = 0, hi = plan.cuts.length - 1;
   while (lo < hi){ const m = (lo + hi + 1) >> 1; if (plan.cuts[m].t <= now + 1e-6) lo = m; else hi = m - 1; }
   return plan.cuts[lo].key;

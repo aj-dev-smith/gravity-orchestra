@@ -90,8 +90,10 @@
    forge for the opening riff, the horns on the hook's entrance, the forge again for the
    walk, the belt's climb, the drum machine for the breakdown's half-time, the organ loft
    for the bridge, the forge's tremolo, the horns' build, the forge for the return, the
-   horns on the stop-time, the toms' cascade — and the anvil rings on the seam's wide
-   shot (the engine holds 'stage' through the breath), every machine in frame.
+   horns on the stop-time, the toms' cascade — and THE ANVIL on the forge: a cut half a beat
+   before the B-major hit, held through the breath (a script past the last note owns the seam;
+   the stage wide cropped the forge at the front corner) and on into the main riff — V → i on
+   one machine, one shot.
 
    iOS NOTE (§5): the sample path ignores `dur` and volume — the horns' stabs have their
    own baked voice (stab:<note>) so they stay short anyway; the organ's held chords ring
@@ -339,7 +341,7 @@ export default {
   director: {
     riff: 2.4, organ: 2, horns: 1.6, bass: .7, drums: 1.1,
     at: [
-      [0, 'riff', 16],        // the forge alone: the main riff
+      [0, 'riff', 8],         // the forge alone: the main riff (the camera is already there — the anvil's shot runs on into it)
       [16, 'horns', 8],       // the brass hook lands
       [32, 'riff', 8],        // the chromatic walk — a new chord every beat
       [40, 'lead', 8],        // the belt's 10ths climbing to E6
@@ -351,8 +353,9 @@ export default {
       [96, 'riff', 8],        // the return
       [112, 'horns', 4],      // stop-time
       [116, 'drums', 3.5],    // the tom cascade
-      // (the anvil at 120 plays on the engine's seam wide — main.js holds 'stage' from the
-      //  last lead note through the breath — so the whole room rings together)
+      [119.5, 'riff', 8.5],   // THE ANVIL: the camera lands on the forge half a beat before the B-major hit and
+                              // holds it ringing through the whole breath, into the loop's riff on the downbeat
+                              // (a script past the last note overrides the seam's default wide — directorplan held)
     ],
   },
   drums: D,

@@ -218,7 +218,8 @@ song can get one, and **MIDI import now generates drums from channel 9** (§6).
   solo, rarity; then a 2nd-order DP over the beat grid cuts the shots (≥ 3 s, on beats, bar lines
   preferred, A-B-A ping-pong priced), share caps (belt .18 / wide .16 / station .24) and coverage
   (every machine that plays is seen once a loop). Scripts (`song.director.at`) are fixed points;
-  `song.director.<key>` is a √-weighted hint. The camera's shot is a pure function of songTime.
+  `song.director.<key>` is a √-weighted hint. The seam's breath is the wide `stage` shot by default; a
+  script that runs past the last note OWNS it (directorplan `held`, may wrap into the roll-in — Forge's anvil). The camera's shot is a pure function of songTime.
   `node scripts/director-audit.mjs` prints every song's shares. Songs with stations open on `auto`;
   others keep free-look. `stage` = the wide shot.
 - Lessons that made five parallel builds work: design FOR marbles (no feed plumbing — each lane
@@ -309,12 +310,19 @@ plays exactly as before (centred, un-limited).
 'song-key': {
   label, sub, bpm,
   scale: [...pitch classes...],        // drives pad-rim hue mapping
-  melody: [['F#5', 1], ...],           // [note, beats-until-next-hit]  (MONOPHONIC, chained)
+  melody: [['F#5', 1], ['G4', 1, .6], ...],  // [note, beats-until-next-hit, vel?]  (MONOPHONIC, chained;
+                                       //  vel 0..1 default 1 = dynamics: live audio + strike juice, never the solve)
   alto:  [...] | {delay, deep, notes}, // optional; delay = beats of rest
   bass:  [...] | {delay, notes},       // optional
   drums: { kick:[0,1,2,3], snare:[1,3], hat:[0,.5,1,...] },   // optional; see below
 }
 ```
+
+**Belt velocity** (optional 3rd element, `src/dynamics.js`): one velocity law (`velGain`) for the belt
+pluck AND the drums — the old `.35 + .65·v` line from v = .5 up (existing grooves unchanged, measured
+±.5 dB), bent down below it so pp is genuinely quiet (v .1 ≈ −19 dB, 0 ≈ −27). Live path only — iOS
+samples play full. MIDI import emits it from note velocity relative to the track's loudest (`^.6`);
+a flat-velocity track stays 2-element.
 
 **THE LOCK RULE (melodic tracks): for every track, sum(beats) + delay must equal the
 melody's sum exactly**, or it desyncs at the loop seam. These tracks *chain* (each pad

@@ -189,7 +189,7 @@ export function convertToSong(parsed, opts = {}) {
     // sorted by onset
     const onsets = [...byOnset.entries()]
       .sort((a, b) => a[0] - b[0])
-      .map(([onset, n]) => ({ onset, midi: n.midi, dur: n.dur }));
+      .map(([onset, n]) => ({ onset, midi: n.midi, dur: n.dur, vel: n.vel }));
 
     return { name: tr.name, onsets, src: tr.notes, pinned: pinnedFirst && tr === beltTracks[0] };
   }).filter(t => t.onsets.length > 0);
@@ -413,16 +413,29 @@ export function convertToSong(parsed, opts = {}) {
   // a phrase window IS the loop: exactly its bars (every onset is already inside [0, W))
   const loopBeats = phrase ? tidy(W) : Math.ceil(maxEnd / 4) * 4;
 
+  // BELT DYNAMICS: each note's MIDI velocity → an optional 3rd element (dynamics.js), RELATIVE to
+  // the track's loudest note (a file played at a flat 80 isn't "quiet" — it has no dynamics)
+  // and on a gentle curve (^.6: half the velocity ≈ .66, a pp ¼ ≈ .44), floored at .15 so a
+  // ghost note still sounds. Full-ish notes (≥ .97) — and every note of a flat-velocity track —
+  // stay 2-element, so dynamics-free files import exactly as before.
+  function beltVels(onsets) {
+    const top = onsets.reduce((m, n) => Math.max(m, n.vel ?? 0), 0);
+    return onsets.map(n => {
+      if (!(top > 0) || !(n.vel > 0)) return null;
+      const v = Math.max(.15, Math.pow(n.vel / top, .6));
+      return v >= .97 ? null : Math.round(v * 100) / 100;
+    });
+  }
   function onsetsToNotes(onsets, role) {
     if (onsets.length === 0) return [];
-    const notes = [];
+    const notes = [], vels = beltVels(onsets);
     for (let i = 0; i < onsets.length; i++) {
       const name = midiToName(onsets[i].midi);
       // last note: IOI = loopBeats - thisOnset (fills the loop)
       const nextOnset = i + 1 < onsets.length ? onsets[i + 1].onset : loopBeats;
       const beats = nextOnset - onsets[i].onset;
       if (beats <= 0) throw new Error(`midi: internal error — non-positive beat at ${role} note ${i}`);
-      notes.push([name, beats]);
+      notes.push(vels[i] == null ? [name, beats] : [name, beats, vels[i]]);
     }
     return notes;
   }
@@ -430,14 +443,14 @@ export function convertToSong(parsed, opts = {}) {
   // for delayed tracks, last note's beats brings track total to loopBeats
   function onsetsToNotesDelayed(onsets) {
     if (onsets.length === 0) return [];
-    const notes = [];
+    const notes = [], vels = beltVels(onsets);
     for (let i = 0; i < onsets.length; i++) {
       const name = midiToName(onsets[i].midi);
       // last note: IOI = loopBeats - thisOnset (same rule as lead, lock rule holds by construction)
       const nextOnset = i + 1 < onsets.length ? onsets[i + 1].onset : loopBeats;
       const beats = nextOnset - onsets[i].onset;
       if (beats <= 0) throw new Error(`midi: internal error — non-positive beat in delayed track note ${i}`);
-      notes.push([name, beats]);
+      notes.push(vels[i] == null ? [name, beats] : [name, beats, vels[i]]);
     }
     return notes;
   }

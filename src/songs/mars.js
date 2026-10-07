@@ -83,6 +83,11 @@
 
    MIX: the ostinato machines (wheel, riff, kick) sit low under the themes and step up for
    the recap; the organ is under the brass; velocity stays pure dynamics (pp → fff).
+   BELT DYNAMICS (the melody's 3rd element, dynamics.js): the pacing G is pp (.2 — it used to
+   be the loudest thing in the pp bars), the theme p → mp, the triads crescendo into the
+   unison G at full, the belt steps back under the tuba's call, the broad 5/2 sung at .7, and
+   the recap + coda are fff (no 3rd element = full). The kick's pp now really is pp too —
+   hitDrum's velocity law no longer floors at −9 dB.
    iOS (§5): the sample path ignores `dur` — the organ/horn/bow-wheel renders ring their full
    length there; every held chord here resolves into a chord that contains it or follows a
    rest, so the ring-on is consonant with what comes next (§5's pads are the risk: their
@@ -130,13 +135,17 @@ const TUTTI  = [['G4', T], ['A#4', T], ['C5', T], ['D5', 1], ['D#5', 1], ['F5', 
 const BROAD  = [['G4', 4], ['A#4', 2], ['C5', 4], ['D#5', 4], ['D5', 2], ['C5', 2], ['A#4', 2]];
 const SCRAMBLE = ['C5','C#5','D5','D#5','E5','F5','F#5','G5','G#5','A5'].map(n => [n, .5]);
 
+/** belt DYNAMICS: [note, beats] → [note, beats, vel] — v a number, or fn(i, n) for a hairpin
+    (velocity is audio + strike juice only; the arcs are the beats', untouched) */
+const dyn = (line, v) => line.map(([n, d], i) => [n, d, v3(typeof v === 'function' ? v(i, line.length) : v)]);
+const hair = (v0, v1) => (i, n) => v0 + (v1 - v0) * i / Math.max(1, n - 1);
 const melody = [
-  ['G4', 5], ['G4', 5],                                             // §1    0  the marble paces the bar
-  ['G4', 5], ['D5', 3], ['C#5', 7], ['A#4', 5], ['F5', 3], ['E5', 7], // §2   10  the first theme, 8va
-  ...ostOn('F5'), ...ostOn('F#5'), ...ostOn('G5'), ['G5', 5],         // §3   40  the triads' thirds; the unison G
-  ['G4', 5], ['G4', 5], ...ANSWER, ...TUTTI,                          // §4   60  (the tuba calls) · the answer · together
-  ...BROAD,                                                         // §5   90  the broad 5/2
-  ...CALL, ...ANSWER,                                               // §6  110  recapitulation
+  ...dyn([['G4', 5], ['G4', 5]], .2),                               // §1    0  pp: the marble paces the bar
+  ...dyn([['G4', 5], ['D5', 3], ['C#5', 7], ['A#4', 5], ['F5', 3], ['E5', 7]], hair(.3, .5)),   // §2   10  the first theme, 8va — p, growing
+  ...dyn([...ostOn('F5'), ...ostOn('F#5'), ...ostOn('G5')], hair(.55, .9)), ['G5', 5],         // §3   40  the triads' thirds, cresc. · the unison G (full)
+  ...dyn([['G4', 5], ['G4', 5]], .5), ...dyn(ANSWER, .85), ...TUTTI,  // §4   60  (the tuba calls: the belt steps back) · the answer · together
+  ...dyn(BROAD, .7),                                                // §5   90  the broad 5/2 — sung, not shouted
+  ...CALL, ...ANSWER,                                               // §6  110  recapitulation fff
   ...ostOn('G5'), ...ostOn('G#5'), ...SCRAMBLE,                     // §7  130  the chord, hammered · the scramble
   ['C#6', 1], ['C#6', 1], ['C#6', 3], ['C6', 1],                    //     145  three stabs · silence · the C (150)
 ];
@@ -268,11 +277,11 @@ const strum = sortEv([
 const D = { kick: [], snare: [], crash: [], floorHigh: [], tomLow: [], tomMid: [], tomHiMid: [], tomHigh: [] };
 {
   const timp = (n, v, only) => OST.forEach((o, i) => (!only || only.includes(i)) && D.kick.push([r5(bar(n) + o), v3(v * ACC[i])]));
-  // pp → mp by DENSITY, not just velocity: the kick voice keeps a .35 amplitude floor (audio.js
-  // hitDrum), so even vel .1 sits ~15 dB over the pp strings — a full-rhythm kick turned the col
-  // legno opening into a four-on-the-floor. Bars 1–2: the downbeat alone (distant thunder);
-  // bars 3–8: the downbeat + the bar's tail (4-&-5); the whole rhythm arrives with the build (§3).
-  for (let n = 1; n <= 8; n++) timp(n, .1 + .015 * (n - 1), n <= 2 ? [0] : [0, 5, 6, 7]);
+  // pp → mp by DENSITY and velocity: bars 1–2 the downbeat alone (distant thunder); bars 3–8
+  // the downbeat + the bar's tail (4-&-5); the whole rhythm arrives with the build (§3). (The
+  // kick voice used to floor at .35 amplitude — vel .1 still sat ~15 dB over the pp strings, so
+  // this crescendo was density only. dynamics.js velGain bends below .5: vel .14 ≈ −17 dB, .28 ≈ −10.)
+  for (let n = 1; n <= 8; n++) timp(n, .14 + .02 * (n - 1), n <= 2 ? [0] : [0, 5, 6, 7]);
   for (let n = 9; n <= 12; n++) timp(n, .6 + .1 * (n - 9));
   for (let n = 13; n <= 18; n++) timp(n, n < 17 ? .36 : .7);                            // under the tuba's call: keep out of its way
   for (const [b] of BROAD_CH) D.kick.push([b, .4]);                                       // §5: one roll of thunder per chord

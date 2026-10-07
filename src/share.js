@@ -4,6 +4,8 @@
    raw JSON size, so even long songs fit comfortably in a URL.
    ============================================================ */
 
+import { okBeltVel } from './dynamics.js';
+
 const b64url = bytes => {
   let s = '';
   bytes.forEach(b => s += String.fromCharCode(b));
@@ -30,7 +32,8 @@ const NOTE_RE = /^[A-G]#?\d$/;
 const checkNotes = (notes, name) => {
   if (!Array.isArray(notes) || !notes.length) throw new Error(`${name}: empty`);
   for (const n of notes){
-    if (!Array.isArray(n) || !NOTE_RE.test(n[0]) || !(n[1] > 0) || !Number.isFinite(n[1]))
+    if (!Array.isArray(n) || !NOTE_RE.test(n[0]) || !(n[1] > 0) || !Number.isFinite(n[1])
+        || n.length > 3 || !okBeltVel(n[2]))             // [note, beats, vel?] — vel 0..1 (dynamics.js)
       throw new Error(`${name}: bad entry ${JSON.stringify(n)}`);
   }
 };

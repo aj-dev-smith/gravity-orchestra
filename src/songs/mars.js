@@ -44,7 +44,8 @@
                  organ's CHOIR hums under them, the harps arpeggiate, the riff rings clean;
                  the belt sings the fanfare broadened in the tallest arcs of the loop.
      §6 110–130  RECAPITULATION fff: the ostinato returns at full cry (riff open on every
-                 downbeat, the fifth G–D in the ostinato's eighths), call + answer fff on
+                 downbeat on the organ's root, the fifth G–D in the ostinato's "&" once the
+                 organ leaves C minor), call + answer fff on
                  the horn rank, the belt an octave over it, full organ under them.
      §7 130–151  CODA: THE CHORD — A♭·D♭·G over C, hammered in the ostinato rhythm by every
                  machine (toms on its C and A♭); the frantic chromatic scramble; three D♭
@@ -55,7 +56,7 @@
                  across octave strings so no string re-bows faster than its .40 s floor:
                  G2 on every beat (0 1 2 3 4: the pulse, .422 s apart), G3 the triplet's ⅓ +
                  beat 3's "&", G4 the ⅔ + the "&" (the climax ostinato swaps that "&" to D3/D4:
-                 the G–D fifth). §5 = long bowed chords. 12 strings: C3 D3 D#3 G2 G#2 G3 G4
+                 the G–D fifth — only in the recap; §3's D♭/E♭ triads keep the bare G). §5 = long bowed chords. 12 strings: C3 D3 D#3 G2 G#2 G3 G4
                  A#3 C4 D4 D#4 G#3.
      riff        palm-muted chugs (':m') double the ostinato's full rhythm (.14 s re-strikes,
                  ≥ the forge's .13 s comfort); open power chords on the downbeats; clean (':c')
@@ -67,12 +68,12 @@
      organ       the first theme (G2–F3 in octaves), the sliding triads + the G pedal, the
                  choir under §5, full organ in §6–§7, the final C held 8.5 beats (3.6 s —
                  released before the seam).
-     strum       harp timbre ('|h'): the ostinato's quarters in §1–§2 (strums ≥ .42 s apart;
-                 the triplet is left to the wheel), arpeggiated chords in §5.
+     strum       harp timbre ('|h'): the ostinato's beats 1 2 3 4 5 in §1–§2 (strums ≥ .42 s
+                 apart; the triplet and the "&" are left to the wheel), arpeggiated chords in §5.
      lead (belt) G4–C#6: the pacing G, the first theme 8va, the triads' thirds in the
                  ostinato rhythm (flat .14 s skims for the triplets), the trumpet's answer,
                  the broad theme (4-beat arcs), the scramble, the stabs, the C.
-   Drums: kick = the timpani on G (the ostinato's full rhythm), snare = side drum (§4/§6
+   Drums: kick = the timpani on G (thinned in §1–§2 — the pp — full rhythm from §3), snare = side drum (§4/§6
    triplets), crash on the big downbeats, toms only in the coda — tomLow ≈ C3 (131 Hz) and
    tomHigh ≈ A♭3 (207 Hz) are the chord's own C and A♭, a tom cascade under the scramble.
    (The kit has no G tom, so no tom plays under the G pedal.)
@@ -173,12 +174,14 @@ function wheelBar(n, v, { lo = 'G2', mid = 'G3', hi = 'G4', and = null } = {}){
 }
 const bowwheel = sortEv([
   ...[1, 2, 3, 4, 5, 6, 7, 8].flatMap(n => wheelBar(n, .3 + .035 * (n - 1))),            // §1–§2 pp → mp
-  ...[9, 10, 11].flatMap(n => wheelBar(n, .62 + .06 * (n - 9), { and: ['D3', 'D4'] })),  // §3: the fifth
+  ...[9, 10, 11].flatMap(n => wheelBar(n, .62 + .06 * (n - 9))),   // §3: the pure G pedal (a D here grinds a semitone on the D♭ and E♭ triads)
   ...wheelBar(12, .95),
   ...[13, 14, 15, 16, 17, 18].flatMap(n => wheelBar(n, n < 17 ? .55 : .7)),              // §4 under the fanfare
   // §5: the wheel BOWS — each chord held until just before the next (the solver clips the rest)
   ...BROAD_CH.flatMap(([b, len, ns]) => ns.map((n, j) => [b, n, v3(.42 * (1 - .1 * j) + (b >= 100 ? .06 : 0)), r5(len - .8)])),
-  ...[23, 24, 25, 26].flatMap(n => wheelBar(n, .82 + .04 * (n - 23), { and: ['D3', 'D4'] })),   // §6 fff
+  // §6 fff — the G–D fifth on the "&" only over the organ's Dm · Gm (bars 25–26): under its Cm
+  // (bars 23–24, D♯4 held) a D4 would grind a semitone against it
+  ...[23, 24, 25, 26].flatMap(n => wheelBar(n, .82 + .04 * (n - 23), n >= 25 ? { and: ['D3', 'D4'] } : {})),
   ...[27, 28].flatMap(n => wheelBar(n, 1, { lo: 'C3', mid: 'G3', hi: 'G4', and: ['G#2', 'G#3'] })),   // the chord
   ...[0, 1, 2, 3, 4].map(o => [bar(29) + o, 'C3', .85, CL]),                             // the scramble's pulse
   ...[145, 146, 147].map(b => [b, 'G#2', 1, CL]), ...[145, 146, 147].map(b => [b, 'G#3', .9, CL]),
@@ -200,9 +203,10 @@ const riff = sortEv([
   // §5: clean, ringing fifths on the broad chords' roots
   ...BROAD_CH.map(([b, len, ns]) => [b, `${{ 90: 'G2', 94: 'D#3', 96: 'C3', 100: 'G#2', 104: 'G2', 106: 'C3', 108: 'G2' }[b]}:c`, .45, len]),
   ...BROAD_CH.map(([b, len]) => [b, `${{ 90: 'D3', 94: 'A#3', 96: 'G3', 100: 'D#3', 104: 'D3', 106: 'G3', 108: 'D3' }[b]}:c`, .4, len]),
-  // §6: open G5 on every downbeat, chugs between, the fifth's D on the "&"
-  ...[23, 24, 25, 26].flatMap(n => [...open(bar(n), ['G2', 'D3', 'G3'], .95, 1),
-    ...chug(n, 'G2', .85).filter(e => e[0] > bar(n) && e[0] !== r5(bar(n) + 3.5)), [r5(bar(n) + 3.5), 'D3:m', .8, .25]]),
+  // §6: an open power chord on every downbeat on the organ's root (C5 · C5 · D5 · G5), G chugs
+  // between, the fifth's D on the "&" over the Dm · Gm bars
+  ...[23, 24, 25, 26].flatMap(n => [...open(bar(n), { 23: ['C3', 'G3', 'C4'], 24: ['C3', 'G3', 'C4'], 25: ['D3', 'A3', 'D4'], 26: ['G2', 'D3', 'G3'] }[n], .95, 1),
+    ...chug(n, 'G2', .85).filter(e => e[0] > bar(n) && (n < 25 || e[0] !== r5(bar(n) + 3.5))), ...(n >= 25 ? [[r5(bar(n) + 3.5), 'D3:m', .8, .25]] : [])]),
   // §7: the chord hammered OPEN in the ostinato rhythm (each hit rings to the next)
   ...[27, 28].flatMap(n => OST.map((o, i) => open(bar(n) + o, CHORD, ACC[i], i < 7 ? OST[i + 1] - o : 1)).flat()),
   ...[0, .5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5].map((o, i) => [bar(29) + o, 'C3:m', v3(.7 + .03 * i), .25]),   // the scramble
@@ -253,7 +257,7 @@ const organ = sortEv([
 
 // ---- STRUM — the harps (harp timbre) ------------------------------------------------
 const strum = sortEv([
-  ...[1, 2, 3, 4, 5, 6, 7, 8].flatMap(n => [0, 1, 2, 4].flatMap(o =>
+  ...[1, 2, 3, 4, 5, 6, 7, 8].flatMap(n => [0, 1, 2, 3, 4].flatMap(o =>
     ['G2|h', 'G3|h'].map(id => [bar(n) + o, id, v3((.3 + .03 * (n - 1)) * (o ? .8 : 1))]))),
   // §5: each broad chord arpeggiated, one strum per beat (rolling up the chord)
   ...BROAD_CH.flatMap(([b, len, , , hp]) => Array.from({ length: len }, (_, k) =>
@@ -263,10 +267,14 @@ const strum = sortEv([
 // ---- DRUMS -------------------------------------------------------------------------------
 const D = { kick: [], snare: [], crash: [], floorHigh: [], tomLow: [], tomMid: [], tomHiMid: [], tomHigh: [] };
 {
-  const timp = (n, v) => OST.forEach((o, i) => D.kick.push([r5(bar(n) + o), v3(v * ACC[i])]));
-  for (let n = 1; n <= 8; n++) timp(n, .3 + .035 * (n - 1));
+  const timp = (n, v, only) => OST.forEach((o, i) => (!only || only.includes(i)) && D.kick.push([r5(bar(n) + o), v3(v * ACC[i])]));
+  // pp → mp by DENSITY, not just velocity: the kick voice keeps a .35 amplitude floor (audio.js
+  // hitDrum), so even vel .1 sits ~15 dB over the pp strings — a full-rhythm kick turned the col
+  // legno opening into a four-on-the-floor. Bars 1–2: the downbeat alone (distant thunder);
+  // bars 3–8: the downbeat + the bar's tail (4-&-5); the whole rhythm arrives with the build (§3).
+  for (let n = 1; n <= 8; n++) timp(n, .1 + .015 * (n - 1), n <= 2 ? [0] : [0, 5, 6, 7]);
   for (let n = 9; n <= 12; n++) timp(n, .6 + .1 * (n - 9));
-  for (let n = 13; n <= 18; n++) timp(n, n < 17 ? .5 : .7);
+  for (let n = 13; n <= 18; n++) timp(n, n < 17 ? .36 : .7);                            // under the tuba's call: keep out of its way
   for (const [b] of BROAD_CH) D.kick.push([b, .4]);                                       // §5: one roll of thunder per chord
   for (let n = 23; n <= 28; n++) timp(n, .9);
   // the side drum: the fanfare's triplets (§4) and the recap's
@@ -284,7 +292,7 @@ const D = { kick: [], snare: [], crash: [], floorHigh: [], tomLow: [], tomMid: [
   const UP = ['floorHigh', 'tomLow', 'tomMid', 'tomHiMid', 'tomHigh'];
   for (let i = 0; i < 10; i++) D[UP[i % 5]].push([bar(29) + .5 * i, v3(.6 + .04 * i)]);
   for (const b of [145, 146, 147]){ D.kick.push([b, 1]); D.tomHigh.push([b, 1]); D.snare.push([b, .9]); }
-  D.kick.push([150, 1]); D.tomLow.push([150, 1]); D.floorHigh.push([150.5, .7]);
+  D.kick.push([150, 1]); D.tomLow.push([150, 1]);                                        // the C (the floor tom is an A: not under the last C)
   for (const l of Object.keys(D)) sortHits(D[l]);
 }
 

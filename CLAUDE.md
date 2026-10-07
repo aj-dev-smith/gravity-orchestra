@@ -69,6 +69,8 @@ on. Treat it as live, and confirm with the human before running it.
                      dolly, catwalk pads, solved teleport arc, tour, controllers, head-pose audio.
                      src/xrplan.js = its pure half (anchors from the director's shots, tour, scale
                      U_PER_M = −G/9.81, earFrame) — test/xrplan.test.js. How to test: docs/XR.md
+                     src/xrmenu.js (the in-world menu, Y) · src/xrdetail.js + src/xrbatch.js (the VR
+                     DETAIL PROFILE, headset render only, undone after it) — test/xrperf.test.js
     src/share.js     song ⇄ deflate→base64url share links
     src/record.js    canvas captureStream + MediaRecorder → "one perfect loop" video
     src/songs/*.js   one module per song (the comments are sacred), aggregated by index.js
@@ -425,8 +427,12 @@ Dies Irae (deep canon echo, delay 5). bpm is the single tempo knob; everything r
   and `placeAt()` reads the head pose. The rig is scaled U_PER_M so marbles fall at a TRUE 9.81 m/s².
   Teleport only (pads = the director's solved eyes; the arc is a solveLaunch throw), tour = the
   director's edit as cuts. IWER is DEV-only (`?xremu`, needs `installRuntime({forceInstall:true})` on
-  desktop Chrome). Perf: no multiview in WebGLRenderer r184 — the full room from the wide is ~1500
-  calls/frame; light songs ~350–575.
+  desktop Chrome). Perf: no multiview in WebGLRenderer r184, so every object draws once PER EYE. The
+  VR DETAIL PROFILE (xrdetail/xrbatch, `?xrdetail=full` = off) mirrors the machines' opaque parts into
+  one BatchedMesh multi-draw per look, skips sub-~7-px parts (never balls) + dim glows, boosts glow for
+  the missing bloom (descriptor `xrGlow`, optional `inst.xr(on)`), and rooms offer `xr(on)` variants
+  (studio: no per-eye Reflector). Full room from the wide ~1430 → ~450–530 calls/frame (both eyes).
+  The head is never moved by the director / ride cam — TOUR teleports (blink); Y = in-world menu.
 
 Dev toggles: `G` = conveyor debug HUD (rulers + height graph; `convDbgOn`, OFF by default). `M` = machines on/off. `?debug` = a scrub bar (time is the only
 state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machine-gunning).

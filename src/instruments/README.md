@@ -56,6 +56,9 @@ export default {
   color: '#ff8a5a',               // cam-button / shot tint
   cameraKey: 'strings',           // the shot / cam-button key when `key` collides with a belt
                                   // role (lead / alto / bass) — the instrument keeps its key
+  xrGlow: 1.55,                   // optional, VR: there is no bloom in a headset, so main multiplies
+                                  // your emissive intensities by this (and additive opacities by a
+                                  // matching factor) for the headset render only. Default 1.55; 1 = off
 
   // PURE DSP, deterministic, no AudioContext: one render feeds BOTH the live
   // Web Audio path (AudioBuffer, gain = vel) and the iOS <audio> fallback (WAV).
@@ -102,6 +105,11 @@ export default {
       // < .2 skips the shared strike-light pool — a chord's faint inner strings
       // must not steal another machine's flash).
       update(songTime, P, dt, { started, skipStrikes, onStrike }){ ... },
+
+      // optional: WebXR. Called with true when a headset session starts (and after every build
+      // while one runs), false when it ends. For a look that needs MORE than xrGlow without
+      // bloom (a hotter core, a bigger halo). Render-only — never change timing or geometry.
+      xr(on){ ... },
     };
   },
 
@@ -147,6 +155,18 @@ export default {
     you'll toggle/raycast later, sets `mesh.userData.noMerge = true`. Custom shaders
     (`onBeforeCompile`, ShaderMaterial) and transparent materials are never merged.
     `userData.frozen = true` (ricochet's own freeze) is the same idea, done in-plugin.
+  - **VR detail profile** (src/xrdetail.js + src/xrbatch.js, headset render ONLY, undone
+    right after it): opaque plain-material meshes that share a LOOK (same material, or
+    separately-made materials with identical properties) are mirrored into one
+    BatchedMesh draw each — a part whose material is mid-flash draws as itself that frame,
+    so one material per part for independent flashes is fine. Parts smaller than ~7 px
+    in the headset are skipped (balls / sphere geometry never are); tag a part
+    `userData.xrKeep = true` if it must always draw, `userData.xrNoBatch = true` to keep
+    it out of the batch. A part with `onBeforeCompile` / a custom `onBeforeRender` /
+    ShaderMaterial / transparency is never batched. A skipped or batched part is hidden by
+    LAYER MASK (the part alone) for that render — its children (a halo, the ball on a tiny
+    arm) still draw, so parenting a ball under a small part is safe. Don't use `layers`
+    for your own visibility logic.
   - **Fade gate**: every ADDITIVE transparent non-shader material under the world
     gets `material.visible = opacity > .002` each frame (an idle glow at opacity 0
     still costs a draw call). Don't drive `material.visible` yourself on those; opt

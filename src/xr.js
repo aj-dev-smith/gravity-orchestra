@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { U_PER_M, PAD_R, planAnchors, tourAt, pickAnchor, throwArc, rigFor, earFrame } from './xrplan.js';
+import { makeXRMenu } from './xrmenu.js';
 
 /* ============================================================
    XR — the WebXR render subsystem (Meta Quest 2 first; any immersive-vr browser).
@@ -23,7 +24,10 @@ import { U_PER_M, PAD_R, planAnchors, tourAt, pickAnchor, throwArc, rigFor, earF
    CONTROLS (Quest Touch):
      right stick ↑ (or hold right trigger) — aim the throw · release — teleport to the lit pad
      right stick ←/→ — snap turn 30°      A — tour on/off (the director drives)   B — play/pause
-     left stick ←/→ — scrub time          X — next pad                           Y — next song
+     left stick ←/→ — scrub time          X — next pad                           Y — the MENU
+   THE MENU (src/xrmenu.js): an in-world panel — song, room, play/pause, tour, next pad, exit.
+   Point either controller at it, trigger to press. While it's open the triggers press, not throw.
+   The director / ride cam NEVER move the headset: the head is yours; TOUR only teleports (blink).
    ============================================================ */
 
 const SNAP = Math.PI / 6;                               // snap-turn step
@@ -33,14 +37,14 @@ const SCRUB_RATE = 4;                                   // song seconds per real
 const DOTS = 25;                                        // teleport-arc marbles
 
 export function makeXR({ renderer, scene, camera, envMap, glowTex, enterSound, gestureRetry, onSession,
-                         getTime, setTime, getRate, setRate, nextSong, songLabel, shotAt }){
+                         getTime, setTime, getRate, setRate, nextSong, songLabel, shotAt, menu: M = null }){
   const q = new URLSearchParams(location.search);
   const root = new THREE.Group(); root.name = 'xr';
   const dolly = new THREE.Group(); dolly.scale.setScalar(U_PER_M);
   root.add(dolly);
   const viewer = new THREE.Object3D();                  // head pose in WORLD (rooms + spatial audio read it)
   let session = null, mode = null, anchors = [], cur = -1, hover = -1, tour = false, aimHand = null;
-  let fade = 0, fadeDir = 0, pending = null, wasAim = false, turnArmed = true;
+  let fade = 0, fadeDir = 0, pending = null, wasAim = false, turnArmed = true, latch = false;
   const edges = {};                                     // button edge detect per hand+index
   let saved = null;
 
@@ -120,7 +124,7 @@ export function makeXR({ renderer, scene, camera, envMap, glowTex, enterSound, g
     const a = anchors[hover >= 0 ? hover : cur];
     const lines = [songLabel?.() || 'CASCADE',
       `${hover >= 0 ? '→ ' : ''}${a ? a.label : ''}`,
-      `${tour ? 'TOUR' : 'FREE'}${getRate() ? '' : ' · PAUSED'}  ·  ${getTime().toFixed(1)}s`];
+      `${tour ? 'TOUR' : 'FREE'}${getRate() ? '' : ' · PAUSED'} · ${getTime().toFixed(0)}s · Y MENU`];
     const s = lines.join('|');
     if (s === panelText) return;
     panelText = s;
@@ -131,8 +135,29 @@ export function makeXR({ renderer, scene, camera, envMap, glowTex, enterSound, g
     ctx2.fillText(lines[0].slice(0, 22), 26, 62);
     ctx2.font = '32px ui-monospace, Menlo, monospace'; ctx2.fillStyle = '#cfd6e6';
     ctx2.fillText(lines[1].slice(0, 26), 26, 112);
-    ctx2.fillStyle = '#7d859c'; ctx2.fillText(lines[2], 26, 160);
+    ctx2.font = '26px ui-monospace, Menlo, monospace'; ctx2.fillStyle = '#7d859c'; ctx2.fillText(lines[2], 26, 160);
     tex.needsUpdate = true;
+  }
+
+  /* ---- the in-world MENU (Y): song · room · transport (the HTML UI is unreachable in VR) ---- */
+  const menu = makeXRMenu({
+    getState: () => ({ songs: M?.songs() || [], song: M?.song(), rooms: M?.rooms() || [], room: M?.room(),
+      playing: !!getRate(), tour, ar: mode === 'ar', time: getTime() }),
+    onPress(b){
+      if (b.kind === 'song'){ if (b.value !== M?.song()) M?.setSong(b.value); }
+      else if (b.kind === 'room') M?.setRoom(b.value);
+      else if (b.id === 'play') setRate(getRate() ? 0 : 1);
+      else if (b.id === 'tour') tour = !tour;
+      else if (b.id === 'pad'){ tour = false; go((cur + 1) % Math.max(1, anchors.length)); }
+      else if (b.id === 'close') menu.hide();
+      else if (b.id === 'exit'){ menu.hide(); exit(); }
+    } });
+  dolly.add(menu.mesh);
+  const _eu = new THREE.Euler(0, 0, 0, 'YXZ');
+  function toggleMenu(){
+    if (menu.open){ menu.hide(); return; }
+    _eu.setFromQuaternion(camera.quaternion, 'YXZ');    // the head in the rig (metres): the panel opens where you look
+    menu.show(camera.position, _eu.y);
   }
 
   /* ---- the blink: a navy shell around the head (fades the world out/in on every move) ---- */
@@ -200,7 +225,7 @@ export function makeXR({ renderer, scene, camera, envMap, glowTex, enterSound, g
     Object.assign(camera, { fov: saved.fov, zoom: saved.zoom, near: saved.near, far: saved.far });
     camera.updateProjectionMatrix(); camera.updateMatrixWorld(true);
     renderer.xr.enabled = false;
-    dots.visible = glow.visible = false; hover = -1; aimHand = null; tour = false;
+    dots.visible = glow.visible = false; hover = -1; aimHand = null; tour = false; menu.hide();
     onSession?.(false, mode); mode = null;
   }
   async function exit(){ if (session) await session.end(); }
@@ -226,7 +251,21 @@ export function makeXR({ renderer, scene, camera, envMap, glowTex, enterSound, g
     const ra = R?.gamepad?.axes || [], la = L?.gamepad?.axes || [];
     // ---- aim + throw (right stick up, or a held trigger on either hand) ----
     const trigR = !!R?.gamepad?.buttons?.[0]?.pressed, trigL = !!L?.gamepad?.buttons?.[0]?.pressed;
-    const aim = (ra[3] ?? 0) < -.55 || trigR ? 'right' : trigL ? 'left' : null;
+    // ---- the MENU: while open, either hand points at it and its trigger presses (no throws) ----
+    const pressR = btn('r', R, 0), pressL = btn('l', L, 0);   // (edges tracked every frame, open or not)
+    if (menu.open){
+      let best = null;
+      for (const k of ['right', 'left']){ const h = hands[k]; if (!h) continue;
+        h.ctrl.getWorldPosition(_o); h.ctrl.getWorldDirection(_d).negate();
+        const hit = menu.cast(_o, _d);                  // (side-effect free: only the chosen hand sets the hover)
+        if (hit && !best){ best = { k, hit }; }
+        h.ray.visible = !!hit; if (hit) h.ray.scale.z = Math.max(.05, hit.distance / U_PER_M / .6);
+      }
+      menu.hover(best ? best.hit : null);
+      if (best && ((best.k === 'right' && pressR) || (best.k === 'left' && pressL))){ menu.press(best.hit.button); latch = true; }
+    } else for (const k in hands) hands[k].ray.scale.z = 1;
+    if (!trigR && !trigL) latch = false;                // a press that closed the menu must be released before it can throw
+    const aim = menu.open || latch ? null : (ra[3] ?? 0) < -.55 || trigR ? 'right' : trigL ? 'left' : null;
     if (aim){
       const h = hands[aim];
       h.ctrl.getWorldPosition(_o); h.ctrl.getWorldDirection(_d).negate();   // a target ray points down its −z
@@ -244,9 +283,9 @@ export function makeXR({ renderer, scene, camera, envMap, glowTex, enterSound, g
     } else if (wasAim){                                 // released: throw yourself onto the lit pad
       for (const k in hands) hands[k].ray.visible = false;
       dots.visible = glow.visible = false;
-      if (hover >= 0){ tour = false; go(hover); }
+      if (hover >= 0 && !menu.open){ tour = false; go(hover); }   // (Y mid-aim: the throw is cancelled)
       hover = -1; aimHand = null; paintPads();
-    }
+    } else if (!menu.open) for (const k in hands) hands[k].ray.visible = false;
     wasAim = !!aim;
     // ---- snap turn (right stick x) ----
     const sx = ra[2] ?? 0;
@@ -256,7 +295,8 @@ export function makeXR({ renderer, scene, camera, envMap, glowTex, enterSound, g
     if (btn('r', R, 4)){ tour = !tour; }                               // A: tour
     if (btn('r', R, 5)) setRate(getRate() ? 0 : 1);                   // B: play / pause
     if (btn('l', L, 4)){ tour = false; go((cur + 1) % Math.max(1, anchors.length)); }   // X: next pad
-    if (btn('l', L, 5)) nextSong?.();                                  // Y: next song
+    if (btn('l', L, 5)) toggleMenu();                                  // Y: the menu (song · room · transport)
+    menu.refresh();
     // ---- scrub (left stick x): time is the only state, so this is just assigning it ----
     const lx = la[2] ?? 0;
     if (Math.abs(lx) > .15) setTime(getTime() + Math.sign(lx) * (Math.abs(lx) - .15) / .85 * SCRUB_RATE * dt);
@@ -327,6 +367,8 @@ export function makeXR({ renderer, scene, camera, envMap, glowTex, enterSound, g
     go, turn,
     dev: {                                              // window.__dev.xr (scripts/xr-shot.mjs drives these)
       enter: m => enter(m), exit, go: id => go(id), turn: s => turn(s),
+      menu: { toggle: () => toggleMenu(), get open(){ return menu.open; }, get hover(){ return menu.hoverId; }, mesh: menu.mesh,
+        get buttons(){ return menu.buttons; }, at: id => menu.buttonWorld(id)?.toArray() },
       get tour(){ return tour; }, set tour(v){ tour = !!v; },
       info: () => ({ presenting: !!session, mode, cur, hover, tour, anchors: anchors.map(a => ({ id: a.id, key: a.key, label: a.label,
         pos: a.pos.map(v => +v.toFixed(2)) })), dolly: dolly.position.toArray().map(v => +v.toFixed(2)),

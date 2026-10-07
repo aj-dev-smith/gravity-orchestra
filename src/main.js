@@ -14,7 +14,7 @@ import { makePaternosterShop, makeToneBarParts, PT, BAR } from './paternoster.js
 import { planCrane, plateField, plateEdge, plateDeploy, craneBall, segAt, hopLayout } from './crane.js';
 import { makeMarbleDrums, KIT_SOLO, KIT_ROOM, kitAnchor } from './marbledrums.js';
 import { makeCameraRig } from './camera.js';
-import { makeRoomHost } from './rooms/index.js';
+import { makeRoomHost, ROOMS } from './rooms/index.js';
 import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
 import { stationFor, layoutStations, HANG_CLEAR, hangPlace } from './instruments/stations.js';
 import { eventTimes, wrapP } from './instruments/clock.js';
@@ -33,6 +33,8 @@ import { RIDE, ridePose, rideMoments, rideWindowAt } from './ridecam.js';
 import { makeFollow, solveShots as solveShotsIn, resolveRoom, solidBox, roomSolids } from './shotrig.js';
 import { makeXR } from './xr.js';
 import { U_PER_M } from './xrplan.js';
+import { makeXRDetail, collectGlow, XR_DETAIL } from './xrdetail.js';
+import { makeXRBatch } from './xrbatch.js';
 /* ============================================================
    CASCADE — melody-driven marble run, now multi-track.
    A song is one or more tracks of [note, beats-until-next-hit].
@@ -185,6 +187,11 @@ const HALO_A = .12, EMI = 1.2;
 const XR_HALO_A = .34, XR_EMI = 2.1;
 let haloA = HALO_A, emi = EMI;
 const xrLit = []; let xrLitAge = 0, xrSaved = new Float32Array(0);   // (xrRender: the lights it re-scales)
+/* the VR DETAIL PROFILE (src/xrdetail.js): fine parts the headset can't resolve, dim glows, the
+   no-bloom glow boost, the rooms' lighter XR variants. ?xrdetail=full = the un-reduced A/B. */
+const xrLite = new URLSearchParams(location.search).get('xrdetail') !== 'full';
+const xrDetail = makeXRDetail(), xrBatch = makeXRBatch();
+let xrOn = false, xrMode = null;                                       // (presenting — xrSession keeps it; buildWorld re-applies plugin xr hooks)
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 /* PERF GOVERNOR (src/perfgov.js): a device that can't hold the frame at its pixel ratio steps
@@ -635,7 +642,8 @@ function buildWorld(keyName){
   // a full room is deep: thin the haze so the back tier still reads from the wide shot
   // (FogExp2 .026 at ~50 u ≈ 18 % visible; .016 ≈ 45 %)
   scene.fog.density = instLive.length ? .016 : .026;
-  rooms.suggest(S.room);                                // a song may name its room (data); a viewer's pick wins
+  if (xrMode === 'ar') rooms.set('off');                // (AR passthrough: the camera feed IS the room — a song change mustn't bring one back)
+  else rooms.suggest(S.room);                           // a song may name its room (data); a viewer's pick wins
   // the song's weather for the room (data): storm = beats that flash lightning, sky = [[beat,
   // 'night'|'dawn'], …] — the room reads them as pure fns of songTime (a room may ignore them)
   rooms.cue({ storm: Array.isArray(S.storm) ? S.storm.filter(Number.isFinite) : null,
@@ -649,6 +657,7 @@ function buildWorld(keyName){
   cam.syncTracks(tracks, stageView);                    // reframe + rebuild the cam-button row for the new song
   syncDirector(S, stageView);
   fadeMats = collectFadeMats(world); fadeWarm = 3;
+  if (xrOn) for (const r of instLive) r.inst.xr?.(true);   // a song picked in the headset: its plugins open in their XR look
   audio.rebuildBank(tracks, S.drums ? Object.keys(S.drums) : [], voices);
   gov.hold(90);                                         // a rebuild's hitch + compiles are not the device's pace
   singlePassFlats(scene);                               // PERF (perftune.js): no 2-pass draw for flat/additive see-through parts
@@ -1228,10 +1237,22 @@ const xr = makeXR({ renderer, scene, camera, envMap, glowTex,
   nextSong(){ sel.selectedIndex = (sel.selectedIndex + 1) % sel.options.length; sel.dispatchEvent(new Event('change')); },
   songLabel: () => SONGS[sel.value]?.label,
   shotAt: now => shotAt(plan, wrapP(now, ROLL_T + LOOP_T), seamFrom),
+  menu: {                                               // the in-world menu (src/xrmenu.js): the same song <select> + room host the 2D page drives
+    songs: () => [...sel.options].map(o => ({ key: o.value, label: o.textContent })),
+    song: () => sel.value,
+    setSong(k){ if (![...sel.options].some(o => o.value === k)) return; sel.value = k; sel.dispatchEvent(new Event('change')); },
+    rooms: () => [...ROOMS.map(r => ({ key: r.key, label: r.label })), { key: 'off', label: 'No room' }],
+    room: () => rooms.key,
+    setRoom: k => rooms.set(k, { announce: true }),
+  },
   onSession: xrSession });
 let xrPrev = null;
 function xrSession(on, mode){
   haloA = on ? XR_HALO_A : HALO_A; emi = on ? XR_EMI : EMI;
+  rooms.xr(on && xrLite);                               // the rooms' headset variants (studio: no mirror pass per eye; arena/starship comfort)
+  for (const r of instLive) r.inst.xr?.(on);            // optional plugin hook (src/instruments/README.md)
+  xrOn = on; xrMode = on ? mode : null; xrLitAge = 0; xrDetail.invalidate();
+  if (!on){ scene.remove(xrBatch.group); xrBatch.dispose(); }   // (the 2D page never draws the mirror)
   for (const role in rigPool) for (const rg of rigPool[role]) rg.lamp.visible = !on;   // XR quality: the marble lamps go dark
   if (mode === 'ar'){                                   // passthrough: no room, no sky, no fog over the camera feed
     if (on){ xrPrev = { room: rooms.key, bg: scene.background, fog: scene.fog.density, alpha: renderer.getClearAlpha() };
@@ -1495,7 +1516,36 @@ function xrRender(){
     xrLit.length = 0; scene.traverse(o => { if (o.isPointLight || o.isSpotLight) xrLit.push(o); });
     if (xrSaved.length < xrLit.length * 2) xrSaved = new Float32Array(xrLit.length * 4);
     xrLitAge = 60;                                      // re-collect ~once a second (+ on every director re-solve)
+    xrRender.glowNow = true;                            // re-collect the no-bloom glow set too (an instrument may set its own xrGlow)
   }
+  if (!xrLite){ xrRender1(); return; }
+  // XR DETAIL PROFILE: fine parts + dim glows skipped, glow boosted (src/xrdetail.js), the machines'
+  // parts mirrored into one multi-draw per material (src/xrbatch.js) — all undone after the render
+  if (xrBatch.root !== world || xrBatch.stale > 12){
+    xrBatch.build(world); if (!xrBatch.group.parent) scene.add(xrBatch.group);
+    xrLitAge = 0; xrRender.glowNow = true; }            // (its frozen looks join the glow boost below)
+  if (xrRender.glowNow){ xrRender.glowNow = false; xrDetail.setGlow(collectGlow([
+    ...instLive.map(r => ({ root: r.station, k: r.I.xrGlow })), ...tracks.map(tr => ({ root: tr.stage })), { root: drumGroup }, { root: xrBatch.group }])); }
+  scene.updateMatrixWorld();                            // (poses current BEFORE the batch copies them; the render skips its own pass)
+  xrDetail.before([world], xr.viewer.position, fadeMats);   // fine parts + dim glows out…
+  xrBatch.before();                                     // …the rest mirrored into the batch (looks compared UN-boosted)…
+  xrDetail.boost();                                     // …then the no-bloom glow boost (originals + the batch's own looks)
+  xrPoints();
+  scene.matrixWorldAutoUpdate = false;
+  xrRender1();
+  scene.matrixWorldAutoUpdate = true;
+  xrBatch.after(); xrDetail.after(); xrPoints(true);
+}
+/* PointsMaterial dust sizes attenuate by view distance — in METRES in the headset (U× nearer),
+   so every mote would draw U× bigger: scale them back for the headset render */
+const xrDust = [], xrDustSize = []; let xrDustAge = 0;
+function xrPoints(undo = false){
+  if (undo){ for (let i = 0; i < xrDust.length; i++) xrDust[i].size = xrDustSize[i]; return; }
+  if (xrDustAge-- <= 0){ xrDust.length = 0; xrDustAge = 120;
+    scene.traverse(o => { if (o.isPoints && o.material?.isPointsMaterial && o.material.sizeAttenuation && !xrDust.includes(o.material)) xrDust.push(o.material); }); }
+  for (let i = 0; i < xrDust.length; i++){ xrDustSize[i] = xrDust[i].size; xrDust[i].size /= U_PER_M; }
+}
+function xrRender1(){
   for (let i = 0; i < xrLit.length; i++){ const l = xrLit[i];
     xrSaved[2 * i] = l.intensity; xrSaved[2 * i + 1] = l.distance;
     l.intensity /= Math.pow(U_PER_M, l.decay); l.distance /= U_PER_M; }
@@ -1762,7 +1812,8 @@ if (new URLSearchParams(location.search).has('debug')){
       return out;
     },
     get layout(){ return lastLayout; }, get wide(){ return lastWide; }, get merge(){ return mergeStats; }, frozen: () => frozenStats(),
-    get editor(){ return editor; }, xr: xr.dev,                    // creation tools: .openMap() .toggleEdit() .stage.state() .stage.select(k)
+    get editor(){ return editor; }, xr: xr.dev,
+    xrPerf: () => ({ lite: xrLite, batch: xrBatch.stats, detail: xrDetail.stats }),   // the VR detail profile at work (scripts/xr-perf.mjs)                    // creation tools: .openMap() .toggleEdit() .stage.state() .stage.select(k)
     // staging-audit handles (scripts/staging-audit.mjs): the live camera, the song's world, the live marbles
     get three(){ return THREE; }, get camera(){ return camera; }, get world(){ return world; }, get marbles(){ return devMarbles; }, get P(){ return ROLL_T + LOOP_T; },
     get shots(){ return lastShots.map(s => ({ key: s.key, owner: s.owner, eye: s.eye.toArray(), aim: s.aim.toArray(), pref: s.pref?.toArray(), rays: s.rays, fg: s.fg, fitMax: s.fitMax, portrait: s.portrait?.eye.toArray() })); },

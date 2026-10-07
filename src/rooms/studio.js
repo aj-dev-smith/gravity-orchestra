@@ -11,7 +11,8 @@ import { STAGE, rng, canvasTex, radialTex, glowPoints, glowMat, beamMat, instanc
    tube practicals, Edison pendants, a neon sign, and a ceiling truss
    throwing soft volumetric beams down onto the instruments.
    Perf: the reflection pass re-renders the scene into a REFL_SCALE×
-   target with MSAA off; everything else is instanced. Animation =
+   target with MSAA off (in a WebXR headset the mirror is swapped for a
+   plain glossy floor — xr(on) — it would re-render per EYE); everything else is instanced. Animation =
    uniforms / texture offsets only (no per-frame allocation).
    ============================================================ */
 
@@ -139,6 +140,12 @@ export default {
     floor.material.uniforms.uTexel.value.set(1 / tw, 1 / th);
     floor.rotation.x = -Math.PI / 2; floor.position.set(0, F, (FRONT + BACK) / 2);
     group.add(floor);
+    // the HEADSET floor (xr): the mirror re-renders the whole scene once PER EYE — far too dear on a
+    // Quest. In VR the epoxy is a plain glossy plane that reflects only the env map (one draw).
+    const xrFloor = new THREE.Mesh(new THREE.PlaneGeometry(2 * HW, FRONT - BACK),
+      new THREE.MeshStandardMaterial({ color: 0x07070c, metalness: .55, roughness: .3, envMap, envMapIntensity: .55 }));
+    xrFloor.rotation.x = -Math.PI / 2; xrFloor.position.copy(floor.position); xrFloor.visible = false;
+    group.add(xrFloor);
 
     // ---- cyclorama: a curved cove from the floor up the back wall, washed in colour ----
     const COVE = 12, cycW = 2 * HW;
@@ -286,6 +293,7 @@ export default {
         beams.material.uniforms.uGain.value = beamBase * (1 + .5 * energy);
         cycMat.color.copy(cycBase).multiplyScalar(1 + .25 * energy);
       },
+      xr(on){ floor.visible = !on; xrFloor.visible = on; },   // VR: no per-eye mirror pass
       resize(w, h, pr){                                      // keep the mirror sharp across rotations / DPR changes
         const tw = Math.max(256, Math.round(w * pr * REFL_SCALE)), th = Math.max(256, Math.round(h * pr * REFL_SCALE));
         floor.getRenderTarget().setSize(tw, th);

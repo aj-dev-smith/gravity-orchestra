@@ -70,6 +70,10 @@ export default {
       // LOCAL frame (see stations.js: +x across, +y up, +z toward the audience,
       // y=0 = deck top, stay inside |x|≤w/2, |z|≤d/2). main parents it to the
       // station. The group is disposed on song change (main traverses + disposes).
+      // floorY = the room floor in your local y (grow legs down to it). A crowded
+      // room may raise your station onto the rear GALLERY behind the belt (deck ≈
+      // the belt's top housing − 2): build() is then called again with a much
+      // lower floorY (~ −36) — legs must stretch, nothing else changes.
       build(part, { rollT, beat, P, start, station, floorY, loopBeats }){ ... },
 
       // Per frame. A PURE fn of songTime (scrub-safe: ?debug can jump anywhere).

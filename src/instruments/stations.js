@@ -31,6 +31,15 @@
        centre, HUNG: the RICOCHET chandelier — a crown over the belt,
               its lowest plate clear above the paternoster's top housing,
               so the wide shot reads it ABOVE the strike band, never across it.
+       front corners, low: the hammered DULCIMER (left, outside the bowls)
+              and the BOW-WHEEL (right, past the kit) — pulled in from the
+              corners so the wide shot holds them whole
+       rear GALLERY (raised, behind the belt — see GALLERY_DROP): the
+              band's riser — the leaning STRUM harp, the RIFF forge's
+              backline, the HORNS — seen OVER the paternoster, either side
+              of the ORGAN loft (centre, HUNG behind the belt: its façade is
+              the room's backdrop). In a full room the marimba / bells tier
+              stands where the gallery row would; the solve steps it back.
        left wing, HUNG: the VOLLEY court — two walls trading one marble, flown
               over the marimba / bass tier, its strike plane yawed to face the
               audience's eye (AUDIENCE dx −6, z 40). It rides out with the left
@@ -51,8 +60,11 @@
    behind it, and (d) if it stands in front of the bays, stays under the
    audience's sightline to the strike band (the belt is the protagonist).
    A floor too crowded for all four (3 bays + every machine) gives up air
-   between bounding boxes first, then a little depth. Pure + deterministic:
-   one song → one stage, every time.
+   between bounding boxes first, then opens the rear GALLERY to everyone
+   (a station the belt would hide climbs up behind it instead), then, last,
+   borrows a little depth. Only the stations a song USES are solved (main
+   builds a station only for a part with events), so a sparse song keeps
+   every slot. Pure + deterministic: one song → one stage, every time.
    ============================================================ */
 
 export const STATIONS = {
@@ -61,11 +73,14 @@ export const STATIONS = {
   bass:     { x: -20,  y: 0.0, z:  3.6, yaw: 1.15, w: 12, d: 8 },   // mid-left, turned to look across the room (its shot clears the marimba)
   bowls:    { x: -13,  y: -.5, z: 18,  yaw:  .8,  w: 10, d: 9 },   // front-left, low
   musicbox: { x:  25,  y: -.5, z:  3.2, yaw: -.9,  w: 10, d: 9 },   // mid-right, behind the drums, turned to the middle
-  horns:    { x:  28.5, y: 0.0, z: 26.5, yaw: 0, w: 14, d: 6 },  // front-right corner, beside the drums: the brass rank faces the audience
-  bowwheel: { x:  26,  y: 0.0, z: 17,  yaw: 0,    w: 11, d: 10 },   // front-right, past the drum kit: the great wheel faces the room (its shot looks in from the side)
+  horns:    { x:  15.5, y: 0.0, z: -11, yaw: -.15, w: 14, d: 6, gallery: true },   // GALLERY, right of centre: the brass rank, bells facing the audience
+  bowwheel: { x:  28,  y: 0.0, z: 15.5, yaw: 0,    w: 11, d: 10 },   // front-right corner, past the drum kit: the great wheel faces the room (its shot looks in from the side)
   turntable: { x:  0,  y: -1.0, z: 12.5, yaw: 0, w: 14, d: 14 },  // front-centre, low: the stage camera looks down onto the spinning record
-  strum:    { x: -29,  y: 0.0, z: 21,  yaw:  .6,  w: 12, d: 6 },   // front-left corner, outside the bowls: the leaning harp turned to the middle
-  dulcimer: { x: -29.5, y: -.5, z: 21, yaw: 0, w: 11.6, d: 10 },  // front-left corner, low: an open grand, keyboard to the audience (beside the bowls)
+  // the REAR GALLERY (see GALLERY_DROP) — the band's RISER behind the paternoster: the leaning
+  // harp at the far left (over the marimba), the riff forge's backline beside it, the brass
+  // right of the organ loft — each seen OVER the belt, never in front of its band
+  strum:    { x: -28.9, y: 0.0, z: -11, yaw:  .2,  w: 12, d: 6, gallery: true },
+  dulcimer: { x: -27.5, y: -.5, z: 17, yaw: 0, w: 11.6, d: 10 },  // front-left corner, low: an open grand, keyboard to the audience (beside the bowls)
   // a CHANDELIER hung over the belt: x/z follow the belt wall's centre, y its top (see HANG)
   ricochet: { x:   0,  y: 16,  z:  0,  yaw:  0,   w: 16, d: 16, hang: true },
   // a flying COURT hung over the LEFT WING (x is relative to the belt centre and RIDES OUT with
@@ -73,9 +88,9 @@ export const STATIONS = {
   // station HANG_CLEAR above the belt's top housing). Footprint: the deck is ~19.5 wide and
   // 2·(ZW + 1.3) deep — ZW grows with belt speed (≤ ~7 for the densest honest line) → d 16
   volley:   { x: -24,  y: 16,  z: -4,   yaw: .45, w: 20, d: 16, hang: true },
-  // the RIFF FORGE takes the lip of the stage like a lead guitarist: front-centre, low, its
-  // 4×12 cab behind the neck (the wide shot reads it under the band's sightline)
-  riff:     { x:  2,   y: -1.0, z: 26,  yaw: 0,   w: 13, d: 6 },
+  // the RIFF FORGE on the GALLERY like a rock band's backline: its 4×12 cab behind the neck,
+  // between the harp and the organ loft (the floor's front lip is too close to the wide's lens)
+  riff:     { x: -14,  y: 0.0, z: -11, yaw: .1, w: 13, d: 6, gallery: true },
   // the ORGAN LOFT: a gallery flown centred BEHIND the belt (x on the belt's axis, z behind its
   // depth — clear of the chandelier's crown), above the housing like every hung station: the
   // pipe façade reads over the paternoster as the room's backdrop, its light rising into the air
@@ -125,30 +140,53 @@ export function stationFor(key, i = 0){
   return STATIONS[key] || { x: -10 + 10 * i, y: 0, z: 28, yaw: 0, w: 9, d: 7 };
 }
 
+
+/* THE REAR GALLERY — the amphitheater's second, upper tier. The floor holds ~8 machines beside
+   and in front of the belt; past that (14 machines, or a 3-bay belt that eats the wings) the
+   only free floor left is BEHIND the belt, where the bays hide it. So a station standing there
+   is raised onto a gallery: its deck GALLERY_DROP under the belt's top housing, so the audience
+   (and the wide shot, which looks down from the front) sees it OVER the paternoster, a loft
+   behind the band (its legs still reach the room floor — floorY — so its XZ footprint is solid
+   to the ground, and nothing may share it). A slot marked `gallery: true` lives up there by
+   design; any other station only climbs up when the floor in front has no clean spot left.
+   The kit and the turntable are floor-only (the kit's contacts are world; the record is meant
+   to be looked DOWN onto from the front). Gallery decks keep clear of every HUNG station's
+   footprint (the organ loft, the chandelier, the court) — those fly where a gallery would stand. */
+export const GALLERY_DROP = 2;
+const FLOOR_ONLY = new Set(['drums', 'turntable']);
+
 /** SOLVE the room for one song.
-    items: [{ key, x, z, box: [x0, x1, z0, z1], pin? }] — WORLD x/z of each floor station's
+    items: [{ key, x, z, box: [x0, x1, z0, z1], top?, pin? }] — WORLD x/z of each floor station's
       origin at its base slot (main: belt centre + slot), and its footprint measured from
       the built geometry RELATIVE to that origin (already rotated by its yaw).
     wall:  [x0, x1, z0, z1] — the belt machines' world XZ box.
     room:  { x0, x1, z0, z1 } — where a footprint may go (inside the walls, behind the camera).
-    Returns { key: { x, z } } (world). Never touches y or yaw. */
-export function layoutStations(items, wall, room, { margin = MARGIN, ref = WING_REF, cx = (wall[0] + wall[1]) / 2, bandY = 4.2, eyeY = 20 } = {}){
-  // a floor too crowded to clear at full margin (a 3-bay belt + every machine) first gives up
-  // air between the footprints' bounding boxes (their corners are mostly empty), then a little
-  // depth toward the audience — never an overlap while any of those clears
+    opts.wallTop — the belt's top-housing y (the gallery's reference); opts.hung — world XZ
+      boxes of this song's HUNG stations (a gallery deck keeps clear of them).
+    Returns { key: { x, z } } (world) — plus `y` (the deck's world y) for a station raised onto
+    the rear GALLERY. Never touches yaw. */
+export function layoutStations(items, wall, room, { margin = MARGIN, ref = WING_REF, cx = (wall[0] + wall[1]) / 2, bandY = 4.2, eyeY = 20, wallTop = 15.7, hung = [] } = {}){
+  // a floor too crowded to clear at full margin first gives up air between the footprints'
+  // bounding boxes (their corners are mostly empty); then the GALLERY opens to everyone (only
+  // gallery-born slots stand there before that — so a room that clears on the floor is staged
+  // exactly as it always was); then, last, a little depth toward the audience (which the wide
+  // shot pays for) — never an overlap while any of those clears
   let last = null;
-  for (const [m, dz] of [[margin, 0], [margin * .7, 0], [margin * .45, 0], [margin * .45, 3], [margin * .3, 6]]){
-    last = solveOnce(items, wall, { ...room, z1: room.z1 + dz }, m, ref, cx, bandY, eyeY);
+  const env = { ref, cx, bandY, eyeY, galleryY: wallTop - GALLERY_DROP, hung };
+  for (const [m, dz, up] of [[margin, 0, 0], [margin * .7, 0, 0], [margin * .45, 0, 0],
+                             [margin, 0, 1], [margin * .7, 0, 1], [margin * .45, 0, 1], [margin * .45, 3, 1], [margin * .3, 6, 1]]){
+    last = solveOnce(items, wall, { ...room, z1: room.z1 + dz }, m, { ...env, up: !!up });
     if (last.clean) break;
   }
   return last.out;
 }
-function solveOnce(items, wall, room, margin, ref, cx, bandY, eyeY){
-  const S = items.map(it => ({ ...it, prio: PRIO[it.key] ?? 50 }));
+function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, hung, up: open }){
+  const S = items.map(it => ({ ...it, prio: PRIO[it.key] ?? 50, rise: !it.pin && !!STATIONS[it.key]?.gallery && !FLOOR_ONLY.has(it.key) }));
   // 1. the WINGS ride out with the belt: a station beside the wall (not the front row)
   //    keeps its gap to the wall's real edge, so the tiers keep their shape on a wide belt
+  //    (a GALLERY slot stands behind the belt, not beside it: it stays on its line)
   for (const s of S){
-    if (s.pin) continue;                                  // a station the user PLACED (stage edit) stays put
+    if (s.pin || s.rise) continue;                        // a station the user PLACED (stage edit) stays put
     const beside = s.z + s.box[2] < wall[3] + 6;          // its back edge reaches the wall's depth band
     if (!beside) continue;
     if (s.x < cx - 4) s.x += Math.min(0, (wall[0] - cx) + ref);
@@ -173,9 +211,18 @@ function solveOnce(items, wall, room, margin, ref, cx, bandY, eyeY){
     const zp = (wall[2] + wall[3]) / 2, z = Math.max(b[2] + dz, zp);    // the pads strike mid-depth of the bays
     return s.top <= bandY + (eyeY - bandY) * (z - zp) / (az - zp);
   };
-  const fits = (s, dx, dz) => { const b = bx(s);
-    return b[0] + dx >= room.x0 - 1e-9 && b[1] + dx <= room.x1 + 1e-9 && b[2] + dz >= room.z0 - 1e-9 && b[3] + dz <= room.z1 + 1e-9
-      && seen(b, dx, dz) && under(s, b, dx, dz); };
+  const inRoom = (b, dx, dz) => b[0] + dx >= room.x0 - 1e-9 && b[1] + dx <= room.x1 + 1e-9 && b[2] + dz >= room.z0 - 1e-9 && b[3] + dz <= room.z1 + 1e-9;
+  const fits = (s, b, dx, dz) => inRoom(b, dx, dz) && seen(b, dx, dz) && under(s, b, dx, dz);
+  // the GALLERY: behind the belt's back face (centre), clear of every hung footprint; a station
+  // that isn't gallery-born only climbs up where the belt would hide it from the floor
+  //  (a hung footprint casts its SHADOW back to the room's rear wall: a gallery machine behind the
+  //   organ's façade or the chandelier would only show the audience the back of what hides it)
+  const clearHung = (b, dx, dz) => hung.every(h => b[0] + dx >= h[1] + margin || h[0] >= b[1] + dx + margin || b[2] + dz >= h[3] + margin);
+  const onGallery = (s, b, dx, dz) => inRoom(b, dx, dz) && (b[2] + b[3]) / 2 + dz < wall[2] && (s.rise || !seen(b, dx, dz)) && clearHung(b, dx, dz);
+  //  (one gallery deck = one ROW: two machines up there never stand one behind the other — the
+  //   front one would hide the back one — unless the room has no other clean spot left at all)
+  const rowFree = (b, dx) => gal.every(g => b[0] + dx >= g[1] + margin || g[0] >= b[1] + dx + margin);
+  const gal = [];
   // keep everything inside the room first (slide in along x, then z)
   const clampIn = s => { const b = bx(s);
     if (b[1] > room.x1) s.x -= b[1] - room.x1; if (b[0] < room.x0) s.x += room.x0 - b[0];
@@ -184,6 +231,8 @@ function solveOnce(items, wall, room, margin, ref, cx, bandY, eyeY){
   //    everyone already placed (by `margin`), inside the room and SEEN past the belt — else it
   //    takes the NEAREST spot that is (a grid search outward from its slot: the smallest move;
   //    on a crowded 3-bay floor a back-tier wing steps forward of the belt rather than hide).
+  //    When the floor has no clean spot left, it climbs onto the rear GALLERY (a gallery-born
+  //    slot looks there first).
   const placed = [wall];
   // (user-PINNED stations — stage edit — are placed first, exactly where the user put them;
   //  the auto-placed rest step around them)
@@ -191,23 +240,36 @@ function solveOnce(items, wall, room, margin, ref, cx, bandY, eyeY){
   const offs = searchGrid();
   let clean = true;
   for (const s of order){
-    if (s.pin){ placed.push(bx(s)); continue; }
+    if (s.pin){                                         // (a machine the user parked behind the belt stands on the gallery there)
+      const b = bx(s);
+      if (!FLOOR_ONLY.has(s.key) && (b[2] + b[3]) / 2 < wall[2] && (STATIONS[s.key]?.gallery || !seen(b))){ s.y = galleryY; gal.push(b); }
+      placed.push(b); continue;
+    }
     clampIn(s);
     const b = bx(s);
     const hits = (dx, dz) => { let n = 0; for (const o of placed)
       if (b[0] + dx < o[1] + margin && o[0] < b[1] + dx + margin && b[2] + dz < o[3] + margin && o[2] < b[3] + dz + margin) n++; return n; };
     let best = null, bestHits = Infinity;
-    for (const [dx, dz] of offs){
-      if (!fits(s, dx, dz)) continue;
-      const n = hits(dx, dz);
-      if (n === 0){ best = [dx, dz]; break; }
-      if (n < bestHits){ bestHits = n; best = [dx, dz]; }        // (a floor too full to clear: least-bad)
-    }
-    if (best){ s.x += best[0]; s.z += best[1]; }
-    if (bestHits < Infinity && !(best && hits(best[0], best[1]) === 0)) clean = false;
+    // modes: 'floor' | 'row' (the gallery, in a row of its own) | 'stack' (the gallery, behind another)
+    const ok = { floor: (dx, dz) => fits(s, b, dx, dz), row: (dx, dz) => onGallery(s, b, dx, dz) && rowFree(b, dx), stack: (dx, dz) => onGallery(s, b, dx, dz) };
+    const scan = mode => {
+      if (mode !== 'floor' && FLOOR_ONLY.has(s.key)) return null;
+      for (const [dx, dz] of offs){
+        if (!ok[mode](dx, dz)) continue;
+        const n = hits(dx, dz);
+        if (n === 0) return [dx, dz];
+        if (mode === 'floor' && n < bestHits){ bestHits = n; best = [dx, dz]; }   // (a floor too full to clear: least-bad)
+      }
+      return null;
+    };
+    let got = null, mode = 'floor';
+    for (const m of s.rise ? ['row', 'floor', 'stack'] : open ? ['floor', 'row', 'stack'] : ['floor']) if ((got = scan(m))){ mode = m; break; }
+    if (!got){ mode = 'floor'; got = best; if (bestHits < Infinity) clean = false; }
+    if (got){ s.x += got[0]; s.z += got[1]; }
+    if (mode !== 'floor'){ s.y = galleryY; gal.push(bx(s)); }
     placed.push(bx(s));
   }
-  return { clean, out: Object.fromEntries(S.map(s => [s.key, { x: s.x, z: s.z }])) };
+  return { clean, out: Object.fromEntries(S.map(s => [s.key, s.y === undefined ? { x: s.x, z: s.z } : { x: s.x, z: s.z, y: s.y }])) };
 }
 /* every (dx, dz) offset on a 0.5-unit grid out to 60 units, nearest first (built once) */
 let _grid = null;

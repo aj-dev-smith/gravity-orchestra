@@ -557,6 +557,14 @@ function buildWorld(keyName){
       }
     }
     rig.station = station; rig.slot = { ...st, y };
+    // the room solve may raise a floor station onto the rear GALLERY (stations.js): rebuilt at
+    // its new deck height — its legs are world-anchored to the room floor (floorY)
+    rig.raise = ny => {
+      y = ny; station.remove(body); disposeTree(body);
+      station.position.y = y; station.updateMatrixWorld(true);
+      body = buildAt(); station.add(body); rig.inst.update(-LEAD_IN, P0, 0, POSE0); station.updateMatrixWorld(true);
+      rig.slot.y = y;
+    };
     rig.cue = eventTimes(part, { rollT: ROLL_T, beat: BEAT }).map(e => ({ t: e.t, w: e.vel }));
     rig.mix = partMix(S, rig.I.key);
     instLive.push(rig);
@@ -571,17 +579,24 @@ function buildWorld(keyName){
   const items = [];
   instLive.forEach(r => { if (r.slot.hang) return;
     const p = r.station.position, box = relBox(r.station, p.x, p.z, r.I.key);
-    if (box) items.push({ key: r.I.key, x: p.x, z: p.z, box, top: tops[r.I.key], rig: r, pin: r.slot.pin }); });
+    if (box) items.push({ key: r.I.key, x: p.x, z: p.z, box, top: tops[r.I.key], deck: p.y, rig: r, pin: r.slot.pin }); });
+  // (the HUNG stations' world footprints: a gallery deck keeps clear of them — the organ loft's
+  //  chassis and the chandelier's crown stand where a gallery machine would)
+  const hungBoxes = instLive.filter(r => r.slot.hang).map(r => visBox(r.station)).filter(b => !b.isEmpty()).map(b => [b.min.x, b.max.x, b.min.z, b.max.z]);
   const kx0 = stageView.cx + kitSlot.x, kz0 = kitSlot.z;
   if (S.drums){ const box = relBox(drumGroup, kx0, kz0, 'drums'); if (box) items.push({ key: 'drums', x: kx0, z: kz0, box, top: tops.drums, pin: kitSlot.pin }); }
   if (items.length && !wallBox.isEmpty()){
     const solved = layoutStations(items,
       [wallBox.min.x, wallBox.max.x, wallBox.min.z, wallBox.max.z],
-      { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 }, { cx: stageView.cx, bandY: STAGE_Y - 1.5, eyeY: 20 });   // (band − 1.5: the pads rising INTO the band read too)
-    lastLayout = { items: items.map(({ key, x, z, box, top }) => ({ key, x, z, box, top, y0: bots[key] })), wall: wallBox.clone(), solved, cx: stageView.cx, bandY: STAGE_Y - 1.5 };
+      { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 },
+      { cx: stageView.cx, bandY: STAGE_Y - 1.5, eyeY: 20, wallTop: wallBox.max.y, hung: hungBoxes });   // (band − 1.5: the pads rising INTO the band read too)
+    lastLayout = { items: items.map(({ key, x, z, box, top, deck }) => ({ key, x, z, box, top, y0: bots[key], deck })), wall: wallBox.clone(), solved, cx: stageView.cx, bandY: STAGE_Y - 1.5, hung: hungBoxes };
     items.forEach(it => {
-      const { x, z } = solved[it.key];
-      if (it.rig){ it.rig.station.position.x = x; it.rig.station.position.z = z; it.rig.station.updateMatrixWorld(true); }
+      const { x, y, z } = solved[it.key];
+      if (it.rig){
+        if (y !== undefined && Math.abs(y - it.rig.station.position.y) > 1e-6) it.rig.raise(y);   // up onto the gallery
+        it.rig.station.position.x = x; it.rig.station.position.z = z; it.rig.station.updateMatrixWorld(true);
+      }
       else if (Math.abs(x - kx0) + Math.abs(z - kz0) > 1e-6){       // the kit moved: rebuild it at its solved slot
         world.remove(drumGroup); disposeTree(drumGroup);
         kitSlot = { x: x - stageView.cx, z };
@@ -891,8 +906,11 @@ function solveShots(shots){
   return followRig;
 }
 /* The points the WIDE shot must hold: the belt wall (band → top housing), a hung station's
-   plates + canopy, every floor station from its deck up — and the front row only from its
-   middle back (they may frame the bottom corners). From the built geometry, per song. */
+   plates + canopy, every floor station from its deck up (a GALLERY machine from its raised
+   deck) — and the front row to FRONT_KEEP of its front half (its whole width: a front-CORNER
+   machine is never cut in half; only its nearest lip may graze the bottom of the frame, the way
+   a concert film shoots past the nearest players). From the built geometry, per song. */
+const FRONT_KEEP = .25;
 function stageFrame(core = false){
   const pts = [], add = (x0, x1, y0, y1, z0, z1) => { for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) pts.push(new THREE.Vector3(x, y, z)); };
   if (!stageWall.isEmpty()) add(stageWall.min.x, stageWall.max.x, STAGE_Y - 3, stageWall.max.y, stageWall.min.z, stageWall.max.z);
@@ -909,7 +927,7 @@ function stageFrame(core = false){
   const front = 13;                                      // a footprint centred past this z is the front row
   const floorBox = (b, deckY) => {
     const y0 = Math.max(b.min.y, deckY - 1.5), zc = (b.min.z + b.max.z) / 2;
-    add(b.min.x, b.max.x, y0, b.max.y, b.min.z, zc > front ? zc : b.max.z);
+    add(b.min.x, b.max.x, y0, b.max.y, b.min.z, zc > front ? zc + FRONT_KEEP * (b.max.z - zc) : b.max.z);
   };
   instLive.forEach(r => {
     const b = visBox(r.station), p = r.station.position;

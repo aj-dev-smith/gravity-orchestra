@@ -172,15 +172,16 @@ const organ = [
   ...chord(48, ['A2', 'C#3', 'E3', 'G3', 'A#3', 'C#4', 'E4'], 1, .7),
   ...chord(49, ['A2', 'C#3', 'E3', 'G3', 'A#3', 'C#4', 'E4'], .95, .7),
   ...chord(50, ['A2', 'D3', 'F3', 'A3', 'D4', 'F4'], .9, 3.85),      // the 6/4: a 3-second column
-  ...chord(54, ['A#2', 'D3', 'G3', 'A#3', 'D4', 'G4'], .82, 1.9),
+  ...chord(54, ['A#2', 'D3', 'G3', 'A#3', 'D4', 'G4'], .82, 1.45),
+  ...chord(55.5, ['C#3', 'G3', 'A#3'], .7, .4),                  // C#°7 under the belt's C#5 pickup (no C#-over-D rub)
   // §5 the cadence
   ...chord(56, ['A2', 'E3', 'G3', 'C#4', 'E4'], .8, 3.85),           // the call returns over A7
   ...chord(60, ['A#2', 'D3', 'G3', 'A#3', 'D4'], .72, 1.9),
   ...chord(62, ['A2', 'C#3', 'E3', 'G3', 'A3'], .78, 1.9),
-  [64, 'D2', .85, 6.85],                                             // the tonic pedal, 64 → 71
+  [64, 'D2', .85, 3.9],                                              // the tonic pedal under Dm · Gm/D
   ...chord(64, ['D3', 'F3', 'A3', 'D4'], .72, 1.9),
   ...chord(66, ['D3', 'G3', 'A#3', 'D4'], .7, 1.9),                  // plagal Gm/D
-  ...chord(68, ['C#3', 'E3', 'G3', 'A3'], .76, 2.9),
+  [68, 'A2', .8, 2.9], ...chord(68, ['C#3', 'E3', 'G3', 'A3'], .76, 2.9),   // the pedal steps to A: a real V → i
   ...chord(71, ['D2', 'D3', 'F3', 'A3', 'D4', 'F4'], .9, 8),        // the final D minor, into the breath
 ];
 
@@ -195,7 +196,7 @@ const bowwheel = [
   // THE PEDAL SOLO
   [44, 'D2', .9, .9], [45, 'C#2', .75, .45], [45.5, 'D2', .78, .45], [46, 'E2', .8, .45],
   [46.5, 'F2', .84, .45], [47, 'G2', .88, .45], [47.5, 'E2', .84, .45],
-  [48, 'A2', .95, 1.85], [50, 'A2', .85, 3.85], [54, 'A#2', .78, 1.9],
+  [48, 'A2', .95, 1.85], [50, 'A2', .85, 3.85], [54, 'A#2', .78, 1.45],
   [56, 'A2', .78, 3.85], [60, 'A#2', .7, 1.9], [62, 'A2', .74, 1.9],
   [64, 'D2', .72, 3.9], [68, 'A2', .74, 2.9],
   [71, 'D2', .85, 5], [71, 'D3', .62, 5],                           // the final D, bowed into the breath
@@ -217,7 +218,7 @@ const dulcimer = [
   // §4 the blows, then the waterfall down the bed over the held 6/4, then Gm
   ...chord(48, ['C#4', 'E4', 'G4', 'A#4'], .85, .6), ...chord(49, ['C#4', 'E4', 'G4', 'A#4'], .8, .6),
   ...eighths(50, ['A5', 'F5', 'D5', 'A4', 'F4', 'D4', 'A3', 'D4'], .6),
-  ...eighths(54, ['G4', 'A#4', 'D5', 'G5'], .55),
+  ...eighths(54, ['G4', 'A#4', 'D5', 'E5'], .55),                    // → E: into the C#°7 pickup, not G against C#
   // §5 the cadence
   ...rolled(56, ['A3', 'E4', 'G4', 'C#5'], .5, 3.8),
   ...eighths(60, ['G4', 'A#4', 'D5', 'A#4'], .5),

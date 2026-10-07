@@ -184,7 +184,7 @@ function solveOne(sh, S, room, keep){
   const fgOn = foreground(at(Math.min(kOn, PHONE_FIT)), aim, blocked, FG_TALL);    // what a phone sees by default
   if (short || fgOn > FG_TALL.max){
     const subject = ownBox ? boxPts(ownBox, sh.aim.y - 4) : null;
-    const r = solveShotEye({ aim, pref: at(PHONE_FIT), room, blocked, others, subject, aspect: FG_TALL.aspect, fgNear: FG_TALL.near, fgPts: FG_TALL.pts, fgMax: FG_TALL.max, fgBudget: 16, maxCands: 70 });
+    const r = solveShotEye({ aim, pref: at(PHONE_FIT), room, blocked, others, subject, aspect: FG_TALL.aspect, fgNear: FG_TALL.near, fgPts: FG_TALL.pts, fgMax: FG_TALL.max, fgBudget: 16, maxCands: 70, fit: false, bottom: 0 });   // (a phone pulls back its own way)
     // (short: any clean-enough eye beats a cramped one; cluttered: only a clearly cleaner one — ≥ 2 rays —
     // is worth leaving the designer's angle for)
     if (!r.none && r.rays <= CLEAR_RAYS && (short ? (r.fg <= FG_TALL.max || r.fg < fgOn) : r.fg <= fgOn - 2 / FG_TALL.pts.length + 1e-9))

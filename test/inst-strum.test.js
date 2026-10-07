@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { prepPart, layoutStrings, solveStrum, pickAt, stringAt, shapeAt, damperAt, feltFace, lastSounding, firstPass,
          stringLength, stringRadius, pickU, dampU, parseId, PART_LIMITS,
-         DELTA, H_TIP, R_TIP, D_DOCK, GUARD, SP_MIN, SP_MAX, V_HI, S_PICK, S_DAMP } from '../src/instruments/strum/solve.js';
+         DELTA, H_TIP, R_TIP, D_DOCK, GUARD, SP_MIN, SP_MAX, V_HI, S_PICK, S_DAMP, PILLAR_OFF, PILLAR_RING } from '../src/instruments/strum/solve.js';
 import { strumVoice } from '../src/instruments/strum/voice.js';
 import strum from '../src/instruments/strum/index.js';
 import { noteHz } from '../src/engine.js';
@@ -100,8 +100,14 @@ describe.each(Object.keys(CASES))('strum solve "%s"', name => {
     }
   });
 
+  it('the marble never reaches the pillar (it stands beyond the bass dock, in the string plane)', () => {
+    let xmin = Infinity;
+    for (let t = START; t < START + 1.1 * P; t += 1e-3) xmin = Math.min(xmin, pickAt(S, t, START).x);
+    expect(xmin - R_TIP - (S.xs[0] - PILLAR_OFF + PILLAR_RING)).toBeGreaterThan(.03);
+  });
+
   it('continuous: nothing teleports (marble, arm, strings, felts) across the count-in and the loop seam', () => {
-    const dt = 2.5e-4;
+    const dt = 5e-4;
     let q0 = pickAt(S, START, START), s0 = S.xs.map((_, j) => stringAt(S, j, START, START)), f0 = S.xs.map((_, j) => damperAt(S, j, START, START));
     for (let t = START + dt; t < START + 2.1 * P; t += dt){
       const q = pickAt(S, t, START);

@@ -3,7 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeEdge } from '../clock.js';
 import { prepPart, layoutStrings, solveStrum, pickAt, stringAt, damperAt, lastSounding, firstPass,
          stringLength, stringRadius, isWound, feltFace, PART_LIMITS,
-         R_TIP, H_TIP, S_PICK, S_DAMP, D_DOCK, V_HI, PULLEY_R, CAR_HW } from './solve.js';
+         R_TIP, H_TIP, S_PICK, S_DAMP, D_DOCK, V_HI, PULLEY_R, CAR_HW, PILLAR_OFF, PILLAR_R, PILLAR_RING } from './solve.js';
 import { strumVoice } from './voice.js';
 
 /* ============================================================
@@ -32,7 +32,8 @@ import { strumVoice } from './voice.js';
        string of the same pitch class, or drop
      · ≤ 6 notes per strum (onsets within 40 ms = one strum; outer
        voices kept, inner thinned evenly)
-     · strums ≥ 0.11 s apart (denser ones are dropped — the louder kept)
+     · strums ≥ 0.2 s apart always fit (a small fan fits ~0.08 s; denser
+       ones are dropped — a much louder one replaces the earlier)
      · ≤ 480 strums per loop (the most crowded are dropped first)
      · durations: a note rings until its felt lands at its end (dur), or
        until the chord changes (dur 0 = let ring); a note that outlasts
@@ -133,7 +134,7 @@ export default {
         const tops = xs.map((x, j) => new THREE.Vector2(x, Ls[j] + .05)).reverse();
         sh.lineTo(x1 + .5, Ls[N - 1] * .82);
         sh.splineThru([new THREE.Vector2(x1 + .2, Ls[N - 1] + .05), ...tops.slice(1, -1), new THREE.Vector2(x0 - .1, Ls[0] + .05)]);
-        sh.lineTo(x0 - .75, Ls[0] + .2);
+        sh.lineTo(x0 - PILLAR_OFF, Ls[0] + .2);
         sh.lineTo(railLo - .1, S_PICK + .55);
         sh.closePath();
         // the ROSETTE soundhole, where the board is broad
@@ -159,15 +160,15 @@ export default {
         pput(brass, new THREE.CylinderGeometry(.06, .06, .05, 12), xs[j], Ls[j] + .05, .12, Math.PI / 2);
       }
       {
-        const pts = [new THREE.Vector3(x0 - .75, Ls[0] + .2, 0), ...xs.map((x, j) => new THREE.Vector3(x, Ls[j] + .05, 0)),
+        const pts = [new THREE.Vector3(x0 - PILLAR_OFF, Ls[0] + .2, 0), ...xs.map((x, j) => new THREE.Vector3(x, Ls[j] + .05, 0)),
                      new THREE.Vector3(x1 + .45, Ls[N - 1] - .05, 0), new THREE.Vector3(x1 + .62, Ls[N - 1] - .45, 0)];
         const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
         pput(brass, new THREE.TubeGeometry(curve, 24 + 6 * N, .1, 10, false));
         const cap = new THREE.SphereGeometry(.16, 16, 12); pput(brass, cap, x1 + .62, Ls[N - 1] - .45, 0);
         // the pillar: from the soundbox up to the neck's head, fluted chrome with brass rings
-        const px = x0 - .75, ph = Ls[0] + .2;
-        pput(chrome, new THREE.CylinderGeometry(.12, .15, ph + .3, 16), px, ph / 2 - .15, 0);
-        for (const f of [.08, .5, .92]) pput(brass, new THREE.TorusGeometry(.15, .035, 8, 24), px, ph * f, 0, Math.PI / 2);
+        const px = x0 - PILLAR_OFF, ph = Ls[0] + .2;   // beyond the bass dock: the marble's run never reaches it
+        pput(chrome, new THREE.CylinderGeometry(PILLAR_R * .8, PILLAR_R, ph + .3, 16), px, ph / 2 - .15, 0);
+        for (const f of [.08, .5, .92]) pput(brass, new THREE.TorusGeometry(PILLAR_RING - .035, .035, 8, 24), px, ph * f, 0, Math.PI / 2);
         pput(brass, new THREE.SphereGeometry(.22, 18, 14), px, ph + .12, 0);
       }
 
@@ -205,9 +206,10 @@ export default {
       // ---- the CARRIAGE + telescoping arm + the GOLD MARBLE ----
       const car = new THREE.Group(); plane.add(car);
       {
-        const body = new THREE.Mesh(new THREE.BoxGeometry(2 * CAR_HW, .42, .34), dark); body.position.set(0, 0, RAIL_N - .02);
+        const body = new THREE.Mesh(new THREE.BoxGeometry(2 * CAR_HW, .42, .3), dark); body.position.set(0, 0, RAIL_N - .06);
         const shoe = new THREE.Mesh(new THREE.BoxGeometry(2 * CAR_HW - .08, .12, .2), chrome); shoe.position.set(0, cY - S_PICK - .02, cZ);
-        const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(.07, .07, .2, 14), chrome); sleeve.rotation.x = Math.PI / 2; sleeve.position.set(0, 0, RAIL_N + .22);
+        // the arm's collar: a short sleeve proud of the body — the retracted marble stops just in front of it
+        const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(.085, .085, .07, 16), chrome); sleeve.rotation.x = Math.PI / 2; sleeve.position.set(0, 0, RAIL_N + .065);
         car.add(body, shoe, sleeve);
       }
       const armGeo = new THREE.CylinderGeometry(.035, .035, 1, 10); armGeo.rotateX(Math.PI / 2);
@@ -256,7 +258,8 @@ export default {
       plane.updateMatrix(); bed.updateMatrix();
       const toLocal = new THREE.Matrix4().multiplyMatrices(bed.matrix, plane.matrix);
       Object.assign(R, { N, xs, rs, Ls, car, arm, marble, marbleM, halo, ghosts, strings, felts, plungers, rings, cabA, cabB, cY, cZ, pulX,
-                         pulleys, dockMats, dockX, motorM, toLocal, edges: ids.map(() => makeEdge(.25)), flash: ids.map(() => 0) });
+                         pulleys, dockMats, dockX, motorM, toLocal, edges: ids.map(() => makeEdge(.25)), flash: ids.map(() => 0),
+                         lastJ: S.passes.map(p => { let L = -1; for (let j = 0; j < N; j++) if (S.strings[j].cr[p.k].sigma && (L < 0 || p.d > 0)) L = j; return L; }) });
       return group;
     }
 
@@ -274,8 +277,10 @@ export default {
         if (!h || !R.edges[j].check(h.abs, h.since, skipStrikes)) continue;
         const c = h.c, p = S.passes[c.k], first = j === (p.d > 0 ? p.lo : p.hi);
         R.flash[j] = 1;
+        // main's strike-light pool is 4 deep and EVERY onStrike takes a slot: a 6-string strum would
+        // overwrite its own big flash within a few ms — so the strum's light rides its LAST string
         onStrike && onStrike({ note: S.ids[j], vel: c.vel, pos: _v.set(R.xs[j], S_PICK, 0).applyMatrix4(R.toLocal).clone(),
-          color: SIG, dur: Math.min(c.dur, 3), shake: 0, sparks: c.brush ? 0 : first ? 4 : 1, light: first ? .9 + .3 * p.vel : .12 });
+          color: SIG, dur: Math.min(c.dur, 3), shake: 0, sparks: c.brush ? 0 : first ? 4 : 1, light: j === R.lastJ[c.k] ? .9 + .3 * p.vel : .12 });
       }
 
       // ---- strings ----
@@ -302,7 +307,7 @@ export default {
 
       // ---- the plectrum ----
       R.car.position.set(q.x, S_PICK, 0);
-      const back = RAIL_N + .32, front = q.n - R_TIP + .02;
+      const back = RAIL_N + .1, front = q.n - R_TIP + .02;
       R.arm.scale.set(1, 1, Math.max(.02, front - back)); R.arm.position.set(q.x, S_PICK, (front + back) / 2);
       R.marble.position.set(q.x, S_PICK, q.n);
       R.marbleM.emissiveIntensity = .6 + 2.2 * speed;

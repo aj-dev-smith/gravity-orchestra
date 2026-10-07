@@ -55,7 +55,11 @@ export const S_PICK  = .55;          // pick height up the strings (from the bri
 export const S_DAMP  = 1.2;          // felt height up the strings
 export const C_EDGE  = .45;          // constant-speed run beyond the outer strings
 export const D_DOCK  = .75;          // dock magnets: this far past each fan edge
-export const N_RET   = .3;           // arm retraction (extra depth) for a silent return
+export const N_RET   = .23;          // arm retraction (extra depth) for a silent return (the marble then sits just
+                                     //   in front of the carriage's collar — retracted, never inside it)
+/* the harp's PILLAR stands in the string plane beyond the bass dock: the marble's whole run
+   (out to the dock, E_lo − D_DOCK) must clear it and its brass rings */
+export const PILLAR_OFF = 1.65, PILLAR_R = .15, PILLAR_RING = .185;   // pillar x = xs[0] − PILLAR_OFF
 /* ---- the strumming hand ---- */
 export const V_LO = 30, V_HI = 200;  // marble speed across the fan (u/s)
 export const SP_MIN = .008, SP_MAX = .026, SP_SOLO = .012;   // spread between chord tones (s): ff … pp
@@ -72,9 +76,9 @@ export const K_OPEN = 2.2, K_DAMP = 30, KILL = 45;   // ring decay (1/s): open, 
 export const TAU_N  = .006;          // the slip's out-of-plane component dies fast (Gaussian, s)
 export const TAU_B  = .035;          // V-shape → fundamental blend time (s)
 export const GLOW_T = 1.1;           // string glow decay (s) while open
-export const CHORD_EPS = .04;
-const PRE_GAP = .08;                 // strums closer than this are merged away before the solve even tries
-export const BRUSH = .32;           // a ringing string the marble brushes past: re-plucked this soft (× its note's vel)        // notes this close together are ONE strum (s)
+export const CHORD_EPS = .04;        // notes this close together are ONE strum (s)
+const PRE_GAP = .08;                 // strums closer than this are thinned away before the solve even tries
+export const BRUSH = .32;            // a ringing string the marble brushes past: re-plucked this soft (× its note's vel)
 
 /** What the machine can honestly play — for the MIDI orchestrator (orchestra.js PART_SPEC).
     gap = the shortest strum-to-strum time the solver ALWAYS fits (tested on dense random
@@ -168,7 +172,7 @@ export function prepPart(part, { rollT, beat, P }, lim = PART_LIMITS){
     g.notes = ns;
     g.vel = Math.max(...ns.map(n => n.vel));
   }
-  // density: a strum closer than lim.gap to the previous kept one is dropped (a louder one replaces it)
+  // density: a strum closer than PRE_GAP to the previous kept one is dropped (a much louder one replaces it)
   strums = thinGaps(strums, PRE_GAP, P, stats);
   // budget: drop the most crowded strum until it fits
   while (strums.length > lim.maxEvents){

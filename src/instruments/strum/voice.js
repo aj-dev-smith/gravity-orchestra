@@ -88,8 +88,7 @@ export function strumVoice(id){
   for (let i = 0; i < M; i++){ lz = gl * buf[i] + al * lz; const a = apc * lz + ax - apc * ay; ax = lz; ay = a; }
   const vNorm = 1 / (2 * Math.sin(Math.PI * f0 / sr));
   const eq = B.bells.map(([f, q, db]) => bell(f, q, db, sr));
-  const clickN = Math.round(.004 * sr);
-  let cx1 = 0, cy1 = 0;
+  const clickN = Math.round(.004 * sr), FADE_IN = Math.round(.0007 * sr);
   for (let n = 0; n < N; n++){
     const s = buf[idx];
     lz = gl * s + al * lz;                          // loss
@@ -97,22 +96,25 @@ export function strumVoice(id){
     buf[idx] = a;
     idx = (idx + 1) % M;
     let o = .62 * (s - prev) * vNorm + .38 * s; prev = s;   // velocity at the bridge (+ some displacement: a round low end)
+    if (n < FADE_IN) o *= .5 - .5 * Math.cos(Math.PI * n / FADE_IN);   // the displacement term starts off zero: no step out of silence
     for (const e of eq) o = e(o);
-    if (n < clickN){                                // the marble's tick: a highpassed seeded burst
-      const x0 = rnd() * 2 - 1, hp = .82 * (cy1 + x0 - cx1); cx1 = x0; cy1 = hp;
-      o += B.click * 6 * hp * Math.exp(-n / (.0012 * sr));
-    }
     out[n] = o;
   }
+  // the marble's tick: a highpassed seeded burst, set RELATIVE to the ring (added after the level
+  // below) — mixed in raw it sat 10 dB over the string and became the voice's peak
   // level: the RING (20–300 ms) sets the gain; the marble's first Helmholtz pulse (a pluck near the
   // bridge is a tall narrow velocity pulse) is rounded by a soft knee instead of setting the level —
   // otherwise the string itself would sit 15 dB under its own attack
   let ring = 0; for (let n = Math.round(.02 * sr); n < Math.min(N, Math.round(.3 * sr)); n++) ring = Math.max(ring, Math.abs(out[n]));
   const gain = .62 / Math.max(ring, 1e-9), KN = .62, HR = .26;
   const fade = Math.round(N * .15);
-  let peak = 0;
+  let peak = 0, cx1 = 0, cy1 = 0;
   for (let n = 0; n < N; n++){
     let x = out[n] * gain;
+    if (n < clickN){
+      const x0 = rnd() * 2 - 1, hp = .82 * (cy1 + x0 - cx1); cx1 = x0; cy1 = hp;
+      x += B.click * 2.4 * hp * Math.sin(Math.PI * Math.min(1, n / 8)) * Math.exp(-n / (.0012 * sr));
+    }
     const ax2 = Math.abs(x);
     if (ax2 > KN) x = Math.sign(x) * (KN + HR * Math.tanh((ax2 - KN) / HR));
     const k = N - 1 - n;

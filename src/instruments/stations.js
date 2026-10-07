@@ -62,6 +62,7 @@ export const STATIONS = {
   bowls:    { x: -13,  y: -.5, z: 18,  yaw:  .8,  w: 10, d: 9 },   // front-left, low
   musicbox: { x:  25,  y: -.5, z:  3.2, yaw: -.9,  w: 10, d: 9 },   // mid-right, behind the drums, turned to the middle
   turntable: { x:  0,  y: -1.0, z: 12.5, yaw: 0, w: 14, d: 14 },  // front-centre, low: the stage camera looks down onto the spinning record
+  dulcimer: { x: -29.5, y: -.5, z: 21, yaw: 0, w: 11.6, d: 10 },  // front-left corner, low: an open grand, keyboard to the audience (beside the bowls)
   // a CHANDELIER hung over the belt: x/z follow the belt wall's centre, y its top (see HANG)
   ricochet: { x:   0,  y: 16,  z:  0,  yaw:  0,   w: 16, d: 16, hang: true },
   // a flying COURT hung over the LEFT WING (x is relative to the belt centre and RIDES OUT with

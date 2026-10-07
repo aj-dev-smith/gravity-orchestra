@@ -16,6 +16,7 @@
    are peak-matched; loudness still comes from vel on the live path.
    ============================================================ */
 import { noteHz, noteNum } from '../../engine.js';
+import { voiceCache } from '../voicecache.js';
 
 export const SR = 44100;
 
@@ -28,7 +29,7 @@ function mulberry32(a){
   };
 }
 
-const cache = new Map();
+const cache = voiceCache();   // (bounded to the song in use — ../voicecache.js)
 
 /** Velocity → layer id (the hard layer above .75). */
 export const layerId = (note, vel) => vel > .75 ? note + '|h' : note;

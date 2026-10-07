@@ -12,9 +12,10 @@
    Higher tines are shorter and stiffer → shorter ring.
    ============================================================ */
 import { noteHz } from '../../engine.js';
+import { voiceCache } from '../voicecache.js';
 
 export const SR = 44100;
-const cache = new Map();
+const cache = voiceCache();   // (bounded to the song in use — ../voicecache.js)
 
 /* tiny seeded PRNG (mulberry32) — deterministic noise for the pin tick */
 function rng(seed){

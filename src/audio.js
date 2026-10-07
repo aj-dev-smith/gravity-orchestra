@@ -3,6 +3,7 @@ import { GM_DRUMS } from './drumkit.js';
 import { metalVoice, VARIANTS as METAL_VARIANTS } from './cymbals.js';
 import { velGain } from './dynamics.js';
 import { PAN_COMP, AIR_HZ, ROOM_MIN, widthFor } from './spatial.js';
+import { voiceWavScale, VOICE_WAV_TOP } from './wavlevel.js';
 
 /* ---------------- audio: raw Web Audio, zero dependencies ----------------
    iOS WebKit bug: a context created before the first user gesture can report
@@ -156,8 +157,16 @@ const SILENT_URL = (() => {
 
 let bank = {}, primed = false;
 const bankKey = (note, bass) => note + (bass ? '|b' : '');
-export function rebuildBank(tracks, drumLanes = [], voices = []){
-  bankStat = { t0: performance.now(), n: 0, wavBytes: 0, floatBytes: 0, byKind: {} };
+/* BAKE BUDGET: rendering every plugin voice used to block the song build — a full room is
+   ~1–1.7 s of pure DSP on a laptop (finale: ~300 ids, ~80 MB Float32), more on a phone. Now
+   the cymbal renders and the voices (main hands them over soonest machine first) bake IN ORDER
+   until BAKE_SYNC_MS, the rest in idle slices — usually long before the play tap. A voice asked
+   for before its slice (a strike, the unlock's WAV) renders on the spot (voiceOf / spec.bake):
+   never silent, at worst one render's hitch. Renders are pure, so WHEN one is made changes
+   nothing it sounds like. `onBaked` runs once every voice exists (main: the voice-cache sweep). */
+export const BAKE_SYNC_MS = 250;
+export function rebuildBank(tracks, drumLanes = [], voices = [], onBaked = null){
+  bankStat = { t0: performance.now(), n: 0, wavBytes: 0, floatBytes: 0, byKind: {}, renderMs: {} };
   Object.values(bank).forEach(a => {
     try { a.pause(); } catch(e){}
     const real = a.dataset.real;
@@ -175,22 +184,25 @@ export function rebuildBank(tracks, drumLanes = [], voices = []){
   const wanted = new Map();
   tracks.forEach(tr => tr.pads.forEach(p => wanted.set(bankKey(p.note, tr.deep), {note:p.note, bass:tr.deep})));
   drumLanes.forEach(name => wanted.set('drum:' + name, {drum:name}));   // one sample per drum lane
-  warmMetal(drumLanes);                                  // the cymbals' renders, now (song load), not on the first hit
-  voiceSrc = new Map(); voiceAB = new Map();
+  const metalQ = metalJobs(drumLanes);                   // the cymbals' renders: at song load (on the bake budget), not on the first hit
+  voiceSrc = new Map(); voicePend = new Map(); voiceAB = new Map();
+  const stat = bankStat, src = voiceSrc, pend = voicePend;
   voices.forEach(v => {                                  // instrument plugin voices (src/instruments/*)
-    if (voiceSrc.has(v.key)) return;
-    try {
-      const r = v.render();
-      voiceSrc.set(v.key, {samples: r.samples, sr: r.sr, wet: !!v.wet, hz: v.hz});   // hz: the voice's pitch (pan width), main's voiceHzOf
-      if (!v.live) wanted.set(v.key, {voice: v.key});   // live: the live path's source only — no <audio> element (no strike fires it bare)
-    } catch(e){ console.warn('cascade: voice render failed', v.key, e); }
+    if (pend.has(v.key)) return;
+    pend.set(v.key, v);
+    if (!v.live) wanted.set(v.key, {voice: v.key});     // live: the live path's source only — no <audio> element (no strike fires it bare)
   });
-  voiceSrc.forEach(v => { bankStat.floatBytes += v.samples.byteLength; });
+  const bakeQ = [...pend.keys()];
+  const bake = key => bakeInto(src, pend, stat, key);    // (this song's maps, even if the bank moves on)
+  // the SYNC share of the bake: the cymbals first (a groove is usually there from the downbeat), then voices in order
+  const sync0 = performance.now();
+  while (metalQ.length && performance.now() - sync0 < BAKE_SYNC_MS) metalQ.shift()();
+  while (bakeQ.length && performance.now() - sync0 < BAKE_SYNC_MS) bake(bakeQ.shift());
   const gen = ++bankGen, todo = [];
   wanted.forEach((spec, k) => {
     const a = document.createElement('audio');
     a.setAttribute('playsinline',''); a.preload = 'auto';
-    if (spec.voice) spec.src = voiceSrc.get(spec.voice);  // (this song's buffer, even if the bank moves on)
+    if (spec.voice) spec.bake = bake;                    // its render: made by now, or on the spot (realSrc)
     wavSpec.set(a, spec); todo.push(a);                  // the WAV itself is encoded LAZILY (realSrc)
     a.src = SILENT_URL;                                  // real sample swapped in after unlock
     a.addEventListener('error', () => stateEl.textContent = 'audio: sample blocked');
@@ -198,15 +210,26 @@ export function rebuildBank(tracks, drumLanes = [], voices = []){
     bank[k] = a;
   });
   bankStat.ms = Math.round(performance.now() - bankStat.t0);
+  bankStat.deferred = bakeQ.length + metalQ.length;
   /* PERF: encoding every WAV used to block the song build (≈130 WAVs / 25 MB on a full room —
      ~½ s on a laptop, seconds on a phone). The elements, keys and silent priming src exist NOW,
      exactly as before; only the real WAV bytes are made later — in idle slices, or on the spot
-     the moment the unlock swap asks for one (realSrc). The §5 unlock dance is unchanged. */
+     the moment the unlock swap asks for one (realSrc). The §5 unlock dance is unchanged.
+     The slices first finish the deferred renders (the bake budget, above), then the WAVs. */
   const idle = typeof requestIdleCallback === 'function' ? cb => requestIdleCallback(cb, { timeout: 1000 }) : cb => setTimeout(cb, 16);
-  const step = () => {
+  let baked = false;
+  const done = () => { if (baked) return; baked = true; stat.bakedMs = Math.round(performance.now() - stat.t0);
+    if (onBaked) try { onBaked(); } catch(e){} };
+  if (!bakeQ.length && !metalQ.length) done();
+  const step = dl => {                                  // (dl: an idle deadline — a truly idle page lends a longer slice)
     if (gen !== bankGen) return;                         // a newer bank replaced this one
     const t0 = performance.now();
-    while (todo.length && performance.now() - t0 < 6) realSrc(todo.shift());
+    const slice = Math.max(6, Math.min(40, dl && dl.timeRemaining ? dl.timeRemaining() : 0));
+    while (metalQ.length && performance.now() - t0 < slice) metalQ.shift()();
+    while (bakeQ.length && performance.now() - t0 < slice) bake(bakeQ.shift());
+    if (bakeQ.length || metalQ.length){ primed ? setTimeout(step, 0) : idle(step); return; }
+    done();
+    while (todo.length && performance.now() - t0 < slice) realSrc(todo.shift());
     if (!todo.length){ bankStat.lazyDoneMs = Math.round(performance.now() - bankStat.t0); return; }
     // once the tap has unlocked the bank, primed elements are WAITING on these bytes: keep
     // slicing every task instead of only in idle time (a busy phone may rarely go idle)
@@ -214,6 +237,22 @@ export function rebuildBank(tracks, drumLanes = [], voices = []){
   };
   idle(step);
 }
+/* render one pending plugin voice into its bank (a no-op once made) → its source, or undefined */
+function bakeInto(src, pend, stat, key){
+  const v = pend.get(key);
+  if (!v) return src.get(key);
+  pend.delete(key);
+  try {
+    const t0 = performance.now(), r = v.render(), fam = key.split(':').slice(0, 2).join(':');
+    stat.renderMs[fam] = (stat.renderMs[fam] || 0) + performance.now() - t0;   // (dev: which machine's bake costs)
+    const gain = Number.isFinite(v.gain) ? Math.max(0, v.gain) : 1;   // song.mix: applied as the render is wrapped (no scaled copy)
+    src.set(key, {samples: r.samples, sr: r.sr, wet: !!v.wet, hz: v.hz, gain});   // hz: the voice's pitch (pan width), main's voiceHzOf
+    stat.floatBytes += r.samples.byteLength;
+  } catch(e){ console.warn('cascade: voice render failed', key, e); }
+  return src.get(key);
+}
+/* the CURRENT bank's voice source for `key`, rendered now if its slice hasn't come yet */
+const voiceOf = key => voiceSrc.get(key) || bakeInto(voiceSrc, voicePend, bankStat, key);
 let bankGen = 0;
 const wavSpec = new WeakMap();                           // <audio> → what its real WAV is, until it is made
 /* the element's real sample URL, encoding it now if the idle pass hasn't reached it yet */
@@ -221,7 +260,10 @@ function realSrc(a){
   if (a.dataset.real) return a.dataset.real;
   const spec = wavSpec.get(a);
   if (!spec) return SILENT_URL;
-  const wav = spec.voice ? encodeWav(spec.src.samples, spec.src.sr) :
+  const vs = spec.voice ? spec.bake(spec.voice) : null;
+  if (spec.voice && !vs){ wavSpec.delete(a); return SILENT_URL; }   // (its render failed — warned, stays silent)
+  const g = vs ? vs.gain : 1;
+  const wav = vs ? encodeWav(vs.samples, vs.sr, VOICE_WAV_TOP, p => g * voiceWavScale(p * g)) :
     spec.drum ? renderDrumWav(spec.drum) : renderNoteWav(noteHz(spec.note), spec.bass);
   const kind = spec.voice ? spec.voice.split(':').slice(0, 2).join(':') : spec.drum ? 'drum' : 'belt';
   if (bankStat){ bankStat.n++; bankStat.wavBytes += wav.size; bankStat.byKind[kind] = (bankStat.byKind[kind] || 0) + wav.size; }
@@ -308,28 +350,30 @@ export function chokeDrum(name){
    · live: the same Float32Array wrapped in an AudioBuffer (cached per context),
      gain = vel (dynamics live here only), optional `dur` → a release fade (for
      sustained voices), routed dry to busOut or (wet) through the melody echo;
-   · samples: the same buffer as a WAV in the <audio> bank (peak-normalized; iOS
-     ignores el.volume, so the element plays full — the usual §5 degradation). */
-let voiceSrc = new Map(), voiceAB = new Map(), voiceCtx = null;
+   · samples: the same buffer as a WAV in the <audio> bank at a FIXED scale of the
+     render (src/wavlevel.js — song.mix and baked layer levels hold; iOS ignores
+     el.volume, so per-hit velocity is still lost — the usual §5 degradation). */
+let voiceSrc = new Map(), voicePend = new Map(), voiceAB = new Map(), voiceCtx = null;   // (voicePend: not rendered yet — rebuildBank's bake budget)
 function voiceBuffer(key){
   if (voiceCtx !== ctx){ voiceAB = new Map(); voiceCtx = ctx; }   // buffers belong to one context
   let b = voiceAB.get(key);
   if (!b){
-    const v = voiceSrc.get(key); if (!v) return null;
+    const v = voiceOf(key); if (!v) return null;
     b = ctx.createBuffer(1, v.samples.length, v.sr);
-    b.getChannelData(0).set(v.samples);
+    const d = b.getChannelData(0); d.set(v.samples);
+    if (v.gain !== 1) for (let i = 0; i < d.length; i++) d[i] *= v.gain;
     voiceAB.set(key, b);
   }
   return b;
 }
-const voiceHz = key => { const h = voiceSrc.get(key)?.hz; if (Number.isFinite(h) && h > 0) return h;   // (the plugin's pitch for a chord / suffixed id)
+const voiceHz = key => { const h = (voiceSrc.get(key) || voicePend.get(key))?.hz; if (Number.isFinite(h) && h > 0) return h;   // (the plugin's pitch for a chord / suffixed id)
   const m = /:([A-G]#?\d)(?:~[\d.]+)?$/.exec(key); try { return m ? noteHz(m[1]) : 0; } catch(e){ return 0; } };
 /** (dev: the sound sweep) is this instrument voice baked in the current bank? */
-export const hasVoice = key => voiceSrc.has(key);
+export const hasVoice = key => voiceSrc.has(key) || voicePend.has(key);
 /* a DURATION-BUCKET id ('inst:organ:C4~1' — src/instruments/sustain.js) bakes its release for the
    sample path below; the live path plays its BASE ('inst:organ:C4') when baked and releases at
    `dur` exactly, as every sustained voice always has */
-const liveKey = key => { const k = key.lastIndexOf('~'); return k > 0 && voiceSrc.has(key.slice(0, k)) ? key.slice(0, k) : key; };
+const liveKey = key => { const k = key.lastIndexOf('~'); return k > 0 && hasVoice(key.slice(0, k)) ? key.slice(0, k) : key; };
 export function playVoice(key, vel = 1, { dur = 0, sp } = {}){
   if (ctx && ctx.state === 'running' && ctx.currentTime > .05){
     const lk = liveKey(key);
@@ -539,9 +583,11 @@ const DRUM_HZ = { kick: 60, snare: 250 };                // pan-width pitch (tom
    a cymbal is kept until it ends so the magnet clamp can choke it (chokeDrum). */
 let metalAB = new Map(), metalCtx = null, metalRR = {};
 const metalLive = new Map();                             // name → Set of {src, g} still ringing
-function warmMetal(names){
+function metalJobs(names){                              // one render per (cymbal, variant) — rebuildBank runs them on its bake budget
+  const q = [];
   for (const n of names) if (GM_DRUMS[n]?.metal)
-    for (let v = 0; v < (METAL_VARIANTS[n] || 1); v++) try { metalVoice(n, v); } catch(e){ console.warn('cascade: metal voice failed', n, e); }
+    for (let v = 0; v < (METAL_VARIANTS[n] || 1); v++) q.push(() => { try { metalVoice(n, v); } catch(e){ console.warn('cascade: metal voice failed', n, e); } });
+  return q;
 }
 function metalBuffer(name, v){
   if (metalCtx !== ctx){ metalAB = new Map(); metalCtx = ctx; }
@@ -698,12 +744,14 @@ function renderDrumWav(name){
   }
   return encodeWav(s, sr);
 }
-/* PCM-16 mono WAV encoder, peak-normalized. (renderNoteWav keeps its own inline
-   encoder verbatim — the iOS-war code is untouched; this serves the drum path.) */
-function encodeWav(s, sr, top = .92){
+/* PCM-16 mono WAV encoder, peak-normalized — or, given `scaleFor(peak)`, at that fixed scale
+   (the plugin voices: src/wavlevel.js — their renders carry song.mix + layer levels, which a
+   normalisation would undo on iOS). (renderNoteWav keeps its own inline encoder verbatim —
+   the iOS-war code is untouched; this serves the drum + voice paths.) */
+function encodeWav(s, sr, top = .92, scaleFor = null){
   const N = s.length;
   let peak = 0; for (let n = 0; n < N; n++) peak = Math.max(peak, Math.abs(s[n]));
-  const k = top / Math.max(peak, 1e-6);
+  const k = scaleFor ? scaleFor(peak) : top / Math.max(peak, 1e-6);
   const buf = new ArrayBuffer(44 + N * 2), v = new DataView(buf);
   const W = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
   W(0, 'RIFF'); v.setUint32(4, 36 + N * 2, true); W(8, 'WAVE'); W(12, 'fmt ');

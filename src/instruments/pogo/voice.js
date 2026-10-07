@@ -20,6 +20,7 @@
    bake order can never change a sample.
    ============================================================ */
 import { noteNum } from '../../engine.js';
+import { voiceCache } from '../voicecache.js';
 
 export const SR = 32000;
 export const LEN = { '': 1.9, p: 1.7, s: 1.25, y: 1.5 };   // s: render length per articulation
@@ -94,7 +95,7 @@ function pluckString(f, N, sr, { bright, t60, pos, noise, seed }){
   return { out, M };
 }
 
-const cache = new Map();
+const cache = voiceCache();   // (bounded to the song in use — ../voicecache.js)
 export function pogoVoice(id){
   if (cache.has(id)) return cache.get(id);
   const { note, flag } = parseId(id);

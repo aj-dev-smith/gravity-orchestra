@@ -19,6 +19,7 @@
 import { noteHz } from '../../engine.js';
 import { SOUND_MAX } from './solve.js';
 import { splitBucket, cutHold, relFor } from '../sustain.js';
+import { voiceCache } from '../voicecache.js';
 
 const SR = 22050;
 const LEN = 5.98;                                        // seconds rendered (contract: < 6 s)
@@ -29,7 +30,7 @@ function mulberry32(a){
     t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
 }
 
-const cache = new Map();
+const cache = voiceCache();   // (bounded to the song in use — ../voicecache.js)
 export function bowlVoice(note){
   if (cache.has(note)) return cache.get(note);
   const bk = splitBucket(note);

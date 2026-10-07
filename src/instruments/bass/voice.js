@@ -12,6 +12,7 @@
    DRY: no echo baked (wet:false) — bass should punch, not smear.
    ============================================================ */
 import { noteHz } from '../../engine.js';
+import { voiceCache } from '../voicecache.js';
 
 export const SR = 32000;
 export const DUR = 2.6;
@@ -26,7 +27,7 @@ function mulberry32(seed){
   };
 }
 
-const cache = new Map();
+const cache = voiceCache();   // (bounded to the song in use — ../voicecache.js)
 export function bassVoice(note){
   if (cache.has(note)) return cache.get(note);
   const f = noteHz(note), sr = SR, N = (sr * DUR) | 0;

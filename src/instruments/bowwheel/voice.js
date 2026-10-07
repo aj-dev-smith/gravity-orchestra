@@ -27,6 +27,7 @@
 import { noteHz, noteNum } from '../../engine.js';
 import { HOLD_MAX } from './solve.js';
 import { splitBucket, cutHold, relFor } from '../sustain.js';
+import { voiceCache } from '../voicecache.js';
 
 export const SR = 22050;
 const REL = .42;                                         // bow-lift release after HOLD_MAX (s)
@@ -49,7 +50,7 @@ function peak(f, q, dB){
 }
 const run = (b, x) => { const y = b.b0 * x + b.b1 * b.x1 + b.b2 * b.x2 - b.a1 * b.y1 - b.a2 * b.y2; b.x2 = b.x1; b.x1 = x; b.y2 = b.y1; b.y1 = y; return y; };
 
-const cache = new Map();
+const cache = voiceCache();   // (bounded to the song in use — ../voicecache.js)
 export function bowVoice(note){
   if (cache.has(note)) return cache.get(note);
   const bk = splitBucket(note);

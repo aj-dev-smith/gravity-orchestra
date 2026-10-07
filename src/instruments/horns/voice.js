@@ -26,6 +26,7 @@ import { noteNum } from '../../engine.js';
 import { HOLD_MAX, STAB_T, STAB_ID } from './solve.js';
 import { family } from './layout.js';
 import { splitBucket } from '../sustain.js';
+import { voiceCache } from '../voicecache.js';
 
 export const SR = 32000;
 const TAU = 2 * Math.PI;
@@ -147,7 +148,7 @@ function hornNote(M, id, o){
   }
 }
 
-const cache = new Map();
+const cache = voiceCache();   // (bounded to the song in use — ../voicecache.js)
 /** id = 'C4' (held) | 'stab:C4' (stab) → { samples, sr } */
 export function hornVoice(id){
   if (cache.has(id)) return cache.get(id);

@@ -19,6 +19,7 @@ import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
 import { stationFor, layoutStations, HANG_CLEAR, hangPlace } from './instruments/stations.js';
 import { eventTimes, wrapP } from './instruments/clock.js';
 import { splitBucket } from './instruments/sustain.js';
+import { nextVoiceEpoch, voiceEpoch, sweepVoiceCaches } from './instruments/voicecache.js';
 import { normalizeHit } from './drumkit.js';
 import { encodeSong, decodeSong } from './share.js';
 import { parseMidi } from './midi/parse.js';
@@ -58,6 +59,8 @@ let muted = false;                                      // sound toggle (mute bu
 let songTime = 0;                                       // the timeline; clock only supplies deltas
 let playRate = 1, skipStrikes = false, dbg = null;      // ?debug scrub: rate + jump suppression
 let devStrikes = null;                                   // ?debug sound sweep: strikes per machine (+ ids with no baked voice)
+let voiceCacheStat = null;                              // dev: what the last build's voice-cache sweep kept/dropped (__dev.bank)
+let devMute = null;                                     // ?debug sound sweep: machines kept SILENT ('belt', 'drums', plugin keys) — solo levels
 let loopIndex = -1;                                     // floor(songTime / P); ticks once per loop → spawns balls
 /* CONVEYOR: the world no longer falls. Each pad RECIRCULATES — it rises to the
    static band exactly at its strike (beltPhase) then wraps away off-screen. Each
@@ -440,6 +443,7 @@ function disposeTree(root){
 function buildWorld(keyName){
   if (recState !== 'idle') abortRec();                  // a rebuilt world invalidates the take
   const S = editor.song(keyName);                       // (the creation tools' instrument MAP may re-route it — src/editor)
+  nextVoiceEpoch();                                     // the plugin voice caches now belong to THIS build (voicecache.js)
   BEAT = 60 / S.bpm; SCALE = S.scale;
   document.getElementById('songsub').textContent = S.sub;
 
@@ -581,15 +585,19 @@ function buildWorld(keyName){
     instLive.push(rig);
     // (voiceIds gets the tempo: a plugin may bucket its voices by a note's length in SECONDS)
     const ids = rig.I.voiceIds ? rig.I.voiceIds(part, { beat: BEAT, bpm: S.bpm, rollT: ROLL_T, P: P0, loopBeats }) : [...new Set(part.map(e => e[1]))];
+    // (gain: the song.mix level — applied as the bank wraps the render (AudioBuffer / WAV), never a
+    //  scaled copy of it: the plugin's cached render IS the bank's source, no second Float32 array)
+    // (t0: the machine's first strike — the bank bakes soonest machine first, src/audio.js BAKE_SYNC_MS)
+    const t0 = rig.cue.reduce((m, c) => Math.min(m, wrapP(c.t + LEAD_IN, P0)), Infinity);
     ids.forEach(id => voices.push({ key: `inst:${rig.I.key}:${id}`, wet: !!rig.I.wet, hz: voiceHzOf(rig.I, id),
-      render: () => mixRender(rig.I.voice(id), rig.mix.base) }));
+      render: () => rig.I.voice(id), gain: rig.mix.base, t0 }));
     // a DURATION-BUCKET id ('C4~1', src/instruments/sustain.js) carries its release baked in for the
     // iOS <audio> path; the live path plays its BASE and releases at `dur` exactly — so a base no
     // strike fires bare is baked LIVE-ONLY (the Float32 source, no <audio> element / WAV)
     const idSet = new Set(ids);
     new Set(ids.filter(id => String(id).includes('~')).map(id => splitBucket(id).base)).forEach(b => { if (!idSet.has(b))
       voices.push({ key: `inst:${rig.I.key}:${b}`, wet: !!rig.I.wet, hz: voiceHzOf(rig.I, b), live: true,
-        render: () => mixRender(rig.I.voice(b), rig.mix.base) }); });
+        render: () => rig.I.voice(b), gain: rig.mix.base, t0 }); });
   });
 
   // the SOLVE: floor stations + the kit (a hung station floats over everyone — not in it)
@@ -658,7 +666,12 @@ function buildWorld(keyName){
   syncDirector(S, stageView);
   fadeMats = collectFadeMats(world); fadeWarm = 3;
   if (xrOn) for (const r of instLive) r.inst.xr?.(true);   // a song picked in the headset: its plugins open in their XR look
-  audio.rebuildBank(tracks, S.drums ? Object.keys(S.drums) : [], voices);
+  // (voices soonest machine first: the bank bakes in this order within its sync budget, the rest in idle
+  //  slices; once every voice exists, a song left behind frees its renders — browsing stays bounded)
+  voices.sort((a, b) => a.t0 - b.t0);
+  const epoch = voiceEpoch();
+  audio.rebuildBank(tracks, S.drums ? Object.keys(S.drums) : [], voices,
+    () => { if (voiceEpoch() === epoch) voiceCacheStat = sweepVoiceCaches(); });
   gov.hold(90);                                         // a rebuild's hitch + compiles are not the device's pace
   singlePassFlats(scene);                               // PERF (perftune.js): no 2-pass draw for flat/additive see-through parts
   // start in the loop's TAIL: songTime < 0 means no ball has spawned yet (li stays
@@ -765,7 +778,7 @@ function strike(tr, i, rig){
     cam.addShake((.04 + pad.dt*.05) * vel);               // micro camera punch on lead strikes (a pp note doesn't shake the room)
     expoKick = Math.max(expoKick, look);
   }
-  if (audio.isReady() && !muted){
+  if (audio.isReady() && !muted && !devMute?.has('belt')){
     try { audio.playNote(pad.note, tr.deep, placeAt(padR), vel); } catch(e){ /* audio must never break the run */ }
   }
 }
@@ -785,7 +798,7 @@ function drumStrike(hit){
     cam.addShake(.05 + .05 * v);
     expoKick = Math.max(expoKick, .8 * v);
   }
-  if (audio.isReady() && !muted){
+  if (audio.isReady() && !muted && !devMute?.has('drums')){
     try { audio.playDrum(hit.lane, hit.vel ?? 1, placeAt(c)); } catch(e){ /* audio must never break the run */ }
   }
 }
@@ -1137,8 +1150,10 @@ function lookAtStation(key, dist = 15, up = 5){
 /* song.mix — an AUDIO-ONLY level per plugin part: { <partKey>: gain | [[beat, gain], …] }.
    Velocity stays DYNAMICS (it also drives the strike light, sparks, a voice's velocity
    layer and the director's cue weight), so a song can stage its gain without dimming
-   its tutti. A number is baked into the voice render, so it holds on the iOS sample
-   path too; a step envelope bakes its loudest step and scales each hit by step/loudest
+   its tutti. A number is the voice's bank GAIN (audio.js applies it as it wraps the render:
+   the live AudioBuffer and the iOS WAV, which keeps the render's level — src/wavlevel.js;
+   it used to peak-normalise, silently undoing this), so it holds on the iOS sample path
+   too; a step envelope bakes its loudest step and scales each hit by step/loudest
    on the webaudio path (iOS plays every sample full — §5). No `mix` → unity, unchanged. */
 function partMix(S, key){
   const m = S.mix?.[key], g01 = v => Math.max(0, Math.min(1, v));   // share links are untrusted: clamp, never amplify
@@ -1148,7 +1163,6 @@ function partMix(S, key){
   const base = g01(Math.max(...m.map(s => s[1])));
   return { base, at: beat => { let g = m[0][1]; for (const [b, v] of m) if (beat >= b) g = v; return base > 0 ? g01(g) / base : 0; } };
 }
-function mixRender(r, g){ return g === 1 ? r : { sr: r.sr, samples: r.samples.map(x => x * g) }; }
 /* a voice's pitch (Hz) for the spatial pan width (low voices sit near the centre): the plugin's own
    voiceHz(id) when it has one (a chord id, a tiered id), else the FIRST pitch in the id ('E2+B2:m',
    'C4|choir', 'stab:D4', 'C4:e:p' — ids list chord notes low → high), else 0 (full width) */
@@ -1180,7 +1194,7 @@ function instStrike(rig, hit){
   if (devStrikes){ const k = rig.I.key, d = devStrikes[k] ||= { n: 0, ids: {}, unbaked: [] };
     d.n++; d.ids[hit.note] = (d.ids[hit.note] || 0) + 1;
     if (!audio.hasVoice(`inst:${k}:${hit.note}`) && !d.unbaked.includes(hit.note)) d.unbaked.push(hit.note); }
-  if (audio.isReady() && !muted){
+  if (audio.isReady() && !muted && !devMute?.has(rig.I.key)){
     const beat = (wrapP(songTime, ROLL_T + LOOP_T) - ROLL_T) / BEAT;   // loop-local beat (song.mix envelope)
     try { audio.playVoice(`inst:${rig.I.key}:${hit.note}`, v * (rig.mix ? rig.mix.at(beat) : 1), { dur: hit.dur || 0, sp: placeAt(p) }); } catch(e){ if (!voiceWarned){ voiceWarned = true; console.warn('cascade: instrument voice failed', rig.I.key, e); } }   /* audio must never break the run — but say so, once */
   }
@@ -1795,8 +1809,10 @@ if (new URLSearchParams(location.search).has('debug')){
     audioProbe: () => audio.probe(),                   // mix-bus gain reduction + reverb-return peak
     // sound sweep: count every plugin strike from now on ({key: {n, ids, unbaked}}; reset → strikes(true))
     strikes(reset){ if (reset || !devStrikes) devStrikes = {}; return devStrikes; },
+    // sound sweep: SOLO machines by muting the rest — mute(['belt','drums','organ']) / mute() = all on (scripts/audio-sweep.mjs)
+    mute(keys){ devMute = keys && keys.length ? new Set(keys) : null; return devMute ? [...devMute] : []; },
     audioPath: () => document.getElementById('astate')?.textContent ?? null,   // the status readout (state · clock · path)
-    bank: () => audio.bankStats(),                     // iOS sample bank: count, WAV bytes, build ms
+    bank: () => ({ ...audio.bankStats(), cache: voiceCacheStat }),                     // iOS sample bank: count, WAV bytes, build ms
     // perf probe: draw calls / triangles per FRAME (summed over every composer pass, averaged
     // over n frames), live lights, compiled programs, and the scene's mesh count
     get scene(){ return scene; }, get renderer(){ return renderer; }, gov, set perfOff(v){ perfOff = !!v; },

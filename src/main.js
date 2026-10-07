@@ -28,6 +28,8 @@ import { mergeStatic, watchFrozen, pruneFrozen, frozenStats } from './mergestati
 import { makeEditor } from './editor/index.js';
 import { planEdit, shotAt } from './directorplan.js';
 import { makeFollow, solveShots as solveShotsIn, resolveRoom, solidBox, roomSolids } from './shotrig.js';
+import { makeXR } from './xr.js';
+import { U_PER_M } from './xrplan.js';
 /* ============================================================
    CASCADE — melody-driven marble run, now multi-track.
    A song is one or more tracks of [note, beats-until-next-hit].
@@ -77,7 +79,11 @@ const recEl = document.getElementById('rec');
 const hueOf = n => Math.max(0, SCALE.indexOf(n.replace(/\d/,''))) / Math.max(1, SCALE.length);
 
 /* ---------------- renderer / scene ---------------- */
-const renderer = new THREE.WebGLRenderer({antialias:false});
+/* XR (src/xr.js): a headset's projection layer only gets 4× MSAA when the canvas asks for it
+   (WebXRManager: samples = antialias ? 4 : 0) — chrome rails + chains shimmer without. Only on a
+   headset browser (or ?xr / ?xremu): in 2D the canvas MSAA is pure cost (see the post chain). */
+const XR_LIKELY = /OculusBrowser|Quest/i.test(navigator.userAgent) || /[?&](xr|xremu)(=|&|$)/.test(location.search);
+const renderer = new THREE.WebGLRenderer({antialias: XR_LIKELY});
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;     // applied by OutputPass at the end of the chain
@@ -170,6 +176,11 @@ const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), .1
 /* halos predate bloom and were tuned to BE the glow — with real bloom they
    drop to a faint wide base or the two stack into giant blobs */
 const HALO_A = .12, EMI = 1.2;
+/* …but a headset gets NO post chain (EffectComposer can't render XR): the halos + emissive cores
+   step back up toward their pre-bloom job while presenting (main's xrSession swaps them) */
+const XR_HALO_A = .34, XR_EMI = 2.1;
+let haloA = HALO_A, emi = EMI;
+const xrLit = []; let xrLitAge = 0, xrSaved = new Float32Array(0);   // (xrRender: the lights it re-scales)
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 /* PERF GOVERNOR (src/perfgov.js): a device that can't hold the frame at its pixel ratio steps
@@ -688,6 +699,7 @@ function planTrackCrane(tr){
    farther = wetter). Audio-only — as the director cuts, the next strike follows the shot. */
 const _spv = new THREE.Vector3();
 function placeAt(worldPos){
+  if (xr.presenting){ const h = xr.ear(worldPos); return spatialize(h.x, h.y, h.z, { tanH: h.tanH, focus: h.focus }); }   // the HEAD is the camera
   camera.updateMatrixWorld();
   _spv.copy(worldPos).applyMatrix4(camera.matrixWorldInverse);
   const tanH = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * camera.aspect;
@@ -847,6 +859,19 @@ function syncDirector(S, view){
   lastShots = shots;
   cam.syncStations(shots, wide, { auto: !soloKey, openWide: full && !soloKey, openUntil: ROLL_T + 2 * BEAT, follow, bounds: eyeRoom(),
                    plan: { at: now => shotAt(plan, wrapP(now, P), seamFrom) } });
+  xrAnchors();
+}
+/* VR teleport pads (src/xrplan.js): every solved shot eye + the wide + one per belt bay, kept
+   clear of every machine's box. Cheap (no rays) — re-run whenever the director re-solves. */
+function xrAnchors(){
+  xrLitAge = 0;                                         // (a new world: re-collect its lights for xrRender)
+  const box = o => { const b = visBox(o); return b.isEmpty() ? null : [b.min.x, b.max.x, b.min.y, b.max.y, b.min.z, b.max.z]; };
+  const belts = tracks.map(tr => { const b = box(tr.machine.group) || box(tr.stage);
+    return b && { role: tr.role, x: (b[0] + b[1]) / 2, z0: b[4], z1: b[5], bandY: STAGE_Y }; }).filter(Boolean);
+  const solids = [...instLive.map(r => box(r.station)), drumGroup && box(drumGroup), ...tracks.map(tr => box(tr.machine.group))].filter(Boolean);
+  xr.setAnchors({ wide: lastWide, belts, solids, room: { x0: -ROOM.HW, x1: ROOM.HW, y0: ROOM.FLOOR, y1: ROOM.CEIL, z0: ROOM.BACK, z1: ROOM.FRONT },
+    shots: lastShots.map(s => ({ key: s.key, eye: s.eye, aim: s.aim, color: s.color,
+      label: s.owner === 'drums' ? 'drums' : (instrumentByKey(s.owner)?.label || s.key) })) });
 }
 /* SOLVED SHOT EYES (src/shotrig.js over the pure shotsolve.js): each station's hand-tuned framing
    is only its PREFERRED eye — the solve keeps the first candidate that stays in the room, stands in
@@ -1074,6 +1099,32 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
     roomBox: { y1: ROOM.CEIL - 2, z1: ROOM.FRONT - 2 },
     roomGroup: () => rooms.group,                         // (stage edit's plan view may lift the ceiling)
   } });
+/* WebXR (src/xr.js): ENTER VR appears only where navigator.xr supports a session — the 2D page is
+   otherwise untouched. While presenting: the head is the camera (no rig, no composer, no governor),
+   halos + emissive step up for the missing bloom, the marble lamps go dark (a constant light set →
+   one recompile, behind the entry blink), and every strike is placed against the head pose. */
+const xr = makeXR({ renderer, scene, camera, envMap, glowTex,
+  enterSound: () => enterSound(), gestureRetry: () => { if (started) audio.gestureRetry(); },
+  getTime: () => songTime, setTime: v => { songTime = v; skipStrikes = true; },
+  getRate: () => playRate, setRate: r => { playRate = r; },
+  nextSong(){ sel.selectedIndex = (sel.selectedIndex + 1) % sel.options.length; sel.dispatchEvent(new Event('change')); },
+  songLabel: () => SONGS[sel.value]?.label,
+  shotAt: now => shotAt(plan, wrapP(now, ROLL_T + LOOP_T), seamFrom),
+  onSession: xrSession });
+let xrPrev = null;
+function xrSession(on, mode){
+  haloA = on ? XR_HALO_A : HALO_A; emi = on ? XR_EMI : EMI;
+  for (const role in rigPool) for (const rg of rigPool[role]) rg.lamp.visible = !on;   // XR quality: the marble lamps go dark
+  if (mode === 'ar'){                                   // passthrough: no room, no sky, no fog over the camera feed
+    if (on){ xrPrev = { room: rooms.key, bg: scene.background, fog: scene.fog.density, alpha: renderer.getClearAlpha() };
+      rooms.set('off'); scene.background = null; scene.fog.density = 0; renderer.setClearAlpha(0); }
+    else if (xrPrev){ rooms.set(xrPrev.room); scene.background = xrPrev.bg; scene.fog.density = xrPrev.fog; renderer.setClearAlpha(xrPrev.alpha); xrPrev = null; }
+  }
+  if (!on){                                             // back to 2D: re-sync every target to the window
+    cam.resize(); renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight);
+    rooms.resize(innerWidth, innerHeight, renderer.getPixelRatio()); gov.hold(90);
+  }
+}
 buildWorld(sel.value);
 if (soloI) lookAtStation(soloKey);
 /* the machine runs from first paint — only AUDIO waits for a gesture.
@@ -1144,7 +1195,6 @@ function spawnBall(tr, birthT){
 }
 
 function animate(){
-  requestAnimationFrame(animate);
   const frameT0 = performance.now();
   const dt = Math.min(clock.getDelta(), .05);
   songTime += dt * playRate;
@@ -1211,8 +1261,8 @@ function animate(){
       }
 
       const show = hidden ? 0 : (1 - fade) * (r.appear ?? 1);   // appear<1 only during the newborn's pre-fall hold
-      rig.halo.material.opacity = HALO_A * show;
-      rig.core.material.emissiveIntensity = EMI * show + .1;
+      rig.halo.material.opacity = haloA * show;
+      rig.core.material.emissiveIntensity = emi * show + .1;
       rig.group.visible = show > .002;
       rig.group.position.copy(rpos);
       rig.core.rotation.x += dt*6; rig.core.rotation.z += dt*3.4;
@@ -1288,10 +1338,11 @@ function animate(){
   // (the director's edit was solved at song load; the ensemble flare runs in every mode)
   if (cues.length) roomFlare();
   devMarbles = marblePts;                               // (dev: __dev.marbles — the staging audit's frame check)
-  cam.update({ dt, time: clock.elapsedTime, songTime, tracks, marblePts, leadRender, reduceMotion, started });
+  if (xr.presenting) xr.update(dt, songTime);           // a headset: the HEAD is the camera (teleport pads, tour, scrub)
+  else cam.update({ dt, time: clock.elapsedTime, songTime, tracks, marblePts, leadRender, reduceMotion, started });
 
   if (solvedRoom !== null && rooms.key !== solvedRoom){ solvedRoom = rooms.key; lastSolve = { ...resolveRoom(lastShots, shotCtx()), follow: followRig }; }   // the room changed: re-check every eye against it
-  rooms.update(dt, songTime, camera, expoKick + ensFlare);         // room ambience (pure fn of songTime + the music's kick)
+  rooms.update(dt, songTime, xr.presenting ? xr.viewer : camera, expoKick + ensFlare);         // room ambience (pure fn of songTime + the music's kick)
   // PERF: an additive glow at opacity 0 still costs a full draw call. Every machine keeps
   // dozens of flash halos parked dark between strikes (~260 in a full room), so skip them
   // via material.visible — no program change, and the owner's own .visible logic is untouched.
@@ -1309,10 +1360,35 @@ function animate(){
   if (convDbgOn) convDebug(leadRender ? leadRender.y : cam.target.y, camera.position.y);
   editor.update();                                      // stage edit: name tags follow their machines
   watchFrozen();                                        // re-check a slice of the frozen still parts (mergestatic.js)
-  composer.render();
-  gov.frame(frameT0, started && playRate > 0 && document.visibilityState === 'visible');   // adaptive resolution (perfgov.js)
+  if (xr.presenting) xrRender();                        // XR: straight to the headset (no composer; ACES still applies)
+  else {
+    composer.render();
+    gov.frame(frameT0, started && playRate > 0 && document.visibilityState === 'visible');   // adaptive resolution (perfgov.js)
+  }
+  for (let i = frameTaps.length - 1; i >= 0; i--) if (frameTaps[i]()) frameTaps.splice(i, 1);   // (dev: renderInfo counts frames HERE — XR has no window rAF)
+}
+const frameTaps = [];
+/* XR SCALE HONESTY: the rig is scaled U_PER_M, so the VIEW space three lights + fogs in is METRES,
+   not world units — every Point/SpotLight would read U^decay (≈2.2×) brighter and reach U farther,
+   and the fog would thin by U. Undo that for the headset render only: owners keep setting their
+   intensities per frame, so the scaled values are restored right after (nothing persists). */
+function xrRender(){
+  if (xrLitAge-- <= 0){
+    xrLit.length = 0; scene.traverse(o => { if (o.isPointLight || o.isSpotLight) xrLit.push(o); });
+    if (xrSaved.length < xrLit.length * 2) xrSaved = new Float32Array(xrLit.length * 4);
+    xrLitAge = 60;                                      // re-collect ~once a second (+ on every director re-solve)
+  }
+  for (let i = 0; i < xrLit.length; i++){ const l = xrLit[i];
+    xrSaved[2 * i] = l.intensity; xrSaved[2 * i + 1] = l.distance;
+    l.intensity /= Math.pow(U_PER_M, l.decay); l.distance /= U_PER_M; }
+  const f = scene.fog, fd = f?.density, fn = f?.near, ff = f?.far;
+  if (f?.isFogExp2) f.density *= U_PER_M; else if (f?.isFog){ f.near /= U_PER_M; f.far /= U_PER_M; }
+  renderer.render(scene, camera);
+  for (let i = 0; i < xrLit.length; i++){ xrLit[i].intensity = xrSaved[2 * i]; xrLit[i].distance = xrSaved[2 * i + 1]; }
+  if (f?.isFogExp2) f.density = fd; else if (f?.isFog){ f.near = fn; f.far = ff; }
 }
 animate();
+renderer.setAnimationLoop(animate);                     // (not window rAF: a headset session drives its own frame loop)
 setTimeout(() => rooms.prewarm(camera), 1200);    // build + compile the other rooms in idle time (no first-swap stall)
 
 /* ---------------- controls ---------------- */
@@ -1473,6 +1549,7 @@ document.getElementById('mute').addEventListener('click', e => {
   audio.showState();
 });
 addEventListener('resize', () => {
+  if (xr.presenting) return;                            // three refuses size changes mid-session; xrSession re-syncs at the end
   cam.resize();
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
@@ -1563,7 +1640,7 @@ if (new URLSearchParams(location.search).has('debug')){
       return out;
     },
     get layout(){ return lastLayout; }, get wide(){ return lastWide; }, get merge(){ return mergeStats; }, frozen: () => frozenStats(),
-    get editor(){ return editor; },                    // creation tools: .openMap() .toggleEdit() .stage.state() .stage.select(k)
+    get editor(){ return editor; }, xr: xr.dev,                    // creation tools: .openMap() .toggleEdit() .stage.state() .stage.select(k)
     // staging-audit handles (scripts/staging-audit.mjs): the live camera, the song's world, the live marbles
     get three(){ return THREE; }, get camera(){ return camera; }, get world(){ return world; }, get marbles(){ return devMarbles; }, get P(){ return ROLL_T + LOOP_T; },
     get shots(){ return lastShots.map(s => ({ key: s.key, owner: s.owner, eye: s.eye.toArray(), aim: s.aim.toArray(), pref: s.pref?.toArray(), rays: s.rays, fg: s.fg, fitMax: s.fitMax, portrait: s.portrait?.eye.toArray() })); },
@@ -1575,12 +1652,12 @@ if (new URLSearchParams(location.search).has('debug')){
     renderInfo(n = 10){
       return new Promise(res => {
         const I = renderer.info; I.autoReset = false; I.reset();
-        let k = 0; const tick = () => { if (++k < n) return requestAnimationFrame(tick);
+        let k = 0; const tick = () => { if (++k < n) return false;
           let meshes = 0, lights = 0; scene.traverseVisible(o => { if (o.isMesh || o.isSprite || o.isPoints || o.isLine) meshes++; if (o.isLight) lights++; });
           const out = { calls: Math.round(I.render.calls / n), tris: Math.round(I.render.triangles / n), programs: I.programs.length,
                         geometries: I.memory.geometries, textures: I.memory.textures, visibleObjs: meshes, lights };
-          I.autoReset = true; I.reset(); res(out); };
-        requestAnimationFrame(tick);
+          I.autoReset = true; I.reset(); res(out); return true; };
+        frameTaps.push(tick);
       });
     },
   };

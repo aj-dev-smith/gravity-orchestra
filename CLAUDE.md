@@ -65,6 +65,10 @@ on. Treat it as live, and confirm with the human before running it.
                      a one-track two-hand piano is split into melody / left hand / chords;
                      opts.route 'legacy' keeps the classic belts-only import). parse.js
                      takes the beat-weighted MEDIAN tempo of the map, not the first event.
+    src/xr.js        WebXR (Quest 2) render subsystem: ENTER VR/AR (only if supported), the scaled
+                     dolly, catwalk pads, solved teleport arc, tour, controllers, head-pose audio.
+                     src/xrplan.js = its pure half (anchors from the director's shots, tour, scale
+                     U_PER_M = −G/9.81, earFrame) — test/xrplan.test.js. How to test: docs/XR.md
     src/share.js     song ⇄ deflate→base64url share links
     src/record.js    canvas captureStream + MediaRecorder → "one perfect loop" video
     src/songs/*.js   one module per song (the comments are sacred), aggregated by index.js
@@ -77,6 +81,8 @@ on. Treat it as live, and confirm with the human before running it.
                      abstractions + the human-curation-over-auto-layout decision)
 
     npm run dev            # vite dev server (add --host to reach a phone on the LAN)
+    npm run dev:xr         # https (self-signed) + LAN host → a Quest can open it (docs/XR.md)
+    node scripts/xr-shot.mjs  # IWER-emulated Quest 2 in headless Chrome: enter VR, teleport, stereo shot, XR draw calls
                            #   ?solo=<instrument> = that plugin's own demo, camera on its station
     node scripts/shot.mjs  # headless screenshots (own browser per call — parallel-agent safe)
     npm test               # vitest — run after ANY song or engine edit
@@ -373,6 +379,15 @@ Dies Irae (deep canon echo, delay 5). bpm is the single tempo knob; everything r
   snaps — possible only because the whole timeline is known. **free** hands over orbit-drag +
   WASD/arrows/QE fly (disabled until picked, so it can never swallow the iOS priming tap).
   Vertical is pinned (the band is static); x/z follow with sway + spread-dolly.
+
+- **WebXR** (`xr.js`, docs/XR.md): render-time framing only. The loop is `renderer.setAnimationLoop`
+  (a headset has no window rAF); while presenting main renders scene→camera directly (no composer —
+  halos/emissive step up, marble lamps off; constant light set), skips the camera rig + perf governor,
+  and `placeAt()` reads the head pose. The rig is scaled U_PER_M so marbles fall at a TRUE 9.81 m/s².
+  Teleport only (pads = the director's solved eyes; the arc is a solveLaunch throw), tour = the
+  director's edit as cuts. IWER is DEV-only (`?xremu`, needs `installRuntime({forceInstall:true})` on
+  desktop Chrome). Perf: no multiview in WebGLRenderer r184 — the full room from the wide is ~1500
+  calls/frame; light songs ~350–575.
 
 Dev toggles: `G` = conveyor debug HUD (rulers + height graph; `convDbgOn`, OFF by default). `M` = machines on/off. `?debug` = a scrub bar (time is the only
 state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machine-gunning).

@@ -319,7 +319,8 @@ for (const [ri, room] of ROOMS.entries()){
       if (!L) return { song: name, wall: null, items: [], fixed: [], shots: [] };
       const w = L.wall, at = k => L.solved[k];
       return { song: name, cx: r(L.cx), bandY: r(L.bandY), wall: r3([w.min.x, w.max.x, w.min.y, w.max.y, w.min.z, w.max.z]),
-        items: L.items.map(it => ({ key: it.key, x: r(it.x), z: r(it.z), box: r3(it.box), top: r(it.top), y0: r(it.y0) })),
+        items: L.items.map(it => ({ key: it.key, x: r(it.x), z: r(it.z), box: r3(it.box), top: r(it.top), y0: r(it.y0), deck: r(it.deck ?? 0) })),
+        hung: (L.hung || []).map(r3),
         fixed: D.hung().map(h => ({ key: h.key, box: r3(h.box) })),
         // the belt's follow offsets as SOLVED against the real meshes (+ their worst blocked probe rays)
         follow: D.solve?.follow ? { land: r3(D.solve.follow.land), portrait: r3(D.solve.follow.portrait), rays: D.solve.follow.rays } : null,

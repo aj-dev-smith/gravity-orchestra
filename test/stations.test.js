@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { STATIONS, layoutStations, MARGIN, AUDIENCE, hangPlace, WING_REF } from '../src/instruments/stations.js';
+import { STATIONS, layoutStations, MARGIN, AUDIENCE, hangPlace, WING_REF, GALLERY_DROP } from '../src/instruments/stations.js';
 import { KIT_ROOM } from '../src/marbledrums.js';
 import { STAGE } from '../src/rooms/common.js';
 
@@ -12,6 +12,8 @@ const boxOf = ({ w, d, yaw }) => {
 const KIT = { x: KIT_ROOM.x, z: KIT_ROOM.z, box: [-8.8, 8.8, -5, 3] };   // the measured kit (riser + arc)
 const ROOM = { x0: -STAGE.HW + 2.5, x1: STAGE.HW - 2.5, z0: STAGE.BACK + 2.5, z1: 31 };
 const floorKeys = Object.keys(STATIONS).filter(k => !STATIONS[k].hang);
+const APPROVED = ['marimba', 'bells', 'bass', 'bowls', 'musicbox', 'turntable'];   // the shipped songs' floor machines (their look is approved)
+const ORGAN_1BAY = [-5.74, 5.74, -15.7, -11.1];                                   // the organ loft's measured world footprint (hung behind the belt)
 const itemsFor = keys => [
   ...keys.map(k => ({ key: k, x: STATIONS[k].x, z: STATIONS[k].z, box: boxOf(STATIONS[k]) })),
   { key: 'drums', ...KIT },
@@ -65,12 +67,26 @@ describe('room staging (stations.js layoutStations)', () => {
       expect(layoutStations(itemsFor(keys), wall, ROOM)).toEqual(solved);
     });
   }
-  it('a one-bay room without the turntable keeps the hand-tuned slots (the solve only moves what collides)', () => {
+  it('a one-bay room without the turntable keeps the hand-tuned slots of the APPROVED tier (the solve only moves what collides)', () => {
+    // every machine on stage at once: the approved amphitheater (marimba / bells / bass / bowls /
+    // music box + the kit) is placed first and keeps its look; the newer machines step around it
     const items = itemsFor(floorKeys.filter(k => k !== 'turntable'));
     const solved = layoutStations(items, walls['1 bay'], ROOM);
     for (const k of ['marimba', 'bells']) expect(solved[k]).toEqual({ x: STATIONS[k].x, z: STATIONS[k].z });
-    for (const k of floorKeys.filter(k => k !== 'turntable'))                       // everyone else: a nudge, not a re-stage
+    for (const k of APPROVED.filter(k => k !== 'turntable'))                        // everyone else: a nudge, not a re-stage
       expect(Math.hypot(solved[k].x - STATIONS[k].x, solved[k].z - STATIONS[k].z), k).toBeLessThan(3);
+    // …and the APPROVED rooms are staged exactly as before the gallery existed: it only ever
+    // takes the stations a song's floor can't (no approved machine climbs up when the floor clears)
+    for (const k of APPROVED) expect(solved[k]?.y, k).toBeUndefined();
+  });
+  it('the newer machines\' slots are clean by design: belt + kit + every new floor machine (+ the organ loft) keeps every slot', () => {
+    const keys = floorKeys.filter(k => !APPROVED.includes(k));
+    expect(keys.length).toBeGreaterThanOrEqual(5);
+    const solved = layoutStations(itemsFor(keys), walls['1 bay'], ROOM, { hung: [ORGAN_1BAY] });
+    for (const k of keys){
+      expect({ x: solved[k].x, z: solved[k].z }, k).toEqual({ x: STATIONS[k].x, z: STATIONS[k].z });
+      expect(solved[k].y, k).toBe(STATIONS[k].gallery ? 15.7 - GALLERY_DROP : undefined);
+    }
   });
   it('the wings ride out with a wider belt (gap to the wall edge kept), the margin is real air', () => {
     const one = layoutStations(itemsFor(floorKeys), walls['1 bay'], ROOM);
@@ -112,5 +128,68 @@ describe('room staging (stations.js layoutStations)', () => {
         expect(items[i].top, `${k} hides the strike band`).toBeLessThanOrEqual(BAND + (EYE - BAND) * (Math.max(b[2], zp) - zp) / (az - zp) + 1e-9);
       expect(b[3], `${k} inside the room (a crowded floor may borrow ≤ 6 u of depth)`).toBeLessThanOrEqual(ROOM.z1 + 6 + 1e-9);
     });
+  });
+
+  /* THE GALLERY (14 machines): MEASURED footprints (__dev.layout, a synthetic song of every plugin's
+     demo) — the realistic worst cases (the biggest plausible song: belt ×2 + kit + the approved four +
+     two gallery machines + the organ loft; a band of only the newer machines) and the stress case
+     (every machine at once, 3 bays, every hung station flown). No overlaps, everyone in the room; a
+     gallery machine stands BEHIND the belt, raised to the gallery deck, never in a hung station's
+     footprint or its shadow — and in the realistic rooms, in one row (nobody behind anybody). */
+  const M = {
+    bass: { box: [-5.9, 5.9, -6.9, 6.9], top: 9.4 }, bells: { box: [-6.4, 6.4, -5.9, 5.9], top: 15.9 },
+    bowls: { box: [-6.8, 6.8, -6.8, 6.8], top: 4.9 }, bowwheel: { box: [-5.5, 5.7, -3.9, 6.7], top: 13.2 },
+    dulcimer: { box: [-5.8, 5.8, -4.6, 4.9], top: 5.1 }, horns: { box: [-7.2, 7.1, -2.6, 3.2], top: 7.3 },
+    marimba: { box: [-7.4, 7, -6.9, 7.2], top: 9.2 }, musicbox: { box: [-6.6, 6.6, -6.7, 6.7], top: 9.1 },
+    riff: { box: [-6.6, 6.7, -3.2, 3.2], top: 5.5 }, strum: { box: [-5.9, 5.8, -3.5, 2.7], top: 7.5 },
+    turntable: { box: [-8, 8, -8, 8], top: 8.1 }, drums: { box: [-9.5, 9.5, -4.9, 3.8], top: 9.5 },
+  };
+  const at = k => k === 'drums' ? { key: k, x: KIT_ROOM.x, z: KIT_ROOM.z, ...M[k] } : { key: k, x: STATIONS[k].x, z: STATIONS[k].z, ...M[k] };
+  const TOP = 15.7;
+  const GAL = {
+    'biggest plausible song (2 bays + kit + bass/marimba/bells/bowls + riff/horns + the organ loft)': {
+      wall: [-17.2, 17.2, -4.1, 2.5], keys: ['bass', 'marimba', 'bells', 'bowls', 'riff', 'horns', 'drums'],
+      hung: [[-5.74, 5.74, -15.7, -11.1]], strict: true },
+    'a band of the newer machines (1 bay + kit + riff/horns/bowwheel/dulcimer/strum + the organ loft)': {
+      wall: [-7, 7, -4.1, 2.2], keys: ['riff', 'horns', 'bowwheel', 'dulcimer', 'strum', 'drums'],
+      hung: [[-5.74, 5.74, -15.7, -11.1]], strict: true },
+    'stress: every machine at once, 3 bays, organ + chandelier + court flown': {
+      wall: [-21.2, 21.2, -4.1, 2.2], keys: [...floorKeys, 'drums'],
+      hung: [[-5.7, 5.7, -15.7, -11.1], [-8.3, 8.3, -9.2, 7.3], [-31.9, -9.4, -24.2, -5.5]], strict: false },
+  };
+  for (const [name, { wall, keys, hung, strict }] of Object.entries(GAL)) it(`${name}: clean, and the gallery stands behind the belt`, () => {
+    const items = keys.map(at);
+    const solved = layoutStations(items, wall, ROOM, { bandY: BAND, eyeY: EYE, wallTop: TOP, hung });
+    const cx = (wall[0] + wall[1]) / 2, ax = cx + AUDIENCE.dx, az = AUDIENCE.z, zp = (wall[2] + wall[3]) / 2;
+    const boxes = items.map(it => world(solved, it)), up = [];
+    boxes.forEach((b, i) => {
+      const k = items[i].key, s = solved[k];
+      expect(clear(b, wall), `${k} × wall`).toBe(true);
+      for (let j = i + 1; j < boxes.length; j++) expect(clear(b, boxes[j]), `${k} × ${items[j].key}`).toBe(true);
+      expect(b[0] >= ROOM.x0 - 1e-9 && b[1] <= ROOM.x1 + 1e-9 && b[2] >= ROOM.z0 - 1e-9, `${k} inside the room`).toBe(true);
+      expect(b[3], `${k} front edge`).toBeLessThanOrEqual(ROOM.z1 + (strict ? 0 : 6) + 1e-9);
+      const xc = (b[0] + b[1]) / 2, zc = (b[2] + b[3]) / 2;
+      if (s.y !== undefined){                                   // up on the GALLERY
+        expect(['drums', 'turntable'], `${k} is floor-only`).not.toContain(k);
+        expect(s.y).toBeCloseTo(TOP - GALLERY_DROP, 9);
+        expect(zc, `${k} behind the belt`).toBeLessThan(wall[2]);
+        for (const h of hung) expect(b[1] <= h[0] || h[1] <= b[0] || b[2] >= h[3], `${k} in a hung station's footprint / shadow`).toBe(true);
+        up.push([k, b]);
+      } else {
+        if (zc < wall[2]){                                      // a floor station behind the belt: seen past its edge
+          const xs = ax + (xc - ax) * (az - wall[3]) / (az - zc);
+          expect(xs >= wall[1] || xs <= wall[0], `${k} hidden behind the belt`).toBe(true);
+        }
+        if (b[1] > wall[0] + 3 && b[0] < wall[1] - 3 && b[3] > wall[3])
+          expect(items[i].top, `${k} hides the strike band`).toBeLessThanOrEqual(BAND + (EYE - BAND) * (Math.max(b[2], zp) - zp) / (az - zp) + 1e-9);
+      }
+    });
+    if (strict){
+      for (const k of keys) if (STATIONS[k]?.gallery) expect(solved[k].y, `${k} is gallery-born`).toBeDefined();
+      for (const k of APPROVED) if (keys.includes(k)) expect(solved[k].y, `${k} stays on the floor`).toBeUndefined();
+      for (let i = 0; i < up.length; i++) for (let j = i + 1; j < up.length; j++)   // one ROW: nobody stands behind anybody
+        expect(up[i][1][1] <= up[j][1][0] || up[j][1][1] <= up[i][1][0], `${up[i][0]} stacked with ${up[j][0]}`).toBe(true);
+    }
+    expect(layoutStations(items, wall, ROOM, { bandY: BAND, eyeY: EYE, wallTop: TOP, hung })).toEqual(solved);   // deterministic
   });
 });

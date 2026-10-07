@@ -396,6 +396,11 @@ function injectStyles(){
     .se-btns i{display:none}
     body.stage-editing #hud{opacity:0;pointer-events:none}
     body.stage-editing #hud *{pointer-events:none!important}
+  }
+  /* a phone on its side (short AND wider than the bottom-sheet breakpoint): the map stands beside
+     the SOUND / REC / ROOM column from the top down to the camera row, not a 200px slot under them */
+  @media (max-height:520px) and (min-width:641px){
+    .map-panel{top:8px;right:120px;width:min(470px,calc(100vw - 136px));max-height:calc(100vh - 92px)}
   }`;
   document.head.appendChild(css);
 }

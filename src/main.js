@@ -304,7 +304,9 @@ const convRulers = new THREE.Group();                   // fixed in WORLD — ne
 const convCv = document.createElement('canvas');
 convCv.width = 280; convCv.height = 150;
 Object.assign(convCv.style, {position:'fixed', left:'8px', top:'8px', zIndex:60,
-  background:'rgba(4,4,12,.72)', border:'1px solid #2a3550', borderRadius:'6px'});
+  background:'rgba(4,4,12,.72)', border:'1px solid #2a3550', borderRadius:'6px',
+  display: convDbgOn ? 'block' : 'none'});               // (OFF means hidden: an empty panel over the HUD dimmed the title/song pick)
+convRulers.visible = convDbgOn;
 document.body.appendChild(convCv);
 const convX = convCv.getContext('2d');
 const convHist = []; const CONV_N = 300;

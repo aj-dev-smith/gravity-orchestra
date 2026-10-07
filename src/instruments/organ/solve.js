@@ -73,7 +73,9 @@ export const PACKETS = 3;                      // packets drawn per pipe (the cu
 // ---- the voice tiers (voice.js renders them; see index.js voiceIds) ----
 export const SHORT_MAX = 1.0;                  // a note this short plays the SHORT render (iOS rings ~1.4 s, not 5)
 export const CONT_AT   = 4.2;                  // a note longer than CONT_AT + .1 is re-sourced here (seamless)
-export const XFADE     = .12;                  // the first voice releases this long after the continuation starts
+export const XFADE     = 0;                    // the first voice starts releasing (τ .12) as the continuation fades in
+                                               // (equal-power .12 s): ~flat. A later release stacked both at full
+                                               // gain (+3 dB, up to +6 dB where they happen to be in phase)
 
 export const TIMBRES = ['organ', 'choir', 'pad'];
 const ALIAS = { organ: 'organ', pipe: 'organ', principal: 'organ', choir: 'choir', vox: 'choir', voice: 'choir',
@@ -99,8 +101,7 @@ export function parseId(id){
   const m = ID_RE.exec(String(id ?? '').trim());
   if (!m) return null;
   const pitch = m[1].toUpperCase() + m[2];
-  const timbre = m[3] ? ALIAS[m[3].toLowerCase()] : 'organ';
-  if (!timbre) return null;
+  const timbre = (m[3] && ALIAS[m[3].toLowerCase()]) || 'organ';   // an unknown suffix degrades to the organ (never drops the note)
   return { pitch, timbre, base: timbre === 'organ' ? pitch : `${pitch}|${timbre}` };
 }
 const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];

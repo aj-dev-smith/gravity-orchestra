@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { fitPart, organLane, laneAt, packetsAt, clearance, pipeGeom, layoutPipes, parseId, strikeIds, sinkDepth, tUp,
   g, RB, H_MAG, T_DOWN, S_MAX, DUR_MIN, GAP_MIN, IOI_MIN, MAX_DUR, SPEED, PACKETS, BELLOWS_R, PIPE_GAP, PART_LIMITS,
-  SHORT_MAX, CONT_AT } from '../src/instruments/organ/solve.js';
-import { organVoice, SR, HOLD, LEN } from '../src/instruments/organ/voice.js';
+  SHORT_MAX, CONT_AT, XFADE } from '../src/instruments/organ/solve.js';
+import * as THREE from 'three';
+import { organVoice, SR, HOLD, LEN, C_HOLD } from '../src/instruments/organ/voice.js';
 import organ from '../src/instruments/organ/index.js';
 import { STATIONS } from '../src/instruments/stations.js';
 import { noteHz, noteNum } from '../src/engine.js';
@@ -203,8 +204,9 @@ describe('fitPart: imported parts degrade gracefully, never throw', () => {
     for (const part of [null, undefined, 'x', [], [null], [[NaN, 'C4']], [[0, 'H4']], [[0, 'E#4']], [[0, 'C4|kazoo']], [[0, 42]], [[0, 'C4', -1, -3]]])
       expect(() => fitPart(part, T)).not.toThrow();
     const { events, report } = fitPart([[0, 'C4', -1, -3], [1, 'nope'], [2, 'C4|kazoo']], T);
-    expect(events.length).toBe(1); expect(events[0].vel).toBe(1); expect(events[0].tDur).toBeCloseTo(.5, 12);
-    expect(report.bad).toBe(2);
+    expect(events.length).toBe(2); expect(events[0].vel).toBe(1); expect(events[0].tDur).toBeCloseTo(.5, 12);
+    expect(events[1]).toMatchObject({ pitch: 'C4', timbre: 'organ' });       // an unknown timbre plays the organ
+    expect(report.bad).toBe(1);
   });
   it('timbres via id suffix (+ aliases); the default is organ', () => {
     expect(parseId('C4')).toEqual({ pitch: 'C4', timbre: 'organ', base: 'C4' });
@@ -306,17 +308,44 @@ describe('organ voice', () => {
       expect(on).toBeGreaterThan(4 * sharp); expect(on).toBeGreaterThan(4 * flat);
     }
   });
-  it('tiers: SHORT is the long render released at ~1 s; CONT skips the speech and fades in', () => {
+  it('tiers: SHORT is the long render released at ~1 s; CONT is the same voice from CONT_AT, fading in', () => {
     const L4 = organVoice('E4').samples, S4 = organVoice('E4/s').samples, C4 = organVoice('E4/c').samples;
     expect(S4.length).toBeLessThan(1.5 * SR);
     for (let i = 0; i < SR; i += 997) expect(S4[i]).toBe(L4[i]);
     expect(Math.abs(S4[S4.length - 1])).toBe(0); expect(Math.abs(C4[C4.length - 1])).toBe(0); expect(Math.abs(C4[0])).toBe(0);
-    expect(C4[Math.round(SR * .5)]).toBe(L4[Math.round(SR)]);
-    expect(C4.length / SR).toBeCloseTo(LEN - .5, 3);
+    expect(C4.length / SR).toBeCloseTo(C_HOLD + .7, 3);
+  });
+  it('the crossfade is matched: CONT at its start sounds like the LONG render at CONT_AT (level + brightness, every timbre)', () => {
+    const rms = (x, i0, n) => { let q = 0; for (let i = i0; i < i0 + n; i++) q += x[i] * x[i]; return Math.sqrt(q / n); };
+    const bright = (x, i0, n) => { let d = 0, q = 0; for (let i = i0 + 1; i < i0 + n; i++){ d += (x[i] - x[i - 1]) ** 2; q += x[i] * x[i]; } return Math.sqrt(d / q); };
+    for (const id of ['C2', 'E4', 'A5', 'C3|pad', 'E5|pad', 'A3|choir', 'E5|choir']){
+      const Lx = organVoice(id).samples, Cx = organVoice(id + '/c').samples;
+      const n = Math.round(SR * .12), c = Math.round(SR * .15), a = Math.round(SR * CONT_AT) + c;   // the same instant of the performance
+      const dB = 20 * Math.log10(rms(Cx, c, n) / rms(Lx, a, n));
+      expect(Math.abs(dB)).toBeLessThan(id.includes('choir') ? 2 : .05);                                 // (choir vibrato / chorus beat: not identical, but matched)
+      expect(Math.abs(Math.log(bright(Cx, c, n) / bright(Lx, a, n)))).toBeLessThan(.15);   // the pad's bloom has not reset
+      let pk = 0; for (const v of Cx) pk = Math.max(pk, Math.abs(v));
+      expect(pk).toBeLessThanOrEqual(.95);
+    }
+  });
+  it('the continuation fires at CONT_AT under a held note — not at its strike', () => {
+    const I = organ.make({ envMap: null, glowTex: null, THREE });
+    const part = [[0, 'A2', .9, 8], [0, 'E4', .7, 1]], beat = .75, P = ROLL_T + 16 * beat + 1.2;
+    I.build(part, { rollT: ROLL_T, beat, P, start: START, station: {}, floorY: -20 });
+    const hits = [];
+    for (let t = START; t < ROLL_T + 7; t += 1 / 60)
+      I.update(t, P, 1 / 60, { started: t >= 0, skipStrikes: false, onStrike: h => hits.push({ t, ...h }) });
+    const a2 = hits.filter(h => h.note.startsWith('A2'));
+    expect(a2.map(h => h.note)).toEqual(['A2', 'A2/c']);
+    expect(a2[1].t - a2[0].t).toBeGreaterThan(CONT_AT - .02);
+    expect(a2[1].t - a2[0].t).toBeLessThan(CONT_AT + .05);
+    expect(a2[0].dur + XFADE).toBeCloseTo(CONT_AT + XFADE, 6);               // the first voice releases as the continuation enters
+    expect(a2[1].dur).toBeCloseTo(6 - CONT_AT, 6);                           // …which releases at the note's end (8 beats = 6 s)
+    expect(hits.filter(h => h.note === 'E4/s').length).toBe(1);
   });
   it('the hold covers the stroke: a long note re-sources before the render runs out', () => {
     expect(CONT_AT + .12).toBeLessThan(HOLD);
-    expect(CONT_AT + (HOLD - .5)).toBeGreaterThanOrEqual(MAX_DUR);   // one continuation covers the longest note
+    expect(CONT_AT + C_HOLD).toBeGreaterThanOrEqual(MAX_DUR);   // one continuation covers the longest note
     expect(SHORT_MAX).toBeLessThan(1.05);
     expect(strikeIds({ base: 'C4', tDur: .5 })).toEqual({ first: 'C4/s', cont: null });
     expect(strikeIds({ base: 'C4|pad', tDur: 2 })).toEqual({ first: 'C4|pad', cont: null });

@@ -10,11 +10,17 @@
                                        staccato note (the sample path can't
                                        release at `dur` — §5), so short chords
                                        don't smear into a 5-second wash
-     '<…>/c'                    CONT   the LONG render from .5 s on (past the
-                                       speech transient) with a .12 s fade-in:
+     '<…>/c'                    CONT   the SAME voice rendered from CONT_AT on
+                                       (every time-varying part — the pad's
+                                       bloom, the choir's vibrato onset, the
+                                       organ's chorus beat — continues where the
+                                       first voice is; same seed, same gain),
+                                       with an equal-power .12 s fade-in.
                                        index.js fires it at CONT_AT under a note
-                                       held longer than the render, crossfading
-                                       with the first voice → seamless 8 s holds
+                                       held longer than the render while the
+                                       first voice releases (live path) → a
+                                       level- and timbre-matched crossfade to
+                                       MAX_DUR holds
 
    The live path releases every voice at the note's `dur` (main → playVoice).
 
@@ -34,12 +40,12 @@
    sin((k−2)φ) — one sin/cos per sample per source, no per-partial trig.
    ============================================================ */
 import { noteHz } from '../../engine.js';
-import { parseId } from './solve.js';
+import { parseId, CONT_AT, MAX_DUR } from './solve.js';
 
 export const SR = 22050;
 export const HOLD = 4.5, REL = .7, LEN = HOLD + REL;            // the LONG render
 export const S_HOLD = 1.05, S_REL = .35;                        // the SHORT tier
-export const C_OFF = .5, C_FADE = .12;                          // the CONTINUATION tier
+export const C_FADE = .12, C_HOLD = MAX_DUR - CONT_AT + .2;    // the CONTINUATION tier (C_HOLD + REL long)
 const PEAK = { organ: .76, choir: .72, pad: .7 };
 const TAU = 2 * Math.PI;
 
@@ -51,12 +57,14 @@ const seedOf = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) h =
 
 /* one additive source: a fundamental phase φ(t) (freq fn per sample-block), harmonic weights
    w[k] (k = 1..K, may be re-set per block by `reweigh`), summed into out with gain env[i]. */
-function additive(out, n, f0, w, { detune = 0, vib = null, reweigh = null, phase = 0 } = {}){
+function additive(out, n, f0, w, { detune = 0, vib = null, reweigh = null, phase = 0, t0 = 0 } = {}){
   const K = w.length - 1;
-  let phi = phase;
+  // rendering from t0: a steady oscillator is exactly where the t = 0 render has it by then
+  // (so the chorus / ensemble beat pattern continues); a vibrato'd one only keeps its character
+  let phi = vib ? phase : (phase + TAU * f0 * (1 + detune) * t0) % TAU;
   const BL = 64;
   for (let b = 0; b < n; b += BL){
-    const t = b / SR;
+    const t = t0 + b / SR;
     let f = f0 * (1 + detune);
     if (vib) f *= Math.pow(2, vib(t) / 1200);
     if (reweigh) reweigh(t, w);
@@ -84,7 +92,7 @@ function bandpass(x, f, Q){
 }
 
 /* ---- ORGAN: principal chorus ---- */
-function renderOrgan(f, rnd, n){
+function renderOrgan(f, rnd, n, t0){
   const out = new Float32Array(n);
   const nyq = SR * .45;
   // 8' principal harmonics (gentle rolloff) + the 4' / 2⅔' / 2' ranks folded onto it
@@ -93,10 +101,10 @@ function renderOrgan(f, rnd, n){
   const w = new Float64Array(K + 1); for (let k = 1; k <= K; k++) w[k] = H[k];
   // the pipe SPEAKS: harmonic k's amplitude rises with τ_k (upper first), so render each rank
   // as the steady sum and shape the attack with a separate brightening "speech" layer below
-  additive(out, n, f, w, { phase: rnd() * TAU });
+  additive(out, n, f, w, { phase: rnd() * TAU, t0 });
   const w2 = new Float64Array(Math.min(K, 6) + 1);            // the second rank, a hair sharp (chorus)
   for (let k = 1; k < w2.length; k++) w2[k] = H[k] * (k === 1 ? .35 : .5);
-  additive(out, n, f, w2, { detune: .00045, phase: rnd() * TAU });
+  additive(out, n, f, w2, { detune: .00045, phase: rnd() * TAU, t0 });
   // attack envelope: the fundamental blooms in ~55 ms (low pipes slower); upper partials
   // overshoot slightly (the chiff's tonal half) — approximated as one envelope + a bright blip
   const tA = .028 + .045 * Math.min(1, 220 / f);
@@ -110,7 +118,7 @@ function renderOrgan(f, rnd, n){
   // faint wind flutter (seeded, ~3 Hz, ±1.2 %)
   const ph1 = rnd() * TAU, ph2 = rnd() * TAU;
   for (let i = 0; i < n; i++){
-    const t = i / SR;
+    const t = t0 + i / SR;
     const att = 1 - Math.exp(-t / tA);
     const flut = 1 + .008 * Math.sin(TAU * 2.9 * t + ph1) + .005 * Math.sin(TAU * 5.3 * t + ph2);
     let v = out[i] * att * att * flut;
@@ -143,7 +151,7 @@ function formantGain(fr, tab, mixO){
   }
   return g;
 }
-function renderChoir(f, rnd, n){
+function renderChoir(f, rnd, n, t0){
   const out = new Float32Array(n);
   const tab = VOWEL[register(f)];
   const K = Math.max(1, Math.min(36, Math.floor(Math.min(5200, SR * .45) / f)));
@@ -158,7 +166,7 @@ function renderChoir(f, rnd, n){
       const ramp = Math.min(1, Math.max(0, (t - onset) / .7));
       return depth * ramp * Math.sin(TAU * rate * t + vph) + 3 * Math.sin(TAU * .37 * t + jph);
     };
-    additive(out, n, f, w, { detune: dt, vib, phase: rnd() * TAU });
+    additive(out, n, f, w, { detune: dt, vib, phase: rnd() * TAU, t0 });
   }
   // breath: noise through the 2nd formant, a little at the onset, a whisper throughout
   const nz = new Float32Array(n);
@@ -166,14 +174,14 @@ function renderChoir(f, rnd, n){
   bandpass(nz, tab.a[1][0], 2.5);
   const tA = .16 + .08 * Math.min(1, 200 / f);
   for (let i = 0; i < n; i++){
-    const t = i / SR, att = 1 - Math.exp(-t / tA);
+    const t = t0 + i / SR, att = 1 - Math.exp(-t / tA);
     out[i] = out[i] * att * att + nz[i] * .18 * (.25 + .75 * Math.exp(-t / .12)) * att;
   }
   return out;
 }
 
 /* ---- PAD: three detuned saws, a blooming lowpass ---- */
-function renderPad(f, rnd, n){
+function renderPad(f, rnd, n, t0){
   const out = new Float32Array(n);
   const K = Math.max(1, Math.min(30, Math.floor(Math.min(6000, SR * .45) / f)));
   for (const dt of [-.0068, 0, .0061]){
@@ -182,15 +190,15 @@ function renderPad(f, rnd, n){
       const fc = 700 + 1900 * (1 - Math.exp(-t / 1.1)) * (1 + .08 * Math.sin(TAU * .21 * t));
       for (let k = 1; k <= K; k++){ const x = k * f / fc; w[k] = (1 / k) / (1 + x * x * x * x); }
     };
-    additive(out, n, f, w, { detune: dt, reweigh, phase: rnd() * TAU });
+    additive(out, n, f, w, { detune: dt, reweigh, phase: rnd() * TAU, t0 });
   }
   // a soft sub-octave body for the low notes (phones still hear the 2nd+ harmonics)
   if (f < 260){
     const w = new Float64Array(2); w[1] = .35;
-    additive(out, n, f / 2, w, { phase: rnd() * TAU });
+    additive(out, n, f / 2, w, { phase: rnd() * TAU, t0 });
   }
   const tA = .32;
-  for (let i = 0; i < n; i++){ const t = i / SR, att = 1 - Math.exp(-t / tA); out[i] *= att * att; }
+  for (let i = 0; i < n; i++){ const t = t0 + i / SR, att = 1 - Math.exp(-t / tA); out[i] *= att * att; }
   return out;
 }
 
@@ -202,19 +210,26 @@ function release(x, i0){
   return x;
 }
 
+/* the raw voice, seconds [t0, t0 + n/SR) of the same performance (same seed → same singers,
+   same phases; every envelope / bloom / vibrato is a function of absolute t) */
+function renderRaw(base, n, t0){
+  const id = parseId(base) || parseId('C4');
+  const f = noteHz(id.pitch), rnd = mulberry32(seedOf(base));
+  const fn = id.timbre === 'choir' ? renderChoir : id.timbre === 'pad' ? renderPad : renderOrgan;
+  return { raw: fn(f, rnd, n, t0), timbre: id.timbre };
+}
 const longCache = new Map(), cache = new Map();
 function longRender(base){
   if (longCache.has(base)) return longCache.get(base);
-  const id = parseId(base) || parseId('C4');
-  const f = noteHz(id.pitch), n = Math.round(SR * LEN), rnd = mulberry32(seedOf(base));
-  const raw = id.timbre === 'choir' ? renderChoir(f, rnd, n) : id.timbre === 'pad' ? renderPad(f, rnd, n) : renderOrgan(f, rnd, n);
+  const n = Math.round(SR * LEN), { raw, timbre } = renderRaw(base, n, 0);
   release(raw, Math.round(SR * HOLD));
   let peak = 0;
   for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(raw[i]));
-  const k = PEAK[id.timbre] / (peak || 1);
+  const k = PEAK[timbre] / (peak || 1);
   for (let i = 0; i < n; i++) raw[i] *= k;
-  longCache.set(base, raw);
-  return raw;
+  const L = { samples: raw, k };
+  longCache.set(base, L);
+  return L;
 }
 
 /** id → {samples, sr}. Cached (the same Float32Array every call — deterministic). */
@@ -225,14 +240,16 @@ export function organVoice(id){
   const L = longRender(base);
   let samples;
   if (tier === 's'){
-    samples = L.slice(0, Math.round(SR * (S_HOLD + S_REL)));
+    samples = L.samples.slice(0, Math.round(SR * (S_HOLD + S_REL)));
     release(samples, Math.round(SR * S_HOLD));
   } else if (tier === 'c'){
-    samples = L.slice(Math.round(SR * C_OFF));
+    // the steady state at CONT_AT, at the LONG render's gain (level-matched by construction)
+    samples = renderRaw(base, Math.round(SR * (C_HOLD + REL)), CONT_AT).raw;
+    release(samples, Math.round(SR * C_HOLD));
+    for (let i = 0; i < samples.length; i++) samples[i] = Math.max(-.95, Math.min(.95, samples[i] * L.k));
     const nf = Math.round(SR * C_FADE);
-    for (let i = 0; i < nf; i++) samples[i] *= .5 - .5 * Math.cos(Math.PI * i / nf);
-    samples[samples.length - 1] = 0;
-  } else samples = L;
+    for (let i = 0; i < nf; i++) samples[i] *= Math.sin(.5 * Math.PI * i / nf);   // equal-power (the first voice is releasing under it)
+  } else samples = L.samples;
   const v = { samples, sr: SR };
   cache.set(id, v);
   return v;

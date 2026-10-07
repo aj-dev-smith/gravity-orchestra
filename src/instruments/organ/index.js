@@ -296,12 +296,14 @@ export default {
         // ---- the strike: the stroke begins (a landing, or a legato re-press), once ----
         if (started && !st.armed && ln.edge.check(st.abs, st.since, skipStrikes)){
           const r = lane.rec[st.i], first = st.abs <= st.first + 1e-9, impact = first || r.arrive !== 'ride';
-          const dur = r.dur <= SHORT_MAX ? r.dur : r.ids.cont ? CONT_AT + XFADE : r.dur;
+          const dur = r.dur <= SHORT_MAX ? r.dur : r.ids.cont ? CONT_AT + XFADE : r.dur;   // a re-sourced note releases as its continuation fades in
           onStrike && onStrike({ note: r.ids.first, vel: r.vel, pos: ln.mouthPos.clone(), color: ICE, dur,
             shake: 0, sparks: impact ? 3 : 0, light: .55 });
         }
         // …and a note held past the render is re-sourced under itself (no visual event)
-        if (started && !st.armed){
+        //    (gated on since ≥ CONT_AT: makeEdge only bounds `since` from above — ungated, the
+        //    continuation fired AT the strike, doubling the onset and cutting the hold short)
+        if (started && !st.armed && st.since >= CONT_AT){
           const r = lane.rec[st.i];
           if (r.ids.cont && ln.cEdge.check(st.abs + CONT_AT, st.since - CONT_AT, skipStrikes))
             onStrike && onStrike({ note: r.ids.cont, vel: r.vel, pos: ln.mouthPos.clone(), color: ICE, dur: r.dur - CONT_AT,

@@ -73,7 +73,9 @@
    IS this piece), hands to the basso's sinking ground, then the harpsichord swelling into
    the wind; the belt takes the wind and the teeth (its fastest, flattest skims), with the
    wheel's long bow between; the wide shot takes the stamping downbeat, the harpsichord its
-   hammered beats; the wheel owns the freeze through the breath. Shares (director-audit):
+   hammered beats; the wheel owns the freeze. (The breath bar itself is always the wide
+   shot — directorplan shotAt's seam rule, every song — so the long low bow rings under the
+   stage shot.) Shares (director-audit):
    lead 34% · bowwheel 25% · dulcimer 20% · strings 14% · stage 7%.
    ============================================================ */
 
@@ -152,10 +154,11 @@ for (const [b, ch, v, d] of [[BAR(7), FM, .5, 3.6], [BAR(8), BBM, .5, 3.6], [BAR
 const STAMP = [[BAR(11), ['F3', 'C4', 'F4', 'G#4', 'C5']], [BAR(11) + 2, ['F3', 'C#4', 'F4', 'G#4']],
                [BAR(12), ['F3', 'C#4', 'F4', 'A#4']], [BAR(12) + 2, ['G3', 'C4', 'E4', 'G4', 'A#4']]];
 for (const [at, ch] of STAMP) for (let i = 0; i < 4; i++)
-  for (const x of ch) bow(at + i * .5, x, i % 2 ? .78 : .95, .3);
-// D — hushed sustained chords under the teeth
+  for (const x of ch) bow(at + i * .5, x, i % 2 ? .78 : .95, .4);   // a fuller stroke than the shiver's: the tutti's weight
+// D — hushed sustained chords under the teeth (pp: the soloist's chatter is the whole picture —
+//     at .42 the held chords + basso rendered as loud as the stamping tutti before them)
 for (const [b, ch] of [[BAR(13), FM], [BAR(13) + 2, DB], [BAR(14), BBM], [BAR(14) + 2, C7]])
-  for (const x of ch) bow(b, x, .42, 1.75);
+  for (const x of ch) bow(b, x, .3, 1.75);
 // E — the freeze: the C7 shiver once more, then the low strings bow through the breath
 shiver(['C4', 'E4', 'G4', 'A#4'], BAR(15), BAR(15) + 3, .5, .8);
 bow(BAR(15) + 3, 'C3', .62, 4.1); bow(BAR(15) + 3, 'G3', .55, 4.1);
@@ -189,7 +192,7 @@ for (const [b, lh, rh] of [
 ]) roll(b, [lh], rh, .86, .4, .02);
 // D — sparse: one soft chord per half bar under the teeth
 for (const [b, lh, rh] of [[BAR(13), 'F3', FM], [BAR(13) + 2, 'C#3', DB], [BAR(14), 'C#3', BBM], [BAR(14) + 2, 'C3', C7]])
-  roll(b, [lh], rh, .45, 1.8);
+  roll(b, [lh], rh, .36, 1.8);
 // E — the freeze: C7 on the downbeat, then the long roll that rings through the breath
 roll(BAR(15), ['C3'], ['E4', 'G4', 'A#4'], .55, 1.4);
 roll(BAR(15) + 3, ['C3', 'G3'], ['E4', 'A#4', 'C5', 'E5'], .5, 5, .07);
@@ -210,7 +213,7 @@ for (const [bar, ns] of [[7, ['F2', 'F2', 'F2', 'F2']], [8, ['C#2', 'C#2', 'C#2'
 eighths('F2', BAR(11), BAR(11) + 2, .82, .82); eighths('C#2', BAR(11) + 2, BAR(12) + 2, .82, .86);
 eighths('C2', BAR(12) + 2, BAR(13), .86, .9);
 // D — half notes under the teeth
-for (const [b, n] of [[BAR(13), 'F2'], [BAR(13) + 2, 'C#2'], [BAR(14), 'C#2'], [BAR(14) + 2, 'C2']]) bass.push([b, n, .58]);
+for (const [b, n] of [[BAR(13), 'F2'], [BAR(13) + 2, 'C#2'], [BAR(14), 'C#2'], [BAR(14) + 2, 'C2']]) bass.push([b, n, .42]);
 // E — the freeze: the dominant shivers once more, the last stroke rings into the breath
 eighths('C2', BAR(15), BAR(15) + 3.5, .55, .8);
 
@@ -235,7 +238,7 @@ export default {
       [BAR(11), 'stage', 4],        // stamping feet: the whole band on one downbeat
       [BAR(12), 'dulcimer', 4],     // the harpsichord hammering every beat
       [BAR(13), 'lead', 8],         // chattering teeth
-      [BAR(15), 'bowwheel', 8],     // the freeze, held through the breath
+      [BAR(15), 'bowwheel', 4],     // the freeze (the breath bar after it is always the wide shot)
     ],
   },
 };

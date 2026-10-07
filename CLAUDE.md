@@ -322,7 +322,10 @@ plays exactly as before (centred, un-limited).
 pluck AND the drums — the old `.35 + .65·v` line from v = .5 up (existing grooves unchanged, measured
 ±.5 dB), bent down below it so pp is genuinely quiet (v .1 ≈ −19 dB, 0 ≈ −27). Live path only — iOS
 samples play full. MIDI import emits it from note velocity relative to the track's loudest (`^.6`);
-a flat-velocity track stays 2-element.
+a flat-velocity track stays 2-element. Songs MIXED under the old floor whose drums live below .5
+(Entertainer brushes, Marionette snare, Danse hat — lanes fell 3–7 dB) wrap those lanes in
+`legacyLane` (dynamics.js `legacyVel`: the velocity that sounds at the old level) — drop the wrap
+to let their quiet hits mean pp. Plugin parts (`playVoice`) are untouched: gain = vel, as before.
 
 **THE LOCK RULE (melodic tracks): for every track, sum(beats) + delay must equal the
 melody's sum exactly**, or it desyncs at the loop seam. These tracks *chain* (each pad

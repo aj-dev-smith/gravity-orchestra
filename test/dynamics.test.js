@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { velGain, beltVel, okBeltVel, velLook, DYN } from '../src/dynamics.js';
+import { velGain, beltVel, okBeltVel, velLook, DYN, legacyVel, legacyLane } from '../src/dynamics.js';
 import { SONGS } from '../src/songs/index.js';
 import { layoutPads } from '../src/engine.js';
 
@@ -28,6 +28,21 @@ describe('velGain — one velocity law', () => {
   it('treats junk as full, clamps out-of-range', () => {
     expect(velGain(NaN)).toBe(1); expect(velGain(undefined)).toBe(1);
     expect(velGain(2)).toBe(1); expect(velGain(-1)).toBe(velGain(0));
+  });
+});
+
+describe('legacyVel — songs mixed under the old floored law keep their balance', () => {
+  it('sounds exactly the old level, identity from the knee up', () => {
+    for (let v = 0; v <= 1 + 1e-9; v += .01){
+      expect(dB(velGain(legacyVel(v)))).toBeCloseTo(dB(old(Math.min(1, v))), 2);
+      if (v >= DYN.KNEE) expect(legacyVel(v)).toBe(Math.min(1, v));
+    }
+  });
+  it('maps a lane, keeping bare beats full', () => {
+    expect(legacyLane([0, [1, .2], [2, .8]])).toEqual([0, [1, legacyVel(.2)], [2, .8]]);
+  });
+  it('the Entertainer / Marionette / Danse drums sound at their pre-dynamics levels', () => {
+    for (const k of ['entertainer', 'marionette']) for (const h of SONGS[k].drums.snare) expect(h[1]).toBeGreaterThan(.3);
   });
 });
 

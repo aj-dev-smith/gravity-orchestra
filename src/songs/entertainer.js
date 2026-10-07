@@ -79,6 +79,8 @@
    is re-framed from its wing side (`shots.bass`: the plugin key, though its cut key is `strings`), because its default eye sat between the
    belt's posts in the studio. */
 
+import { legacyLane } from '../dynamics.js';
+
 // ---- note helpers (sharps only) --------------------------------------------------
 const r5 = x => +x.toFixed(5);
 /** 'D6/.25 E6/.25 …' → [['D6', .25], …]: a chained belt line */
@@ -350,7 +352,9 @@ export default {
     dulcimer: 1.2, horns: 2, strum: 3, bass: 1, drums: .5,
     shots: { bass: { x: -5, up: 7.5, dist: 15 } },      // (keyed by the PLUGIN key) the bass bed from its wing side
   },
-  drums: { kick: lane(kick), snare: lane(snare), hat: lane(hat), crash: lane(crash) },
+  // (legacyLane: these brushes were balanced under the old floored drum law — dynamics.js keeps
+  //  their level exactly; the brush whisper is a mix level here, Joplin's p/f rides on top of it)
+  drums: { kick: legacyLane(lane(kick)), snare: legacyLane(lane(snare)), hat: legacyLane(lane(hat)), crash: legacyLane(lane(crash)) },
 };
 
 export const _entertainer = { sum, melodyBeats: sum(melody), dyn };

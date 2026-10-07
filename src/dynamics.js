@@ -43,3 +43,19 @@ export const okBeltVel = v => v === undefined || (typeof v === 'number' && Numbe
 /** the strike's VISUAL weight for a velocity (flash, sparks, shake): never invisible —
     a pp note still lights its pad, just less (.3 at v = 0, 1 at v = 1). */
 export const velLook = v => .3 + .7 * clamp01(v);
+
+/** the velocity that sounds under velGain at the level `v` sounded under the OLD floored drum law
+    (.35 + .65·v) — identity from the knee up. For songs mixed before velGain bent the bottom
+    (the Entertainer's brushes, the Marionette's ticking snare, the Danse's bone rattles): their
+    authored balance is kept exactly; drop the wrap to let their quiet hits mean pp. Bisection
+    (velGain is monotone), so pure and exact to ~1e-9. */
+export function legacyVel(v){
+  v = clamp01(v);
+  if (v >= DYN.KNEE) return v;
+  const want = DYN.FLOOR + (1 - DYN.FLOOR) * v;
+  let lo = v, hi = DYN.KNEE;
+  for (let i = 0; i < 40; i++){ const m = (lo + hi) / 2; if (velGain(m) < want) lo = m; else hi = m; }
+  return +((lo + hi) / 2).toFixed(4);
+}
+/** a drum lane through legacyVel: [beat, vel] (or a bare beat = full) → [beat, legacyVel(vel)] */
+export const legacyLane = hits => hits.map(h => Array.isArray(h) ? [h[0], legacyVel(h[1] ?? 1), ...h.slice(2)] : h);

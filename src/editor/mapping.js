@@ -253,7 +253,7 @@ export function applyMidiMapping(parsed, mapping, opts = {}){
 
 /* =================== authored songs =================== */
 
-const chainEvents = (notes, delay = 0) => { let b = delay; return notes.map(([n, d]) => { const e = { beat: b, midi: noteNum(n), vel: .8, dur: d }; b += d; return e; }); };
+const chainEvents = (notes, delay = 0) => { let b = delay; return notes.map(([n, d, v]) => { const e = { beat: b, midi: noteNum(n), vel: v ?? .8, dur: d }; b += d; return e; }); };
 const asChain = d => Array.isArray(d) ? { notes: d, delay: 0 } : d;
 
 /** An authored song's sources: [{ id, name, role, count, events, drums? }].

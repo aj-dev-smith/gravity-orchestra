@@ -461,6 +461,9 @@ export default {
     const _c = new THREE.Color(), _e = new THREE.Euler(0, 0, 0, 'ZYX');
     const RING_HOT = new THREE.Color(0xff6a1a), RING_COOL = new THREE.Color(0x1aa8ff), RUN = new THREE.Color(0x6fd8ff);
     const plumeBase = plume.material.uniforms.uGain.value;
+    // HEADSET comfort (xr(on)): a rolling sky around a standing viewer is vection — the deck under
+    // your feet never tilts (it's the instruments' frame), and in VR the sky banks half as far
+    let bankK = 1;
     return {
       group, ...STAGE,
       fog: new THREE.FogExp2(FOG, .014), background: new THREE.Color(0x010208),
@@ -468,7 +471,7 @@ export default {
       update(dt, songTime, camera, energy = 0, cues = null){
         const t = songTime, tc = skyClock(t);
         // SKY: bank (roll about the forward axis + a coordinated nose-yaw) — the deck never moves
-        const bank = bankAt(t, cues);
+        const bank = bankAt(t, cues) * bankK;
         _e.set(0, BANK.yaw * bank, bank);
         rig.quaternion.setFromEuler(_e);
         dome.quaternion.copy(rig.quaternion);
@@ -503,6 +506,7 @@ export default {
         gunwaleMat.color.setHex(0x4fc8ff).multiplyScalar(1.2 + .25 * thump + .8 * energy);
         glass.uniforms.uGain.value = 1 + .4 * energy;
       },
+      xr(on){ bankK = on ? .5 : 1; },
       dispose(){ sky.dispose(); tex.map.dispose(); tex.emi.dispose(); puff.dispose(); glowT.dispose(); },
     };
   },

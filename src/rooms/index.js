@@ -17,6 +17,7 @@ import starship from './starship.js';
            update?(dt, songTime, camera, energy, cues),   // pure-ish ambience; no allocation.
                                                      // cues = the song's weather (see cue())
            resize?(w, h, pixelRatio),                // render-target rooms (the studio mirror)
+           xr?(on),                                  // WebXR headset variant (lighter / comfier)
            dispose() } }
    Rooms are built LAZILY on first visit and CACHED (hidden, not destroyed), so
    cycling with R is instant after the first pass and shaders compile once.
@@ -80,6 +81,7 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
   }
 
   let userPicked = false;
+  let xrOn = false;                                           // presenting in a headset (main: xrSession)
   let weather = null;                                         // the current song's {storm, sky, rollT, beat, P}
   function set(k, { announce = false } = {}){
     if (announce) userPicked = true;
@@ -94,6 +96,7 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
       cur = built[k] || buildRoom(R);
       if (cur.place && cur.anchorGen !== anchorGen){ cur.place(anchors); cur.anchorGen = anchorGen; }
       cur.group.visible = true;
+      if (cur.xrOn !== xrOn){ cur.xr?.(xrOn); cur.xrOn = xrOn; }   // the headset variant follows the room in
       fog.color.copy(cur.fog.color); fog.density = cur.fog.density;
       scene.background = cur.background; applyMood(cur.mood);
     }
@@ -195,6 +198,10 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
     },
     /* the song's weather (data): storm beats + sky phases, for rooms that stage them */
     cue(w){ weather = w; },
+    /* WebXR: rooms may offer a lighter / comfier HEADSET variant via an optional xr(on) — the
+       studio drops its per-eye mirror pass, the arena tames its blinders, the starship banks
+       its sky less. Applied to the live room now and to any room set while presenting. */
+    xr(on){ xrOn = !!on; if (cur && cur.xrOn !== xrOn){ cur.xr?.(xrOn); cur.xrOn = xrOn; } },
     update(dt, songTime, camera, energy){ if (cur && cur.update) cur.update(dt, songTime, camera, energy, weather); },
     resize(w, h, pr){ for (const b of Object.values(built)) b.resize?.(w, h, pr); },
     dispose(){

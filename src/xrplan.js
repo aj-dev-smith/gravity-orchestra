@@ -82,11 +82,12 @@ export function planAnchors({ shots = [], wide = null, belts = [], solids = [], 
 }
 
 /* which anchor a director shot key lands on: a station's own pad; 'belt' / a belt role → that
-   belt's pad (else the lead belt's); 'stage' → the wide; anything unknown → the first anchor */
+   belt's pad (else the lead belt's); a 'ride' (the 2D ride-the-ball camera — never flown in a
+   headset) → the lead belt's pad; 'stage' → the wide; anything unknown → the first anchor */
 export function anchorFor(key, anchors){
   if (!anchors.length) return -1;
   let a = anchors.find(x => x.key === key);
-  if (!a && (key === 'belt' || key === 'all' || key === 'alto' || key === 'bass' || key === 'lead'))
+  if (!a && (key === 'belt' || key === 'ride' || key === 'all' || key === 'alto' || key === 'bass' || key === 'lead'))
     a = anchors.find(x => x.key === 'lead') || anchors.find(x => /^(alto|bass)$/.test(x.key));
   return (a || anchors[0]).id;
 }

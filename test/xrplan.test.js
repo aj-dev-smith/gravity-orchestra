@@ -97,6 +97,7 @@ describe('tour = the director edit, as pads (a pure fn of songTime)', () => {
     expect(A[anchorFor('stage', A)].key).toBe('stage');
     expect(A[anchorFor('belt', A)].key).toBe('lead');
     expect(A[anchorFor('alto', A)].key).toBe('lead');    // a belt role without its own pad → the lead belt
+    expect(A[anchorFor('ride', A)].key).toBe('lead');    // the 2D ride cam is never flown in a headset: its belt's pad
     expect(A[anchorFor('bells', A)].key).toBe('bells');
     expect(anchorFor('nope', A)).toBe(0);
     expect(anchorFor('x', [])).toBe(-1);

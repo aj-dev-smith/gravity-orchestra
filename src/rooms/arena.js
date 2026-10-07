@@ -578,7 +578,10 @@ export default {
     const beamBase = beams.material.uniforms.uGain.value;
     const blindIdle = new THREE.Color(.22, .09, .025), blindHot = new THREE.Color(9, 7.4, 5.4);
     const hazeIdle = hazes.map(h => h.m.material.opacity);
-    const blindFlash = age => (age >= 0 && age < 1.2) ? Math.exp(-age * 4.2) : 0;
+    // in a HEADSET a blinder hit fills the whole field of view and there's no looking away from
+    // the screen: the flash peaks lower (xr(on) — photosensitive comfort, same timing)
+    let blindK = 1;
+    const blindFlash = age => (age >= 0 && age < 1.2) ? blindK * Math.exp(-age * 4.2) : 0;
     const co2Level = age => (age >= 0 && age < 1.55) ? Math.min(1, age / .05) * Math.max(0, 1 - Math.max(0, age - .4) / 1.1) : 0;
 
     return {
@@ -652,6 +655,7 @@ export default {
           background.copy(fog.color);
         }
       },
+      xr(on){ blindK = on ? .45 : 1; },
       dispose(){},
     };
   },

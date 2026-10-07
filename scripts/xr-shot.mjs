@@ -109,16 +109,49 @@ if (A.controls){                                         // B pause/play, left-s
   await page.evaluate(() => window.__xrdev.controllers.right.updateAxes('thumbstick', 0, 0)); await sleep(150);
   const yaw1 = await page.evaluate(() => window.__dev.scene.getObjectByName('xr').children[0].rotation.y);
   check(Math.abs(Math.abs(yaw1 - yaw0) - Math.PI / 6) < 1e-6, `right stick snap-turns 30° (${(yaw0 * 57.3).toFixed(0)}° → ${(yaw1 * 57.3).toFixed(0)}°)`);
+  // Y → the in-world MENU; point the right controller at a button, pull the trigger
   const song0 = await page.evaluate(() => document.getElementById('song').value);
-  await press('left', 'y-button'); await sleep(800);
-  const s1 = await page.evaluate(() => ({ song: document.getElementById('song').value, ...window.__dev.xr.info() }));
-  check(s1.song !== song0 && s1.presenting && s1.anchors.length > 0, `Y → next song in the headset (${song0} → ${s1.song}, ${s1.anchors.length} pads)`);
+  await press('left', 'y-button'); await sleep(300);
+  check(await page.evaluate(() => window.__dev.xr.menu.open), 'Y opens the in-world menu');
+  const pointAt = id => page.evaluate(id => {
+    const d = window.__dev, T = d.three, w = d.xr.menu.at(id); if (!w) return false;
+    const dolly = d.scene.getObjectByName('xr').children[0]; dolly.updateMatrixWorld(true);
+    const inv = dolly.matrixWorld.clone().invert();
+    const hand = new T.Vector3(.18, 1.25, -.15), tgt = new T.Vector3(...w).applyMatrix4(inv);
+    const q = new T.Quaternion().setFromUnitVectors(new T.Vector3(0, 0, -1), tgt.sub(hand).normalize());
+    const c = window.__xrdev.controllers.right; c.position.set(hand.x, hand.y, hand.z); c.quaternion.set(q.x, q.y, q.z, q.w);
+    return true; }, id);
+  const pick = await page.evaluate(s0 => window.__dev.xr.menu.buttons.find(b => b.kind === 'song' && !b.id.endsWith(':' + s0))?.id, song0);
+  check(!!pick && await pointAt(pick), `menu: pointing at ${pick}`);
+  if (A.out) { await sleep(250); await page.screenshot({ path: A.out.replace(/\.png$/, '-menu.png') }); }
+  await press('right', 'trigger'); await sleep(900);
+  const s1 = await page.evaluate(() => ({ song: document.getElementById('song').value, menu: window.__dev.xr.menu.open, ...window.__dev.xr.info() }));
+  check(s1.song !== song0 && s1.song === pick.slice(5) && s1.presenting && s1.anchors.length > 0, `menu → song in the headset (${song0} → ${s1.song}, ${s1.anchors.length} pads)`);
+  const room0 = await page.evaluate(() => window.__dev.room?.());
+  const roomPick = await page.evaluate(r0 => window.__dev.xr.menu.buttons.find(b => b.kind === 'room' && !b.id.endsWith(':' + r0) && b.id !== 'room:off')?.id, room0);
+  await pointAt(roomPick); await sleep(150); await press('right', 'trigger'); await sleep(400);
+  const room1 = await page.evaluate(() => window.__dev.room?.());
+  check(room1 === roomPick.slice(5), `menu → room (${room0} → ${room1})`);
+  const padBefore = await page.evaluate(() => window.__dev.xr.info().cur);
+  await pointAt('close'); await sleep(150); await press('right', 'trigger'); await sleep(600);
+  const s2 = await page.evaluate(() => ({ menu: window.__dev.xr.menu.open, cur: window.__dev.xr.info().cur }));
+  check(!s2.menu && s2.cur === padBefore, `CLOSE closes the menu — and the press never throws (pad ${padBefore} → ${s2.cur})`);
 }
 if (A.tour){
   await page.evaluate(() => { window.__dev.xr.tour = true; });
   await sleep(+(A.tour) * 1000 || 4000);
   const s = await page.evaluate(() => window.__dev.xr.info());
   check(s.tour, `tour on · at pad ${s.cur} (${s.anchors[s.cur]?.key})`);
+  // the director / RIDE cam never move the headset: the camera stays in the rig at the emulated head pose
+  const head = () => page.evaluate(() => { const c = window.__dev.camera;
+    return { inRig: c.parent?.parent?.name === 'xr', local: c.position.toArray().map(v => +v.toFixed(3)) }; });
+  const h0 = await head();
+  await page.evaluate(() => { window.__dev.xr.tour = false; window.__dev.cam('ride'); });
+  await sleep(1200);
+  const h1 = await head();
+  await page.evaluate(() => window.__dev.cam('auto'));
+  check(h0.inRig && h1.inRig && h0.local.every((v, i) => Math.abs(v - h1.local[i]) < 1e-3),
+    `ride cam / director never move the headset (head in rig ${JSON.stringify(h0.local)} → ${JSON.stringify(h1.local)})`);
 }
 const frame = async (out, t) => {
   await page.evaluate((rate, t) => { if (rate !== undefined) window.__dev.rate = +rate; if (t !== undefined) window.__dev.t = +t; }, A.rate, t);

@@ -267,7 +267,7 @@ export function makeMarbleDrums({ envMap, glowTex }){
       const world = c.clone().add(K);
       const floorY = pieceFloor(p);
       let cy = null;
-      if (p.cym){ cy = byCym.get(p.cym); if (!cy){ cy = { on: p.cym, head: buildHung(p), members: [], parts: [] }; byCym.set(p.cym, cy); cyms.push(cy); } }
+      if (p.cym){ cy = byCym.get(p.cym); if (!cy){ cy = { on: p.cym, head: buildHung(p), members: [], parts: [], choked: -Infinity }; byCym.set(p.cym, cy); cyms.push(cy); } }
       const head = cy ? cy.head : st.kind === 'cymbal' ? buildHatPiece(p, st, c) : buildDrumPiece(p, st, c, floorY);
       const mag = buildMagnet(c, H, st, mats, glowTex);
       kit.add(mag.group); mags.push(mag);
@@ -282,7 +282,7 @@ export function makeMarbleDrums({ envMap, glowTex }){
                    wobbleA: WOBBLE[p.key] ?? .12, wobbleAxis: pieces.length * 2.4,
                    drum: { contact: world, style: { ball: st.glow } },   // the shape main's drumStrike reads
                    trim: seats.find(q => q.lane === p.key)?.trimMat,   // a tom's stair nosing
-                   cym: cy, fired: -Infinity, choked: -Infinity, flash: 0 };
+                   cym: cy, fired: -Infinity, flash: 0 };
       pieces.push(pc);
       if (cy){ cy.members.push(pc); cy.parts.push({ L, meta, rho: p.rho, dir: p.dir, vInMax: pc.vInMax }); }
       if (p.key === 'kick') kickPc = pc;
@@ -331,16 +331,6 @@ export function makeMarbleDrums({ envMap, glowTex }){
         }
       }
       pc.flash *= Math.exp(-dt * 9);
-
-      // CHOKE edge: the clamp grabs this cymbal on cue (drumparts clampAt) — cut its sound
-      if (pc.cym && d.i >= 0){
-        const ck = pc.meta.choke[d.i];
-        if (t < pc.choked - 1e-6) pc.choked = -Infinity;
-        if (started && ck < Infinity && d.since >= ck && d.since - ck <= EDGE_W){
-          const at = t - d.since + ck;
-          if (at > pc.choked + 1e-6){ pc.choked = at; if (!skipStrikes) onStrike && onStrike({ lane: pc.meta.lane[d.i], choke: true, vel: 0, drum: pc.drum }); }
-        }
-      }
 
       // the head on its piston (its rod rides with it; the sleeve stays put) — a hung
       // cymbal is posed once for all its balls, below
@@ -439,7 +429,20 @@ export function makeMarbleDrums({ envMap, glowTex }){
     for (const cy of cyms){
       const h = cy.head;
       h.group.position.y = h.bell + (started ? cymbalPiston(cy.members, t, start) : 0);
-      const q = started ? cymbalPose(cy.C, t, start) : { rx: 0, rz: 0, k: 1 };
+      const q = started ? cymbalPose(cy.C, t, start) : { rx: 0, rz: 0, k: 1, i: -1 };
+      // CHOKE edge: the clamp grabs the CYMBAL on cue (the merged schedule's choke — the same
+      // one cymbalPose grips with), so every lane it sounds (the ride AND its bell) is cut
+      if (q.i >= 0){
+        const ck = cy.C.choke[q.i];
+        if (t < cy.choked - 1e-6) cy.choked = -Infinity;
+        if (ck < Infinity && q.since >= ck && q.since - ck <= EDGE_W){
+          const at = t - q.since + ck;
+          if (at > cy.choked + 1e-6){
+            cy.choked = at;
+            if (!skipStrikes && onStrike) for (const m of cy.members) onStrike({ lane: m.key, choke: true, vel: 0, drum: m.drum });
+          }
+        }
+      }
       h.tilt.rotation.set(q.rx, 0, q.rz);
       h.clamp.position.y = h.clampY - CLAMP.gap * (1 - q.k);
       let fl = 0; for (const m of cy.members) fl = Math.max(fl, m.flash);

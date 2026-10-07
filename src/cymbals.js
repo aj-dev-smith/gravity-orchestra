@@ -91,8 +91,11 @@ export function metal(r, wn, o, sr = SR){
       if (e < 1e-5) break;
     }
   }
-  const atk = Math.max(1, Math.round(.0004 * sr)), fade = Math.round(.034 * sr);
-  for (let i = 0; i < n; i++) y[i] *= Math.min(1, i / atk) * Math.min(1, (n - 1 - i) / fade);
+  // the render is finite but bronze isn't: the tail is still ~20–30 dB under the attack when
+  // `dur` runs out, so a 30 ms cut there reads as a GATE on an exposed crash. Fade the last
+  // 15 % (≤ .5 s) on a smoothstep instead — it lands as the ring dying away.
+  const atk = Math.max(1, Math.round(.0004 * sr)), fade = Math.max(1, Math.round(Math.min(.5, .15 * o.dur) * sr));
+  for (let i = 0; i < n; i++){ const u = Math.min(1, (n - 1 - i) / fade); y[i] *= Math.min(1, i / atk) * u * u * (3 - 2 * u); }
   return y;
 }
 

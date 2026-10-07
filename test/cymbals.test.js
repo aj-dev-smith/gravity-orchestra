@@ -64,6 +64,8 @@ describe('metal voices (cymbals.js)', () => {
       const T = s.length / a.sr;
       expect(rms(s, a.sr, 0, .05)).toBeGreaterThan(.05);                 // a real hit
       expect(rms(s, a.sr, T * .85, T)).toBeLessThan(rms(s, a.sr, 0, .1) * .15);   // and it dies away
+      // …and is never GATED: the last 60 ms sit ≥ 40 dB under the attack (a fade, not a cut)
+      if (name !== 'clap') expect(rms(s, a.sr, T - .06, T)).toBeLessThan(rms(s, a.sr, 0, .1) * .01);
     }
   });
   it('variants are distinct strokes, not copies', () => {

@@ -626,10 +626,13 @@ function hitDrum(name, vel, sp){
 /* the iOS bank's metal samples: the SAME render as the live path, baked to a WAV whose peak
    is the cymbal's mix gain relative to the shells' .92 — el.volume is ignored on iOS, so a
    crash normalized like a kick would ring at full level for 3 s over the whole mix */
-const METAL_PEAK = .92 / .8;                             // the snare's gain → .92 (the shells' level)
+/* (the open hat is levelled against the CLOSED hat, not the snare: the closed hat's WAV is
+   baked at full .92 like every shell, so an open hat scaled off the snare came out ~6 dB
+   UNDER the closed one — an open hat must not be quieter than a chick) */
+const metalPeak = name => .92 * GM_DRUMS[name].gain / GM_DRUMS[name === 'hatOpen' ? 'hat' : 'snare'].gain;
 function renderDrumWav(name){
   if (GM_DRUMS[name]?.metal){
-    try { const r = metalVoice(name, 0); return encodeWav(r.samples, r.sr, Math.min(.92, GM_DRUMS[name].gain * METAL_PEAK)); }
+    try { const r = metalVoice(name, 0); return encodeWav(r.samples, r.sr, Math.min(.92, metalPeak(name))); }
     catch(e){ console.warn('cascade: metal WAV failed', name, e); }
   }
   const sr = 22050;

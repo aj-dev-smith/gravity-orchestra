@@ -33,7 +33,7 @@ export const SLIDE_X = .1, SLIDE_Z = .16;  // the slide's two tubes: ±x off the
 export const VALVE_Y0 = Y_LID + .75, VALVE_DY = .26;   // the valve block: casings face the audience, low on the riser
 export const C4 = 261.626;
 
-export const family = m => m < 46 ? 'tba' : m < 62 ? 'tbn' : 'tpt';
+export const family = m => m < 48 ? 'tba' : m < 62 ? 'tbn' : 'tpt';
 const TBN = [46, 53, 58, 62, 65, 68, 70, 72, 74, 75, 77]; // Bb tenor trombone partials 2–12 (MIDI): Bb2 F3 Bb3 D4 F4 Ab4 Bb4 …
 const TBA = [34, 46, 53, 58, 62, 65, 68, 70];              // BBb tuba partials: BBb1 Bb2 F3 Bb3 D4 F4 Ab4 Bb4
 const TPT = [58, 65, 70, 74, 77, 80, 82, 84, 86, 87, 89]; // Bb trumpet partials (sounding): Bb3 F4 Bb4 D5 F5 Ab5 Bb5 C6 …

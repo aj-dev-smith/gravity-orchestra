@@ -332,6 +332,29 @@ describe('horns: the build', () => {
   });
 });
 
+describe('horns: a dense random part survives the whole build', () => {
+  it('500 random events: builds fast, ≤ 150 meshes, every frame finite, every strike fires with a real voice id', () => {
+    let s = 11; const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+    const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const loopBeats = 32, beat = 60 / 140, Pp = ROLL_T + loopBeats * beat;
+    const part = Array.from({ length: 500 }, () => [Math.floor(rnd() * loopBeats * 8) / 8, names[Math.floor(rnd() * 12)] + (1 + Math.floor(rnd() * 7)), rnd() * 1.2, rnd() < .4 ? 0 : rnd() * 6]);
+    const inst = horns.make({ envMap: null, glowTex: null, THREE });
+    const t0 = performance.now();
+    const grp = inst.build(part, { rollT: ROLL_T, beat, P: Pp, start: START, station: { w: 14, d: 6 }, floorY: -1.5, loopBeats });
+    expect(performance.now() - t0).toBeLessThan(1500);
+    let meshes = 0; grp.traverse(o => { if (o.isMesh || o.isSprite) meshes++; });
+    expect(meshes).toBeLessThanOrEqual(150);
+    const ids = new Set(horns.voiceIds(part)), hits = [];
+    const t1 = performance.now(); let frames = 0;
+    for (let t = START; t < START + Pp + .5; t += 1 / 60, frames++)
+      inst.update(t, Pp, 1 / 60, { started: true, skipStrikes: false, onStrike: h => hits.push(h) });
+    expect((performance.now() - t1) / frames).toBeLessThan(2);       // ms per frame
+    grp.traverse(o => { if (o.isMesh || o.isSprite) expect(Number.isFinite(o.position.y) && Number.isFinite(o.scale.y)).toBe(true); });
+    expect(hits.length).toBeGreaterThan(50);
+    for (const h of hits){ expect(ids.has(h.note)).toBe(true); expect(h.dur).toBeGreaterThan(0); expect(Number.isFinite(h.pos.y)).toBe(true); }
+  });
+});
+
 describe('horns: the voice', () => {
   const ids = horns.voiceIds(horns.demo.part);
   it('every demo id pre-renders fast (song-load budget)', () => {
@@ -346,8 +369,18 @@ describe('horns: the voice', () => {
       expect(hornVoice(id)).toBe(v);
       let pk = 0; for (const x of v.samples) pk = Math.max(pk, Math.abs(x));
       expect(pk, id).toBeGreaterThan(.5); expect(pk, id).toBeLessThanOrEqual(.9);
-      expect(v.samples[v.samples.length - 1]).toBe(0);
+      expect(v.samples[v.samples.length - 1]).toBe(0); expect(Math.abs(v.samples[0])).toBe(0);   // no click at either end
       expect(v.samples.length).toBeLessThan(v.sr * 3.5);
+    }
+  });
+  it('the tuba still reads on a phone: ≥ 30 % of its energy above 200 Hz (CLAUDE.md §5)', () => {
+    const goertzel = (x, sr, f, a, b) => { const w = 2 * Math.PI * f / sr, c = 2 * Math.cos(w); let s1 = 0, s2 = 0;
+      for (let i = a; i < b; i++){ const s0 = x[i] + c * s1 - s2; s2 = s1; s1 = s0; } return s1 * s1 + s2 * s2 - c * s1 * s2; };
+    for (const note of ['E2', 'G2', 'A#2']){
+      const { samples, sr } = hornVoice(note), f = noteHz(note), a = Math.round(.4 * sr), b = a + Math.round(.8 * sr);
+      let lo = 0, hi = 0;
+      for (let k = 1; k <= 24; k++){ const e = goertzel(samples, sr, k * f, a, b); if (k * f < 200) lo += e; else hi += e; }
+      expect(hi / (lo + hi), note).toBeGreaterThan(.3);   // (before the body lift: an E2 kept ~11 %)
     }
   });
   it('a stab is short; a held note sustains then exhales', () => {

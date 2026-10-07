@@ -13,7 +13,7 @@
      tune, τ 28 ms), an accent overshoot on stabs.
    · breath noise gated by the waveform (pitch-synchronous); vibrato only on held notes
      (after 220 ms); a slow seeded pitch drift.
-   · the family follows the register (layout.js family): TUBA (< A#2), TROMBONE (< D4),
+   · the family follows the register (layout.js family): TUBA (< C3 — so a Bb2 is a tuba), TROMBONE (< D4),
      TRUMPET — each its own spectrum + body formants.
 
    ids: 'C4'      = a held note (speaks HOLD_MAX s, then exhales; the live path releases at dur)
@@ -35,10 +35,12 @@ const HORN = {
   tbn: { s0: 2.9, s1: .75, fund: .72, ripple: .1, phase: .19, atk: .024, rel: .07, settle: -.25, vib: .05, rate: 5.2, lag: .03,
     nz: .022, nzF: 1300, nzQ: .8, burst: .35, burstF: 1800, dyn: .8,
     body: [['hp', 65, .7], ['peak', 520, .9, 4.5], ['peak', 1200, 1.3, 3], ['hs', 3500, .7, -4], ['lp', 6500, .7]] },
-  // the tuba: a darker, rounder slope, its fundamental kept (it IS the floor), body low
-  tba: { s0: 3.3, s1: 1.15, fund: .25, ripple: .08, phase: .17, atk: .032, rel: .09, settle: -.2, vib: .03, rate: 4.8, lag: .036,
+  // the tuba: a darker, rounder slope, its fundamental kept (it IS the floor) — but its body
+  // lifts the 2nd–4th partials so ~35 % of an E2's energy sits above 200 Hz (phone speakers
+  // roll off below that — CLAUDE.md §5; a fundamental-heavy tuba vanished on a phone)
+  tba: { s0: 3.3, s1: .85, fund: .6, ripple: .08, phase: .17, atk: .032, rel: .09, settle: -.2, vib: .03, rate: 4.8, lag: .036,
     nz: .016, nzF: 700, nzQ: .7, burst: .28, burstF: 900, dyn: .85,
-    body: [['hp', 30, .7], ['peak', 260, .9, 3.5], ['peak', 640, 1.2, 4], ['hs', 2400, .7, -5], ['lp', 4200, .7]] },
+    body: [['hp', 45, .7], ['peak', 320, .9, 4.5], ['peak', 640, 1.2, 4], ['hs', 2400, .7, -5], ['lp', 4200, .7]] },
 };
 
 const TABLES = {};
@@ -159,6 +161,9 @@ export function hornVoice(id){
   const z = Math.round(SR * .025);
   for (let i = 0; i < z; i++) dry[N - 1 - i] *= .5 - .5 * Math.cos(Math.PI * i / z);
   dry[N - 1] = 0;
+  // …and exactly silent at the start: a 1 ms fade-in (the tongue burst starts on a non-zero sample)
+  const zi = Math.round(SR * .001);
+  for (let i = 0; i < zi; i++) dry[i] *= .5 - .5 * Math.cos(Math.PI * i / zi);
   let peak = 0;
   for (let i = 0; i < N; i++) peak = Math.max(peak, Math.abs(dry[i]));
   const k = (stab ? .86 : .8) / (peak || 1);

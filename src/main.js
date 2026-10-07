@@ -7,7 +7,7 @@ import { singlePassFlats } from './perftune.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { SONGS, DEFAULT_SONG, defaultSongKey } from './songs/index.js';
 import { fillSongMenu, addSongOption, isRuntimeSong } from './songmenu.js';
-import { G, UP, UPY, ROLL_T, DESCENT, solveLaunch, arcPos, arcVel, padOffset, beltPhase, deployPose, PAD_R, padRadius, layoutPads } from './engine.js';
+import { G, UP, UPY, ROLL_T, DESCENT, solveLaunch, arcPos, arcVel, padOffset, beltPhase, deployPose, PAD_R, padRadius, layoutPads, noteHz } from './engine.js';
 import * as audio from './audio.js';
 import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } from './juice.js';
 import { makePaternosterShop, makeToneBarParts, PT, BAR } from './paternoster.js';
@@ -52,6 +52,7 @@ const FIXED_ZMAX = 30;                                  // FIXED cam: cap the pu
 let muted = false;                                      // sound toggle (mute button)
 let songTime = 0;                                       // the timeline; clock only supplies deltas
 let playRate = 1, skipStrikes = false, dbg = null;      // ?debug scrub: rate + jump suppression
+let devStrikes = null;                                   // ?debug sound sweep: strikes per machine (+ ids with no baked voice)
 let loopIndex = -1;                                     // floor(songTime / P); ticks once per loop → spawns balls
 /* CONVEYOR: the world no longer falls. Each pad RECIRCULATES — it rises to the
    static band exactly at its strike (beltPhase) then wraps away off-screen. Each
@@ -560,8 +561,10 @@ function buildWorld(keyName){
     rig.cue = eventTimes(part, { rollT: ROLL_T, beat: BEAT }).map(e => ({ t: e.t, w: e.vel }));
     rig.mix = partMix(S, rig.I.key);
     instLive.push(rig);
-    const ids = rig.I.voiceIds ? rig.I.voiceIds(part) : [...new Set(part.map(e => e[1]))];
-    ids.forEach(id => voices.push({ key: `inst:${rig.I.key}:${id}`, wet: !!rig.I.wet, render: () => mixRender(rig.I.voice(id), rig.mix.base) }));
+    // (voiceIds gets the tempo: a plugin may bucket its voices by a note's length in SECONDS)
+    const ids = rig.I.voiceIds ? rig.I.voiceIds(part, { beat: BEAT, bpm: S.bpm, rollT: ROLL_T, P: P0, loopBeats }) : [...new Set(part.map(e => e[1]))];
+    ids.forEach(id => voices.push({ key: `inst:${rig.I.key}:${id}`, wet: !!rig.I.wet, hz: voiceHzOf(rig.I, id),
+      render: () => mixRender(rig.I.voice(id), rig.mix.base) }));
   });
 
   // the SOLVE: floor stations + the kit (a hung station floats over everyone — not in it)
@@ -1029,6 +1032,16 @@ function partMix(S, key){
   return { base, at: beat => { let g = m[0][1]; for (const [b, v] of m) if (beat >= b) g = v; return base > 0 ? g01(g) / base : 0; } };
 }
 function mixRender(r, g){ return g === 1 ? r : { sr: r.sr, samples: r.samples.map(x => x * g) }; }
+/* a voice's pitch (Hz) for the spatial pan width (low voices sit near the centre): the plugin's own
+   voiceHz(id) when it has one (a chord id, a tiered id), else the FIRST pitch in the id ('E2+B2:m',
+   'C4|choir', 'stab:D4', 'C4:e:p' — ids list chord notes low → high), else 0 (full width) */
+function voiceHzOf(I, id){
+  try {
+    if (I.voiceHz){ const h = I.voiceHz(id); if (Number.isFinite(h) && h > 0) return h; }
+    const m = /([A-G]#?)(-?\d)/.exec(String(id));
+    return m ? noteHz(m[1] + m[2]) : 0;
+  } catch (e){ return 0; }
+}
 
 /* An instrument plugin's strike: sparks + a shared strike light at the contact (its
    local pos → world through the station), an optional camera punch, and its voice.
@@ -1039,10 +1052,17 @@ function instStrike(rig, hit){
   const p = rig.station.localToWorld(_sp.copy(hit.pos || new THREE.Vector3()));
   const col = new THREE.Color(hit.color ?? 0xffffff);
   if (hit.sparks !== 0) spawnBurst(p.clone(), col, hit.sparks ?? Math.round(4 + 6 * v), 2.6);
-  const L = strikeLights[strikeLightIdx++ % STRIKE_LIGHTS];
-  L.l.color.copy(col); L.l.position.copy(p).add(new THREE.Vector3(0, .6, .4));
-  L.age = 0; L.peak = 8 * (.35 + .65 * v) * (hit.light ?? 1);
+  // the shared strike-light pool is small (STRIKE_LIGHTS): a faint accent (a strum's inner strings,
+  // light < .2) doesn't take a slot — it would overwrite another machine's real flash
+  if ((hit.light ?? 1) >= .2){
+    const L = strikeLights[strikeLightIdx++ % STRIKE_LIGHTS];
+    L.l.color.copy(col); L.l.position.copy(p).add(new THREE.Vector3(0, .6, .4));
+    L.age = 0; L.peak = 8 * (.35 + .65 * v) * (hit.light ?? 1);
+  }
   if (hit.shake) cam.addShake(hit.shake * v);
+  if (devStrikes){ const k = rig.I.key, d = devStrikes[k] ||= { n: 0, ids: {}, unbaked: [] };
+    d.n++; d.ids[hit.note] = (d.ids[hit.note] || 0) + 1;
+    if (!audio.hasVoice(`inst:${k}:${hit.note}`) && !d.unbaked.includes(hit.note)) d.unbaked.push(hit.note); }
   if (audio.isReady() && !muted){
     const beat = (wrapP(songTime, ROLL_T + LOOP_T) - ROLL_T) / BEAT;   // loop-local beat (song.mix envelope)
     try { audio.playVoice(`inst:${rig.I.key}:${hit.note}`, v * (rig.mix ? rig.mix.at(beat) : 1), { dur: hit.dur || 0, sp: placeAt(p) }); } catch(e){ if (!voiceWarned){ voiceWarned = true; console.warn('cascade: instrument voice failed', rig.I.key, e); } }   /* audio must never break the run — but say so, once */
@@ -1614,6 +1634,9 @@ if (new URLSearchParams(location.search).has('debug')){
     orbitMax(d){ cam.orbit.maxDistance = d; cam.orbit.maxPolarAngle = Math.PI; },
     room(k){ return k === undefined ? rooms.key : rooms.set(k); },
     audioProbe: () => audio.probe(),                   // mix-bus gain reduction + reverb-return peak
+    // sound sweep: count every plugin strike from now on ({key: {n, ids, unbaked}}; reset → strikes(true))
+    strikes(reset){ if (reset || !devStrikes) devStrikes = {}; return devStrikes; },
+    audioPath: () => document.getElementById('astate')?.textContent ?? null,   // the status readout (state · clock · path)
     bank: () => audio.bankStats(),                     // iOS sample bank: count, WAV bytes, build ms
     // perf probe: draw calls / triangles per FRAME (summed over every composer pass, averaged
     // over n frames), live lights, compiled programs, and the scene's mesh count

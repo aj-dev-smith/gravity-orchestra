@@ -45,6 +45,7 @@ import { makeEdge } from '../clock.js';
 import { fitPart, organLane, laneAt, packetsAt, layoutPipes, strikeIds, RB, H_MAG, BELLOWS_R, PACKETS,
          CONT_AT, XFADE, SHORT_MAX } from './solve.js';
 import { organVoice } from './voice.js';
+import { noteHz } from '../../engine.js';
 
 const ICE = 0x8fd8ff, ICE_DEEP = 0x2f7fd0, AMBER = 0xffa04a;
 const TINT = { organ: [.3, .62, 1], choir: [.62, .5, 1], pad: [.26, .9, .8] };   // ice · lavender · aqua (all → white when bright)
@@ -56,7 +57,6 @@ const BEAM_TOP = 17;      // the loft's air: light fades out by here (local y)
 const DECK_T = .4;
 const POLE   = .12;       // magnet pole length (its face = the parked marble's top)
 
-const idsByPart = new WeakMap();                     // build() → the exact voice ids (it knows the tempo)
 
 /* the light: pipe-face strips + sky columns, ONE mesh. Per-vertex: lane, h (height above the
    mouth), kind (0 strip / 1 column), across (−1..1, strips), top (pipe top above the mouth). */
@@ -124,16 +124,21 @@ export default {
   color: '#8fd8ff',                 // ice-blue → white
 
   voice(id){ return organVoice(id); },
-  /* the exact tiered ids (build() knew the tempo); a part never built falls back to every tier
-     a 100-bpm reading would need, plus LONG + SHORT for every base id */
-  voiceIds(part){
-    const known = idsByPart.get(part);
-    if (known) return known;
+  /* the exact tiered ids: main hands voiceIds the tempo + loop ({beat, rollT, P}), so the fit is
+     the very one build() makes. (Called without it — an old caller — every tier a 100-bpm reading
+     would need is baked, plus LONG + SHORT for every base id.) */
+  voiceIds(part, { beat, rollT = 2.6, P } = {}){
     const ids = new Set();
+    if (beat > 0 && P > 0){
+      for (const e of fitPart(part, { rollT, beat, P }).events){ const s = strikeIds(e); ids.add(s.first); if (s.cont) ids.add(s.cont); }
+      return [...ids];
+    }
     const { events } = fitPart(part, { rollT: 2.6, beat: .6, P: 2.6 + .6 * 64 + 1.2 });
     for (const e of events){ const s = strikeIds(e); ids.add(e.base); ids.add(`${e.base}/s`); if (s.cont) ids.add(s.cont); }
     return [...ids];
   },
+  /** the pipe's pitch for the pan width ('C4|choir', 'C4/s', 'C4|pad/c' → C4) */
+  voiceHz(id){ const m = /^([A-G]#?)(-?\d)/.exec(String(id)); return m ? noteHz(m[1] + m[2]) : 0; },
 
   make({ envMap, glowTex }){
     let lanes = [], start = -Infinity, R = null;
@@ -144,9 +149,6 @@ export default {
       const group = new THREE.Group();
       lanes = []; start = s0; R = null;
       const { events } = fitPart(part, { rollT, beat, P });
-      const ids = new Set();
-      for (const e of events){ const s = strikeIds(e); ids.add(s.first); if (s.cont) ids.add(s.cont); }
-      idsByPart.set(part, [...ids]);
       if (!events.length) return group;
 
       const byPitch = new Map();

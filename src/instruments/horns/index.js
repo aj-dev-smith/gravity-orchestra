@@ -52,10 +52,11 @@ export default {
   color: '#ffa21f',
 
   voice: id => hornVoice(id),
-  /* ids = the pitch (held) or 'stab:<pitch>', after the same fitting the build does
-     (octave folds + horn merges; thinning only drops, so this is a superset) */
-  voiceIds(part){
-    const fit = fitPart(part, { limits: { ...PART_LIMITS, gap: 0 } });
+  /* ids = the pitch (held) or 'stab:<pitch>'. Given the tempo (main passes {beat, loopBeats}) this is
+     EXACTLY the build's fit (its same-pitch thinning is in seconds); without it, the same fit
+     minus thinning (octave folds + horn merges; thinning only drops, so it is a superset) */
+  voiceIds(part, { beat, loopBeats = Infinity } = {}){
+    const fit = beat > 0 ? fitPart(part, { beat, loopBeats }) : fitPart(part, { limits: { ...PART_LIMITS, gap: 0 } });
     return [...new Set(fit.map(e => voiceIdOf(e[1], e[3])))];
   },
 

@@ -65,8 +65,10 @@ export default {
   color: SIGNATURE,
 
   voice: id => grandVoice(id),
-  voiceIds(part){
-    const { part: fit } = fitPart(part);
+  /* every id a strike can fire: the build's own fit (main passes {beat}: holds clamp to the damper's
+     MAX_HOLD in beats, as build does; per-string thinning only drops, so this covers it) */
+  voiceIds(part, { beat } = {}){
+    const { part: fit } = fitPart(part, beat > 0 ? { maxDurBeats: MAX_HOLD / beat } : {});
     return [...new Set(fit.map(e => { const p = parseNote(e[1]); return voiceIdOf(p.m, p.ep, e[2]); }))];
   },
 

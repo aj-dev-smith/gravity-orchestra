@@ -287,7 +287,10 @@ export function dulcimerLane(strikes, P, { m = 60 } = {}){
     // a rising glide waits until the ball is above the target level (it passes b at r1)
     let r1 = rs;
     if (b > c){ const disc = u * u - 2 * g * (b - a); r1 = Math.max(rs, disc > 0 ? (u - Math.sqrt(disc)) / g : rs); }
-    const g0 = r1, g1 = g0 + .7 * Math.max(1e-3, Tc - g0);
+    // the glide (smoothstep, peak accel 6Δ/T²) takes 70% of the window — stretched (up to 95%, still
+    // at rest before the landing) when a big repetition-lever move would otherwise exceed A_CUP
+    const Wg = Math.max(1e-3, Tc - r1), need = Math.sqrt(6 * Math.abs(b - c) / A);
+    const g0 = r1, g1 = g0 + Math.min(.95 * Wg, Math.max(.7 * Wg, need));
     p.ret = { a, u, A, rs, c, b, g0, g1, Tc };
     // the damper over this gap: legato (stays up) when the next lift comes before this drop lands
     p.legato = p.gap - LIFT_LEAD < hold[i] + DROP_T + .02;

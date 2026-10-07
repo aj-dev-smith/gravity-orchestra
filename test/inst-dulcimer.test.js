@@ -186,6 +186,19 @@ describe('dulcimer: the repetition limit (what the orchestrator may send)', () =
     expect(lane.L.s).toEqual([3, 6]);
   });
 
+  it('the cup\'s free glide (to the next catch level) never exceeds the piston\'s limit either', () => {
+    const glideA = lane => Math.max(0, ...lane.plan.map(p => 6 * Math.abs(p.ret.b - p.ret.c) / (p.ret.g1 - p.ret.g0) ** 2));
+    let worst = 0, seed = 3;
+    const R = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (let gap = PART_LIMITS.gap; gap < 1; gap += .01) for (const a of [0, 1]) for (const b of [0, 1]) for (const c of [0, 1])
+      worst = Math.max(worst, glideA(dulcimerLane([{ t: 1, vel: a }, { t: 1 + gap, vel: b }, { t: 1 + 2 * gap, vel: c }], 10)));
+    for (let k = 0; k < 150; k++){
+      const P = 4 + R() * 20, n = 1 + Math.floor(R() * 40);
+      worst = Math.max(worst, glideA(dulcimerLane(Array.from({ length: n }, () => ({ t: R() * P, vel: R(), hold: R() })), P)));
+    }
+    expect(worst).toBeLessThanOrEqual(A_CUP * (1 + 1e-9));
+  });
+
   it('a pathological string (400 strikes 30 ms apart) thins in one pass and stays honest', () => {
     const P = 14, t0 = performance.now();
     const lane = dulcimerLane(Array.from({ length: 400 }, (_, i) => ({ t: 2 + i * .03, vel: (i % 7) / 6, hold: .05 })), P, { m: 70 });
@@ -343,6 +356,14 @@ describe('dulcimer: the voice', () => {
   it('a soft key is darker than a hard one (brightness follows the hammer)', () => {
     const cent = s => { let num = 0, den = 0; for (let k = 1; k <= 10; k++){ const e = goertzel(s, 330 * k, 800, 8000); num += k * e; den += e; } return num / den; };
     expect(cent(grandVoice('E4:p').samples)).toBeLessThan(cent(grandVoice('E4').samples));
+  });
+
+  it('dynamics are monotone across the soft-layer crossover (vel just under SOFT never sounds louder than SOFT)', () => {
+    const lvl = s => rms(s, 0, Math.round(SR * .4));
+    for (const n of ['A1', 'C3', 'E4', 'C6', 'C7', 'G3:e', 'C6:e']){
+      const f = grandVoice(n).samples, p = grandVoice(n.replace(/(:e)?$/, '$1:p')).samples;
+      expect(.59 * lvl(p), n).toBeLessThanOrEqual(.6 * lvl(f));
+    }
   });
 
   it('every demo id renders, and the whole demo bakes fast', () => {

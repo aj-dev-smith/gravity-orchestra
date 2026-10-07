@@ -32,7 +32,7 @@ import { grandVoice } from './voice.js';
    PART CONSTRAINTS (import robustness — PART_LIMITS in solve.js; fitPart +
    dulcimerLane enforce them, warn, and never throw):
      · pitch range A1–C7 (MIDI 33–96); outside folds by octaves
-     · ≤ 24 strings (distinct pitches): rarer pitches move an octave onto a
+     · ≤ 20 strings (distinct pitches): rarer pitches move an octave onto a
        same-pitch-class string, else drop
      · polyphony: lanes are independent, any chord of ≤ 8 notes per onset
        (outer voices kept, then the loudest)
@@ -257,11 +257,14 @@ varying float vU; varying float vLen; varying float vSing; varying float vHot; v
       // static per-lane parts: piston sleeves (+ a dark collar), the damper rail's guides
       const SLV_TOP = Y_CR - BALL_R - .12;
       const yRail = Y_SB + .14 + DF_H + DB_H + LIFT + .55;
-      const sleeveGeo = new THREE.CylinderGeometry(SLEEVE_R * .62, SLEEVE_R * .62, SLV_TOP - CASE_Y0, 14);
+      // the sleeves run down through the case floor and are seated in the plinth: the rod's full
+      // stroke (C_TOP above the floor) is longer than the case is deep, so at rest its foot sits
+      // below the case floor — always inside its sleeve, never a bare rod hanging under the case
+      const sleeveGeo = new THREE.CylinderGeometry(SLEEVE_R * .62, SLEEVE_R * .62, SLV_TOP - PL, 14);
       const collarGeo = new THREE.CylinderGeometry(SLEEVE_R, SLEEVE_R, .12, 18);
       const zStrike = lens.map(l => Z_F - l * STRIKE_U);
       xs.forEach((x, k) => {
-        const s = new THREE.Mesh(sleeveGeo, chrome); s.position.set(x, (SLV_TOP + CASE_Y0) / 2, zStrike[k]); add(fz(s));
+        const s = new THREE.Mesh(sleeveGeo, chrome); s.position.set(x, (SLV_TOP + PL) / 2, zStrike[k]); add(fz(s));
         const c = new THREE.Mesh(collarGeo, dark); c.position.set(x, SLV_TOP - .06, zStrike[k]); add(fz(c));
       });
       bar(V(xL - .05, yRail, Z_D), V(xR + .05, yRail, Z_D), .07, chrome);

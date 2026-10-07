@@ -32,6 +32,7 @@ import { noteNum } from '../../engine.js';
 export const SR = 32000;
 export const PEAK = .8;
 const HARD = .85, SOFTV = .42;              // the two baked velocity layers
+const SOFT_TRIM = .78;                       // the soft piano layer's baked level (≈ −2.2 dB; see grandVoice)
 
 const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
 /** render length by register: bass rings longer (cosine-faded to exactly 0) */
@@ -117,7 +118,7 @@ export function grandVoice(id){
   const k = String(id).match(ID);
   const m = k ? noteNum(k[1]) : 60;
   const flags = k ? k[2] : '';
-  const ep = flags.includes(':e'), vel = flags.includes(':p') ? SOFTV : HARD;
+  const ep = flags.includes(':e'), soft = flags.includes(':p'), vel = soft ? SOFTV : HARD;
   const N = Math.round(SR * durFor(m) * (ep ? .85 : 1));
   const out = new Float32Array(N);
   if (ep) epiano(m, vel, N, out); else piano(m, vel, N, out, lcg(hash(String(id))));
@@ -127,7 +128,10 @@ export function grandVoice(id){
   for (let i = 0; i < z; i++) out[N - 1 - i] *= .5 - .5 * Math.cos(Math.PI * i / z);
   let peak = 0;
   for (let i = 0; i < N; i++){ const x = Math.abs(out[i]); if (x > peak) peak = x; }
-  const gain = PEAK / (peak || 1);
+  // the soft PIANO layer is baked quieter: peak-normalising a dark, hammer-less render would make it
+  // LOUDER (higher RMS) than the hard layer, so at the vel .6 crossover a softer key sounded louder.
+  // At SOFT_TRIM the crossover is monotone (and the iOS bank, which ignores el.volume, keeps a real p).
+  const gain = (soft && !ep ? PEAK * SOFT_TRIM : PEAK) / (peak || 1);
   for (let i = 0; i < N; i++) out[i] *= gain;
   out[N - 1] = 0;
   const r = { samples: out, sr: SR };

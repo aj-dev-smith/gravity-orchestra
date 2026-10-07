@@ -65,7 +65,7 @@
                         G4/D4 strings ring straight through Cadd9 → Em7 → G.
      bowwheel   C3–G4   the cello: 11 strings (limit 12), strokes ≤ 2.6 s (limit 3.9),
                         repeated pitches ≥ .55 beat apart (its re-bow hop, ≥ .35 s).
-     dulcimer   C3–G6   the Marble Grand: fills of 3–4 eighths, two soft bridge
+     dulcimer   C3–A6   the Marble Grand: fills of 3–4 eighths, two soft bridge
                         chords and the last chord (≤ 5 notes at once; limit 8), 18
                         strings (limit 20); same-pitch repeats ≥ .5 beat (limit .21 s).
      bowls      D4–D5   three bowls only (G4 D5 D4 — limit 8): open fifths, consonant
@@ -186,9 +186,11 @@ for (let n = 1; n <= 4; n++){
   const ch = CHART[n - 1], shape = HARP[ch];
   // each pick RINGS a beat (the thumb's bass two) — its felt stays up. dur 0 would mean
   // "until the chord changes", and every one-note pick is a new "chord": it would choke the
-  // last pick. Longer holds were tried (to the bar line): every pass of the marble BRUSHES a
-  // ringing string, and four rings deep that turned the picking to mush (+86 re-plucks a loop).
-  PICK[ch].forEach((k, i) => strum.push([r5(bar(n) + i / 2), shape[k], v3((i === 0 ? .62 : i === 4 ? .48 : .36) * (n === 1 ? .9 : 1)), i === 0 ? 2 : 1]));
+  // last pick. The bar's LAST pick stops at the bar line (a guitarist's chord change lifts it —
+  // B3 hanging over Cadd9's C3 bass was a semitone rub). Longer holds were tried (to the bar
+  // line): every pass of the marble BRUSHES a ringing string, and four rings deep that turned
+  // the picking to mush (+86 re-plucks a loop).
+  PICK[ch].forEach((k, i) => strum.push([r5(bar(n) + i / 2), shape[k], v3((i === 0 ? .62 : i === 4 ? .48 : .36) * (n === 1 ? .9 : 1)), i === 0 ? 2 : i === 7 ? .5 : 1]));
 }
 // VERSE: the folk pattern, a little lift into the second half
 for (let n = 5; n <= 12; n++) strumBar(n, FOLK, n < 9 ? .92 : 1);
@@ -225,8 +227,8 @@ const bow = (b, line, v0, v1 = v0) => {
 bow(bar(3), [['E3', 4], ['D3', 4]], .36, .42);                 // wakes under Em7 / D
 bow(bar(5), [['G3', 4], ['F#3', 4], ['E3', 4], ['C3', 4]], .5, .56);      // the walking line
 bow(bar(9), [['G3', 4], ['F#3', 4], ['C3', 2], ['E3', 2], ['D3', 2], ['A3', 2]], .56, .66);
-bow(bar(13), [['E4', 4], ['D4', 2], ['C4', 1], ['B3', 1], ['A3', 4], ['G3', 2], ['B3', 2],
-              ['C4', 2], ['E4', 2], ['D4', 2], ['G4', 2], ['D4', 2], ['A3', 2], ['G3', 2], ['F#3', 2]], .62, .74);
+bow(bar(13), [['E4', 4], ['D4', 2], ['B3', 2], ['A3', 4], ['G3', 2], ['B3', 2],
+              ['C4', 2], ['E4', 2], ['D4', 2], ['G4', 2], ['D4', 2], ['A3', 2], ['G3', 2.5], ['F#3', 1.5]], .62, .74);
 bow(bar(21), [['B3', 1.5], ['D4', .5], ['E4', 1], ['D4', 1], ['G3', 2], ['A3', 1], ['B3', 1]], .62, .8);   // the solo
 bow(bar(23), [['C4', 4], ['A3', 2], ['F#3', 2]], .66, .6);
 cello.push([bar(25), 'G3', .5, 4.1]);                          // the common tone of Cadd9 → G, through the breath (2.6 s)
@@ -247,14 +249,15 @@ chordP(bar(21), ['E3', 'B3', 'D4', 'G4'], .34, 3.6);            // bridge: soft 
 fill(bar(21) + 3, ['B5', 'A5'], .4, .36);                       //   and a two-note sigh under the long G5
 chordP(bar(22), ['C3', 'G3', 'D4', 'E4'], .32, 3.6);
 fill(bar(22) + 3, ['G5', 'A5'], .36, .42);
-fill(bar(24) + 2.5, ['A5', 'D6', 'F#6'], .42, .5);             // tag: one more answer, above the tune
+fill(bar(24) + 2.5, ['F#5', 'A5', 'D6'], .42, .5);             // tag: one more answer, landing on D6 — the 9th the last chord keeps
 chordP(bar(25), ['C3', 'G3', 'E4', 'D5'], .46, 6);               // the last chord, held through the breath (damper ≤ 4.5 s)
 piano.push([r5(bar(25) + .5), 'G5', .36, 5], [r5(bar(25) + 1), 'D6', .3, 5]);   // rolled up an octave
 sortHits(piano);
 
 // ---- SINGING BOWLS (the halo) [beat, note, vel, beats] ---------------------------------
 const bowls = [
-  [bar(1), 'G4', .4, 6], [bar(1) + 2, 'D5', .32, 6],           // the intro's open fifth
+  [bar(2), 'G4', .4, 7], [bar(2) + 2, 'D5', .32, 6],           // the intro's open fifth, under Cadd9 → Em7
+  //   (bar 2, not bar 1: the director's bowls shot at beat 6 sees both rims singing)
   [bar(13), 'G4', .44, 7], [bar(13) + 1, 'D5', .36, 6],        // chorus
   [bar(17), 'D4', .4, 7], [bar(17) + 1, 'G4', .34, 6],
   [bar(21), 'G4', .5, 7], [bar(21) + 2, 'D5', .42, 6],         // bridge swell

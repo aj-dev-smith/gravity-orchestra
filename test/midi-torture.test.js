@@ -202,11 +202,12 @@ describe('ROLE routing: a file whose programs say nothing still fills the room',
   });
 
   it('a full machine passes the voice down its list; nothing fits → dropped with a reason', () => {
-    // four bass-register lines (means 36–42: under ROLE.LOW 46 — the corpus's basses sit at 30–42)
-    const lows = [0, 1, 2, 3].map(k => trk(`Low ${k}`, null, k + 1, line(30 + k * 2, 16, 1, .5).map(([b, m]) => [b + k * .25, m, .5])));
+    // five bass-register lines (means 36–42: under ROLE.LOW 46 — the corpus's basses sit at 30–42)
+    const lows = [0, 1, 2, 3, 4].map(k => trk(`Low ${k}`, null, k + 1, line(30 + k * 2, 16, 1, .5).map(([b, m]) => [b + k * .2, m, .5])));
     const r = orchestrateByRole(parseMidi(file(trk('Tune', null, 0, line(72, 16)), ...lows)).tracks, { ppq: PPQ, bpm: 120 });
     expect(r.parts.filter(p => p.key === 'bass').length).toBe(1);      // one string-bass voice…
     expect(r.belt.length).toBe(3);                                     // …two more low lines take the belts…
+    expect(r.parts.filter(p => p.key === 'pogo').length).toBe(1);      // …the next one the Pogo Bass (a program-less low line: the string bass first)…
     expect(r.parts.some(p => p.key === 'marimba')).toBe(true);         // …and the last one the marimba
   });
 

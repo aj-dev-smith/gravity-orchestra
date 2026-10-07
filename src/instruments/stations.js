@@ -36,7 +36,7 @@
               corners so the wide shot holds them whole
        rear GALLERY (raised, behind the belt — see GALLERY_DROP): the
               band's riser — the leaning STRUM harp, the RIFF forge's
-              backline, the HORNS — seen OVER the paternoster, either side
+              backline, the HORNS, the POGO BASS rig at the right end — seen OVER the paternoster, either side
               of the ORGAN loft (centre, HUNG behind the belt: its façade is
               the room's backdrop). In a full room the marimba / bells tier
               stands where the gallery row would; the solve steps it back.
@@ -91,6 +91,9 @@ export const STATIONS = {
   // the RIFF FORGE on the GALLERY like a rock band's backline: its 4×12 cab behind the neck,
   // between the harp and the organ loft (the floor's front lip is too close to the wide's lens)
   riff:     { x: -14,  y: 0.0, z: -11, yaw: .1, w: 13, d: 6, gallery: true },
+  // the POGO BASS on the GALLERY's right end, beside the brass: the rhythm section's bass rig (its
+  // 8×10 behind the neck) — the backline, with the Riff Forge's half-stack on the left
+  pogo:     { x:  29.9, y: 0.0, z: -11, yaw: 0, w: 11, d: 6.4, gallery: true },
   // the ORGAN LOFT: a gallery flown centred BEHIND the belt (x on the belt's axis, z behind its
   // depth — clear of the chandelier's crown), above the housing like every hung station: the
   // pipe façade reads over the paternoster as the room's backdrop, its light rising into the air

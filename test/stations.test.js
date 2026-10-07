@@ -141,7 +141,7 @@ describe('room staging (stations.js layoutStations)', () => {
     bowls: { box: [-6.8, 6.8, -6.8, 6.8], top: 4.9 }, bowwheel: { box: [-5.5, 5.7, -3.9, 6.7], top: 13.2 },
     dulcimer: { box: [-5.8, 5.8, -4.6, 4.9], top: 5.1 }, horns: { box: [-7.2, 7.1, -2.6, 3.2], top: 7.3 },
     marimba: { box: [-7.4, 7, -6.9, 7.2], top: 9.2 }, musicbox: { box: [-6.6, 6.6, -6.7, 6.7], top: 9.1 },
-    riff: { box: [-6.6, 6.7, -3.2, 3.2], top: 5.5 }, strum: { box: [-5.9, 5.8, -3.5, 2.7], top: 7.5 },
+    riff: { box: [-6.6, 6.7, -3.2, 3.2], top: 5.5 }, strum: { box: [-5.9, 5.8, -3.5, 2.7], top: 7.5 }, pogo: { box: [-5.5, 5.5, -2.4, 2.4], top: 4.9 },
     turntable: { box: [-8, 8, -8, 8], top: 8.1 }, drums: { box: [-9.5, 9.5, -4.9, 3.8], top: 9.5 },
   };
   const at = k => k === 'drums' ? { key: k, x: KIT_ROOM.x, z: KIT_ROOM.z, ...M[k] } : { key: k, x: STATIONS[k].x, z: STATIONS[k].z, ...M[k] };

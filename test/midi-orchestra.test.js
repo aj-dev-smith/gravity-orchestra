@@ -112,7 +112,7 @@ describe('routeProgram — GM program → room instrument', () => {
     marimba: [11, 12, 13, 15, 45, 46, 55, 113, 115],                 // 55 orchestra hit: a struck stab
     volley: [114],                                                    // steel drums: the volley is a steel pan
     bells: [14],
-    bass: [32, 33, 34, 35, 36, 37, 38, 39, 43, 47],
+    bass: [32, 33, 34, 35, 36, 37, 38, 39, 43, 47],                // (the family table; PREFER sends 33–39 on to the Pogo Bass)
     bowls: [88, 89, 90, 91, 92, 93, 94, 95, 96, 99],
     sustain: [16, 19, 20, 40, 41, 42, 44, 48, 49, 50, 52, 53, 54],
     belt: [0, 1, 4, 6, 21, 22, 23, 24, 25, 30, 56, 60, 65, 68, 73, 80, 81, 104, 107, 110],   // 21–23: accordion / harmonica = reed melody
@@ -182,9 +182,11 @@ describe('convertToSong — orchestra routing', () => {
       trk('Bass', 33, 3, scale8(40)),
       trk('Pad', 89, 4, [[0, 60, 4], [0, 64, 4], [0, 67, 4], [4, 62, 4], [4, 65, 4], [4, 69, 4]]),
       trk('Celesta', 8, 5, [[1, 84], [3, 88]]),
+      trk('Upright', 32, 6, scale8(36)),
     ));
     expect(song.melody.map(n => n[0]).slice(0, 3)).toEqual(['C5', 'D5', 'E5']);
-    expect(Object.keys(song.parts).sort()).toEqual(['bass', 'bells', 'bowls', 'marimba', 'musicbox']);
+    // the fingered (electric) bass bounces on the Pogo Bass; the acoustic upright keeps the string bass
+    expect(Object.keys(song.parts).sort()).toEqual(['bass', 'bells', 'bowls', 'marimba', 'musicbox', 'pogo']);
     expect(song.alto).toBeUndefined(); expect(song.bass).toBeUndefined();
     expect(song.sub).toMatch(/marimba/);
     expect(warnings.every(w => typeof w === 'string')).toBe(true);
@@ -486,7 +488,7 @@ describe('the lead must enter early and last (Star Wars / Piano Man regressions)
     const { song } = convert(file(brass, horn, flute, bass));
     expect(song.melody[0][0]).toBe('G4');                 // brass top line
     expect(sumBeats(song.melody)).toBe(48);
-    expect(song.parts.bass.length).toBeGreaterThan(0);
+    expect(song.parts.pogo.length).toBeGreaterThan(0);              // (a fingered bass: the Pogo Bass)
   });
 
   it('an early lead that STOPS halfway loses to one that lasts', () => {

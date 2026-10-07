@@ -18,6 +18,7 @@ import { PART_LIMITS as ORGAN_L, parseId as organParse } from '../src/instrument
 import { PART_LIMITS as HORNS_L, MIN_GAP as HORNS_MIN_GAP } from '../src/instruments/horns/solve.js';
 import { PART_LIMITS as BOWWHEEL_L, MIN_REPEAT as BW_MIN_REPEAT } from '../src/instruments/bowwheel/solve.js';
 import { PART_LIMITS as DULCIMER_L, parseNote as dulcimerParse } from '../src/instruments/dulcimer/solve.js';
+import { PART_LIMITS as POGO_L, MIN_GAP as POGO_MIN_GAP, normalizeHits as pogoHits } from '../src/instruments/pogo/solve.js';
 import { buildMidi } from './helpers/midi-builder.js';
 import { noteNum, ROLL_T } from '../src/engine.js';
 
@@ -210,18 +211,33 @@ describe('track NAMES before programs', () => {
     // (a solo / a fill is not the song's tune: those guitars are guitars, not leads)
     expect(got).toEqual({ 'Guitar Solo': 'guitar', 'Lead Guitar Fill': 'guitar' });
   });
-  it('"Bass" played by a guitar program goes to the string bass (when the string bass can keep up)', () => {
+  // (a rock file's "Bass" is a bass GUITAR — on a placeholder guitar program as often as not: since the Pogo Bass
+  //  it bounces there; a "Bass" on an upright / orchestral program keeps the string bass's winched balls)
+  it('"Bass" played by a guitar program is an ELECTRIC bass: the Pogo Bass', () => {
     const bass = Array.from({ length: 16 }, (_, i) => [i, 40 + [0, 3, 5, 7][i % 4]]);
     const { song, warnings } = convert(file(trk('Lead', 0, 0, tune(72, 16)), trk('Bass', 27, 1, bass)));
     expect(warnings.some(w => /"Bass" plays as a bass by its name \(its program is Clean Guitar\)/.test(w))).toBe(true);
-    expect(song.parts?.bass?.length).toBe(16);
+    expect(song.parts?.pogo?.length).toBe(16);
+    expect(song.parts?.bass).toBeUndefined();
     expect(song.bass).toBeUndefined();
   });
-  it('…but a bass the string bass would gut (8ths on one pitch at 220 bpm: .136 s < its .15 s gap) stays a belt line', () => {
+  it('"Bass" on an upright / orchestral program goes to the string bass (when the string bass can keep up)', () => {
+    const bass = Array.from({ length: 16 }, (_, i) => [i, 40 + [0, 3, 5, 7][i % 4]]);
+    const { song, warnings } = convert(file(trk('Lead', 0, 0, tune(72, 16)), trk('Bass', 42, 1, bass)));
+    expect(warnings.some(w => /"Bass" plays as a bass by its name \(its program is Cello\)/.test(w))).toBe(true);
+    expect(song.parts?.bass?.length).toBe(16);
+    expect(song.parts?.pogo).toBeUndefined();
+  });
+  it('8ths on one pitch at 220 bpm (.136 s): the Pogo Bass plays every chug; the string bass (.15 s gap) would gut them — an upright one stays a belt line', () => {
     const bass = Array.from({ length: 32 }, (_, i) => [i / 2, 40, .4]);
-    expect(gapFit(bass.map(([b, m]) => ({ tick: b * PPQ, midi: m })), PART_SPEC.bass.gap, 60 / 220 / PPQ)).toBeLessThan(BASS_FIT);
-    expect(gapFit(bass.map(([b, m]) => ({ tick: b * PPQ, midi: m })), PART_SPEC.bass.gap, 60 / 120 / PPQ)).toBe(1);
-    const { song, warnings } = convert(file(trk('Lead', 0, 0, tune(72, 16), [tempo(220)]), trk('Bass', 26, 1, bass), vibes()));
+    const ns = bass.map(([b, m]) => ({ tick: b * PPQ, midi: m }));
+    expect(gapFit(ns, PART_SPEC.bass.gap, 60 / 220 / PPQ)).toBeLessThan(BASS_FIT);
+    expect(gapFit(ns, PART_SPEC.bass.gap, 60 / 120 / PPQ)).toBe(1);
+    expect(gapFit(ns, PART_SPEC.pogo.gap, 60 / 220 / PPQ)).toBe(1);
+    const e = convert(file(trk('Lead', 0, 0, tune(72, 16), [tempo(220)]), trk('Bass', 26, 1, bass), vibes()));
+    expect(e.song.parts?.pogo?.length).toBe(32);                                    // every chug, bounced
+    expect(e.song.bass).toBeUndefined();
+    const { song, warnings } = convert(file(trk('Lead', 0, 0, tune(72, 16), [tempo(220)]), trk('Bass', 42, 1, bass), vibes()));
     expect(warnings.some(w => /named a bass, but the string bass could play only 50%/.test(w))).toBe(true);
     expect(song.parts?.bass).toBeUndefined();
     expect(song.bass.notes.length).toBe(32);                                        // every chug, on the belt
@@ -344,7 +360,9 @@ describe('steel drums → the volley (an existing machine, never routed before)'
 // ---------------------------------------------------------------------------
 describe('the family machines: PREFER / LINE_HOME / OVERFLOW_TO', () => {
   it('a PREFER machine routes only while it has a PART_SPEC (a plugin that is gone falls back to the family home)', () => {
-    expect([...new Set(PREFER.map(p => p.key))]).toEqual(['riff', 'strum', 'bowwheel', 'organ', 'horns']);
+    expect([...new Set(PREFER.map(p => p.key))]).toEqual(['riff', 'strum', 'bowwheel', 'organ', 'horns', 'pogo']);
+    for (let p = 33; p <= 39; p++) expect(preferFor(p, false), `program ${p}`).toBe('pogo');   // electric / synth basses
+    expect(preferFor(32, false)).toBe(null);                          // the acoustic (upright) bass keeps the string bass
     expect(preferFor(30, false)).toBe(null);                          // a distortion LINE stays a belt candidate …
     expect(preferFor({ program: 30, poly: 0, medDur: .1, riff: true, pitches: 12 })).toBe('riff');   // … a power-chord riff doesn't
     expect(preferFor(25, true)).toBe('strum');
@@ -379,7 +397,7 @@ describe('the family machines: PREFER / LINE_HOME / OVERFLOW_TO', () => {
     expect(song.parts.marimba.length).toBeGreaterThan(0);
   });
   it('every new PART_SPEC is its plugin\'s own PART_LIMITS (no copied numbers); the gaps are the solvers\' floors', () => {
-    const L = { riff: RIFF_L, strum: STRUM_L, organ: ORGAN_L, horns: HORNS_L, bowwheel: BOWWHEEL_L, dulcimer: DULCIMER_L };
+    const L = { riff: RIFF_L, strum: STRUM_L, organ: ORGAN_L, horns: HORNS_L, bowwheel: BOWWHEEL_L, dulcimer: DULCIMER_L, pogo: POGO_L };
     for (const [k, lim] of Object.entries(L)){
       const S = PART_SPEC[k];
       for (const f of ['lo', 'hi', 'gap']) expect(S[f], `${k}.${f}`).toBe(lim[f]);
@@ -393,6 +411,11 @@ describe('the family machines: PREFER / LINE_HOME / OVERFLOW_TO', () => {
     expect(PART_SPEC.horns.gap).toBe(HORNS_MIN_GAP);
     expect(PART_SPEC.riff.maxEvents).toBe(2 * RIFF_L.maxEvents);     // its budget counts hits; a power chord is ≥ 2 notes
     expect(PART_SPEC.riff.durs).toBe(true);                          // every hit carries its length (the hook lift)
+    // the Pogo Bass: one pitch's re-strike floor IS the pogo's (220-bpm 8ths — .136 s — fit); a line + double stops
+    expect(PART_SPEC.pogo.gap).toBe(POGO_MIN_GAP);
+    expect(PART_SPEC.pogo.gap).toBeLessThanOrEqual(60 / 220 / 2);
+    expect(PART_SPEC.pogo).toMatchObject({ lo: 28, hi: 55, poly: 2, voices: 1, durs: true, pitches: 28 });
+    expect(OVERFLOW_TO.pogo).toBe('bass');                           // a second electric bass: the string bass
   });
   it('OVERFLOW_TO chains run upstream first and never loop', () => {
     const order = overflowOrder(Object.keys(PART_SPEC));
@@ -440,6 +463,9 @@ describe('timbre / articulation suffixes (orchestra.noteSuffix ↔ each plugin\'
     expect(noteSuffix('dulcimer', { prog: 4 }, spb)).toBe(':e');
     expect(noteSuffix('dulcimer', { prog: 0 }, spb)).toBe('');
     for (const k of ['horns', 'bowwheel', 'marimba', 'bass']) expect(noteSuffix(k, { prog: 61, dur: .1 }, spb)).toBe('');
+    // the Pogo Bass: slap 36/37, picked 34, synth 38/39, fingered otherwise — and the plugin reads them back
+    expect([32, 33, 34, 35, 36, 37, 38, 39, 26].map(p => noteSuffix('pogo', { prog: p }, spb))).toEqual(['', '', ':p', '', ':s', ':s', ':y', ':y', '']);
+    expect(pogoHits([[0, 'E1:s'], [1, 'A1:p'], [2, 'D2:y'], [3, 'G2']]).map(h => h.ids[0])).toEqual(['E1:s', 'A1:p', 'D2:y', 'G2']);
     expect(strumParse('E3|n').variant).toBe('n');
     expect(organParse('C4|choir').timbre).toBe('choir');
     expect(dulcimerParse('C4:e').ep).toBe(true);
@@ -551,12 +577,12 @@ describe('THE CHUG (a 220-bpm riff song in 4/4 + 5/8, half-tempo clean interlude
     expect(r.phrase.barLines.length).toBe(r.phrase.bars + 1);
     for (const k of ['alto', 'bass']) if (r.song[k]) expect(r.song[k].delay + sum(r.song[k].notes)).toBeCloseTo(sum(r.song.melody), 9);
   });
-  it('the vocals lead, the RIFF FORGE plays the power chords as palm-muted chugs, the L/R bass is ONE string bass', () => {
+  it('the vocals lead, the RIFF FORGE plays the power chords as palm-muted chugs, the L/R bass is ONE Pogo Bass', () => {
     // (was: every voice a belt voice by program, the riff a belt line on its roots, the bass a belt — before
     // the Riff Forge: a distortion guitar's power chords are its machine's native shape, chords and all)
     const w = r.warnings.join('\n');
     expect(r.song.melody.every(([n]) => [64, 67, 69, 71].includes(noteNum(n)))).toBe(true);
-    expect(w).toMatch(/bass: "Bass \(right\)" doubles "Bass \(left\)" — merged/);
+    expect(w).toMatch(/pogo: "Bass \(right\)" doubles "Bass \(left\)" — merged/);
     expect(w).toMatch(/"Bass \(left\)" plays as a bass by its name/);
     expect(w).not.toMatch(/routed by musical role/);
     expect(r.song.alto).toBeUndefined(); expect(r.song.bass).toBeUndefined();     // the belt is the singer's alone
@@ -571,8 +597,11 @@ describe('THE CHUG (a 220-bpm riff song in 4/4 + 5/8, half-tempo clean interlude
     expect([...byBeat.values()].filter(ms => ms.length >= 2).length).toBeGreaterThan(.9 * byBeat.size);
     // … palm-muted (a .4-beat note at 220 bpm is .11 s < RIFF_MUTE_SEC), with its length for the hook lift
     expect(riff.every(e => e[1].endsWith(':m') && e[3] > 0)).toBe(true);
-    // the bass: one string-bass voice on the roots (its pedal repeats thinned to the .15 s string gap)
-    expect(r.song.parts.bass.every(e => rootPcs.has(pc(e[1])))).toBe(true);
+    // the bass: one Pogo Bass voice on the roots — an electric bass (guitar programs 26/28, named "Bass"): since the
+    // pogo, its pedal 8ths are no longer thinned to the string bass's .15 s gap (its own floor is .1 s)
+    expect(r.song.parts.bass).toBeUndefined();
+    expect(r.song.parts.pogo.every(e => rootPcs.has(pc(e[1])))).toBe(true);
+    expect(r.warnings.some(x => /^pogo: thinned/.test(x))).toBe(false);
   });
   it('without names the guitar leads — and the loop is still a riff section, not the interlude', () => {
     const x = convert(chug({ names: false }).bytes);

@@ -23,6 +23,7 @@ import { PART_LIMITS as ORGAN_LIMITS } from '../instruments/organ/solve.js';
 import { PART_LIMITS as HORNS_LIMITS } from '../instruments/horns/solve.js';
 import { PART_LIMITS as BOWWHEEL_LIMITS } from '../instruments/bowwheel/solve.js';
 import { PART_LIMITS as DULCIMER_LIMITS } from '../instruments/dulcimer/solve.js';
+import { PART_LIMITS as POGO_LIMITS } from '../instruments/pogo/solve.js';
 
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 export const midiToName = m => NOTE_NAMES[m % 12] + (Math.floor(m / 12) - 1);
@@ -118,6 +119,9 @@ export const PREFER = [
   { key: 'organ',    programs: [21, 22, 23], shape: 'chordal' },          // accordion / harmonica: a melody, unless it plays chords
   { key: 'organ',    programs: range(88, 95), shape: 'any', few: true },  // synth pads: always a bed
   { key: 'horns',    programs: range(56, 71), shape: 'chordal' },         // brass / reed SECTIONS (a single horn line is a melody)
+  // ELECTRIC / SYNTH basses (fingered, picked, fretless, slap ×2, synth ×2) → the Pogo Bass. The
+  // ACOUSTIC bass (32 — the upright / jazz bass) stays on the string bass's winched heavy balls.
+  { key: 'pogo',     programs: range(33, 39), shape: 'any' },
 ];
 /* LINE_HOME: a voice's family machine when it is a LINE the belts can't take (the lead is
    chosen; ≤ 3 belts) or a CHORDAL voice that may still lead (a piano: comping, unless it IS
@@ -136,6 +140,7 @@ export const BOWL_FEW = 8;
 export const OVERFLOW_TO = {
   volley: 'marimba',          // a second steel-pan voice → struck bars
   riff: 'marimba',            // a third guitar → struck bars (the legacy guitar home)
+  pogo: 'bass',               // a second electric bass → the string bass
   strum: 'dulcimer',          // a third comping guitar → struck strings
   dulcimer: 'marimba',
   bowwheel: 'organ',          // a big string section → the organ's pad voice (C4|pad)
@@ -190,6 +195,7 @@ export function lineHome(v){
      organ     'C4|choir' (choir / voice 52–54, voice lead 85) · 'C4|pad' (strings 40–51, synth
                pads 88–95) · the organ otherwise
      dulcimer  'C4:e' the tine e-piano (Rhodes / DX 4–5, clavinet 7)
+     pogo      'E1:s' slap (36 / 37) · 'E1:p' picked (34) · 'E1:y' synth bass (38 / 39) · fingered otherwise
    The bowwheel and horns have one voice (the horns pick tuba / trombone / trumpet by register);
    a merged note (two voices on one beat + pitch) takes the louder one's timbre.            */
 export const RIFF_MUTE_SEC = .15;
@@ -209,6 +215,7 @@ export function noteSuffix(key, n, spb, ctx = null){
     case 'strum': { const q = ctx?.prog ?? p; return q === 24 ? '|n' : q === 46 ? '|h' : ''; }
     case 'organ': return (p >= 52 && p <= 54) || p === 85 ? '|choir' : (p >= 40 && p <= 51) || (p >= 88 && p <= 95) ? '|pad' : '';
     case 'dulcimer': return p === 4 || p === 5 || p === 7 ? ':e' : '';
+    case 'pogo': return p === 36 || p === 37 ? ':s' : p === 34 ? ':p' : p === 38 || p === 39 ? ':y' : '';
     default: return '';
   }
 }
@@ -256,6 +263,11 @@ export function gapFit(notes, gap, secPerTick){
   return all ? kept / all : 1;
 }
 const isGuitar = v => (v.program >= 24 && v.program <= 31) || v.role === 'guitar';
+/** an ELECTRIC bass voice (→ the Pogo Bass): an electric / synth bass program (33–39), or a NAMED bass on
+    any program but the acoustic bass (32) and the orchestral families (strings, ensembles, brass, reed:
+    40–71 — "Contrabass", "Strings (as bass)", a tuba). Needs the machine (PART_SPEC.pogo). */
+export const UPRIGHT_BASS = new Set([32, ...Array.from({ length: 32 }, (_, i) => 40 + i)]);
+export const electricBass = v => !!PART_SPEC.pogo && ((v.program >= 33 && v.program <= 39) || (v.role === 'bass' && !UPRIGHT_BASS.has(v.program)));
 
 /* ---- what each machine can honestly play --------------------------------
    lo/hi     the sweet range (MIDI). Each VOICE is octave-shifted as a whole so its
@@ -334,6 +346,14 @@ export const PART_SPEC = {
   dulcimer:  { lo: DULCIMER_LIMITS.lo, hi: DULCIMER_LIMITS.hi, center: DULCIMER_LIMITS.center, pitches: DULCIMER_LIMITS.pitches,
                poly: DULCIMER_LIMITS.poly, gap: DULCIMER_LIMITS.gap, ioi: 0, voices: DULCIMER_LIMITS.voices,
                maxEvents: DULCIMER_LIMITS.maxEvents, sustain: true, minDur: DULCIMER_LIMITS.minDur, maxDur: DULCIMER_LIMITS.maxDur },
+  /* pogo      the POGO BASS: a four-string electric bass, one pogo stick bouncing on each string, fret
+               carriages pre-move (pitch = position). E1–G3; a line + the odd double stop (poly 2 — the
+               strings voice 4); gap = one PITCH's re-strike floor (.1 s: 220-bpm 8ths are .136 s); pitches
+               is only a fold cap (the lanes are strings: E1–G3 = 28 semitones); every hit carries its length
+               (the hook lifts — and the live voice releases — at the note's end) */
+  pogo:      { lo: POGO_LIMITS.lo, hi: POGO_LIMITS.hi, center: POGO_LIMITS.center, pitches: POGO_LIMITS.hi - POGO_LIMITS.lo + 1,
+               poly: POGO_LIMITS.poly, gap: POGO_LIMITS.gap, ioi: POGO_LIMITS.ioi, voices: POGO_LIMITS.voices,
+               maxEvents: POGO_LIMITS.maxEvents, durs: true },
 };
 export const VOLLEY_MIN_HOP = .2;   // mirrors volley GEOM.MIN_HOP (asserted in test/midi-orchestra)
 export const PICKUP_BEATS = 4;      // pre-lead notes within this many beats wrap to the loop tail
@@ -523,6 +543,10 @@ export function orchestrate(tracks, { ppq, bpm, pin = null, windowed = false }){
     v.home = routeProgram(v.program);
     // the track's NAME before its program (a "Bass" played by a guitar program is a bass)
     let byName = nameHome(v);
+    // a NAMED bass that is ELECTRIC (any program but the upright / orchestral ones — a rock file's
+    // "Bass" is a bass guitar, often on a placeholder guitar program: MoP's are 26 / 28) bounces on
+    // the Pogo Bass when it keeps up with the line (its .1 s same-pitch floor: 220-bpm 8ths fit)
+    if (byName === 'bass' && electricBass(v) && gapFit(v.notes, PART_SPEC.pogo.gap, 60 / bpm / ppq) >= BASS_FIT) byName = 'pogo';
     if (byName === 'bass' && v.home !== 'bass'){
       const fit = gapFit(v.notes, PART_SPEC.bass.gap, 60 / bpm / ppq);
       if (fit < BASS_FIT){
@@ -531,10 +555,9 @@ export function orchestrate(tracks, { ppq, bpm, pin = null, windowed = false }){
         byName = null;
       }
     }
-    if (byName && byName !== v.home){
+    if (byName && byName !== v.home && !(byName === 'pogo' && v.home === 'bass'))
       warnings.push(`"${v.name}" plays as a ${v.role === 'sustain' ? 'sustained part' : v.role} by its name (its program is ${GM_NAMES[v.program]})`);
-      v.home = byName;
-    }
+    if (byName && byName !== v.home) v.home = byName;
     if (v.home === null){
       warnings.push(`dropped "${v.name}" (${GM_NAMES[v.program]}: no instrument in the room plays sound effects)`);
       continue;
@@ -582,7 +605,7 @@ export function orchestrate(tracks, { ppq, bpm, pin = null, windowed = false }){
     // most melodic routed voice (top line), which keeps playing its own machine too.
     // Prefer the voice that ENTERS first (to the bar), then the most melodic kind, then the busiest.
     const rank = { musicbox: 0, marimba: 0, dulcimer: 0, turntable: 0, volley: 0, ricochet: 0, bells: 1, riff: 1, strum: 1, horns: 1,
-                   bowls: 2, organ: 2, bowwheel: 2, bass: 3 };
+                   bowls: 2, organ: 2, bowwheel: 2, bass: 3, pogo: 3 };
     const rk = v => rank[v.dest] ?? 2;
     lead = [...routed].sort((a, b) => (Math.floor(a.first / 4) - Math.floor(b.first / 4)) || (rk(a) - rk(b)) ||
                                       (b.onsets - a.onsets) || (b.mean - a.mean))[0];
@@ -804,7 +827,10 @@ export function orchestrateByRole(tracks, { ppq, bpm, programs = false, reason =
           : p <= 7 ? ['dulcimer', 'marimba', 'bowls'] : ['marimba', 'dulcimer', 'bowls']; }
     } else if ((lowLine(v) && v.role !== 'lead') || v.low){ v.kind = v.low ? 'the left hand\'s bass line' : v.role === 'bass' ? 'a bass line (by its name)' : 'a low line';
       // (a named bass the string bass can't keep up with — repeats faster than its gap — rides a belt first)
-      v.prefs = v.role === 'bass' && gapFit(v.notes, PART_SPEC.bass.gap, secPerTick) < BASS_FIT ? ['belt', 'bass', 'marimba'] : ['bass', 'belt', 'marimba']; }
+      // (an ELECTRIC bass bounces on the Pogo Bass; any other low line keeps the string bass first — and the pogo
+      //  before the struck bars when both are taken)
+      v.prefs = programs && electricBass(v) ? ['pogo', 'bass', 'belt', 'marimba']
+        : v.role === 'bass' && gapFit(v.notes, PART_SPEC.bass.gap, secPerTick) < BASS_FIT ? ['belt', 'bass', 'pogo', 'marimba'] : ['bass', 'belt', 'pogo', 'marimba']; }
     else if (programs && routeProgram(v.program) === 'volley'){ v.kind = 'a steel-pan line'; v.prefs = ['volley', 'turntable', 'alto', 'belt', 'marimba']; }
     else if (sparkly(v)){ v.kind = 'a high sparkly line'; v.prefs = ['musicbox', 'turntable', 'belt', 'marimba']; }
     else {

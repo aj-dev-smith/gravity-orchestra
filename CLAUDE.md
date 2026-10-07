@@ -559,7 +559,7 @@ Daybreak Engine, Danse Macabre through October, pinned to Daybreak under `?debug
 - **The Orchestra**: Canon in D — Orchestra, Carol of the Bells, Morning Mood.
 - **October** (graveyard): Danse Macabre, Night on Bald Mountain, Funeral March of a Marionette.
 - **Classics**: Für Elise (duo), Ode to Joy (trio thirds), Canon in D (true canon), Greensleeves
-  (6/8), Gymnopédie 1, Prelude in C (single track — camera buttons auto-hide), Mountain King
+  (6/8), Gymnopédie 1, Prelude in C (single track), Mountain King
   (accelerando, kick/snare/hat groove), Toccata in Dm (6.5-beat pedal lob), Dies Irae (deep canon
   echo, delay 5).
 - **Drum showcase**: Backbeat (every kit piece incl. ride bell, a choked china, a splash).
@@ -762,8 +762,6 @@ tempo, the blob-URL console noise and the forced breath wide shot are all FIXED)
   scale doesn't fit a room (the band is 18.7 m up); MAP / EDIT STAGE are 2D-only.
 - Wall-clock bake-budget tests (e.g. inst-riff "bakes the whole demo fast") can flake when the
   machine is loaded by parallel agents/suites — re-run the file alone before believing it.
-- `~/Desktop/cascade-video/capture.mjs` (local, not in the repo) still presses `g` to hide the debug
-  HUD — the HUD now defaults OFF, so that key turns it ON. Drop the line.
 
 ---
 

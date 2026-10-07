@@ -142,7 +142,7 @@ ring through the breath into the downbeat.
 - **Ride cam** (`src/ridecam.js`, the **RIDE** button). You sit just behind the lead marble and look
   where it's going. It's comfort-limited: the horizon never rolls and view rotation is capped. The
   director rides the loop's biggest flight sparingly (share ≤ 0.14; on short loops only every n-th
-  pass). Try `/?song=toccata` with AUTO (it rides the 6.5-beat pedal lob), or press RIDE on any multi-track song (single-track songs like Prelude in C hide the camera buttons).
+  pass). Try `/?song=toccata` with AUTO (it rides the 6.5-beat pedal lob), or press RIDE on any multi-track song.
 
 ---
 

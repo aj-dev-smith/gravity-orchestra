@@ -849,7 +849,8 @@ function syncDirector(S, view){
     voices: [...cues.map(c => ({ key: c.key, hits: c.cue, weight: dirWeight(S, c.owner) })),   // (the song's pull only:
              // salience is relative to each machine's own norm, so sparse voices need no boost)
              { key: 'belt', belt: true, hits: beltHits, weight: dirWeight(S, 'belt') }],
-    grid: { t0: ROLL_T, beat: BEAT, end: seamFrom },
+    // song.barBeats: the meter's bar length in beats (Mars is 5/4) — the edit prefers cuts on bar lines
+    grid: { t0: ROLL_T, beat: BEAT, end: seamFrom, bar: Number.isInteger(S.barBeats) && S.barBeats >= 2 && S.barBeats <= 16 ? S.barBeats : 4 },
     fixed: script.map(c => ({ t: c.t, len: c.hold, key: c.key })),
     wides: moments.filter(m => m.n >= ENSEMBLE_N).map(m => m.t),
     rides,

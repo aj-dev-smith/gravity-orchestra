@@ -464,7 +464,7 @@ describe('timbre / articulation suffixes (orchestra.noteSuffix ↔ each plugin\'
     expect(noteSuffix('dulcimer', { prog: 0 }, spb)).toBe('');
     for (const k of ['horns', 'bowwheel', 'marimba', 'bass']) expect(noteSuffix(k, { prog: 61, dur: .1 }, spb)).toBe('');
     // the Pogo Bass: slap 36/37, picked 34, synth 38/39, fingered otherwise — and the plugin reads them back
-    expect([32, 33, 34, 35, 36, 37, 38, 39, 26].map(p => noteSuffix('pogo', { prog: p }, spb))).toEqual(['', '', ':p', '', ':s', ':s', ':y', ':y', '']);
+    expect([32, 33, 34, 35, 36, 37, 38, 39, 26, 80, 91, 104].map(p => noteSuffix('pogo', { prog: p }, spb))).toEqual(['', '', ':p', '', ':s', ':s', ':y', ':y', '', ':y', ':y', '']);
     expect(pogoHits([[0, 'E1:s'], [1, 'A1:p'], [2, 'D2:y'], [3, 'G2']]).map(h => h.ids[0])).toEqual(['E1:s', 'A1:p', 'D2:y', 'G2']);
     expect(strumParse('E3|n').variant).toBe('n');
     expect(organParse('C4|choir').timbre).toBe('choir');

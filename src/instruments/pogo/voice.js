@@ -143,6 +143,10 @@ export function pogoVoice(id){
     const P = low ? [[1, .22, 2.2], [2, .3, 2.6], [3, .16, 3.5], [4, .08, 5]] : [[1, .32, 2], [2, .16, 3]];
     const mids = biquad('peak', flag === 's' ? 1500 : 800, 1.1, flag === 's' ? 7 : 5, sr);   // the "clank" / the slap's scoop-and-snap
     const hp = biquad('hp', 32, .7, 0, sr);
+    // the GRIT: a parallel overdriven copy of everything above ~260 Hz (a bassist's blend pedal) — the
+    // band a phone speaker plays, so an E1 still reads where its 41 Hz fundamental can't
+    const gHp1 = biquad('hp', 260, .7, 0, sr), gHp2 = biquad('hp', 260, .7, 0, sr);
+    const GRIT = flag === 's' ? .2 : flag === 'p' ? .3 : .55, G_K = low ? 4 : 3;
     // the transient: fingered = a soft thud; pick = a click; SLAP = the thumb's pop + the string slapping the frets
     const tr = biquad('bp', flag === 's' ? 3200 : flag === 'p' ? 2400 : 900, flag === 's' ? 1.4 : 2, 0, sr);
     const trLen = (flag === 's' ? .05 : flag === 'p' ? .025 : .02) * sr, trAmp = flag === 's' ? 1.1 : flag === 'p' ? .45 : .12;
@@ -154,7 +158,8 @@ export function pogoVoice(id){
       s = a * (s + ph);
       let tx = 0;
       if (n < trLen){ tx = trAmp * tr(r() * 2 - 1) * Math.exp(-n / trLen * 5); }
-      x[n] = sat(hp(mids(s + tx)), art.drive);
+      const core = hp(mids(s + tx));
+      x[n] = sat(core + GRIT * Math.tanh(G_K * gHp2(gHp1(core))), art.drive);
     }
   }
   // the release: a cosine fade over the last 25 % (the cut is never a click; it decays to exactly 0)

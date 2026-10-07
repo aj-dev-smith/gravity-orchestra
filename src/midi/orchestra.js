@@ -195,7 +195,7 @@ export function lineHome(v){
      organ     'C4|choir' (choir / voice 52–54, voice lead 85) · 'C4|pad' (strings 40–51, synth
                pads 88–95) · the organ otherwise
      dulcimer  'C4:e' the tine e-piano (Rhodes / DX 4–5, clavinet 7)
-     pogo      'E1:s' slap (36 / 37) · 'E1:p' picked (34) · 'E1:y' synth bass (38 / 39) · fingered otherwise
+     pogo      'E1:s' slap (36 / 37) · 'E1:p' picked (34) · 'E1:y' synth bass (38 / 39; a named bass on 80–103) · fingered otherwise
    The bowwheel and horns have one voice (the horns pick tuba / trombone / trumpet by register);
    a merged note (two voices on one beat + pitch) takes the louder one's timbre.            */
 export const RIFF_MUTE_SEC = .15;
@@ -215,7 +215,8 @@ export function noteSuffix(key, n, spb, ctx = null){
     case 'strum': { const q = ctx?.prog ?? p; return q === 24 ? '|n' : q === 46 ? '|h' : ''; }
     case 'organ': return (p >= 52 && p <= 54) || p === 85 ? '|choir' : (p >= 40 && p <= 51) || (p >= 88 && p <= 95) ? '|pad' : '';
     case 'dulcimer': return p === 4 || p === 5 || p === 7 ? ':e' : '';
-    case 'pogo': return p === 36 || p === 37 ? ':s' : p === 34 ? ':p' : p === 38 || p === 39 ? ':y' : '';
+    // (a NAMED bass on a synth lead / pad / fx program — 80–103: "Bass Lead" on a square lead — is a synth bass too)
+    case 'pogo': return p === 36 || p === 37 ? ':s' : p === 34 ? ':p' : p === 38 || p === 39 || (p >= 80 && p <= 103) ? ':y' : '';
     default: return '';
   }
 }

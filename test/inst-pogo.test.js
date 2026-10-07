@@ -330,6 +330,25 @@ describe('pogo voice', () => {
     expect(bright('A1:s')).toBeGreaterThan(1.5 * bright('A1'));
     expect(pogoVoice('A1:s').samples.length).toBeLessThan(pogoVoice('A1').samples.length);
   });
+  it('reads on a PHONE speaker: every articulation keeps real energy above 200 Hz, even the low E (CLAUDE.md §5)', () => {
+    // (review: the first cut's fingered E1 put ~1/9 of its level above 200 Hz — on a phone, a 41 Hz line nearly vanished
+    //  next to the string bass it replaces. The parallel GRIT path keeps it at the string bass's E1 or better.)
+    const hp200 = x => {   // two cascaded 2nd-order Butterworth highpasses at 200 Hz
+      const out = Float64Array.from(x);
+      for (let k = 0; k < 2; k++){
+        const w = 2 * Math.PI * 200 / SR, c = Math.cos(w), al = Math.sin(w) / (2 * Math.SQRT1_2);
+        const b0 = (1 + c) / 2 / (1 + al), b1 = -(1 + c) / (1 + al), a1 = -2 * c / (1 + al), a2 = (1 - al) / (1 + al);
+        let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        for (let i = 0; i < out.length; i++){ const v = out[i], y = b0 * v + b1 * x1 + b0 * x2 - a1 * y1 - a2 * y2; x2 = x1; x1 = v; y2 = y1; y1 = y; out[i] = y; }
+      }
+      return out;
+    };
+    const rms = x => { const n = Math.round(.4 * SR); let e = 0; for (let i = 0; i < n; i++) e += x[i] * x[i]; return Math.sqrt(e / n); };
+    for (const id of ['E1', 'E1:s', 'E1:p', 'E1:y', 'A1', 'E2', 'A2']){
+      const x = pogoVoice(id).samples;
+      expect(rms(hp200(x)), id).toBeGreaterThan(.1);
+    }
+  });
 });
 
 describe('pogo render (headless build + update)', () => {

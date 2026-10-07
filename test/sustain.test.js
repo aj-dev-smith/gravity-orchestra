@@ -65,6 +65,14 @@ describe('bucket ids', () => {
     expect(L.length).toBeLessThan(LADDER.length);
     expect(bucketIds(many, () => 4.5, L).filter(i => splitBucket(i).hold).length).toBeLessThanOrEqual(BUCKET_CAP);
     expect(planLadder(many, () => 4.5, 0)).toEqual([]);    // nothing fits → no buckets (bare bases, as before)
+    expect(planLadder(many, () => 4.5, 0, LADDERS[2])).toBe(LADDERS[2]);   // … unless the plugin keeps a floor rung
+  });
+  it('a dense multi-timbre organ part keeps its staccato bucket (never below the old /s tier)', () => {
+    // 36 pipes × 3 timbres, all staccato: one rung alone is > BUCKET_CAP ids — the organ floors at it
+    const part = [];
+    for (let i = 0; i < 108; i++) part.push([i * .5, ['C', 'D', 'E', 'F', 'G', 'A'][i % 6] + (2 + Math.floor(i / 6) % 4) + ['', '|choir', '|pad'][Math.floor(i / 36)], .8, .5]);
+    const beat = .6, ids = organ.voiceIds(part, { beat, bpm: 100, rollT: 2.6, P: 2.6 + 64 * beat + 1.2, loopBeats: 64 });
+    expect(ids.filter(i => !splitBucket(i).hold)).toEqual([]);   // every strike a bucket (a ~.3 s note), none the 5.2 s LONG
   });
   it('allBucketIds is each base + every rung below its native hold', () => {
     expect(allBucketIds(['C4', 'E2'], b => b === 'C4' ? 4 : 1.5).sort()).toEqual(['C4', 'C4~0.5', 'C4~1', 'C4~2', 'E2', 'E2~0.5', 'E2~1'].sort());

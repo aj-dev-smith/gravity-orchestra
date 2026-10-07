@@ -214,7 +214,8 @@ song can get one, and **MIDI import now generates drums from channel 9** (§6).
   bowls) fire **duration buckets** — `'<base>~<hold>'` ids (`src/instruments/sustain.js`) whose
   render is the base cut at .5 / 1 / 2 s with the release BAKED in, the rung nearest the note's
   hold (log-nearest: ≤ √2 off). voiceIds gets the tempo, so build() and voiceIds plan the same
-  ladder from the same lane solve; a part over `BUCKET_CAP` (40) bucket ids coarsens the ladder.
+  ladder from the same lane solve; a part over `BUCKET_CAP` (40) bucket ids coarsens the ladder ([.5,2] → [.6] → none; the
+  organ floors at [.6] — it replaced the old per-base '/s' tier, so its staccato never regresses).
   main bakes a '~' id's bare base LIVE-ONLY (Float32, no `<audio>`); `playVoice` plays that base
   on the live path and releases at `dur` exactly, as before. Measured (all songs + demos): WAV bank
   −12 %, Float32 sources +32 %, bake time ≈ unchanged (cuts are slices; horns re-render natively).

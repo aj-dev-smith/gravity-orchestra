@@ -45,7 +45,7 @@
    ============================================================ */
 import { G, noteNum } from '../../engine.js';
 import { laneClock, at, wrapP, normalizeEvent } from '../clock.js';
-import { bucketId, planLadder, LADDER } from '../sustain.js';
+import { bucketId, planLadder, LADDER, LADDERS, BUCKET_CAP } from '../sustain.js';
 
 export const g = -G.y;                         // |gravity| = 14.5
 
@@ -243,7 +243,8 @@ export function strikeIds(n, ladder = LADDER){
   return { first: bucketId(n.base, n.tDur, VOICE_HOLD, ladder), cont: null };
 }
 /** one ladder for a whole fitted part (build and voiceIds both plan it from fitPart's events) */
-export const organLadder = events => planLadder(events.filter(e => e.tDur <= CONT_AT + .1).map(e => [e.base, e.tDur]), () => VOICE_HOLD);
+export const organLadder = events => planLadder(events.filter(e => e.tDur <= CONT_AT + .1).map(e => [e.base, e.tDur]), () => VOICE_HOLD,
+  BUCKET_CAP, LADDERS[LADDERS.length - 2]);     // floor: one rung (.6 s) — never below the old '/s' tier's per-base staccato
 
 /* ---- one pipe's lane: its fitted notes → per-gap solved motion ----
    notes: [{t (wrapped), tDur, vel, timbre, base}] for ONE pitch, already fitted (spaced ≥

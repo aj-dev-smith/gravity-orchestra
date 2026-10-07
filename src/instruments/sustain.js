@@ -57,14 +57,18 @@ export function splitBucket(id){
   const hold = +s.slice(k + 1);
   return Number.isFinite(hold) && hold > 0 ? { base: s.slice(0, k), hold } : { base: s, hold: 0 };
 }
-/** pairs [[base, dur]…] + native(base) → the finest ladder whose bucket ids fit `cap` */
-export function planLadder(pairs, native, cap = BUCKET_CAP){
+/** pairs [[base, dur]…] + native(base) → the finest ladder whose bucket ids fit `cap`. `floor` = the
+    ladder a part keeps when even one rung overflows the cap (default none: every strike fires its bare
+    base, the pre-bucket behaviour). The organ floors at one rung — its old '/s' SHORT tier baked a
+    short render for EVERY base, so a dense organ part must never lose its staccato on iOS. */
+export function planLadder(pairs, native, cap = BUCKET_CAP, floor = LADDERS[LADDERS.length - 1]){
   for (const L of LADDERS){
+    if (!L.length) break;
     const ids = new Set();
     for (const [base, dur] of pairs){ const id = bucketId(base, dur, native(base), L); if (id !== base) ids.add(id); }
     if (ids.size <= cap) return L;
   }
-  return LADDERS[LADDERS.length - 1];
+  return floor;
 }
 /** every id the pairs fire under `ladder` (bucket ids and bare bases), unique */
 export function bucketIds(pairs, native, ladder){

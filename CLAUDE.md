@@ -443,7 +443,11 @@ state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machi
 - **Perf (render-time only — all A/B-able by URL flag).** `mergestatic.js` bakes still parts per
   material AND parts rigid on a moving carriage (piston head, valve slide: merged into the carriage's
   frame); single-material parts with geometry groups (every Box/Cylinder) merge too (`?norigid` = the
-  old merge). `raybvh.js` routes big-mesh raycasts (the shot solve) through a BVH — identical hits
+  old merge). The stillness proof samples the loop uniformly AND around each lane's first strikes + the
+  count-in (a lid pop / bell flex lasts a fraction of a second — uniform samples alone baked 11 moving
+  horn/bowl parts still); `node scripts/merge-audit.mjs <url>` re-proves every bake over a dense sweep
+  and must print all `ok` after any instrument change. A part that changes in place (material swap, CPU-
+  rewritten geometry) never bakes. `raybvh.js` routes big-mesh raycasts (the shot solve) through a BVH — identical hits
   (`?nobvh`; `scripts/same-solve.mjs` proves every shot unchanged). The iOS WAV bank's background
   encode sleeps while the live Web Audio path is healthy (it was eating phone frames for seconds per
   song change). `?batch=1` = opt-in 2D BatchedMesh mirror (no CPU win measured headless; try it on a

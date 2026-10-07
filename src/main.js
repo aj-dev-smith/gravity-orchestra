@@ -435,7 +435,8 @@ function hangLow(root){
 let fadeMats = [], fadeWarm = 0, fadeTick = 0, perfOff = false;
 const NO_MERGE = new URLSearchParams(location.search).has('nomerge');
 const RIGID = new URLSearchParams(location.search).has('norigid') ? { rigid: false, groups: false } : { rigid: true, groups: true };   // ?norigid: A/B — the merge as it was (no carriage merge, no multi-group parts)
-let mergeStats = null;                                  // dev: what the static merge baked (__dev.merge)
+const AUDIT_N = +new URLSearchParams(location.search).get('mergeaudit') || 0;   // dev: re-prove every bake over a dense sweep (scripts/merge-audit.mjs)
+let mergeStats = null, mergeAudit = null;                                  // dev: what the static merge baked (__dev.merge)
 function collectFadeMats(root){
   const out = new Set();
   root.traverse(o => { for (const m of [].concat(o.material || []))
@@ -648,8 +649,32 @@ function buildWorld(keyName){
     const add = r => { mergeStats.merged += r.merged + (r.rigid?.merged || 0); mergeStats.removed += r.removed + (r.rigid?.removed || 0); mergeStats.frozen += r.frozen || 0; mergeStats.rigid = (mergeStats.rigid || 0) + (r.rigid?.removed || 0); };
     const RUN = { started: true, skipStrikes: true, onStrike(){} };   // (started: the LIVE pose — !started is the armed hold)
     // (the last arg re-poses for the count-in; parts still across the sweep AND that pose stop auto-updating their matrices)
-    instLive.forEach(r => add(mergeStatic(r.station, t => r.inst.update(t, P0, 0, RUN), times, () => r.inst.update(-LEAD_IN, P0, 0, POSE0), RIGID)));
-    if (drumGroup) add(mergeStatic(drumGroup, t => drumKit.update(t, P0, 0, RUN), times, () => drumKit.update(-LEAD_IN, P0, 0, POSE0), RIGID));
+    // the proof's SAMPLES: the uniform sweep, plus the moments a STRIKE moves something. A lid pop,
+    // a bell's flex, a valve press lasts a fraction of a second and can fall between uniform samples
+    // (a part that only twitches there would be baked still — frozen for good). So: every lane's
+    // first two events ± a short window, a sustained note's middle + end, and the count-in + roll-in
+    // (entrance hardware — a gate, a magnet — moves once, there). ?mergeaudit=N re-proves every bake
+    // over a dense sweep (N uniform + every event ±.5 s) and lists any it gets wrong (__dev.mergeAudit).
+    const EV_OFF = [-.3, -.12, -.04, 0, .04, .12, .3], EV_PER = 2;
+    const fit = x => x < -LEAD_IN ? x + P0 : x;
+    const sweepFor = evs => {
+      const per = new Map(), out = times.slice();
+      for (let x = -LEAD_IN; x < ROLL_T + 1; x += .1) out.push(x);
+      for (const e of evs){ const a = per.get(e.id) || per.set(e.id, []).get(e.id); if (a.length < EV_PER) a.push(e); }
+      for (const a of per.values()) for (const e of a){
+        for (const o of EV_OFF) out.push(fit(e.t + o));
+        if (e.d > 0) out.push(fit(e.t + e.d / 2), fit(e.t + e.d), fit(e.t + e.d + .12));
+      }
+      return out;
+    };
+    const instEvs = r => eventTimes(S.parts?.[r.I.key], { rollT: ROLL_T, beat: BEAT }).map(e => ({ t: wrapP(e.t, P0), d: e.tDur, id: String(e.note) }));
+    const kitEvs = () => Object.entries(S.drums || {}).flatMap(([lane, hits]) => hits.map(normalizeHit).map(h => ({ t: wrapP(ROLL_T + h.beat * BEAT, P0), d: 0, id: lane })));
+    const opt = evs => !AUDIT_N ? RIGID : { ...RIGID, audit: [...Array.from({ length: AUDIT_N }, (_, k) => -LEAD_IN + (k + .5) / AUDIT_N * (P0 + LEAD_IN)),
+      ...evs.flatMap(e => Array.from({ length: 53 }, (_, k) => fit(e.t - .5 + k * .025)))] };
+    mergeAudit = [];
+    const audited = (key, r) => { if (r.audit?.length) mergeAudit.push({ key, parts: r.audit }); return r; };
+    instLive.forEach(r => { const ev = instEvs(r); add(audited(r.I.key, mergeStatic(r.station, t => r.inst.update(t, P0, 0, RUN), sweepFor(ev), () => r.inst.update(-LEAD_IN, P0, 0, POSE0), opt(ev)))); });
+    if (drumGroup){ const ev = kitEvs(); add(audited('drums', mergeStatic(drumGroup, t => drumKit.update(t, P0, 0, RUN), sweepFor(ev), () => drumKit.update(-LEAD_IN, P0, 0, POSE0), opt(ev)))); }
   }
 
   // a full room is deep: thin the haze so the back tier still reads from the wide shot
@@ -1847,7 +1872,7 @@ if (new URLSearchParams(location.search).has('debug')){
       if (lastWide?.eye) test('stage', lastWide.eye, lastWide.aim);
       return out;
     },
-    get layout(){ return lastLayout; }, get wide(){ return lastWide; }, get merge(){ return mergeStats; }, frozen: () => frozenStats(), rayBVH: () => rayBVHStats(),
+    get layout(){ return lastLayout; }, get wide(){ return lastWide; }, get merge(){ return mergeStats; }, get mergeAudit(){ return mergeAudit; }, frozen: () => frozenStats(), rayBVH: () => rayBVHStats(),
     get editor(){ return editor; }, xr: xr.dev,
     xrPerf: () => ({ lite: xrLite, batch: xrBatch.stats, detail: xrDetail.stats }),   // the VR detail profile at work (scripts/xr-perf.mjs)                    // creation tools: .openMap() .toggleEdit() .stage.state() .stage.select(k)
     // staging-audit handles (scripts/staging-audit.mjs): the live camera, the song's world, the live marbles

@@ -96,3 +96,30 @@ describe('mergeStatic carriage (rigid) merge', () => {
     pruneFrozen();
   });
 });
+
+/* the part itself must not change either: a material swapped mid-loop or a geometry re-written on the
+   CPU (a deformed tine) would be frozen by a baked copy — even when its transform never moves */
+describe('mergeStatic never bakes a part that changes in place', () => {
+  it('a still part whose geometry is re-written (or whose material is swapped) stays live; rigid parts too', () => {
+    const root = new THREE.Group(), mat = new THREE.MeshStandardMaterial(), alt = new THREE.MeshStandardMaterial();
+    const mk = () => new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), mat);
+    const a = mk(), b = mk(), bent = mk(), swap = mk();                 // still in the world
+    const car = new THREE.Group(), c = mk(), d = mk(), cSwap = mk();     // rigid on a moving carriage
+    car.add(c, d, cSwap); root.add(a, b, bent, swap, car);
+    const scene = new THREE.Scene(); scene.add(root);
+    const pos = bent.geometry.attributes.position;
+    const pose = t => {
+      car.position.x = Math.sin(t);
+      pos.setY(0, .5 + .1 * Math.sin(t)); pos.needsUpdate = true;           // the tine rings
+      const odd = Math.round(t * 2) % 3 === 1;                              // swapped only at some samples…
+      swap.material = cSwap.material = odd ? alt : mat;                     // …and back by the rest pose
+    };
+    const r = mergeStatic(root, pose, times, () => pose(0));
+    expect(a.parent).toBe(null); expect(b.parent).toBe(null);             // the honest still parts bake
+    expect(bent.parent).toBe(root); expect(swap.parent).toBe(root);
+    expect(c.parent).toBe(null); expect(d.parent).toBe(null);             // the honest rigid parts bake
+    expect(cSwap.parent).toBe(car);
+    expect(r.rigid.removed).toBe(2);
+    pruneFrozen();
+  });
+});

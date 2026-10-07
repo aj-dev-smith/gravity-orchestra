@@ -36,6 +36,8 @@ function mergeable(o, groupsOK = true){
   if ((!groupsOK && o.geometry.groups?.length > 1) || Object.keys(o.geometry.morphAttributes || {}).length) return false;
   return true;
 }
+// a geometry's edit stamp: buffer versions only grow, so any CPU re-write (or a draw-range change) moves it
+const geoVer = g => { let v = g.index ? g.index.version : 0; for (const k in g.attributes) v += g.attributes[k].version || 0; return `${g.id}|${v}|${g.drawRange.start}|${g.drawRange.count}`; };
 const drawnUnder = (o, root) => { for (let p = o; p; p = p.parent){ if (!p.visible) return false; if (p === root) return true; } return true; };
 
 /** root: a built station group (already placed). pose(t): poses it at songTime t (a pure fn).
@@ -43,22 +45,49 @@ const drawnUnder = (o, root) => { for (let p = o; p; p = p.parent){ if (!p.visib
     the count-in after the sweep — given it, every part whose LOCAL transform held still across
     the sweep AND the rest pose is also FROZEN (see freezeStill), and parts rigid on a moving carriage
     are baked onto it (mergeRigid; opts.rigid = false skips that). Returns { merged, removed, frozen, rigid }. */
-export function mergeStatic(root, pose, times, rest, { rigid = true, groups = true } = {}){
+export function mergeStatic(root, pose, times, rest, { rigid = true, groups = true, audit = null } = {}){
   root.updateMatrixWorld(true);
   const cand = [], locals = [];
-  root.traverse(o => { if (o !== root && mergeable(o, groups)) cand.push({ o, m: o.matrixWorld.clone(), v: drawnUnder(o, root), mat: o.material, live: true });
+  root.traverse(o => { if (o !== root && mergeable(o, groups)) cand.push({ o, m: o.matrixWorld.clone(), v: drawnUnder(o, root), mat: o.material, ver: geoVer(o.geometry), live: true, same: true });
                        if (rest) locals.push({ o, m: o.matrix.clone(), vis: o.visible, still: true, shown: true }); });
   for (const t of (cand.length >= 2 || rest) ? times : []){
     pose(t);
     root.updateMatrixWorld(true);
-    for (const c of cand) if (c.live && (!c.m.equals(c.o.matrixWorld) || drawnUnder(c.o, root) !== c.v || c.o.material !== c.mat)) c.live = false;
+    for (const c of cand){
+      // (same: the part itself never changes — its material is never swapped and its geometry never
+      // re-written on the CPU (a deformed tine, a bent string) — a baked copy would freeze either)
+      if (c.same && (c.o.material !== c.mat || geoVer(c.o.geometry) !== c.ver)) c.same = c.live = false;
+      if (c.live && (!c.m.equals(c.o.matrixWorld) || drawnUnder(c.o, root) !== c.v)) c.live = false;
+    }
     for (const l of locals){ if (l.still && !l.m.equals(l.o.matrix)) l.still = false; if (l.shown && l.o.visible !== l.vis) l.shown = false; }
+  }
+  // AUDIT (dev, opts.audit = a much denser set of times): re-run the proof over it BEFORE baking, then
+  // report every part that was baked although the dense proof says it moves (the sweep missed it)
+  let auditL2 = null;
+  if (audit){
+    for (const c of cand) c.ok2 = true;
+    const L2 = new Map(locals.map(l => [l.o, true]));
+    for (const t of audit){
+      pose(t); root.updateMatrixWorld(true);
+      for (const c of cand){
+        if (!c.ok2) continue;
+        if (c.o.material !== c.mat || geoVer(c.o.geometry) !== c.ver) c.ok2 = false;
+        else if (c.live && (!c.m.equals(c.o.matrixWorld) || drawnUnder(c.o, root) !== c.v)) c.ok2 = false;
+      }
+      for (const l of locals) if (L2.get(l.o) && (!l.m.equals(l.o.matrix) || l.o.visible !== l.vis)) L2.set(l.o, false);
+    }
+    auditL2 = L2;
+    pose(times[times.length - 1]); root.updateMatrixWorld(true);
   }
   const res = cand.length < 2 ? { merged: 0, removed: 0 } : mergeStill(root, pose, times, cand);
   if (rest){
     rest();
     res.rigid = rigid ? mergeRigid(root, cand, locals) : { merged: 0, removed: 0 };
     res.frozen = freezeStill(root, locals);
+  }
+  if (audit){
+    const path = o => { const a = []; for (let p = o; p && p !== root; p = p.parent) a.push(p.name || p.type + (p.geometry ? ':' + p.geometry.type : '')); return a.join('<'); };
+    res.audit = cand.filter(c => !c.o.parent && (!c.ok2 || (!c.live && c.chain.some(o => !auditL2.get(o))))).map(c => `${c.live ? 'still' : 'rigid'}:${path(c.o)}`);
   }
   return res;
 }
@@ -107,7 +136,7 @@ function mergeRigid(root, cand, locals){
   root.updateMatrixWorld(true);
   const groups = new Map(), _m = new THREE.Matrix4();
   for (const c of cand){
-    if (c.live || !c.o.parent || !c.mat || c.o.material !== c.mat) continue;   // (world-still parts went to mergeStill)
+    if (c.live || !c.same || !c.o.parent || !c.mat || c.o.material !== c.mat || geoVer(c.o.geometry) !== c.ver) continue;   // (world-still parts went to mergeStill)
     if (!still(c.o) || !c.o.visible) continue;
     let a = c.o.parent, ok = true;
     for (; a && a !== root; a = a.parent){
@@ -116,6 +145,7 @@ function mergeRigid(root, cand, locals){
       if (!a.visible){ ok = false; break; }               // (never drawn: leave it as it is)
     }
     if (!ok || !a || a === root) continue;                // (a === root: the station itself never moves — mergeStill's case)
+    c.chain = []; for (let p = c.o; p !== a; p = p.parent) c.chain.push(p);   // (the rigid path: the audit re-checks it)
     if (!L.has(a)) continue;
     const rel = _m.copy(a.matrixWorld).invert().multiply(c.o.matrixWorld);
     if (rel.determinant() < 0) continue;                  // mirrored: merging would flip its winding

@@ -31,7 +31,9 @@
                             Rhodes chords. The belt states the hook twice.
      HORNS     32–48  9–12  CALL AND RESPONSE. The hook again, and the BELLOWS HORNS answer
                             every held note ("ba-ba-BAH"). The phrase turns Cmaj7 → B7♯9, and
-                            the horns push the B7 a half beat early, as funk horns do.
+                            the horns push the B7 a half beat early, as funk horns do — and the
+                            forge's last chanks and the bass push WITH them (PUSH: bars 11, 29,
+                            30), so a push never lands on top of the old chord.
      GRAND     48–64  13–16 THE MARBLE GRAND'S SOLO. The band drops to bass, a soft kit and the
                             forge's offbeat chanks. The organ lays a low pad, and the e-piano
                             plays a Dorian solo (8ths + 16ths, a peak on B5). The belt floats
@@ -187,14 +189,18 @@ const GROOVE_BARS = {};
 [5, 7, 9, 13, 15, 25, 29].forEach(b => { GROOVE_BARS[b] = 'Em9'; });
 [6, 8, 10, 14, 16, 26, 30].forEach(b => { GROOVE_BARS[b] = 'A13'; });
 GROOVE_BARS[11] = 'Cmaj7'; GROOVE_BARS[12] = 'B7s9';
+// the PUSHES: where the horns hit the next chord on the "and" of 4, the rhythm section goes
+// with them (the forge's last two 16ths, the bass's last 8th, the harp) — a horn B7 over a
+// guitar Cmaj7 chank on the same 16th is a clash, not a push
+const PUSH = { 11: 'B7s9', 29: 'A13', 30: 'B7s9' };
 
 // ---- RIFF FORGE: clean scratch, the distorted break ----------------------------------------
 const riff = [];
 const OPEN_SLOTS = new Set([4, 7, 12, 14]);        // 2 · the "a" of 2 · 4 · the "and" of 4
 const GHOST_REST = new Set([2, 10]);               // two breaths in the 16th wall
-const scratch = (b0, ch, s = 1, sparse = false) => {
+const scratch = (b0, ch0, s = 1, sparse = false, push = null) => {
   for (let k = 0; k < 16; k++){
-    const b = r5(b0 + k / 4), open = OPEN_SLOTS.has(k);
+    const b = r5(b0 + k / 4), open = OPEN_SLOTS.has(k), ch = push && k >= 14 ? push : ch0;
     if (sparse && !open) continue;
     if (!open && GHOST_REST.has(k)) continue;
     for (const n of GTR[ch]) riff.push(open ? [b, n + ':c', v3((k === 4 || k === 12 ? .82 : .7) * s), .45]
@@ -204,7 +210,7 @@ const scratch = (b0, ch, s = 1, sparse = false) => {
 for (const [bar, ch] of Object.entries(GROOVE_BARS)){
   const n = +bar;
   if (n >= 13 && n <= 16) scratch(BAR(n), ch, .7, true);       // under the Grand: chanks only
-  else scratch(BAR(n), ch, n >= 29 ? .85 : 1);
+  else scratch(BAR(n), ch, n >= 29 ? .85 : 1, false, PUSH[n]);
 }
 { // the BREAK (bars 27–28): distortion. Three Cmaj7 slams, a B7♯9, the blues run up B
   const P5 = (b, ns, v, d) => ns.forEach(n => riff.push([r5(b), n, v, d]));
@@ -221,7 +227,7 @@ riff.sort(byBeat);
 const bass = [];
 for (const [bar, ch] of Object.entries(GROOVE_BARS)){
   const n = +bar, s = n >= 13 && n <= 16 ? .85 : 1;
-  for (const [o, nt, v] of BASS_BAR[ch]) bass.push([r5(BAR(n) + o), nt, v3(v * s)]);
+  for (const [o, nt, v] of BASS_BAR[ch]) bass.push([r5(BAR(n) + o), PUSH[n] && o === 3.5 ? (PUSH[n] === 'B7s9' ? 'F#2' : 'A2') : nt, v3(v * s)]);
 }
 // intro: the bass wakes on the B7 (bar 4), a pickup into the groove
 bass.push([14, 'B2', .7], [15, 'A2', .6], [15.5, 'F#2', .66], [15.75, 'D3', .7]);
@@ -307,8 +313,8 @@ oc(90, ['C3', 'G3', 'B3', 'E4'], .62, 2, ['B4', 'E5']);
 oc(92, ['F#2', 'E3', 'A3', 'C4'], .64, 2, ['C5', 'E5']);
 oc(94, ['B2', 'F#3', 'A3', 'D#4'], .68, 2, ['B4', 'D#5']);
 // the tutti
-oc(112, ['E3', 'B3', 'D4', 'F#4', 'G4'], .58, 4, ['B4', 'D5']);
-oc(116, ['A2', 'E3', 'G3', 'C#4', 'F#4'], .58, 4, ['B4', 'E5']);
+oc(112, ['E3', 'B3', 'D4', 'F#4', 'G4'], .58, 3.5, ['B4', 'D5']);      // (lifts for the horns' push on the "and" of 4)
+oc(116, ['A2', 'E3', 'G3', 'C#4', 'F#4'], .58, 3.5, ['B4', 'E5']);
 // the landing, held through the breath
 oc(120, ['B2', 'F#3', 'A3', 'D#4'], .6, 7.6, ['A4', 'D#5']);
 organ.sort(byBeat);
@@ -328,8 +334,8 @@ for (const [b, n, d, v] of [
   [92, 'A4', 1, .74], [93, 'C5', 1, .82], [94, 'B4', 1, .8], [95, 'D#5', 1, .9],          // F#m7♭5 · B7: D#5 → E
 ]) bw(b, n, v, d * .96);
 // the tutti: a bowed bed (Em9 · A13)
-bw(112, 'E3', .55, 3.9); bw(112, 'B3', .5, 3.9); bw(112, 'F#4', .5, 3.9); bw(112, 'D5', .48, 3.9);
-bw(116, 'A3', .55, 3.9); bw(116, 'E4', .5, 3.9); bw(116, 'G4', .5, 3.9); bw(116, 'B4', .48, 3.9);
+bw(112, 'E3', .55, 3.4); bw(112, 'B3', .5, 3.4); bw(112, 'F#4', .5, 3.4); bw(112, 'D5', .48, 3.4);   // (off before the push)
+bw(116, 'A3', .55, 3.4); bw(116, 'E4', .5, 3.4); bw(116, 'G4', .5, 3.4); bw(116, 'B4', .48, 3.4);
 // the landing: B7 (A3 · B3 · F#4 · D#5), 7 beats = 3.8 s
 bw(120, 'B3', .66, 7); bw(120, 'A3', .6, 7); bw(120, 'F#4', .6, 7); bw(120, 'D#5', .64, 7);
 bowwheel.sort(byBeat);
@@ -343,7 +349,7 @@ for (const [bar, ch, s] of [[17, 'Cmaj7', 1], [18, 'D6', 1], [19, 'Bm7', .72], [
 // the bridge: one let-ring strum per chord
 for (const [b, ch] of [[80, 'Am9'], [84, 'D9'], [88, 'Gmaj7'], [90, 'Cmaj7'], [92, 'F7b5'], [94, 'B7']]) sw(b, ch, .56);
 // the tutti: backbeats + the "and" of 4
-for (const [bar, ch] of [[29, 'Em9'], [30, 'A13']]) for (const [o, v] of [[1, .7], [2.5, .56], [3, .72], [3.5, .56]]) sw(BAR(bar) + o, ch, v);
+for (const [bar, ch] of [[29, 'Em9'], [30, 'A13']]) for (const [o, v] of [[1, .7], [2.5, .56], [3, .72], [3.5, .56]]) sw(BAR(bar) + o, o === 3.5 ? PUSH[bar] : ch, v);
 sw(120, 'B7s9', .9);
 strum.sort(byBeat);
 
@@ -359,7 +365,7 @@ const ARP_EM = ['E4', 'G4', 'B4', 'D5', 'F#5', 'G5', 'B5', 'A5', 'G5', 'F#5', 'D
 ARP_BM.forEach((n, k) => mm(72 + k / 4, n, .6 + .12 * (k % 4 === 0) + .1 * k / 15, .25));
 ARP_EM.forEach((n, k) => mm(76 + k / 4, n, .72 + .12 * (k % 4 === 0) + .08 * k / 15, .25));
 // the tutti: 8ths, Em9 · A13
-[['B4', 'E5', 'F#5', 'E5', 'B4', 'G5', 'F#5', 'D5'], ['C#5', 'E5', 'G5', 'E5', 'C#5', 'F#5', 'E5', 'B4']]
+[['B4', 'E5', 'F#5', 'E5', 'B4', 'G5', 'F#5', 'E5'], ['C#5', 'E5', 'G5', 'E5', 'C#5', 'F#5', 'E5', 'B4']]
   .forEach((row, i) => row.forEach((n, k) => mm(112 + 4 * i + k / 2, n, k % 2 ? .4 : .5, .5)));
 ['B3', 'D#4', 'F#4', 'A4'].forEach(n => mm(120, n, .7, 4));     // the landing ROLLS (held ≥ 1 beat)
 marimba.sort(byBeat);

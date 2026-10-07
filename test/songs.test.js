@@ -174,6 +174,15 @@ describe('finale: every machine plays its whole part', () => {
   it('the turntable record clears every deployed pair', () => {
     expect(buildRecord(S.parts.turntable, { rollT: ROLL_T, beat, P, start: -2.4 }).ok).toBe(true);
   });
+  it('the rhythm section pushes WITH the horns (no new chord landing on the old one)', () => {
+    const at = (k, b) => S.parts[k].filter(e => Math.abs(e[0] - b) < 1e-6).map(e => String(e[1]).split(/[:|]/)[0]).sort();
+    expect(at('riff', 43.5)).toEqual(['A3', 'B2', 'D#3', 'D4']);       // horns B7 a half beat early → the forge's B7♯9
+    expect(at('riff', 119.5)).toEqual(['A3', 'B2', 'D#3', 'D4']);
+    expect(at('riff', 115.5)).toEqual(['B4', 'C#4', 'F#4', 'G3']);      // horns A13 early → the forge's A13
+    expect(at('bass', 43.5)).toEqual(['F#2']);
+    expect(at('strum', 115.5)).toContain('C#4');
+    expect(at('strum', 119.5)).toContain('D#4');
+  });
   it('the vibes never double the lead', () => {
     const NN = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
     const midi = n => { const m = n.match(/^([A-G]#?)(\d)$/); return NN.indexOf(m[1]) + 12 * (+m[2] + 1); };

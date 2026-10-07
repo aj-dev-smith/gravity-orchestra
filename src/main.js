@@ -1840,7 +1840,7 @@ if (new URLSearchParams(location.search).has('debug')){
     xrPerf: () => ({ lite: xrLite, batch: xrBatch.stats, detail: xrDetail.stats }),   // the VR detail profile at work (scripts/xr-perf.mjs)                    // creation tools: .openMap() .toggleEdit() .stage.state() .stage.select(k)
     // staging-audit handles (scripts/staging-audit.mjs): the live camera, the song's world, the live marbles
     get three(){ return THREE; }, get camera(){ return camera; }, get world(){ return world; }, get marbles(){ return devMarbles; }, get P(){ return ROLL_T + LOOP_T; },
-    get shots(){ return lastShots.map(s => ({ key: s.key, owner: s.owner, eye: s.eye.toArray(), aim: s.aim.toArray(), pref: s.pref?.toArray(), rays: s.rays, fg: s.fg, fitMax: s.fitMax, portrait: s.portrait?.eye.toArray() })); },
+    get shots(){ return lastShots.map(s => ({ key: s.key, owner: s.owner, eye: s.eye.toArray(), aim: s.aim.toArray(), pref: s.pref?.toArray(), rays: s.rays, fg: s.fg, fitMax: s.fitMax, pk: s.pk, portrait: s.portrait?.eye.toArray() })); },
     get solve(){ const f = lastSolve?.follow; return lastSolve && { ms: lastSolve.ms, split: lastSolve.split, kept: lastSolve.kept, solids: lastSolve.solids, room: solvedRoom, follow: lastShots.length && f?.land ? { land: f.land, portrait: f.portrait, rays: f.rays } : null }; },
     get follow(){ return followRig; }, shotCtx: () => shotCtx(),
     roomSolids: () => roomSolids(rooms.group).map(s => s.box),   // the room's standing geometry, as the shot solve sees it

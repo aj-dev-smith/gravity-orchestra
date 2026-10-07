@@ -141,13 +141,17 @@ export function boxPts(b, yMin = -Infinity){
     blocked(eye, dir, far) → bool — does this probe ray hit ANOTHER machine first
     others: [box] — every other machine's 3D box (clear air: an eye stays ≥ `air` from each)
     subject: [x,y,z][] — the points that should be in frame (framing is kept ≥ the pref's − .15)
-    Returns { eye, rays, az, lift, k, cost } — rays = blocked probe rays of the winner. */
+    Returns { eye, rays, az, lift, k, cost, pk } — rays = blocked probe rays of the winner; pk = the
+    fitPref walk-back factor (1: the designer's distance). */
 export function solveShotEye({ aim, pref, room, blocked, others = [], subject = null, air = 1.2, fov = 55, aspect = 1.5, fgMax = FG_MAX, fgNear = .6, fgPts = EDGE, fgBudget = 40, maxCands = Infinity, fit = true, bottom = UI_BOTTOM }){
   const inRoom = e => e[0] >= room.x0 && e[0] <= room.x1 && e[1] >= room.y0 && e[1] <= room.y1 && e[2] >= room.z0 && e[2] <= room.z1;
   const swayIn = e => { const o = sub(e, aim); return [-SWAY, 0, SWAY].every(a => { const r = rotY(o, a); return inRoom([aim[0] + r[0], aim[1] + r[1], aim[2] + r[2]]); }); };
   // the designer's angle at the distance that frames its station (fitPref): the search starts there
+  // (pk: how far it walked back — a phone's own pull-back (shotrig/camera.js) is relative to the
+  //  DESIGNER's distance, so it divides this out instead of stacking on top of it)
+  const d0 = Math.hypot(...sub(pref, aim));
   if (fit && subject) pref = fitPref(aim, pref, subject, { fov, aspect, bottom, ok: e => swayIn(e) && !others.some(b => boxDist(e, b) < air) });
-  const off0 = sub(pref, aim);
+  const off0 = sub(pref, aim), pk = d0 > 1e-6 ? Math.hypot(...off0) / d0 : 1;
   const fr0 = subject ? framed(pref, aim, subject, fov, aspect, bottom) : 1;
   // candidates in order of how far they stray from the preference (the designer's angle first)
   const cands = [];
@@ -169,10 +173,10 @@ export function solveShotEye({ aim, pref, room, blocked, others = [], subject = 
     if (rays <= CLEAR_RAYS && fgBudget-- <= 0) break;               // (a bounded search: the best so far wins)
     const fg = rays <= CLEAR_RAYS ? foreground(eye, aim, blocked, { aspect, fov, near: fgNear, pts: fgPts, stop: Math.floor(fgMax * fgPts.length) + 2 }) : 1;
     const cost = rays * 10 + c.dev + Math.max(0, fr0 - .15 - fr) * 8 + Math.max(0, fg - fgMax) * 12;
-    if (!best || cost < best.cost) best = { eye, rays, fg, az: c.az, lift: c.lift, k: c.k, cost, framed: fr };
+    if (!best || cost < best.cost) best = { eye, rays, fg, az: c.az, lift: c.lift, k: c.k, cost, framed: fr, pk };
     if (rays <= CLEAR_RAYS && fr >= fr0 - .15 && fg <= fgMax) break;   // the first clean one in preference order wins
   }
-  return best || { eye: pref, rays: blockedRays(pref, aim, blocked), fg: 0, az: 0, lift: 0, k: 1, cost: Infinity, framed: fr0, none: true };   // (none: no candidate stood in the room)
+  return best || { eye: pref, rays: blockedRays(pref, aim, blocked), fg: 0, az: 0, lift: 0, k: 1, cost: Infinity, framed: fr0, pk, none: true };   // (none: no candidate stood in the room)
 }
 
 /* ---- the room's WIDE (main.js searchWide fits one per candidate direction) ----

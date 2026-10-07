@@ -49,6 +49,12 @@ describe('station framing: the designer\'s angle at the distance that frames it'
     // …and fit:false keeps the old behaviour (the phone's own pull-back owns its distance)
     expect(solveShotEye({ aim: BELLS.aim, pref: BELLS.pref, room: EYE_ROOM, blocked: () => false, others: [], subject: pts, fit: false }).eye.map((v, i) => v - BELLS.pref[i]).every(d => Math.abs(d) < 1e-9)).toBe(true);
   });
+  it('reports the walk-back (pk) so a phone\'s own pull-back divides it out instead of stacking on it', () => {
+    const r = solveShotEye({ aim: BELLS.aim, pref: BELLS.pref, room: EYE_ROOM, blocked: () => false, others: [], subject: pts });
+    const k = Math.hypot(...sub(fitPref(BELLS.aim, BELLS.pref, pts), BELLS.aim)) / Math.hypot(...sub(BELLS.pref, BELLS.aim));
+    expect(r.pk).toBeGreaterThan(1); expect(r.pk).toBeCloseTo(k, 9);
+    expect(solveShotEye({ aim: BELLS.aim, pref: BELLS.pref, room: EYE_ROOM, blocked: () => false, others: [], subject: pts, fit: false }).pk).toBe(1);
+  });
   it('the pull-back never walks the eye into a neighbour\'s air', () => {
     const wallBehind = [15, 30, -22, 30, 5, 8];                         // a machine just behind the old eye
     const r = solveShotEye({ aim: BELLS.aim, pref: BELLS.pref, room: EYE_ROOM, blocked: () => false, others: [wallBehind], subject: pts });

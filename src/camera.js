@@ -310,7 +310,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
       // a STATION shot: its own eye → aim, with a slow orbit drift so a held shot breathes.
       // Aspect-aware like FIXED: a narrow (portrait) frame pulls the eye back along its
       // own line so the station still fits side to side.
-      const fit = Math.min(shot.fitMax ?? Infinity, Math.pow(Math.max(1, 1.5 / camera.aspect), .6));   // fitMax: the eye can't leave the room
+      const fit = Math.min(shot.fitMax ?? Infinity, Math.max(1, Math.pow(Math.max(1, 1.5 / camera.aspect), .6) / (shot.pk || 1)));   // (pk: the solve already walked the eye back that much — shotrig)   // fitMax: the eye can't leave the room
       aim.copy(shot.aim);
       ideal.copy(shot.eye).sub(aim).multiplyScalar(fit).applyAxisAngle(_Y, sway * .12).add(aim);
     } else followPose(effMode === 'ride' ? 'lead' : effMode, marblePts, sway, ideal, aim, true);   // (ride, nothing to ride yet: chase the lead)

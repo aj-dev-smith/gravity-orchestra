@@ -152,7 +152,7 @@ function solveOne(sh, S, room, keep){
   sh._kept = !!keep && clean(sh.eye.toArray());
   if (!sh._kept){
     const r = solveShotEye({ aim, pref: sh.pref.toArray(), room, blocked, others, subject: ownBox ? boxPts(ownBox, sh.aim.y - 4) : null });
-    sh.eye.fromArray(r.eye); sh.rays = r.rays; sh.fg = +r.fg.toFixed(2);
+    sh.eye.fromArray(r.eye); sh.rays = r.rays; sh.fg = +r.fg.toFixed(2); sh.pk = r.pk ?? 1;
   }
   // (a room swap: an eye kept as clean keeps its phone framing too, while that is still clean)
   if (sh._kept && sh._phone){
@@ -163,12 +163,15 @@ function solveOne(sh, S, room, keep){
   // screen): the farthest step whose eye stays in clear air, SEES its station, and doesn't walk a
   // neighbour into the tall frame's foreground (edge rays at a phone's aspect). Farthest first —
   // the common case (all clear) costs one probe, not seven.
+  // (the phone's pull-back is relative to the DESIGNER's distance: an eye fitPref already walked
+  //  back by pk for the desktop's button row backs off pk less — they never stack)
+  const pk = sh.pk ?? 1, PF = Math.max(1, PHONE_FIT / pk), PM = Math.max(1, PULL_MAX / pk);
   const off = sh.eye.clone().sub(sh.aim);
   const at = q => sh.aim.clone().addScaledVector(off, q).toArray();
   // (portrait clutter is judged over the whole tall frame — FG_TALL: nearer than .8 × the aim's depth —
   // RELATIVE to the designer's own k = 1 frame: the pull-back may add none)
   let fg1 = null, k = 1;
-  for (let q = PULL_MAX; q > 1.01; q -= .25){
+  for (let q = PM; q > 1.01; q -= .25){
     const e = at(q);
     if (others.some(b => boxDist(e, b) < 1.2) || blockedRays(e, aim, blocked) > CLEAR_RAYS) continue;
     fg1 ??= foreground(at(1), aim, blocked, FG_TALL);
@@ -180,18 +183,18 @@ function solveOne(sh, S, room, keep){
   // phone gets its OWN solved eye: the same ring search from the pulled-back preference, judged at
   // the phone's aspect over the whole frame (camera.js takes shot.portrait on a narrow screen)
   delete sh.portrait;
-  const kOn = Math.min(roomFit(sh.aim, sh.eye, room), k), short = kOn < PHONE_FIT * .9;   // (a few % short just crops a sliver: not worth a new angle)
-  const fgOn = foreground(at(Math.min(kOn, PHONE_FIT)), aim, blocked, FG_TALL);    // what a phone sees by default
+  const kOn = Math.min(roomFit(sh.aim, sh.eye, room), k), short = kOn < PF * .9;   // (a few % short just crops a sliver: not worth a new angle)
+  const fgOn = foreground(at(Math.min(kOn, PF)), aim, blocked, FG_TALL);    // what a phone sees by default
   if (short || fgOn > FG_TALL.max){
     const subject = ownBox ? boxPts(ownBox, sh.aim.y - 4) : null;
-    const r = solveShotEye({ aim, pref: at(PHONE_FIT), room, blocked, others, subject, aspect: FG_TALL.aspect, fgNear: FG_TALL.near, fgPts: FG_TALL.pts, fgMax: FG_TALL.max, fgBudget: 16, maxCands: 70, fit: false, bottom: 0 });   // (a phone pulls back its own way)
+    const r = solveShotEye({ aim, pref: at(PF), room, blocked, others, subject, aspect: FG_TALL.aspect, fgNear: FG_TALL.near, fgPts: FG_TALL.pts, fgMax: FG_TALL.max, fgBudget: 16, maxCands: 70, fit: false, bottom: 0 });   // (a phone pulls back its own way)
     // (short: any clean-enough eye beats a cramped one; cluttered: only a clearly cleaner one — ≥ 2 rays —
     // is worth leaving the designer's angle for)
     if (!r.none && r.rays <= CLEAR_RAYS && (short ? (r.fg <= FG_TALL.max || r.fg < fgOn) : r.fg <= fgOn - 2 / FG_TALL.pts.length + 1e-9))
       sh.portrait = { key: sh.key, eye: new THREE.Vector3().fromArray(r.eye), aim: sh.aim, fitMax: 1, fg: +r.fg.toFixed(2) };
   }
   sh.fitMax = kOn;
-  const pe = sh.portrait ? sh.portrait.eye.toArray() : at(Math.min(kOn, PHONE_FIT));
+  const pe = sh.portrait ? sh.portrait.eye.toArray() : at(Math.min(kOn, PF));
   sh._phone = { eye: pe, fg: Math.max(FG_TALL.max, sh.portrait ? sh.portrait.fg : fgOn) };
 }
 function roomFit(aim, eye, room){

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { makeEdge } from '../clock.js';
+import { makeEdge, smooth } from '../clock.js';
 import { solveRiff, stampAt, carriageAt, muteAt, ringAt, hitAt, voiceIdsFor, crossBottom, stringDrop, strikeSurface,
          STRINGS, NUT_X, BRIDGE_X, STAMP_X, STAMP_DX, stampX, STR_DZ, MUTE_X, SCALE_L, STRING_Y, FRET_H, HEAD_R, MUTE_R, HOOK_W, LIFT_Y,
          H_PARK, V_IN, MAX_FRET, latchRest, strZ, gauge, strTop, fretX, PART_LIMITS, CLEAR_UP } from './solve.js';
@@ -303,7 +303,7 @@ export default {
         const padMat = new THREE.MeshStandardMaterial({ color: 0x3a1a0c, metalness: .6, roughness: .3, envMap, emissive: new THREE.Color(SIG), emissiveIntensity: .1 });
         hook.add(new THREE.Mesh(hg.legs, chrome), new THREE.Mesh(hg.cross, padMat));
         car.add(slider); car.position.z = z;
-        hook.position.z = z;
+        hook.position.z = z; hook.userData.riffHook = s;          // (test/idle.test.js finds a string's hook by this)
         const tip = sprite(glowTex, 0xff8a3a);
         deck.add(car, hook, tip);
         // the stamp: chrome marble head + rod + collar; its solenoid coil in the beam; a halo + ghosts
@@ -370,7 +370,9 @@ export default {
         const vel = rg.i >= 0 ? S.ev[rg.i].vel : 0;
         // idle: the stamp parked on its latch (the rest between T_UP's catch and T_DN's drive)
         const lr = latchRest(p), parked = lr ? restEnv(lr.since, lr.until, .25, .45) : 0;
-        const hov = parked ? HOVER_A * parked * (1 - c.p) * (.5 - .5 * sway(t, HOVER_HZ, 1.3 * s)) : 0;
+        // (gated by the hook's CLEARANCE above the string, not its press fraction: a carriage can be
+        // mid-press during a latch rest, and the hook must sit on the string it kinks)
+        const hov = parked ? HOVER_A * parked * smooth(0, CLEAR_UP, crossBottom(s, c.p) - strTop(s)) * (.5 - .5 * sway(t, HOVER_HZ, 1.3 * s)) : 0;
         // carriage: slider rides the groove; the hook's crossbar lifts / presses
         ln.car.position.x = c.x;
         ln.hook.position.set(c.x, crossBottom(s, c.p) - crossBottom(s, 0) + hov, ln.z);

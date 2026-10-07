@@ -13,7 +13,7 @@ import bowwheel from '../src/instruments/bowwheel/index.js';
 import dulcimer from '../src/instruments/dulcimer/index.js';
 import pogo from '../src/instruments/pogo/index.js';
 
-import { solveRiff, stampAt, latchRest, H_PARK } from '../src/instruments/riff/solve.js';
+import { solveRiff, stampAt, latchRest, carriageAt, pressDepth, H_PARK } from '../src/instruments/riff/solve.js';
 import { solvePogo, pogoAt, hangRest, H_MAG as POGO_H } from '../src/instruments/pogo/solve.js';
 import { prepPart, layoutStrings, solveStrum, pickAt, dockRest } from '../src/instruments/strum/solve.js';
 import { fitPart as organFit, organLane, organLadder, laneAt as organAt, heldRest as organRest, H_MAG as ORGAN_H } from '../src/instruments/organ/solve.js';
@@ -226,4 +226,32 @@ describe('idle never touches a contact pose (render, idle off vs on)', () => {
       expect(bad).toEqual([]);
     }, 60000);
   }
+});
+
+/* ---- riff: a carriage can be MID-PRESS while its stamp is latched (it moves to the next fret
+   early). Wherever a hook is kinking its string, the render must be the solved pose — the hook
+   never hovers off a string it is pressing. (One string per run, so any diff is that string's.) ---- */
+describe('riff: the hook hover never lifts a hook off a string it presses', () => {
+  it('a pressing string\'s hook is at its solved height (idle off vs on), even while its stamp is latched', () => {
+    const tm = timing(riff.demo.bpm, riff.demo.beats), st = STATIONS.riff, part = riff.demo.part;
+    const R = solveRiff(part, tm);
+    const inst = riff.make({ envMap: null, glowTex: null, THREE });
+    const group = inst.build(part, { ...tm, start: START, station: st, floorY: -22 - st.y, ceilY: 36 - st.y, loopBeats: riff.demo.beats });
+    const hooks = []; group.traverse(o => { if (o.userData.riffHook != null) hooks[o.userData.riffHook] = o; });
+    expect(hooks.filter(Boolean).length).toBe(R.strings.length);
+    let hot = 0, bad = 0;
+    try {
+      for (let t = START; t < START + 1.15 * tm.P; t += .002){
+        const live = R.strings.map((S, s) => pressDepth(s, carriageAt(S, t, START)) > 0);
+        const latched = R.strings.map((S, s) => live[s] && !!latchRest(stampAt(S, t, START)));
+        if (!latched.some(Boolean)) continue;
+        IDLE.on = false; inst.update(t, tm.P, 0, { started: true, skipStrikes: true, onStrike: () => {} });
+        const a = hooks.map(h => h.position.y);
+        IDLE.on = true; inst.update(t, tm.P, 0, { started: true, skipStrikes: true, onStrike: () => {} });
+        hooks.forEach((h, s) => { if (live[s]){ hot++; if (h.position.y !== a[s]) bad++; } });
+      }
+    } finally { IDLE.on = true; }
+    expect(hot).toBeGreaterThan(5);                 // the case is real: carriages press during a latch
+    expect(bad).toBe(0);
+  }, 60000);
 });

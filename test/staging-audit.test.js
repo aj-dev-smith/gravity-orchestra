@@ -25,10 +25,13 @@ const FIX = FIXFILE.songs, ROOMSOLIDS = FIXFILE.rooms;
 const ROOM = { x0: -STAGE.HW + 2.5, x1: STAGE.HW - 2.5, z0: STAGE.BACK + 2.5, z1: 31 };
 const EYE_ROOM = { x0: -STAGE.HW + 1.5, x1: STAGE.HW - 1.5, y0: STAGE.FLOOR + 1.5, y1: STAGE.CEIL - 1.5, z0: STAGE.BACK + 1.5, z1: STAGE.FRONT - 1.5 };
 const clear2 = (a, b) => a[1] <= b[0] || b[1] <= a[0] || a[5] <= b[4] || b[5] <= a[4];
-const MAX_BLOCKED = 3;
+const MAX_BLOCKED = 3;                                          // 3 / 15 = 20 %
 /* main's solve inputs: the belt's top (the gallery deck hangs off it) + the hung stations' XZ footprints */
 const galleryOpts = R => ({ cx: R.cx, bandY: R.bandY, eyeY: 20, wallTop: R.wall[3],
-  hung: R.hung || (R.fixed || []).map(f => [f.box[0], f.box[1], f.box[4], f.box[5]]) });                                          // 3 / 15 = 20 %
+  hung: R.hung || (R.fixed || []).map(f => [f.box[0], f.box[1], f.box[4], f.box[5]]) });
+/* a station's world box as solved (one the solve raised onto the rear GALLERY stands its whole height higher) */
+const boxSolved = (solved, it) => { const p = solved[it.key], up = p.y === undefined ? 0 : p.y - (it.deck ?? 0);
+  return [p.x + it.box[0], p.x + it.box[1], it.y0 + up, it.top + up, p.z + it.box[2], p.z + it.box[3]]; };
 describe('staging audit: every song lays out clean and every station shot sees its station', () => {
   it('the fixture covers every song + the MIDI imports, and every room but the Void', () => {
     const have = new Set(FIX.map(R => R.song));
@@ -40,9 +43,7 @@ describe('staging audit: every song lays out clean and every station shot sees i
     const wall = R.wall;                                        // [x0,x1,y0,y1,z0,z1]
     const solved = R.items.length ? layoutStations(R.items.map(({ key, x, z, box, top }) => ({ key, x, z, box, top })),
       [wall[0], wall[1], wall[4], wall[5]], ROOM, galleryOpts(R)) : {};
-    // (a station the solve raised onto the rear GALLERY stands its whole height higher)
-    const box3 = it => { const p = solved[it.key], up = p.y === undefined ? 0 : p.y - (it.deck ?? 0);
-      return [p.x + it.box[0], p.x + it.box[1], it.y0 + up, it.top + up, p.z + it.box[2], p.z + it.box[3]]; };
+    const box3 = it => boxSolved(solved, it);
     const boxes = Object.fromEntries(R.items.map(it => [it.key, box3(it)]));
     for (const f of R.fixed || []) boxes[f.key] = f.box;
     boxes.belt = wall;
@@ -90,7 +91,7 @@ describe('staging audit: every song lays out clean and every station shot sees i
     expect(R.follow.rays[0], 'browser landscape follow: blocked probe rays').toBeLessThanOrEqual(MAX_BLOCKED);
     expect(R.follow.rays[1], 'browser portrait follow: blocked probe rays').toBeLessThanOrEqual(MAX_BLOCKED);
     const solved = R.items.length ? layoutStations(R.items, [R.wall[0], R.wall[1], R.wall[4], R.wall[5]], ROOM, galleryOpts(R)) : {};
-    const boxes = R.items.map(it => { const p = solved[it.key]; return [p.x + it.box[0], p.x + it.box[1], it.y0, it.top, p.z + it.box[2], p.z + it.box[3]]; })
+    const boxes = R.items.map(it => boxSolved(solved, it))
       .concat((R.fixed || []).map(f => f.box));
     for (const cls of ['land', 'portrait']){
       const opts = { wall: R.wall, boxes, stageY: STAGE_Y, backs: FOLLOW_BACKS[cls], room: EYE_ROOM, portrait: cls === 'portrait' };

@@ -5,6 +5,7 @@ import cathedral from './cathedral.js';
 import studio from './studio.js';
 import voidRoom from './void.js';
 import graveyard from './graveyard.js';
+import arena from './arena.js';
 /* ============================================================
    ROOM HOST — the one seam main.js talks to. A Room module is
        { key, label, build(scene, {envMap, renderer}) → {
@@ -20,6 +21,8 @@ import graveyard from './graveyard.js';
    cycling with R is instant after the first pass and shaders compile once.
    FLOOR is identical in every room (common.js — the floor contract), so a
    swap never rebuilds the song's world or restarts the timeline.
+   'arena' (the Metal Arena) also reads cues.drums / melody / loopBeats / start: its
+   pyro + CO2 + blinder cue sheet is solved from them at song load (arena-cues.js).
    'off' = no room: the original bare dark void + fog.
    Choosing: ?room=<key>  >  a pick made THIS session (R / ROOM)  >  the song's own
    `room` field (features-as-data; suggest())  >  the viewer's remembered pick
@@ -30,7 +33,7 @@ import graveyard from './graveyard.js';
    never swallow the iOS priming tap — same rule as the free cam).
    ============================================================ */
 
-export const ROOMS = [grid, cathedral, studio, voidRoom, graveyard];
+export const ROOMS = [grid, cathedral, studio, voidRoom, graveyard, arena];
 export const ROOM_KEYS = [...ROOMS.map(r => r.key), 'off'];
 export { STAGE };
 

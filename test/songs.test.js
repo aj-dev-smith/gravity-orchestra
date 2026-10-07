@@ -4,6 +4,12 @@ import { isRuntimeSong } from '../src/songmenu.js';
 import { buildRecord } from '../src/instruments/turntable/solve.js';
 import { buildOrbit, CLEAR as RICO_CLEAR, FOOT_MAX } from '../src/instruments/ricochet/solve.js';
 import { eventTimes } from '../src/instruments/clock.js';
+import { prepPart as strumPrep, solveStrum, layoutStrings as strumLayout } from '../src/instruments/strum/solve.js';
+import { solveRiff } from '../src/instruments/riff/solve.js';
+import { prepPart as bowPrep } from '../src/instruments/bowwheel/solve.js';
+import { fitPart as hornsFit } from '../src/instruments/horns/solve.js';
+import { fitPart as grandFit } from '../src/instruments/dulcimer/solve.js';
+import { fitPart as organFit } from '../src/instruments/organ/solve.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -50,6 +56,7 @@ const EXPECTED_KEYS = [
   'winter',
   'scarborough',
   'forge',
+  'finale',
 ];
 
 describe('SONGS catalogue', () => {
@@ -135,6 +142,50 @@ describe.each(Object.entries(SONGS))('song "%s"', (key, song) => {
       expect(trackTotal).toBeCloseTo(melodyTotal, 9);
     });
   }
+});
+
+
+// Starship Groove (finale) plays EVERY machine: each part must fit its machine whole —
+// nothing folded, thinned or dropped — and the vibes trade with the lead, never double it
+describe('finale: every machine plays its whole part', () => {
+  const S = SONGS['finale'], ROLL_T = 2.6, beat = 60 / S.bpm;
+  const loopBeats = S.melody.reduce((a, n) => a + n[1], 0);
+  const P = ROLL_T + loopBeats * beat + 1.2;
+  const pitches = k => new Set(S.parts[k].map(e => String(e[1]).split(/[:|]/)[0])).size;
+  it('stays inside each machine\'s pitch budget', () => {
+    expect(pitches('bass')).toBeLessThanOrEqual(8);
+    expect(pitches('horns')).toBeLessThanOrEqual(12);
+    expect(pitches('bowwheel')).toBeLessThanOrEqual(12);
+    expect(pitches('dulcimer')).toBeLessThanOrEqual(20);
+    expect(pitches('strum')).toBeLessThanOrEqual(24);
+    expect(pitches('bells')).toBeLessThanOrEqual(10);
+  });
+  it('the forge, harp, bow wheel, horns, Grand and organ keep every event', () => {
+    const R = solveRiff(S.parts.riff, { rollT: ROLL_T, beat, P });
+    expect(R.stats).toMatchObject({ viol: 0, dropped: 0 });
+    const sp = strumPrep(S.parts.strum, { rollT: ROLL_T, beat, P });
+    expect(sp.stats).toMatchObject({ folded: 0, merged: 0, thinned: 0, dropped: 0, unparsed: 0 });
+    expect(solveStrum(sp, P, strumLayout(sp.ids, { W: 12 })).stats.infeasible).toBe(0);
+    expect(bowPrep(S.parts.bowwheel).dropped).toEqual({ range: 0, pitches: 0, events: 0, bad: 0 });
+    expect(hornsFit(S.parts.horns, { beat, loopBeats }).length).toBe(S.parts.horns.length);
+    expect(grandFit(S.parts.dulcimer, { maxDurBeats: 4.5 / beat }).warnings).toEqual([]);
+    expect(organFit(S.parts.organ, { rollT: ROLL_T, beat, P }).report).toMatchObject({ bad: 0, folded: 0, droppedPitch: 0, thinnedChord: 0, droppedMax: 0, thinned: 0 });
+  });
+  it('the turntable record clears every deployed pair', () => {
+    expect(buildRecord(S.parts.turntable, { rollT: ROLL_T, beat, P, start: -2.4 }).ok).toBe(true);
+  });
+  it('the vibes never double the lead', () => {
+    const NN = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const midi = n => { const m = n.match(/^([A-G]#?)(\d)$/); return NN.indexOf(m[1]) + 12 * (+m[2] + 1); };
+    let t = 0; const lead = S.melody.map(([n, d]) => { const o = [t, midi(n), d]; t += d; return o; });
+    const bad = [];
+    for (const [b, n] of S.parts.turntable){
+      const L = lead.find(([s, , d]) => b >= s - 1e-6 && b < s + d - 1e-6); if (!L) continue;
+      const m = midi(n);
+      if ((Math.abs(L[0] - b) < 1e-6 && (m - L[1]) % 12 === 0) || m === L[1]) bad.push(`${b}:${n}`);
+    }
+    expect(bad).toEqual([]);
+  });
 });
 
 // Daybreak Engine's late-added TURNTABLE + RICOCHET parts must solve clean on the real loop

@@ -62,6 +62,9 @@
 
    MIX (song.mix, audio-only — velocity stays dynamics): the soloist on top; the wheel's
    twelve strings and the harpsichord are pulled under it, the basso sits just below.
+   BELT DYNAMICS (the melody's 3rd element): the soloist shivers pp → mp with the entries, the
+   wind is f, the stamping ff, the teeth p (.32 — its dense sixteenths used to set the whole
+   mix's level, so the hushed bars measured as loud as the stamping), the freeze mp.
 
    iOS NOTE (§5): the sample path ignores `dur` — a bowed string rings its whole 4.3 s
    render each stroke (one <audio> per string, so a re-bow cuts its own tail). The wheel's
@@ -73,9 +76,9 @@
    IS this piece), hands to the basso's sinking ground, then the harpsichord swelling into
    the wind; the belt takes the wind and the teeth (its fastest, flattest skims), with the
    wheel's long bow between; the wide shot takes the stamping downbeat, the harpsichord its
-   hammered beats; the wheel owns the freeze. (The breath bar itself is always the wide
-   shot — directorplan shotAt's seam rule, every song — so the long low bow rings under the
-   stage shot.) Shares (director-audit):
+   hammered beats; the wheel owns the freeze — its script runs 8 beats, through the breath bar
+   (a script past the last note overrides the seam's default wide), straight into bar 1's
+   wheel shot: the long low bow is seen ringing across the seam. Shares (director-audit):
    lead 34% · bowwheel 25% · dulcimer 20% · strings 14% · stage 7%.
    ============================================================ */
 
@@ -112,7 +115,17 @@ const D = [
 ];
 const E = [['E5', 4]];                                        // 15 the leading tone, frozen through the breath
 
-const melody = [...A, ...B, ...C, ...D, ...E];
+/** belt DYNAMICS: [note, beats] → [note, beats, vel] (dynamics.js; audio + strike juice only —
+    the arcs are the beats'). v a number, or [v0, v1] for a hairpin across the line */
+const dyn = (line, v) => line.map(([n, d], i) => [n, d,
+  +(Array.isArray(v) ? v[0] + (v[1] - v[0]) * i / Math.max(1, line.length - 1) : v).toFixed(3)]);
+const melody = [
+  ...dyn(A, [.3, .62]),        // the shiver: pp frozen notes, growing with the entries
+  ...dyn(B, .85),              // the horrid wind: f
+  ...C,                        // stamping feet: tutti ff (full)
+  ...dyn(D, .32),              // the chattering teeth: p — hushed, under the wind's level at last
+  ...dyn(E, .55),              // the freeze: the leading tone, held mp through the breath
+];
 const BAR = b => (b - 1) * 4;                                 // beat at which bar b (1-based) starts
 const LOOP = sum(melody);                                     // 60
 
@@ -238,7 +251,7 @@ export default {
       [BAR(11), 'stage', 4],        // stamping feet: the whole band on one downbeat
       [BAR(12), 'dulcimer', 4],     // the harpsichord hammering every beat
       [BAR(13), 'lead', 8],         // chattering teeth
-      [BAR(15), 'bowwheel', 4],     // the freeze (the breath bar after it is always the wide shot)
+      [BAR(15), 'bowwheel', 8],     // the freeze — held THROUGH the breath bar: the long low bow rings into bar 1's shiver
     ],
   },
 };

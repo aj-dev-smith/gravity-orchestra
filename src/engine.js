@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { beltVel } from './dynamics.js';
 
 /* ============================================================
    ENGINE — the pure heart. No scene, no DOM, no audio.
@@ -278,9 +279,11 @@ export function padRadius(notes, role){
 export function layoutPads(melody, { zBase, isBass, delayBeats = 0, beat, radOf, clear = CLEAR, hopOver = Infinity, xMax = Infinity }){
   const pads = []; let t = 0;
   let p = new THREE.Vector3(0, -DESCENT * delayBeats * beat, zBase), dir = isBass ? -1 : 1;
-  melody.forEach(([note, beats], i) => {
-    const dt = beats * beat;
-    pads.push({ pos: p.clone(), note, dt, t, r: radOf(note) });
+  melody.forEach((entry, i) => {
+    const [note, beats] = entry, dt = beats * beat;
+    // vel: the note's dynamics (optional 3rd element, default 1) — audio + strike juice only;
+    // it never touches the geometry or the solve (a note's pad is a pure fn of the note)
+    pads.push({ pos: p.clone(), note, dt, t, r: radOf(note), vel: beltVel(entry) });
     t += dt;
     if (i % 4 === 3) dir *= -1;                          // weave
     const next = melody[i+1];

@@ -1251,3 +1251,28 @@ describe('convertToSong — drums from a format-0 file', () => {
     expect(song.melody.length).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// belt dynamics — MIDI velocity → the belt entry's optional 3rd element
+// ---------------------------------------------------------------------------
+describe('convertToSong — belt velocities', () => {
+  const line = vels => simpleMidi(vels.flatMap((v, i) => [
+    { tick: i * 480, type: 'on', note: 60 + (i % 5), vel: v },
+    { tick: i * 480 + 400, type: 'off', note: 60 + (i % 5) },
+  ]));
+  it('a flat-velocity line imports with no velocities at all (as before)', () => {
+    const { song } = convertToSong(parseMidi(line([80, 80, 80, 80, 80, 80])));
+    for (const e of song.melody) expect(e.length).toBe(2);
+  });
+  it('relative to the loudest note, on a gentle curve, floored, lock rule untouched', () => {
+    const { song } = convertToSong(parseMidi(line([120, 60, 30, 120, 5, 120, 90, 120])));
+    const v = song.melody.map(e => e[2] ?? 1);
+    expect(v[0]).toBe(1); expect(song.melody[0].length).toBe(2);   // the loudest: full, 2-element
+    expect(v[1]).toBeCloseTo(Math.pow(.5, .6), 2);                 // half the velocity ≈ .66 — gentle
+    expect(v[2]).toBeLessThan(v[1]);
+    expect(v[4]).toBe(.15);                                        // a ghost note still sounds
+    expect(v[6]).toBeGreaterThan(v[1]);
+    for (const x of v) expect(x >= 0 && x <= 1).toBe(true);
+    expect(sumBeats(song.melody)).toBe(Math.ceil((7 + 1) / 4) * 4); // the beats are the beats
+  });
+});

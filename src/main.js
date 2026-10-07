@@ -24,6 +24,7 @@ import { parseMidi } from './midi/parse.js';
 import { convertToSong } from './midi/convert.js';
 import { recSupported, startRecording } from './record.js';
 import { spatialize } from './spatial.js';
+import { velLook } from './dynamics.js';
 import { mergeStatic, watchFrozen, pruneFrozen, frozenStats } from './mergestatic.js';
 import { makeEditor } from './editor/index.js';
 import { planEdit, shotAt } from './directorplan.js';
@@ -729,23 +730,26 @@ function placeAt(worldPos){
 const noteEl = document.getElementById('note');
 function strike(tr, i, rig){
   const pad = tr.pads[i], po = tr.padObjs[i];
-  po.flash = 1;
-  rig.lamp.intensity = 7;                               // strike flash
+  // DYNAMICS: the note's velocity (song data, ['G4', 1, .6]) scales the strike's juice — the
+  // flash, lamp, ripple, sparks and punch — never the motion (the arc and the pad are the solve's)
+  const vel = pad.vel ?? 1, look = velLook(vel);
+  po.flash = look;
+  rig.lamp.intensity = 7 * look;                        // strike flash
   if (tr.role === 'lead') noteEl.innerHTML = `<b>${pad.note}</b>&nbsp; ·&nbsp; ${'·'.repeat(Math.min(i, 40))}`;
   const padR = new THREE.Vector3(pad.pos.x, STAGE_Y, pad.pos.z).add(tr.origin);   // every pad strikes at the band, in its bay
-  spawnRipple(padR, po.g.quaternion, po.hue, tr.isBass, po.amp);
+  spawnRipple(padR, po.g.quaternion, po.hue, tr.isBass, po.amp * look);
   // JUICE: sparks, squash, punch
   const sparkColor = new THREE.Color().setHSL(po.hue, .85, .62);
   spawnBurst(padR.clone().add(UP), sparkColor,
-             Math.min(5 + Math.round(pad.dt*7), 16),
-             2.4 + Math.min(pad.dt*1.6, 3));
-  rig.squash = 1;
+             Math.max(2, Math.round(Math.min(5 + Math.round(pad.dt*7), 16) * look)),
+             (2.4 + Math.min(pad.dt*1.6, 3)) * (.6 + .4 * look));
+  rig.squash = 1;                                         // (squash is the impact — physics, not dynamics)
   if (tr.role === 'lead'){
-    cam.addShake(.04 + pad.dt*.05);                       // micro camera punch on lead strikes
-    expoKick = 1;
+    cam.addShake((.04 + pad.dt*.05) * vel);               // micro camera punch on lead strikes (a pp note doesn't shake the room)
+    expoKick = Math.max(expoKick, look);
   }
   if (audio.isReady() && !muted){
-    try { audio.playNote(pad.note, tr.deep, placeAt(padR)); } catch(e){ /* audio must never break the run */ }
+    try { audio.playNote(pad.note, tr.deep, placeAt(padR), vel); } catch(e){ /* audio must never break the run */ }
   }
 }
 
@@ -834,7 +838,9 @@ function syncDirector(S, view){
   // SCRIPTED CUTS (song.director.at = [[beat, shot, holdBeats?], …]): the story beats a
   // density vote can't see — a moonlit establishing shot, the soloist, the dawn bell. shot =
   // 'stage', a station key, or a belt role ('lead'/'alto'/'bass'); unknown keys are dropped.
-  // Held for holdBeats (≥ .35 s): fixed points the solved edit builds around.
+  // Held for holdBeats (≥ .35 s): fixed points the solved edit builds around. A script that
+  // runs past the last note OWNS the breath (and may wrap into the roll-in): without one the
+  // seam is the wide 'stage' shot (directorplan shotAt).
   const known = new Set(['stage', ...shots.map(sh => sh.key), ...tracks.map(t => t.role)]);
   for (const c of (Array.isArray(S.director?.at) ? S.director.at : []))
     if (Array.isArray(c) && Number.isFinite(c[0]) && known.has(c[1]))
@@ -845,7 +851,7 @@ function syncDirector(S, view){
   // The belt's hits: every pad, a long lob or a skim counting for more (its own spectacle).
   const beltHits = [];
   tracks.forEach(tr => tr.pads.forEach(pd => beltHits.push({ t: wrapP(tr.rollT + pd.t, P),
-    w: .5 + Math.min(1.5, Math.max(0, pd.dt - 1) * .6) + (pd.dt <= .15 ? .4 : 0) })));
+    w: (.5 + Math.min(1.5, Math.max(0, pd.dt - 1) * .6) + (pd.dt <= .15 ? .4 : 0)) * (.5 + .5 * (pd.vel ?? 1)) })));   // (a pp line pulls less)
   // RIDES: the long, tall flights the camera may ride (ridecam.js) — sparingly, and never for a
   // reduced-motion viewer (the manual RIDE button stays theirs to pick)
   rides = reduceMotion ? [] : rideMoments(flightsOf(P));
@@ -854,7 +860,7 @@ function syncDirector(S, view){
              // salience is relative to each machine's own norm, so sparse voices need no boost)
              { key: 'belt', belt: true, hits: beltHits, weight: dirWeight(S, 'belt') }],
     // song.barBeats: the meter's bar length in beats (Mars is 5/4) — the edit prefers cuts on bar lines
-    grid: { t0: ROLL_T, beat: BEAT, end: seamFrom, bar: Number.isInteger(S.barBeats) && S.barBeats >= 2 && S.barBeats <= 16 ? S.barBeats : 4 },
+    grid: { t0: ROLL_T, beat: BEAT, end: seamFrom, loop: P, bar: Number.isInteger(S.barBeats) && S.barBeats >= 2 && S.barBeats <= 16 ? S.barBeats : 4 },
     fixed: script.map(c => ({ t: c.t, len: c.hold, key: c.key })),
     wides: moments.filter(m => m.n >= ENSEMBLE_N).map(m => m.t),
     rides,

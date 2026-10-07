@@ -73,6 +73,8 @@
    cymbal); song.sky turns the sky grey-rose at cockcrow and back to midnight on the seam.
    ============================================================ */
 
+import { legacyLane } from '../dynamics.js';
+
 // ---- helpers ---------------------------------------------------------------------
 const PC = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 const num = n => { const m = /^([A-G]#?)(\d)$/.exec(n); return PC.indexOf(m[1]) + 12 * (+m[2] + 1); };
@@ -294,6 +296,7 @@ const D = { kick: [], snare: [], hat: [], crash: [], tomHigh: [], tomHiMid: [], 
   D.crash.push([222, 1], [225, 1]); D.kick.push([222, 1], [223, .8], [224, .8], [225, 1]);
   D.snare.push([223, .9], [224, .9]);
   D.floorHigh.push([225.5, .7], [226, .8], [226.5, .9]);
+  D.hat = legacyLane(D.hat);                       // (the bone rattles were balanced under the old floored drum law — dynamics.js keeps their level)
   for (const l of Object.keys(D)) sortHits(D[l]);
 }
 

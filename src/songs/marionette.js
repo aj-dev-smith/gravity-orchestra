@@ -31,6 +31,7 @@
    bells (the funeral toll), drums (a muffled bass drum + a ticking snare: the march).
    ============================================================ */
 
+import { legacyLane } from '../dynamics.js';
 const PC = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 const num = n => { const m = /^([A-G]#?)(\d)$/.exec(n); return PC.indexOf(m[1]) + 12 * (+m[2] + 1); };
 const name = k => PC[k % 12] + (Math.floor(k / 12) - 1);
@@ -140,7 +141,7 @@ export default {
     shots: { bells: { x: 4.5, up: 7.2, dist: 12.5 } },   // the toll against the moon, clear of the music box
     at: [[0, 'stage', 6], [48, 'turntable', 12], [71.6, 'bells', 6], [90, 'stage', 6]] },   // the procession, the episode, the toll
   storm: [72],                                       // one distant flicker as the puppet's bell tolls
-  drums: { kick, snare, floorHigh, crash },
+  drums: { kick: legacyLane(kick), snare: legacyLane(snare), floorHigh, crash },   // (legacyLane: the march's tick was balanced under the old floored law — dynamics.js)
 };
 
 export const _marionette = { sum, melodyBeats: sum(melody) };

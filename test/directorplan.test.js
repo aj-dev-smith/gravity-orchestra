@@ -74,6 +74,37 @@ describe('directorplan — the edit, solved up front', () => {
     expect(planEdit({ voices: room(), grid }).cuts).toEqual(p.cuts);
   });
 
+  // ---- THE SEAM: a script may own the breath (the forge's anvil, winter's freeze) ----
+  const P = end + 4;                                             // the loop: the grid, then a 4 s breath, then wraps to 0
+  it('a script that runs into the breath holds through it — the seam is the wide only by default', () => {
+    const p = planEdit({ voices: room(), grid: { ...grid, loop: P }, fixed: [{ t: at(92), len: 4 * beat + 4, key: 'bells' }] });
+    expect(shotAt(p, at(93), end)).toBe('bells');
+    for (let x = end; x < P; x += .25) expect(shotAt(p, x, end)).toBe('bells');
+    expect(shotAt(p, end + .1, end)).toBe('bells');
+    // an unscripted song keeps the rule
+    expect(shotAt(planEdit({ voices: room(), grid: { ...grid, loop: P } }), end + .1, end)).toBe('stage');
+  });
+  it('a script that starts between the last whole beat and the seam, and wraps into the roll-in', () => {
+    // the grid's last whole beat is before `end`: a cut half a beat before the seam (the anvil's
+    // camera arriving) still lands, holds through the breath, and wraps past the loop's end into
+    // the roll-in — then the roll-in's uncovered rest is the wide again
+    const e2 = end - .3, g2 = { t0, beat, end: e2, loop: P };
+    const p = planEdit({ voices: room(), grid: g2, fixed: [{ t: e2 - .2, len: (P - (e2 - .2)) + .5, key: 'drums' }] });
+    expect(shotAt(p, e2 - .1, e2)).toBe('drums');
+    expect(shotAt(p, P - .01, e2)).toBe('drums');
+    expect(shotAt(p, .25, e2)).toBe('drums');                    // wrapped: loop-local .25 = P + .25
+    expect(shotAt(p, .75, e2)).toBe('stage');                    // past its hold: the roll-in's wide
+    expect(shotAt(p, at(10), e2)).not.toBe('drums');             // the grid itself is untouched by the wrap
+  });
+  it('a held seam script never leaks into the beat grid (the solve sees nothing of it)', () => {
+    const a = planEdit({ voices: room(), grid: { ...grid, loop: P } });
+    const b = planEdit({ voices: room(), grid: { ...grid, loop: P }, fixed: [{ t: end + .5, len: 3 + t0 + .2, key: 'bells' }] });
+    expect(b.cuts).toEqual(a.cuts);
+    expect(shotAt(b, end + 1, end)).toBe('bells');
+    expect(shotAt(b, .2, end)).toBe('bells');                    // wrapped into the roll-in
+    expect(shotAt(b, end + .2, end)).toBe('stage');              // before it starts: the wide
+  });
+
   // ---- RIDE THE BALL (ridecam.js): a long, tall flight the director may ride ----
   const lob = { t: at(40), dt: 2.2, w: 1, role: 'bass' };       // the room's one big pedal lob (≈ 4.4 beats)
 

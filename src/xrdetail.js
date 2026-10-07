@@ -63,7 +63,7 @@ export function boostMaterial(m, kEmi, kGlow){
 export function makeXRDetail({ cfg = XR_DETAIL } = {}){
   let hidden = new Set(), frame = 0;
   const lastHead = new THREE.Vector3(1e9, 0, 0);
-  const undoVis = [], undoMat = [], saved = [];
+  const undoVis = [], undoMask = [], undoMat = [], saved = [];
   const _s = new THREE.Sphere();
   let glowMats = [];                                    // [[material, kEmi, kGlow]] (re-collected by the owner)
   let stats = { hidden: 0, dimmed: 0, boosted: 0 };
@@ -95,8 +95,10 @@ export function makeXRDetail({ cfg = XR_DETAIL } = {}){
        position, fadeMats = the page's additive glows (dimmest skipped) */
     before(roots, head, fadeMats = []){
       if (frame++ % cfg.every === 0 || head.distanceTo(lastHead) > cfg.moved) select(roots, head);
-      undoVis.length = 0; undoMat.length = 0;
-      for (const o of hidden) if (o.visible){ o.visible = false; undoVis.push(o); }
+      undoVis.length = 0; undoMask.length = 0; undoMat.length = 0;
+      // hide the PART only (layer mask 0): a .visible=false would hide its subtree too — a culled
+      // lever arm would take the ball on its tip with it, and balls are never culled
+      for (const o of hidden) if (o.visible && o.layers.mask !== 0){ undoVis.push(o); undoMask.push(o.layers.mask); o.layers.mask = 0; }
       for (let i = 0; i < fadeMats.length; i++){ const m = fadeMats[i];
         if (m.visible && m.opacity < cfg.dimGlow){ m.visible = false; undoMat.push(m); } }
       stats = { hidden: undoVis.length, dimmed: undoMat.length, boosted: 0 };
@@ -110,13 +112,13 @@ export function makeXRDetail({ cfg = XR_DETAIL } = {}){
     },
     /* right after: undo every change (owners never see them) */
     after(){
-      for (let i = 0; i < undoVis.length; i++) undoVis[i].visible = true;
+      for (let i = 0; i < undoVis.length; i++) undoVis[i].layers.mask = undoMask[i];
       for (let i = 0; i < undoMat.length; i++) undoMat[i].visible = true;
       for (let i = 0; 2 * i < saved.length; i++){ const m = glowMats[i][0];
         if (saved[2 * i] !== undefined) m.emissiveIntensity = saved[2 * i];
         m.opacity = saved[2 * i + 1]; }
       saved.length = 0;
-      undoVis.length = 0; undoMat.length = 0;
+      undoVis.length = 0; undoMask.length = 0; undoMat.length = 0;
     },
     invalidate(){ frame = 0; },
     get stats(){ return stats; },

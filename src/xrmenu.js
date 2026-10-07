@@ -95,7 +95,7 @@ export function makeXRMenu({ getState, onPress }){
       g.strokeStyle = b.on ? 'rgba(255,183,100,.9)' : hot ? 'rgba(207,214,230,.8)' : 'rgba(207,214,230,.2)';
       g.lineWidth = hot ? 4 : 2; g.stroke();
       g.fillStyle = b.on ? '#ffd29a' : '#cfd6e6';
-      g.font = `${b.kind === 'act' ? '600 28' : b.kind === 'room' ? '24' : '28'}px ui-monospace, Menlo, monospace`;
+      g.font = `${b.kind === 'act' ? '600 28' : b.kind === 'room' ? '21' : '28'}px ui-monospace, Menlo, monospace`;
       let t = b.label; while (g.measureText(t).width > b.w - 28 && t.length > 3) t = t.slice(0, -2) + '…';
       g.textAlign = b.kind === 'song' ? 'left' : 'center';
       g.fillText(t, b.kind === 'song' ? b.x + 18 : b.x + b.w / 2, b.y + b.h / 2 + 1);
@@ -119,20 +119,25 @@ export function makeXRMenu({ getState, onPress }){
       mesh.visible = true; drawn = ''; draw();
     },
     hide(){ mesh.visible = false; hover = null; cursor.visible = false; },
-    /* a pointing ray (world origin + dir) → the button it's over (redraws the hover), or null */
-    point(origin, dir){
+    /* a pointing ray (world origin + dir) → {button, distance, uv} | null — NO side effects (both
+       hands are cast every frame; only the chosen one may set the hover) */
+    cast(origin, dir){
       if (!mesh.visible) return null;
       ray.set(origin, dir);
       const hit = ray.intersectObject(mesh, false)[0];
-      let b = null;
-      if (hit?.uv){ b = hitButton(layout, hit.uv.x, hit.uv.y);
-        cursor.visible = true; cursor.position.set((hit.uv.x - .5) * MENU_M[0], (hit.uv.y - .5) * MENU_M[1], .002); }
+      if (!hit?.uv) return null;
+      return { button: hitButton(layout, hit.uv.x, hit.uv.y), distance: hit.distance, uv: hit.uv };
+    },
+    /* the ONE hit this frame (or null): hover highlight + cursor; redraws only when the hover changes */
+    hover(h){
+      if (h){ cursor.visible = true; cursor.position.set((h.uv.x - .5) * MENU_M[0], (h.uv.y - .5) * MENU_M[1], .002); }
       else cursor.visible = false;
-      const id = b?.id || null;
+      const id = h?.button?.id || null;
       if (id !== hover){ hover = id; drawn = ''; }
       draw();
-      return hit ? { button: b, distance: hit.distance } : null;
+      return h;
     },
+    point(origin, dir){ return this.hover(this.cast(origin, dir)); },
     press(b){
       if (!b) return;
       if (b.kind === 'page'){ page = b.value; drawn = ''; draw(); return; }
@@ -147,6 +152,7 @@ export function makeXRMenu({ getState, onPress }){
       mesh.updateWorldMatrix(true, false);
       return mesh.localToWorld(new THREE.Vector3((u - .5) * MENU_M[0], (v - .5) * MENU_M[1], 0));
     },
+    get hoverId(){ return hover; },
     get buttons(){ return layout.map(b => ({ id: b.id, kind: b.kind, label: b.label, on: !!b.on })); },
   };
 }

@@ -42,14 +42,14 @@ describe('xrdetail — fine-detail cull', () => {
     D.setGlow(collectGlow([{ root }]));
     D.before([root], new THREE.Vector3(), [glowMat, dim]);
     D.boost();
-    expect(bolt.visible).toBe(false);
-    expect(frame.visible).toBe(true);
-    expect(ball.visible).toBe(true);                                   // balls are the music: never culled
+    expect(shown(bolt)).toBe(false);
+    expect(shown(frame)).toBe(true);
+    expect(shown(ball)).toBe(true);                                   // balls are the music: never culled
     expect(dim.visible).toBe(false);                                   // a dim additive glow: skipped in XR
     expect(frame.material.emissiveIntensity).toBeCloseTo(.5 * XR_DETAIL.emissive, 9);
     expect(glowMat.opacity).toBeCloseTo(Math.min(1, .4 * XR_DETAIL.glow), 9);
     D.after();
-    expect(bolt.visible).toBe(true);
+    expect(shown(bolt)).toBe(true);
     expect(dim.visible).toBe(true);
     expect(frame.material.emissiveIntensity).toBe(.5);
     expect(glowMat.opacity).toBe(.4);
@@ -60,6 +60,26 @@ describe('xrdetail — fine-detail cull', () => {
     root.add(new THREE.Mesh(box, m));
     const [[mat, ke, kg]] = collectGlow([{ root, k: 1 }]);
     expect(mat).toBe(m); expect(ke).toBe(1); expect(kg).toBe(1);
+  });
+});
+
+const shown = o => o.visible && o.layers.mask !== 0;            // (the profile hides a PART by layer mask, never its subtree)
+describe('xrdetail + xrbatch hide the part, never its children', () => {
+  it('a culled / batched parent keeps its un-batched children (a halo, a ball on a tiny arm)', () => {
+    const root = new THREE.Group();
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(.05, .05, .05), std()); arm.position.set(0, 0, -60);
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(.04), std()); arm.add(tip);
+    root.add(arm); root.updateMatrixWorld(true);
+    const D = makeXRDetail(); D.before([root], new THREE.Vector3());
+    expect(shown(arm)).toBe(false); expect(shown(tip)).toBe(true);
+    D.after(); expect(shown(arm)).toBe(true);
+    const w = new THREE.Group(), m = std();
+    const p1 = new THREE.Mesh(box, m), p2 = new THREE.Mesh(box, m);
+    const halo = new THREE.Mesh(box, new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending }));
+    p1.add(halo); w.add(p1, p2);
+    const B = makeXRBatch(); B.build(w); B.before();
+    expect(shown(p1)).toBe(false); expect(halo.visible && halo.layers.mask !== 0 && p1.visible).toBe(true);
+    B.after(); expect(shown(p1)).toBe(true);
   });
 });
 
@@ -98,26 +118,26 @@ describe('xrbatch — one draw per look, mirroring the owners exactly', () => {
     bm.getMatrixAt(ea, m);
     expect(new THREE.Vector3().setFromMatrixPosition(m).toArray()).toEqual([1, 3, 0]);
     expect(bm.getVisibleAt(1)).toBe(false);                            // b hidden by its owner → hidden in the batch
-    expect(a.visible).toBe(false);                                     // the batch draws it this render
+    expect(shown(a)).toBe(false);                                     // the batch draws it this render
     B.after();
-    expect(a.visible).toBe(true);
+    expect(shown(a)).toBe(true);
     expect(b.visible).toBe(false);                                     // the owner's own state is untouched
     st.visible = false; B.before();
     expect(B.stats.drawn).toBe(0);                                     // an ancestor hidden → nothing drawn
-    B.after(); expect(a.visible).toBe(true);
+    B.after(); expect(shown(a)).toBe(true);
   });
   it('a look-alike mid-flash draws as itself; a swapped material drops out', () => {
     const { world, c, d } = scene();
     const B = makeXRBatch(); B.build(world);
     c.material.emissive.setRGB(1, .5, 0);                              // c flashes
     B.before();
-    expect(c.visible).toBe(true);                                      // drawn by itself, exactly as the owner set it
-    expect(d.visible).toBe(false);                                     // its idle twin rides the batch
+    expect(shown(c)).toBe(true);                                      // drawn by itself, exactly as the owner set it
+    expect(shown(d)).toBe(false);                                     // its idle twin rides the batch
     expect(B.stats.own).toBe(1);
     B.after();
     d.material = std();                                                // a plugin swapped a material after build
     B.before();
-    expect(d.visible).toBe(true); expect(B.stale).toBe(1);
+    expect(shown(d)).toBe(true); expect(B.stale).toBe(1);
     B.after();
   });
   it('sameLook compares the animated fields + the material version', () => {

@@ -157,7 +157,10 @@ export default {
     in the headset are skipped (balls / sphere geometry never are); tag a part
     `userData.xrKeep = true` if it must always draw, `userData.xrNoBatch = true` to keep
     it out of the batch. A part with `onBeforeCompile` / a custom `onBeforeRender` /
-    ShaderMaterial / transparency is never batched.
+    ShaderMaterial / transparency is never batched. A skipped or batched part is hidden by
+    LAYER MASK (the part alone) for that render — its children (a halo, the ball on a tiny
+    arm) still draw, so parenting a ball under a small part is safe. Don't use `layers`
+    for your own visibility logic.
   - **Fade gate**: every ADDITIVE transparent non-shader material under the world
     gets `material.visible = opacity > .002` each frame (an idle glow at opacity 0
     still costs a draw call). Don't drive `material.visible` yourself on those; opt

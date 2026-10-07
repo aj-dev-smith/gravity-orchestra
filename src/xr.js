@@ -257,11 +257,11 @@ export function makeXR({ renderer, scene, camera, envMap, glowTex, enterSound, g
       let best = null;
       for (const k of ['right', 'left']){ const h = hands[k]; if (!h) continue;
         h.ctrl.getWorldPosition(_o); h.ctrl.getWorldDirection(_d).negate();
-        const hit = menu.point(_o, _d);
+        const hit = menu.cast(_o, _d);                  // (side-effect free: only the chosen hand sets the hover)
         if (hit && !best){ best = { k, hit }; }
         h.ray.visible = !!hit; if (hit) h.ray.scale.z = Math.max(.05, hit.distance / U_PER_M / .6);
       }
-      if (!best) menu.point(_o.set(0, -1e6, 0), _d.set(0, -1, 0));   // (nothing pointed: clear the hover)
+      menu.hover(best ? best.hit : null);
       if (best && ((best.k === 'right' && pressR) || (best.k === 'left' && pressL))){ menu.press(best.hit.button); latch = true; }
     } else for (const k in hands) hands[k].ray.scale.z = 1;
     if (!trigR && !trigL) latch = false;                // a press that closed the menu must be released before it can throw
@@ -367,7 +367,7 @@ export function makeXR({ renderer, scene, camera, envMap, glowTex, enterSound, g
     go, turn,
     dev: {                                              // window.__dev.xr (scripts/xr-shot.mjs drives these)
       enter: m => enter(m), exit, go: id => go(id), turn: s => turn(s),
-      menu: { toggle: () => toggleMenu(), get open(){ return menu.open; }, mesh: menu.mesh,
+      menu: { toggle: () => toggleMenu(), get open(){ return menu.open; }, get hover(){ return menu.hoverId; }, mesh: menu.mesh,
         get buttons(){ return menu.buttons; }, at: id => menu.buttonWorld(id)?.toArray() },
       get tour(){ return tour; }, set tour(v){ tour = !!v; },
       info: () => ({ presenting: !!session, mode, cur, hover, tour, anchors: anchors.map(a => ({ id: a.id, key: a.key, label: a.label,

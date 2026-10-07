@@ -6,8 +6,8 @@ import * as THREE from 'three';
    owner put it this frame. So for the headset render we MIRROR it: every opaque mesh in the world
    that shares a look (material) + vertex layout with others is an instance in a THREE.BatchedMesh,
    and each frame its instance matrix = the part's matrixWorld and its visibility = the part's own
-   (ancestors + material gate included). The originals are hidden for that one render and shown
-   again right after. Nothing the owners do changes: they still move their own meshes; the batch
+   (ancestors + material gate included). The originals are hidden for that one render (layer mask
+   0 — the part alone; its un-batched children still draw) and restored right after. Nothing the owners do changes: they still move their own meshes; the batch
    only copies what they did (no state of its own beyond the copy — time is still the only state).
 
    Why: three r184's WebGLRenderer has no multiview, so each object is drawn once PER EYE. A full
@@ -95,15 +95,15 @@ export function makeXRBatch(){
   const holder = new THREE.Group(); holder.name = 'xr-batch';
   holder.matrixAutoUpdate = false;
   let entries = [], batches = [], root = null;
-  const undo = [];
-  let stale = 0, own = 0, drawn = 0;
+  const undo = [], undoMask = [];
+  let stale = 0, own = 0, drawn = 0, builds = 0;
 
   function dispose(){
     for (const b of batches){ holder.remove(b); b.dispose(); if (b.userData.ownMat) b.material.dispose(); }
     batches = []; entries = []; root = null;
   }
   function build(world){
-    dispose(); root = world; stale = 0;
+    dispose(); root = world; stale = 0; builds++;
     if (!world) return 0;
     for (const list of batchGroups(world).values()){
       const geos = [...new Set(list.map(o => o.geometry))];
@@ -143,22 +143,22 @@ export function makeXRBatch(){
         if (!e.gone){ e.gone = true; stale++; e.b.setVisibleAt(e.id, false); }
         continue;
       }
-      let vis = o.visible && e.mat.visible;
+      let vis = o.visible && o.layers.mask !== 0 && e.mat.visible;   // (mask 0 = the detail pass culled it this frame)
       for (let k = 0, L = e.chain.length; vis && k < L; k++)   // every ancestor shown AND still attached (a rebuilt kit leaves its old group behind)
         vis = e.chain[k].visible && (k === L - 1 || e.chain[k].parent === e.chain[k + 1]);
       if (vis && !e.shared && !sameLook(e.mat, e.b.material, e.ver)){ e.b.setVisibleAt(e.id, false); own++; continue; }   // mid-flash: drawn as itself
       e.b.setVisibleAt(e.id, vis);
       if (!vis) continue;
       e.b.setMatrixAt(e.id, o.matrixWorld);
-      o.visible = false; undo.push(o);
+      undo.push(o); undoMask.push(o.layers.mask); o.layers.mask = 0;   // hide THIS part only (a .visible=false would take its children — a halo, a ball — with it)
     }
     drawn = undo.length;
   }
-  function after(){ for (let i = 0; i < undo.length; i++) undo[i].visible = true; undo.length = 0; }
+  function after(){ for (let i = 0; i < undo.length; i++) undo[i].layers.mask = undoMask[i]; undo.length = 0; undoMask.length = 0; }
   return {
     group: holder, build, before, after, dispose,
     get root(){ return root; },
     get stale(){ return stale; },                      // parts that dropped out since the build (a re-build re-takes them)
-    get stats(){ return { batches: batches.length, parts: entries.length, drawn, own, stale }; },
+    get stats(){ return { batches: batches.length, parts: entries.length, drawn, own, stale, builds }; },
   };
 }

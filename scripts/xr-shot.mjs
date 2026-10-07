@@ -123,15 +123,20 @@ if (A.controls){                                         // B pause/play, left-s
     return true; }, id);
   const pick = await page.evaluate(s0 => window.__dev.xr.menu.buttons.find(b => b.kind === 'song' && !b.id.endsWith(':' + s0))?.id, song0);
   check(!!pick && await pointAt(pick), `menu: pointing at ${pick}`);
-  if (A.out) { await sleep(250); await page.screenshot({ path: A.out.replace(/\.png$/, '-menu.png') }); }
+  await sleep(250);
+  check(await page.evaluate(() => window.__dev.xr.menu.hover) === pick, `menu: the pointed button is highlighted (both hands cast; only the pointing one hovers)`);
+  if (A.out) await page.screenshot({ path: A.out.replace(/\.png$/, '-menu.png') });
   await press('right', 'trigger'); await sleep(900);
   const s1 = await page.evaluate(() => ({ song: document.getElementById('song').value, menu: window.__dev.xr.menu.open, ...window.__dev.xr.info() }));
   check(s1.song !== song0 && s1.song === pick.slice(5) && s1.presenting && s1.anchors.length > 0, `menu → song in the headset (${song0} → ${s1.song}, ${s1.anchors.length} pads)`);
   const room0 = await page.evaluate(() => window.__dev.room?.());
   const roomPick = await page.evaluate(r0 => window.__dev.xr.menu.buttons.find(b => b.kind === 'room' && !b.id.endsWith(':' + r0) && b.id !== 'room:off')?.id, room0);
-  await pointAt(roomPick); await sleep(150); await press('right', 'trigger'); await sleep(400);
-  const room1 = await page.evaluate(() => window.__dev.room?.());
-  check(room1 === roomPick.slice(5), `menu → room (${room0} → ${room1})`);
+  if (A.mode === 'ar') check(!roomPick, 'AR: the menu offers no rooms (the camera feed is the room)');
+  else {
+    await pointAt(roomPick); await sleep(150); await press('right', 'trigger'); await sleep(400);
+    const room1 = await page.evaluate(() => window.__dev.room?.());
+    check(room1 === roomPick.slice(5), `menu → room (${room0} → ${room1})`);
+  }
   const padBefore = await page.evaluate(() => window.__dev.xr.info().cur);
   await pointAt('close'); await sleep(150); await press('right', 'trigger'); await sleep(600);
   const s2 = await page.evaluate(() => ({ menu: window.__dev.xr.menu.open, cur: window.__dev.xr.info().cur }));

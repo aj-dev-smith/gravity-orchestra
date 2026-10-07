@@ -17,7 +17,8 @@
 
    TEMPO / THE SEAM: bpm = 60·6/3.8 ≈ 94.7, so the loop's fixed 3.8 s breath (ROLL_T +
    1.2) is EXACTLY 6 beats = 2 bars of 3/4. The last verse ends on D (bar 16, "mine"),
-   the harp, the drone, the choir and two bells RING through those two bars, and the
+   the drone, the choir, a flue D3 and two bells RING through those two bars (the
+   harp's last down-strum decays under them), and the
    loop comes back in on the intro's Dm downbeat — the vamp the song ended on. Melody
    108 beats + 6 = 114 = 38 bars, ~72.2 s.
 
@@ -49,7 +50,7 @@
                  (Dm D3 A3 D4 F4 A4 · C C3 G3 C4 E4 G4 · F F3 A3 C4 F4 A4 ·
                  G G2 D3 G3 B3 D4 G4 · Am A2 E3 A3 C4 E4 A4); ≤ 6 notes a strum,
                  strums ≥ .32 s apart (its limit is .2 s)
-     bowwheel    the drone (D3, A3) in 2-bar bow strokes (3.55 s — the wheel's limit
+     bowwheel    the drone (D3, A3) in 2-bar bow strokes (3.45 s — the wheel's limit
                  is 3.9), then the counter-line; 8 strings
      organ       the choir pad, verse 2 only ('|choir' timbre) + a flue D3 at the end
      musicbox    the glints (D5–F6, 7 tines)
@@ -61,7 +62,7 @@
    entrance, the choir's entrance, the counter-line's climb, the bell on "Remember
    me", the wide last line — and √-weights so the sparse bow wheel / organ / bells win
    their moments over the harp's constant strumming (director-audit: strum 25 ·
-   bowwheel 17 · organ 12 · lead 11 · musicbox 10 · belt 9 · stage 9 · bells 6 %).
+   bowwheel 16 · organ 12 · lead 11 · musicbox 10 · belt 9 · stage 9 · bells 7 %).
    The bow wheel's shot is pulled back past its gantry posts so the wheel and the
    bowed strings read under the rose window.
 
@@ -124,7 +125,8 @@ const strum = [
 ];
 
 // ---- bow wheel: the drone, then the counter-line ---------------------------------
-const STROKE = .4;                                   // beats between strokes: the marble's hop
+const STROKE = .55;                                  // beats between strokes: the marble's re-bow hop (.35 s ≥ the
+                                                     // machine's T_PRESS + F_MIN = .32 s, so no stroke is clipped short)
 const drone = [];
 for (let b = 0; b < 102; b += 6) drone.push([b, 'D3', b < V1 ? .34 : b < V2 ? .4 : .44, 6 - STROKE]);
 drone.push([102, 'D3', .4, 3 - STROKE], [105, 'D3', .42, 6.1]);   // the last stroke rings into the breath
@@ -194,7 +196,9 @@ export default {
   // under the tune; the choir enters soft and stays a pad
   mix: {
     strum:    [[0, .5], [V2, .42]],
-    bowwheel: .6,
+    // verse 2's counter-line is a FEATURED voice (it has its own shot): it must sit above
+    // the harp's strumming, not under it (a sample-render measured it ~2 dB under at .6)
+    bowwheel: [[0, .6], [V2, .85]],
     organ:    .5,
     musicbox: .6,
     bells:    .7,
@@ -208,8 +212,8 @@ export default {
       [0, 'strum', 12],            // the intro: the autoharp alone
       [12, 'lead', 12],            // "Are you going to Scarborough Fair?"
       [60, 'organ', 12],           // the choir enters
-      [72, 'bowwheel', 12],        // the counter-line leaves the drone and climbs: A · B C…
-      [84, 'bells', 6],            // …to D under "Remember me" — the bell tolls it
+      [72, 'bowwheel', 11],        // the counter-line leaves the drone and climbs: A · B C…
+      [83, 'bells', 7],            // …to D under "Remember me" — cut a beat early: the striker's swing, then the toll
       [96, 'stage', 12],           // the last line, the whole candlelit nave
     ],
   },

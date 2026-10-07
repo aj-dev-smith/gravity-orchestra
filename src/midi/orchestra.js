@@ -193,15 +193,20 @@ export function lineHome(v){
    The bowwheel and horns have one voice (the horns pick tuba / trombone / trumpet by register);
    a merged note (two voices on one beat + pitch) takes the louder one's timbre.            */
 export const RIFF_MUTE_SEC = .15;
-export function noteSuffix(key, n, spb){
+/* ctx (shapePart's whole-part view — optional): onsetProgs = the programs sounding at each beat; prog =
+   the part's dominant program. The Riff Forge's amp is per HIT (the plugin makes a whole hit clean if ANY
+   note says ':c'), so clean needs EVERY voice on that onset clean — a clean guitar's extra note beside a
+   distortion chord must not clean the chord. The autoharp's strings are keyed by id (pitch + variant), so
+   its variant is one per PART (mixed variants would string the same pitch twice). */
+export function noteSuffix(key, n, spb, ctx = null){
   const p = n.prog ?? 0, ps = n.progs || [p];
   switch (key){
     case 'riff': {
       const mute = ps.every(x => x === 28) || (n.dur != null && n.dur * spb < RIFF_MUTE_SEC);
-      const clean = ps.every(x => x >= 24 && x <= 27);
+      const clean = (ctx?.onsetProgs?.get(n.beat) || ps).every(x => x >= 24 && x <= 27);
       return mute || clean ? ':' + (mute ? 'm' : '') + (clean ? 'c' : '') : '';
     }
-    case 'strum': return p === 24 ? '|n' : p === 46 ? '|h' : '';
+    case 'strum': { const q = ctx?.prog ?? p; return q === 24 ? '|n' : q === 46 ? '|h' : ''; }
     case 'organ': return (p >= 52 && p <= 54) || p === 85 ? '|choir' : (p >= 40 && p <= 51) || (p >= 88 && p <= 95) ? '|pad' : '';
     case 'dulcimer': return p === 4 || p === 5 || p === 7 ? ':e' : '';
     default: return '';
@@ -1073,9 +1078,17 @@ export function shapePart(key, notes, { bpm, loopBeats, rollT = ROLL_T }){
   // over a held note is struck, not rolled — two hands can't sustain six voices
   const beats = [...new Set(out.map(n => n.beat))].sort((a, b) => a - b);
   const nextOn = b => { const i = beats.findIndex(x => x > b + 1e-9); return i >= 0 ? beats[i] : loopBeats + beats[0]; };
+  // the whole-part view noteSuffix needs: every program sounding at each onset; the dominant program
+  const onsetProgs = new Map(), progN = new Map();
+  for (const n of out){
+    const ps = n.progs || [n.prog ?? 0];
+    (onsetProgs.get(n.beat) || onsetProgs.set(n.beat, []).get(n.beat)).push(...ps);
+    for (const x of ps) progN.set(x, (progN.get(x) || 0) + 1);
+  }
+  const sfx = { onsetProgs, prog: [...progN.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]?.[0] };
   const part = out.map(n => {
     const vel = Math.round(Math.max(.05, Math.min(1, n.vel)) * 100) / 100;
-    const e = [n.beat, midiToName(n.midi) + noteSuffix(key, n, spb), vel];
+    const e = [n.beat, midiToName(n.midi) + noteSuffix(key, n, spb, sfx), vel];
     if (S.sustain) e.push(Math.round(n.dur * 1000) / 1000);
     else if (S.durs){ if (n.dur != null) e.push(Math.round(n.dur * 1000) / 1000); }
     else if (S.roll){                                    // a held note: a ROLL

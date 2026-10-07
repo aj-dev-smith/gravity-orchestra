@@ -444,6 +444,24 @@ describe('timbre / articulation suffixes (orchestra.noteSuffix ↔ each plugin\'
     expect(organParse('C4|choir').timbre).toBe('choir');
     expect(dulcimerParse('C4:e').ep).toBe(true);
   });
+  it('the riff amp is per HIT (a clean note beside a distortion chord stays dirty); the strum variant is per PART', () => {
+    // G1 clean (27) adds an E3 on top of G2's distortion (30) E2+B2 power chord; on beat 1 G1 plays alone
+    const riff = shapePart('riff', [
+      { beat: 0, midi: 40, vel: .9, dur: 1, prog: 30 }, { beat: 0, midi: 47, vel: .9, dur: 1, prog: 30 }, { beat: 0, midi: 52, vel: .5, dur: 1, prog: 27 },
+      { beat: 1, midi: 43, vel: .6, dur: 1, prog: 27 }], { bpm: 100, loopBeats: 4 }).part;
+    const hits = normalizeHits(riff);
+    expect(hits.map(h => h.clean)).toEqual([false, true]);
+    // two guitars on the autoharp (steel 25 busier than nylon 24): ONE variant, so a pitch is one string
+    const strum = shapePart('strum', [
+      ...[0, 1, 2, 3].flatMap(b => [52, 56, 59].map(m => ({ beat: b, midi: m, vel: .8, dur: .8, prog: 25 }))),
+      { beat: .5, midi: 52, vel: .9, dur: .4, prog: 24 }], { bpm: 100, loopBeats: 4 }).part;
+    expect(new Set(strum.map(e => strumParse(e[1]).variant))).toEqual(new Set(['']));
+  });
+  it('the MAP panel reads a suffixed part back as pitches (a re-route keeps the notes)', async () => {
+    const { songSources } = await import('../src/editor/mapping.js');
+    const src = songSources({ melody: [['C4', 4]], parts: { riff: [[0, 'E2:m', 1, .2]], organ: [[0, 'C4|choir', .8, 2]], dulcimer: [[1, 'G4:e', .7, 1]] } });
+    expect(src.filter(s => s.id.startsWith('part:')).map(s => s.events.map(e => e.midi))).toEqual([[40], [60], [67]]);
+  });
   it('a pre-ROLLED MIDI strum (its strings spread over the 1/12-beat grid) stays one strum on the autoharp', () => {
     // 8th-note strums at 140 bpm (.21 s), each chord rolled over two 1/12-beat grid cells (36 ms ≤ chordEps)
     const rolled = Array.from({ length: 16 }, (_, i) => [52, 56, 59].map((m, k) => [i * .5 + (k ? 1 / 12 : 0), m, .4])).flat();

@@ -41,8 +41,8 @@
                      scale both.
      STRING BASS     the oom an octave down: the band's tuba line, roots and fifths on the
                      beat, plus the walks (G A B → C into the A strain's 3rd phrase, F E D
-                     under the B strain's G, Bb A … G). It has 8 strings (C2 D2 E2 F2 G2 A2
-                     A#2 B2), so the chromatic passing notes (D#, G#) stay with the grand.
+                     under the B strain's G, Bb A … G). It has 10 strings (C2 … B2, with the
+                     score's chromatic Eb and Ab: its strings ring, so it must follow them).
      BELLOWS HORNS   the brass section, used for punctuation. Short STABS on the
                      syncopations: the tied sixteenth (beat .75) of every forte bar, the
                      intro's accent and the final button. They hold a chord only where the
@@ -75,7 +75,7 @@
    belt (the falling intro pads) → horns (the G stab) → grand (A's stride) → horns (the
    octave stabs) → string bass (the Bb-A-Ab-G walk into B) → banjo (B) → belt → horns (the
    turnaround) → wide (A', everyone) → bass → banjo → drums (the stop). Shares are about
-   horns 23 · strum 20 · grand 14 · stage 14 · belt 13 · bass 13 · drums 5 %. The bass shot
+   grand 23 · horns 20 · bass 16 · belt 15 · strum 12 · stage 11 · drums 5 %. The bass shot
    is re-framed from its wing side (`shots.bass`: the plugin key, though its cut key is `strings`), because its default eye sat between the
    belt's posts in the studio. */
 
@@ -86,23 +86,24 @@ const L = s => s.trim().split(/\s+/).map(t => { const [n, d] = t.split('/'); ret
 const sum = line => line.reduce((s, [, d]) => s + d, 0);
 const BAR = k => 2 * (k - 1);                         // beat at which loop bar k (1-based) starts
 
-/* JOPLIN'S DYNAMICS, per loop bar → a velocity scale. p .55, f .9; the hairpins (<, >)
-   ramp across their bar. The score's dynamics line, transcribed. */
+/* JOPLIN'S DYNAMICS, per loop bar → a velocity scale. p .55, f .9. A hairpin (<, >) ramps
+   from where the score starts it: most are "s4 s\<", i.e. the bar's SECOND half (from = 1
+   beat); the intro's dim. is its last eighth. The score's dynamics line, transcribed. */
 const P = .55, F = .9;
 const DYN = {};
-const mark = (bars, a, b = a) => bars.forEach(k => { DYN[k] = [a, b]; });
-mark([1, 2, 3], F); mark([4], F, P);
+const mark = (bars, a, b = a, from = 0) => bars.forEach(k => { DYN[k] = [a, b, from]; });
+mark([1, 2, 3], F); mark([4], F, P, 1.5);
 for (const o of [4, 36]){                             // A and A': p < f > · p < f > · p < f …
-  mark([o + 1, o + 5, o + 9], P); mark([o + 2, o + 6, o + 10], P, F);
+  mark([o + 1, o + 5, o + 9], P); mark([o + 2, o + 6, o + 10], P, F, 1);
   mark([o + 3, o + 7, o + 11, o + 12, o + 13, o + 14, o + 15], F);
-  mark([o + 4, o + 8], F, P);
+  mark([o + 4, o + 8], F, P, 1);
 }
-mark([20], F, P); mark([52], F);                      // A ends dim. into B; A' ends forte, the stop
+mark([20], F); mark([52], F);                         // A's 2nd ending stays forte into B (the dim. is the 1st ending's); A' ends forte, the stop
 mark([21, 22, 23, 24, 25, 26, 27, 28], F);            // B: eight bars forte …
-mark([29, 30, 31], P); mark([32], P, .5); mark([33], P); mark([34], P, F); mark([35], F); mark([36], F, P);
+mark([29, 30, 31], P); mark([32], P, .5, 1); mark([33], P); mark([34], P, F); mark([35], F); mark([36], F, P, 1);
 const dyn = beat => {
-  const k = Math.floor(beat / 2) + 1, [a, b] = DYN[k] ?? [F, F];
-  return a + (b - a) * ((beat - BAR(k)) / 2);
+  const k = Math.floor(beat / 2) + 1, [a, b, from] = DYN[k] ?? [F, F, 0];
+  return a + (b - a) * Math.max(0, (beat - BAR(k) - from) / (2 - from));
 };
 const vel = (beat, x) => r5(Math.min(1, Math.max(.05, x * dyn(beat))));
 
@@ -213,17 +214,19 @@ const dulcimer = [
 ];
 
 // ---- THE STRING BASS — the oom an octave down, and the walks --------------------
-/* Same four-slot bar as the stride; one note or '-'. 8 strings: C2 D2 E2 F2 G2 A2 A#2 B2. */
+/* Same four-slot bar as the stride; one note or '-'. 10 strings: C2 D2 D#2 E2 F2 G2 G#2 A2 A#2 B2
+   (the strings RING ~2 s, so the bass takes the score's own Eb and Ab rather than leave the
+   E / A it just struck humming a semitone against the grand's passing note). */
 const BS_A = [
   'C2 - G2 -', 'F2 - E2 -', 'G2 - G2 -', 'C2 - - -',
-  'C2 - G2 -', 'F2 - E2 -', 'D2 - D2 -', '- G2 A2 B2',      // the walk up into the 3rd phrase
+  'C2 - G2 -', 'F2 - E2 D#2', 'D2 - D2 -', '- G2 A2 B2',    // E · Eb → D; the walk up into the 3rd phrase
   'C2 - G2 -', 'F2 - E2 -', 'G2 - G2 -', 'C2 - - -',
-  'C2 - A#2 -', 'A2 - - -', 'G2 - G2 -',                    // C, Bb, A, (the grand's Ab), G
+  'C2 - A#2 -', 'A2 - G#2 -', 'G2 - G2 -',                 // C, Bb, A, Ab, G — the chromatic descent
 ];
 const BS_A_END = 'C2 G2 C2 -';
 const BS_B = [
   'C2 - G2 -', 'C2 - G2 -', 'F2 - C2 -', 'E2 - G2 -',
-  'C2 - G2 -', 'C2 - E2 -', 'D2 - D2 -', '- F2 E2 D2',      // walking down under the G
+  'C2 - G2 -', 'C2 - E2 D#2', 'D2 - D2 -', '- F2 E2 D2',    // E · Eb → D; walking down under the G
   'C2 - G2 -', 'C2 - G2 -', 'F2 - C2 -', 'E2 - C2 -',
   'F2 - A2 -', 'G2 - G2 -', 'D2 - G2 -', 'C2 G2 C2 -',
 ];
@@ -233,7 +236,7 @@ const walk = (rows, k0) => rows.flatMap((row, r) => row.split(/\s+/).flatMap((n,
   return [[b, n, vel(b, s === 0 ? .95 : .82)]];
 }));
 const bass = [
-  [4.75, 'A2', vel(4.75, .7)], [5.25, 'B2', vel(5.25, .7)], [5.5, 'A2', vel(5.5, .7)],   // intro: down with the piano …
+  [4.75, 'A2', vel(4.75, .7)], [5.25, 'B2', vel(5.25, .7)], [5.5, 'A2', vel(5.5, .7)], [5.75, 'G#2', vel(5.75, .7)],   // intro: down with the piano (A B A Ab) …
   [6, 'G2', vel(6, .9)], [7, 'G2', vel(7, 1)],                                         // … onto the G, and the accent
   ...walk(BS_A, 5), ...walk([BS_A_END], 20),
   ...walk(BS_B, 21),
@@ -273,7 +276,7 @@ const horns = [
   // the turnaround: D7 · G7 · C, sustained, crescendo into A'
   ...hit(BAR(35), 'D7', .75, .9), ...hit(BAR(35) + 1, 'G7', .85, .7), ...hit(BAR(35) + 1.75, 'C', .9, 1.25),
   ...hornsA(37),
-  ...hit(BAR(52), 'C', .9), ...hit(BAR(52) + 1, 'Chi', 1),          // the final button
+  ...hit(BAR(52), 'C', .9), ...hit(BAR(52) + 1, 'Chi', 1, 2),       // the final button — held, so the breath isn't dead air
 ];
 
 // ---- THE AUTOHARP — the ragtime banjo ------------------------------------------
@@ -281,25 +284,31 @@ const VO = {
   C: ['C4', 'E4', 'G4', 'C5'], C7: ['C4', 'E4', 'G4', 'A#4'], F: ['C4', 'F4', 'A4', 'C5'], Fm: ['C4', 'F4', 'G#4', 'C5'],
   G: ['B3', 'D4', 'G4', 'B4'], G7: ['B3', 'D4', 'F4', 'G4'], D7: ['D4', 'F#4', 'A4', 'C5'], Fdim: ['C4', 'D#4', 'F#4', 'A4'],
 };
-/* the harmony, one chord per half bar (the stride's chords, named) */
-const HA = ['C C7', 'F C', 'C G7', 'C C', 'C C7', 'F C', 'D7 D7', 'G G7', 'C C7', 'F C', 'C G7', 'C C', 'C C7', 'F Fm', 'C G7'];
-const HB = ['C C', 'C C', 'F Fm', 'C C', 'C C', 'C C', 'G D7', 'G G7', 'C C', 'C C', 'F Fm', 'C C7', 'F Fdim', 'C C', 'D7 G7'];
-/** strums on every eighth (down on the beat, up on the and); `upOnly` bars only chuck the ands */
+/* the harmony, one chord per half bar (the stride's chords, named) — or four per bar, one per
+   eighth, where the score changes on the "and": the G7 of A's cadence bars arrives with the
+   stride's chord at 1.5 (the tied E above the 1.0 G bass is still C), B's Fm with its Ab chord,
+   and the passing Eb in the bass is D#dim7 (same four notes as 'Fdim'), never a held C. */
+const HA = ['C C7', 'F C', 'C C C G7', 'C C', 'C C7', 'F F C Fdim', 'D7 D7', 'G G7', 'C C7', 'F C', 'C C C G7', 'C C', 'C C7', 'F Fm', 'C C C G7'];
+const HB = ['C C', 'C C', 'F F F Fm', 'C C', 'C C', 'C C C Fdim', 'G D7', 'G G7', 'C C', 'C C', 'F F F Fm', 'C C7', 'F Fdim', 'C C', 'D7 G7'];
+/** strums on every eighth (down on the beat, up on the and); `upOnly` bars only chuck the ands.
+    Each strum is a banjo CHUCK: its felts drop after CHUCK beats, so a chord never rings on
+    across the stride's next chord (an up-only bar's strum would otherwise hold a whole beat). */
+const CHUCK = .3;
 const banjo = (chart, k0, upOnly = () => false) => chart.flatMap((bar, r) => {
-  const k = k0 + r, [h1, h2] = bar.split(' ');
+  const k = k0 + r, hs = bar.split(' '), q = hs.length === 4 ? hs : [hs[0], hs[0], hs[1], hs[1]];
   return [0, 1, 2, 3].flatMap(s => {
     const up = s % 2 === 1;
     if (upOnly(r + 1) && !up) return [];
-    const b = BAR(k) + .5 * s, ch = VO[s < 2 ? h1 : h2];
-    return ch.map(n => [b, n, vel(b, up ? .42 : .58)]);
+    const b = BAR(k) + .5 * s, ch = VO[q[s]];
+    return ch.map(n => [b, n, vel(b, up ? .42 : .58), CHUCK]);
   });
 });
 const pianoBars = r => [1, 2, 5, 6, 9, 10].includes(r);              // A's quiet "E C E C" calls
 const strum = [
   ...banjo(HB, 21),
-  ...VO.C.flatMap(n => [[BAR(36), n, vel(BAR(36), .6)], [BAR(36) + .5, n, vel(BAR(36) + .5, .45)], [BAR(36) + 1, n, vel(BAR(36) + 1, .5)]]),
+  ...VO.C.flatMap(n => [[BAR(36), n, vel(BAR(36), .6), CHUCK], [BAR(36) + .5, n, vel(BAR(36) + .5, .45), CHUCK], [BAR(36) + 1, n, vel(BAR(36) + 1, .5), CHUCK]]),
   ...banjo(HA, 37, pianoBars),
-  ...VO.C.flatMap(n => [[BAR(52), n, .75], [BAR(52) + 1, n, .85]]),   // the stop
+  ...VO.C.flatMap(n => [[BAR(52), n, .75, CHUCK], [BAR(52) + 1, n, .85, 1.5]]),   // the stop (the last one rings a little)
 ];
 
 // ---- DRUMS — brushes-ish: bass drum with the oom, snare whisper with the pah ------

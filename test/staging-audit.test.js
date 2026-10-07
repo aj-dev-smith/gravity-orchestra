@@ -37,7 +37,7 @@ describe('staging audit: every song lays out clean and every station shot sees i
     const have = new Set(FIX.map(R => R.song));
     for (const k of Object.keys(SONGS)) expect(have.has(k), `${k} missing from the fixture — regenerate it`).toBe(true);
     for (const m of ['room-tour.mid', 'canon-in-d.mid']) expect(have.has(m), m).toBe(true);
-    expect(Object.keys(ROOMSOLIDS).sort()).toEqual(['cathedral', 'graveyard', 'grid', 'studio']);
+    expect(Object.keys(ROOMSOLIDS).sort()).toEqual(['arena', 'cathedral', 'graveyard', 'grid', 'starship', 'studio']);
   });
   for (const R of FIX){
     const wall = R.wall;                                        // [x0,x1,y0,y1,z0,z1]

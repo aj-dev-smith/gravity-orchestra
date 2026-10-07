@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { riser } from '../riser.js';
 import { makeEdge, smooth } from '../clock.js';
 import { solveRiff, stampAt, carriageAt, muteAt, ringAt, hitAt, voiceIdsFor, crossBottom, stringDrop, strikeSurface,
          STRINGS, NUT_X, BRIDGE_X, STAMP_X, STAMP_DX, stampX, STR_DZ, MUTE_X, SCALE_L, STRING_Y, FRET_H, HEAD_R, MUTE_R, HOOK_W, LIFT_Y,
@@ -137,10 +138,8 @@ export default {
       box(iron, -7.4, 7.4, 0, .4, -2.6, 2.4);
       box(trim, -7.35, 7.35, .32, .36, 2.4, 2.44);
       const legH = -floorY / rs;
-      if (legH > .05){                                     // a solid stage riser down to the floor (no legs in front of the neck)
-        box(dark, -7.1, 7.1, -legH, 0, -3.35, 2.15);
-        box(trim, -7.12, 7.12, -.12, -.08, 2.15, 2.18);
-      }
+      // an open truss riser down to the floor (riser.js — the old solid box's footprint, not its slab)
+      riser(THREE, add, { x0: -7.1, x1: 7.1, z0: -3.35, z1: 2.15, y0: -legH, y1: 0, dark, trim, chrome });
       // the stand: two yokes up to the neck's cradle
       for (const x of [-4.2, 3.6]){
         box(dark, x - .22, x + .22, .4, BOARD_Y - .55, -.4, .4);

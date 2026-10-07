@@ -44,7 +44,7 @@ export const isLead = t => t === LEAD || !!doubled(t);
 /** the plugin a target feeds (a doubled lead feeds one too), else null */
 export const machineOf = t => doubled(t) || (t && ![LEAD, BELT, DRUMS, OFF].includes(t) ? t : null);
 
-const NOTE_RE = /^[A-G]#?\d$/;
+const PITCH_HEAD = /^([A-G]#?\d)(?:$|[:|/])/;     // a part id's pitch ('E2', 'E2:m', 'C4|choir')
 const q12 = b => Math.round(b * 12) / 12;
 const tidy = b => Math.round(b * 12000) / 12000;
 const median = a => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
@@ -267,8 +267,10 @@ export function songSources(song, labels = {}){
   }
   for (const [key, part] of Object.entries(song.parts || {})){
     if (!Array.isArray(part) || !part.length) continue;
-    const events = part.filter(e => Array.isArray(e) && NOTE_RE.test(e[1]))
-      .map(e => ({ beat: e[0], midi: noteNum(e[1]), vel: e[2] ?? 1, dur: e[3] ?? null }));
+    // (a machine's id may carry a timbre / articulation suffix — 'E2:m', 'C4|choir', 'C4:e' — the
+    // pitch is its head; a re-route keeps the pitch, the new machine picks its own timbre)
+    const events = part.filter(e => Array.isArray(e) && PITCH_HEAD.test(e[1]))
+      .map(e => ({ beat: e[0], midi: noteNum(PITCH_HEAD.exec(e[1])[1]), vel: e[2] ?? 1, dur: e[3] ?? null }));
     out.push({ id: `part:${key}`, name: labels[key] || key, gm: `part · ${key}`, events, home: key });
   }
   if (song.drums && Object.keys(song.drums).length){

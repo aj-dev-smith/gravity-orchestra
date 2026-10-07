@@ -62,7 +62,17 @@ export default {
   // id = an event's note field. Keep peak ≤ ~.9; keep it short (≤ ~3 s) — every
   // unique id in the song is pre-rendered on song load. sr 22050–44100.
   voice(id){ return { samples, sr }; },
-  voiceIds(part){ ... },          // optional: unique ids to bake (default: unique e[1])
+  // optional: the unique ids to bake (default: unique e[1]). ctx = { beat, bpm, rollT, P, loopBeats }
+  // (main passes the song's tempo + loop: bucket voices by a note's length in SECONDS, exactly as
+  // build() will; an old caller may omit it — fall back to a superset)
+  voiceIds(part, ctx){ ... },
+  // optional: an id's pitch in Hz for the spatial pan width (low voices sit near the centre).
+  // Default: the FIRST pitch in the id ('E2+B2:m', 'C4|choir', 'stab:D4') — list chord notes low → high.
+  voiceHz(id){ ... },
+  // optional, for the MIDI importer: your solve.js PART_LIMITS (lo/hi/center/pitches/poly/gap/ioi/
+  // voices/maxEvents/sustain/minDur/maxDur). orchestra.js derives its PART_SPEC from it (imports
+  // it — the numbers are never copied) and routes programs to you in PREFER / LINE_HOME.
+  PART_LIMITS,
 
   make({ envMap, glowTex, THREE }){
     return {
@@ -82,7 +92,9 @@ export default {
       //   onStrike({ note, vel, pos, color, dur, shake, sparks, light })
       // pos = Vector3 in YOUR local frame (main maps it through the station),
       // dur = seconds (sustained voices release there), shake ≈ .02–.1 for big
-      // hits only, sparks = count (0 = none), light = strike-light scale (1).
+      // hits only, sparks = count (0 = none), light = strike-light scale (1;
+      // < .2 skips the shared strike-light pool — a chord's faint inner strings
+      // must not steal another machine's flash).
       update(songTime, P, dt, { started, skipStrikes, onStrike }){ ... },
     };
   },

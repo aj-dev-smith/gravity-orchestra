@@ -7,10 +7,17 @@ import { describe, it, expect } from 'vitest';
 import { parseMidi } from '../src/midi/parse.js';
 import { convertToSong } from '../src/midi/convert.js';
 import { orchestrate, orchestrateByRole, shapePart, polyphony, splitHands, routeProgram, nameRole, riffLike, isPowerChord, gapFit, twins, preferFor,
+         ioiFit, PREFER_FIT, overflowOrder, noteSuffix, RIFF_MUTE_SEC,
          lowLine, PART_SPEC, PREFER, OVERFLOW_TO, ROLE, VOLLEY_MIN_HOP, BASS_FIT } from '../src/midi/orchestra.js';
 import { barGrid, walkMeter, barAt, barStart, barFeatures, barSim, scoreWindows, selfSimilarity, tempoClock, PHRASE } from '../src/midi/phrase.js';
 import { fitMachine } from '../src/editor/mapping.js';
 import { GEOM as VOLLEY, buildVolley } from '../src/instruments/volley/solve.js';
+import { PART_LIMITS as RIFF_L, normalizeHits } from '../src/instruments/riff/solve.js';
+import { PART_LIMITS as STRUM_L, parseId as strumParse } from '../src/instruments/strum/solve.js';
+import { PART_LIMITS as ORGAN_L, parseId as organParse } from '../src/instruments/organ/solve.js';
+import { PART_LIMITS as HORNS_L, MIN_GAP as HORNS_MIN_GAP } from '../src/instruments/horns/solve.js';
+import { PART_LIMITS as BOWWHEEL_L, MIN_REPEAT as BW_MIN_REPEAT } from '../src/instruments/bowwheel/solve.js';
+import { PART_LIMITS as DULCIMER_L, parseNote as dulcimerParse } from '../src/instruments/dulcimer/solve.js';
 import { buildMidi } from './helpers/midi-builder.js';
 import { noteNum, ROLL_T } from '../src/engine.js';
 
@@ -291,7 +298,9 @@ describe('ROLE.LOW 50 → 46: rhythm guitars are guitars, basses are basses', ()
     const { song, warnings } = convert(file(
       trk('Lead', 0, 0, tune(76, 16)), trk('A', 0, 1, tune(64, 16)), trk('B', 0, 2, tune(57, 16)), trk('Rhythm', 30, 3, gtr)));
     expect(song.parts?.bass).toBeUndefined();
-    expect(warnings.some(w => /"Rhythm" .*plays on the turntable \(a spare melodic line\)/.test(w))).toBe(true);
+    // (was: the free turntable — a spare guitar line now plays its family's machine, the Riff Forge)
+    expect(warnings.some(w => /"Rhythm" .*plays on the riff \(a spare distortion guitar line\)/.test(w))).toBe(true);
+    expect(song.parts.riff.length).toBe(16);
   });
   it('role routing (no programs): a guitar-named line at 47 is a melodic line; an unnamed line at 40 is the bass', () => {
     const r = orchestrateByRole(parseMidi(file(trk('Tune', null, 0, tune(72, 16)),
@@ -333,20 +342,142 @@ describe('steel drums → the volley (an existing machine, never routed before)'
 });
 
 // ---------------------------------------------------------------------------
-describe('extension points: PREFER (machines not built yet) + OVERFLOW_TO', () => {
-  it('a PREFER machine routes only once it has a PART_SPEC', () => {
-    expect(PREFER.map(p => p.key)).toEqual(['riff', 'strum', 'organ']);
-    expect(preferFor(30, false)).toBe(null);                          // no riff machine on this branch
-    PART_SPEC.riff = { lo: 40, hi: 76, center: 52, pitches: 36, poly: 4, gap: .12, ioi: 0, voices: 2, maxEvents: 640 };
-    PART_SPEC.strum = { lo: 40, hi: 76, center: 57, pitches: 24, poly: 6, gap: .2, ioi: .12, voices: 2, maxEvents: 384 };
+describe('the family machines: PREFER / LINE_HOME / OVERFLOW_TO', () => {
+  it('a PREFER machine routes only while it has a PART_SPEC (a plugin that is gone falls back to the family home)', () => {
+    expect([...new Set(PREFER.map(p => p.key))]).toEqual(['riff', 'strum', 'bowwheel', 'organ', 'horns']);
+    expect(preferFor(30, false)).toBe(null);                          // a distortion LINE stays a belt candidate …
+    expect(preferFor({ program: 30, poly: 0, medDur: .1, riff: true, pitches: 12 })).toBe('riff');   // … a power-chord riff doesn't
+    expect(preferFor(25, true)).toBe('strum');
+    expect(preferFor(25, false)).toBe(null);                          // a single steel-guitar line stays a belt candidate
+    expect(preferFor({ program: 27, poly: 0, medDur: .1, riff: true, pitches: 12 })).toBe('riff');   // a clean guitar's power chords (MoP G1)
+    expect(preferFor(27, true)).toBe('strum');                        // … its ordinary chords strum
+    expect(preferFor(89, false)).toBe('organ');                       // a pad is always a bed
+    expect(preferFor({ program: 89, poly: 1, medDur: 3, pitches: 6 })).toBe('bowls');   // … a few long notes: the bowls
+    expect(preferFor(61, true)).toBe('horns');
+    expect(preferFor(61, false)).toBe(null);                          // a single horn line is a melody
+    expect(preferFor(48, true)).toBe('bowwheel');
+    const chords = Array.from({ length: 16 }, (_, i) => [[i, 52], [i, 56], [i, 59]]).flat();
+    const route = () => orchestrate(parseMidi(file(trk('Lead', 0, 0, tune(72, 16)), trk('Strum', 25, 1, chords))).tracks, { ppq: PPQ, bpm: 120 });
+    expect(route().parts.map(p => p.key)).toEqual(['strum']);
+    const saved = PART_SPEC.strum;
+    delete PART_SPEC.strum;
     try {
-      expect(preferFor(30, false)).toBe('riff');
-      expect(preferFor(25, true)).toBe('strum');
-      expect(preferFor(25, false)).toBe(null);                        // a single steel-guitar line stays a belt candidate
-      const chords = Array.from({ length: 16 }, (_, i) => [[i, 52], [i, 56], [i, 59]]).flat();
-      const r = orchestrate(parseMidi(file(trk('Lead', 0, 0, tune(72, 16)), trk('Strum', 25, 1, chords))).tracks, { ppq: PPQ, bpm: 120 });
-      expect(r.parts.map(p => p.key)).toEqual(['strum']);
-    } finally { delete PART_SPEC.riff; delete PART_SPEC.strum; }
+      expect(preferFor(25, true)).toBe(null);
+      expect(route().parts.map(p => p.key)).toEqual(['riff']);        // the guitar family's other machine (then the marimba)
+    } finally { PART_SPEC.strum = saved; }
+  });
+  it('a fit guard: the autoharp takes a voice only if its .2 s strum spacing keeps ≥ PREFER_FIT of it', () => {
+    const spt = 60 / 120 / PPQ;
+    const strums = Array.from({ length: 16 }, (_, i) => [52, 56, 59].map(m => ({ tick: i * PPQ / 2 + (m - 52) * 4, midi: m })));   // 8ths, pre-strummed
+    expect(ioiFit(strums.flat(), PART_SPEC.strum.ioi, spt, PART_SPEC.strum.chordEps)).toBe(1);   // .25 s strums; a 10 ms roll is one strum
+    expect(ioiFit(strums.flat(), PART_SPEC.strum.ioi, spt)).toBeLessThan(.5);                     // (unmerged, the roll's strings crowd)
+    const run = Array.from({ length: 32 }, (_, i) => ({ tick: i * PPQ / 4, midi: 52 + i % 7 }));          // a 16th-note harp run (.125 s)
+    expect(ioiFit(run, PART_SPEC.strum.ioi, spt, PART_SPEC.strum.chordEps)).toBeLessThan(PREFER_FIT);
+    const harp = trk('Harp', 46, 1, run.map(n => [n.tick / PPQ, n.midi, 1]));
+    const { song } = convert(file(trk('Lead', 0, 0, tune(76, 16)), harp));
+    expect(song.parts.strum).toBeUndefined();                         // the run stays on the struck bars
+    expect(song.parts.marimba.length).toBeGreaterThan(0);
+  });
+  it('every new PART_SPEC is its plugin\'s own PART_LIMITS (no copied numbers); the gaps are the solvers\' floors', () => {
+    const L = { riff: RIFF_L, strum: STRUM_L, organ: ORGAN_L, horns: HORNS_L, bowwheel: BOWWHEEL_L, dulcimer: DULCIMER_L };
+    for (const [k, lim] of Object.entries(L)){
+      const S = PART_SPEC[k];
+      for (const f of ['lo', 'hi', 'gap']) expect(S[f], `${k}.${f}`).toBe(lim[f]);
+      expect(S.poly, `${k}.poly`).toBeLessThanOrEqual(lim.poly);
+      if (lim.pitches) expect(S.pitches, `${k}.pitches`).toBeLessThanOrEqual(lim.pitches);
+      if (lim.maxDur) expect(S.maxDur, `${k}.maxDur`).toBeLessThanOrEqual(lim.maxDur);
+      if (lim.voices) expect(S.voices, `${k}.voices`).toBe(lim.voices);
+      expect(S.voices).toBeGreaterThan(0);
+    }
+    expect(PART_SPEC.bowwheel.gap).toBe(+BW_MIN_REPEAT.toFixed(3));  // closer same-pitch onsets MERGE into one stroke
+    expect(PART_SPEC.horns.gap).toBe(HORNS_MIN_GAP);
+    expect(PART_SPEC.riff.maxEvents).toBe(2 * RIFF_L.maxEvents);     // its budget counts hits; a power chord is ≥ 2 notes
+    expect(PART_SPEC.riff.durs).toBe(true);                          // every hit carries its length (the hook lift)
+  });
+  it('OVERFLOW_TO chains run upstream first and never loop', () => {
+    const order = overflowOrder(Object.keys(PART_SPEC));
+    for (const [from, to] of Object.entries(OVERFLOW_TO)){
+      expect(PART_SPEC[to], `${from} → ${to}`).toBeDefined();
+      expect(order.indexOf(from), `${from} before ${to}`).toBeLessThan(order.indexOf(to));
+    }
+    expect(OVERFLOW_TO.organ).toBe('bowls'); expect(OVERFLOW_TO.bowwheel).toBe('organ');
+  });
+  it('a big string section: the bow wheel takes 4 voices, the rest bow on the organ (its pad voice)', () => {
+    // (six DIFFERENT sections — each enters on its own sixteenth, so none is a twin of another)
+    const sect = (name, ch, base) => trk(name, 48, ch, Array.from({ length: 8 }, (_, i) => [i * 2 + ch / 4, base + [0, 4, 7][i % 3]]).flatMap(([b, m]) => [[b, m, 1.5], [b, m + 3, 1.5]]));
+    const { song, warnings } = convert(file(trk('Lead', 0, 0, tune(76, 16)),
+      ...[1, 2, 3, 4, 5, 6].map(ch => sect(`Str ${ch}`, ch, 44 + 3 * ch))));
+    expect(song.parts.bowwheel.length).toBeGreaterThan(0);
+    expect(song.parts.organ.length).toBeGreaterThan(0);
+    expect(song.parts.organ.every(e => e[1].endsWith('|pad'))).toBe(true);    // strings on the organ: its pad voice
+    expect(warnings.filter(w => /plays on the organ \(the bowwheel already plays 4 voices\)/.test(w)).length).toBe(2);
+  });
+});
+
+describe('timbre / articulation suffixes (orchestra.noteSuffix ↔ each plugin\'s parser)', () => {
+  const spb = .5;
+  it('riff: palm mute from the note length in SECONDS (or a muted-guitar program), clean for clean / acoustic programs', () => {
+    expect(noteSuffix('riff', { prog: 30, dur: .2 }, spb)).toBe(':m');            // .1 s < RIFF_MUTE_SEC
+    expect(noteSuffix('riff', { prog: 30, dur: 1 }, spb)).toBe('');
+    expect(noteSuffix('riff', { prog: 28, dur: 2 }, spb)).toBe(':m');
+    expect(noteSuffix('riff', { prog: 27, dur: 2 }, spb)).toBe(':c');
+    expect(noteSuffix('riff', { prog: 27, dur: .1 }, spb)).toBe(':mc');
+    expect(noteSuffix('riff', { prog: 27, progs: [27, 30], dur: 2 }, spb)).toBe('');   // a clean guitar doubling a distortion riff: the dirt
+    expect(noteSuffix('riff', { prog: 30, dur: null }, spb)).toBe('');
+    expect(RIFF_MUTE_SEC).toBe(.15);
+    // the plugin reads them back
+    const h = normalizeHits([[0, 'E2:m', 1, 1], [0, 'B2:m', 1, 1], [1, 'G2:c', 1, 2]]);
+    expect(h.map(x => [x.mute, x.clean])).toEqual([[true, false], [false, true]]);
+  });
+  it('strum / organ / dulcimer timbres by program; the others take none', () => {
+    expect(noteSuffix('strum', { prog: 24 }, spb)).toBe('|n');
+    expect(noteSuffix('strum', { prog: 46 }, spb)).toBe('|h');
+    expect(noteSuffix('strum', { prog: 25 }, spb)).toBe('');
+    expect(noteSuffix('organ', { prog: 52 }, spb)).toBe('|choir');
+    expect(noteSuffix('organ', { prog: 89 }, spb)).toBe('|pad');
+    expect(noteSuffix('organ', { prog: 49 }, spb)).toBe('|pad');
+    expect(noteSuffix('organ', { prog: 19 }, spb)).toBe('');
+    expect(noteSuffix('dulcimer', { prog: 4 }, spb)).toBe(':e');
+    expect(noteSuffix('dulcimer', { prog: 0 }, spb)).toBe('');
+    for (const k of ['horns', 'bowwheel', 'marimba', 'bass']) expect(noteSuffix(k, { prog: 61, dur: .1 }, spb)).toBe('');
+    expect(strumParse('E3|n').variant).toBe('n');
+    expect(organParse('C4|choir').timbre).toBe('choir');
+    expect(dulcimerParse('C4:e').ep).toBe(true);
+  });
+  it('the riff amp is per HIT (a clean note beside a distortion chord stays dirty); the strum variant is per PART', () => {
+    // G1 clean (27) adds an E3 on top of G2's distortion (30) E2+B2 power chord; on beat 1 G1 plays alone
+    const riff = shapePart('riff', [
+      { beat: 0, midi: 40, vel: .9, dur: 1, prog: 30 }, { beat: 0, midi: 47, vel: .9, dur: 1, prog: 30 }, { beat: 0, midi: 52, vel: .5, dur: 1, prog: 27 },
+      { beat: 1, midi: 43, vel: .6, dur: 1, prog: 27 }], { bpm: 100, loopBeats: 4 }).part;
+    const hits = normalizeHits(riff);
+    expect(hits.map(h => h.clean)).toEqual([false, true]);
+    // two guitars on the autoharp (steel 25 busier than nylon 24): ONE variant, so a pitch is one string
+    const strum = shapePart('strum', [
+      ...[0, 1, 2, 3].flatMap(b => [52, 56, 59].map(m => ({ beat: b, midi: m, vel: .8, dur: .8, prog: 25 }))),
+      { beat: .5, midi: 52, vel: .9, dur: .4, prog: 24 }], { bpm: 100, loopBeats: 4 }).part;
+    expect(new Set(strum.map(e => strumParse(e[1]).variant))).toEqual(new Set(['']));
+  });
+  it('the MAP panel reads a suffixed part back as pitches (a re-route keeps the notes)', async () => {
+    const { songSources } = await import('../src/editor/mapping.js');
+    const src = songSources({ melody: [['C4', 4]], parts: { riff: [[0, 'E2:m', 1, .2]], organ: [[0, 'C4|choir', .8, 2]], dulcimer: [[1, 'G4:e', .7, 1]] } });
+    expect(src.filter(s => s.id.startsWith('part:')).map(s => s.events.map(e => e.midi))).toEqual([[40], [60], [67]]);
+  });
+  it('a pre-ROLLED MIDI strum (its strings spread over the 1/12-beat grid) stays one strum on the autoharp', () => {
+    // 8th-note strums at 140 bpm (.21 s), each chord rolled over two 1/12-beat grid cells (36 ms ≤ chordEps)
+    const rolled = Array.from({ length: 16 }, (_, i) => [52, 56, 59].map((m, k) => [i * .5 + (k ? 1 / 12 : 0), m, .4])).flat();
+    const r = shapePart('strum', rolled.map(([beat, midi]) => ({ beat, midi, vel: .8, dur: .4, prog: 25 })), { bpm: 140, loopBeats: 8 });
+    expect(r.warnings.filter(w => /thinned/.test(w))).toEqual([]);
+    expect(r.part.length).toBe(48);
+  });
+  it('end to end: a nylon strummer, a choir and a Rhodes import with their voices', () => {
+    const chords = (base, n, step, len) => Array.from({ length: n }, (_, i) => [i * step, base + i % 2, len]).flatMap(([b, m, l]) => [[b, m, l], [b, m + 4, l], [b, m + 7, l]]);
+    const { song } = convert(file(trk('Lead', 73, 0, tune(79, 16)),
+      trk('Nylon', 24, 1, chords(52, 16, 1, 1)),
+      trk('Choir', 52, 2, Array.from({ length: 4 }, (_, i) => [0, 3, 7, 10, 14].map(d => [i * 4, 50 + 2 * i + d, 4])).flat()),
+      trk('Rhodes', 4, 3, chords(57, 8, 2, 2))));
+    expect(song.parts.strum.every(e => e[1].endsWith('|n'))).toBe(true);
+    expect(song.parts.organ.every(e => e[1].endsWith('|choir'))).toBe(true);
+    expect(song.parts.dulcimer.every(e => e[1].endsWith(':e'))).toBe(true);
   });
 });
 
@@ -420,18 +551,28 @@ describe('THE CHUG (a 220-bpm riff song in 4/4 + 5/8, half-tempo clean interlude
     expect(r.phrase.barLines.length).toBe(r.phrase.bars + 1);
     for (const k of ['alto', 'bass']) if (r.song[k]) expect(r.song[k].delay + sum(r.song[k].notes)).toBeCloseTo(sum(r.song.melody), 9);
   });
-  it('the vocals lead, the riff rides a belt on its ROOTS, the L/R bass is ONE belt', () => {
-    // (every voice is a belt voice by program, so the room is filled by ROLE: the guitar's chug is a
-    // melodic line — power chords are one note — and the named bass, too quick for the string bass, a belt)
+  it('the vocals lead, the RIFF FORGE plays the power chords as palm-muted chugs, the L/R bass is ONE string bass', () => {
+    // (was: every voice a belt voice by program, the riff a belt line on its roots, the bass a belt — before
+    // the Riff Forge: a distortion guitar's power chords are its machine's native shape, chords and all)
     const w = r.warnings.join('\n');
     expect(r.song.melody.every(([n]) => [64, 67, 69, 71].includes(noteNum(n)))).toBe(true);
-    expect(w).toMatch(/belt: "Bass \(right\)" doubles "Bass \(left\)" — merged/);
-    expect(w).toMatch(/"Bass \(left\)" → \w+ belt \(a bass line \(by its name\)\)/);
-    expect(w).toMatch(/"Guitar 1" → turntable/);
-    const rootPcs = new Set(ROOTS.map(m => m % 12));
-    expect(r.song.bass.notes.every(([n]) => rootPcs.has(pc(n)))).toBe(true);
-    expect(r.song.parts.turntable.every(e => rootPcs.has(pc(e[1])))).toBe(true);    // the riff's ROOTS, not its fifths
-    expect(r.song.alto).toBeUndefined();                                            // one bass belt, not two
+    expect(w).toMatch(/bass: "Bass \(right\)" doubles "Bass \(left\)" — merged/);
+    expect(w).toMatch(/"Bass \(left\)" plays as a bass by its name/);
+    expect(w).not.toMatch(/routed by musical role/);
+    expect(r.song.alto).toBeUndefined(); expect(r.song.bass).toBeUndefined();     // the belt is the singer's alone
+    const riff = r.song.parts.riff, rootPcs = new Set(ROOTS.map(m => m % 12));
+    // every hit is a POWER CHORD on a riff root (root + fifth [+ octave]) …
+    const byBeat = new Map();
+    for (const [b, n] of riff){ if (!byBeat.has(b)) byBeat.set(b, []); byBeat.get(b).push(noteNum(n.split(':')[0])); }
+    for (const ms of byBeat.values()){
+      expect(isPowerChord(ms) || ms.length === 1).toBe(true);
+      expect(rootPcs.has(Math.min(...ms) % 12)).toBe(true);
+    }
+    expect([...byBeat.values()].filter(ms => ms.length >= 2).length).toBeGreaterThan(.9 * byBeat.size);
+    // … palm-muted (a .4-beat note at 220 bpm is .11 s < RIFF_MUTE_SEC), with its length for the hook lift
+    expect(riff.every(e => e[1].endsWith(':m') && e[3] > 0)).toBe(true);
+    // the bass: one string-bass voice on the roots (its pedal repeats thinned to the .15 s string gap)
+    expect(r.song.parts.bass.every(e => rootPcs.has(pc(e[1])))).toBe(true);
   });
   it('without names the guitar leads — and the loop is still a riff section, not the interlude', () => {
     const x = convert(chug({ names: false }).bytes);

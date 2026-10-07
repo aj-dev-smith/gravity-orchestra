@@ -21,6 +21,8 @@ import { buildComb, tineAt, splitTwins, GEOM } from '../src/instruments/musicbox
 import { solveLane as bassSolve, TC, E as BASS_E, V_MIN, winchT } from '../src/instruments/bass/solve.js';
 
 const NOTE_RE = /^[A-G]#?\d$/;
+// the note-id grammar of the machines that take a suffix (orchestra.noteSuffix ↔ each plugin's parser)
+const SUFFIXED = { riff: /^[A-G]#?\d(:m?c?)?$/, strum: /^[A-G]#?\d(\|[nh])?$/, organ: /^[A-G]#?\d(\|(choir|pad))?$/, dulcimer: /^[A-G]#?\d(:e)?$/ };
 const PPQ = 480;
 const sumBeats = notes => notes.reduce((s, [, b]) => s + b, 0);
 const convert = (bytes, opts) => convertToSong(parseMidi(bytes), opts);
@@ -166,7 +168,7 @@ describe('convertToSong — legacy behaviour without program changes', () => {
   it('opts.orchestra forces routing on for a program-less (all-piano) file', () => {
     const bytes = file(trk('a', null, 0, scale8(72)), trk('b', null, 1, [[0, 48, 4], [0, 52, 4], [4, 50, 4], [4, 53, 4]]));
     const { song } = convert(bytes, { orchestra: true });
-    expect(song.parts?.marimba?.length).toBeGreaterThan(0);  // the chordal piano goes to the marimba
+    expect(song.parts?.dulcimer?.length).toBeGreaterThan(0); // the chordal piano comps on the Marble Grand (was: the marimba)
     expect(song.bass).toBeUndefined();
   });
 });
@@ -188,31 +190,36 @@ describe('convertToSong — orchestra routing', () => {
     expect(warnings.every(w => typeof w === 'string')).toBe(true);
   });
 
-  it('strings: a chordal ensemble is a bowls bed, a single moving line is a melody (belt)', () => {
+  it('strings: a chordal ensemble bows on the bow wheel, a single moving line is a melody (belt)', () => {
     const { song } = convert(file(
       trk('Violin', 40, 0, scale8(76, 8, .5).map(([b, m]) => [b, m, .5])),
       trk('Ensemble', 48, 1, [[0, 55, 4], [0, 59, 4], [0, 62, 4], [4, 57, 4], [4, 60, 4], [4, 64, 4]]),
     ));
     expect(song.melody[0][0]).toBe('E5');                   // the violin leads the belt
-    expect(song.parts.bowls.length).toBe(6);
-    expect(song.parts.bowls.every(e => e.length === 4 && e[3] > 0)).toBe(true);   // sustained: durations kept
+    expect(song.parts.bowls).toBeUndefined();               // (was: a bowls bed — before the bow wheel)
+    expect(song.parts.bowwheel.length).toBe(6);
+    expect(song.parts.bowwheel.every(e => e.length === 4 && e[3] > 0 && NOTE_RE.test(e[1]))).toBe(true);   // sustained: durations kept
   });
 
-  it('a chordal non-lead belt voice moves to the marimba; overflow beyond 3 belts too', () => {
+  it('a chordal non-lead belt voice moves to its family machine (a piano: the Marble Grand), else the marimba; overflow beyond 3 belts too', () => {
     const { song, warnings } = convert(file(
       trk('Lead', 0, 0, scale8(76)),
       trk('Comp', 0, 1, [[0, 60], [0, 64], [1, 62], [1, 65], [2, 64], [2, 67], [3, 62], [3, 65]]),
+      trk('Synth comp', 81, 5, [[0, 60], [0, 64], [1, 62], [1, 65], [2, 64], [2, 67], [3, 62], [3, 65]].map(([b, m]) => [b + .5, m])),
       trk('Alto', 0, 2, scale8(64)),
       trk('Low', 0, 3, scale8(48)),
-      trk('Extra', 0, 4, scale8(55, 4)),
+      trk('Extra', 81, 4, scale8(55, 4)),
     ));
     expect(song.alto).toBeDefined(); expect(song.bass).toBeDefined();
-    expect(warnings.some(w => /"Comp" .*plays on the marimba \(chordal/.test(w))).toBe(true);
+    expect(warnings.some(w => /"Comp" .*plays on the dulcimer \(chordal/.test(w))).toBe(true);
+    expect(song.parts.dulcimer.filter(e => e[0] === 0).length).toBe(2);              // its chords survive
+    // a chordal voice with NO family machine (a saw lead) still finds the struck bars
+    expect(warnings.some(w => /"Synth comp" .*plays on the marimba \(chordal/.test(w))).toBe(true);
     // a spare melodic LINE no longer dumps on the marimba: it finds the free turntable (#9)
     expect(warnings.some(w => /"Extra" .*plays on the turntable \(a spare melodic line/.test(w))).toBe(true);
     expect(song.parts.turntable.length).toBe(4);
     const mar = song.parts.marimba.map(e => e[0]);
-    expect(mar.filter(b => b === 0).length).toBeGreaterThanOrEqual(2);              // chords survive
+    expect(mar.filter(b => b === .5).length).toBeGreaterThanOrEqual(2);             // chords survive
   });
 
   it('sound-effect programs are dropped with a warning', () => {
@@ -369,7 +376,7 @@ describe.each(Object.keys(FIXTURES))('fixture "%s"', name => {
       expect(INSTRUMENTS.some(I => I.key === k), k).toBe(true);
       for (const e of part){
         expect(e[0]).toBeGreaterThanOrEqual(0); expect(e[0]).toBeLessThan(loop);
-        expect(e[1]).toMatch(NOTE_RE);
+        expect(e[1]).toMatch(SUFFIXED[k] || NOTE_RE);       // (a machine's own timbre / articulation suffix)
         expect(e[2]).toBeGreaterThan(0); expect(e[2]).toBeLessThanOrEqual(1);
       }
     }
@@ -426,7 +433,8 @@ describe.each(Object.keys(FIXTURES))('fixture "%s"', name => {
 describe('fixture specifics', () => {
   it('room tour lights up every station + the drums', () => {
     const { song } = convertToSong(parseMidi(FIXTURES['room-tour']()));
-    expect(Object.keys(song.parts).sort()).toEqual(['bass', 'bells', 'bowls', 'marimba', 'musicbox']);
+    // (the string-ensemble pad was a bowls bed before the bow wheel existed)
+    expect(Object.keys(song.parts).sort()).toEqual(['bass', 'bells', 'bowwheel', 'marimba', 'musicbox']);
     expect(Object.keys(song.drums)).toEqual(expect.arrayContaining(['kick', 'snare', 'hat', 'crash']));
     expect(sumBeats(song.melody)).toBe(64);
   });
@@ -441,7 +449,10 @@ describe('fixture specifics', () => {
     expect(song.parts.bass.slice(0, 4).map(e => e[1])).toEqual(['D3', 'A2', 'B2', 'F#2']);
     expect(sumBeats(song.melody)).toBe(52);                // six turns + the cadence bar
     expect(song.melody.at(-1)).toEqual(['D6', 4]);         // the lead lands on D and takes the tallest arc home
-    for (const k of ['marimba', 'bells', 'bass', 'bowls']) expect(song.parts[k].some(e => e[0] === 48), k).toBe(true);
+    // the slow strings bow the wheel (was: the bowls). The harp's running arpeggio stays on the marimba:
+    // the autoharp's strums must sit ≥ .2 s apart and would thin a third of it (orchestra PREFER_FIT)
+    for (const k of ['marimba', 'bells', 'bass', 'bowwheel']) expect(song.parts[k].some(e => e[0] === 48), k).toBe(true);
+    expect(song.parts.strum).toBeUndefined();
     expect(warnings.filter(w => /dropped|thinned/.test(w))).toEqual([]);   // nothing lost
   });
 
@@ -507,7 +518,8 @@ describe('the lead must enter early and last (Star Wars / Piano Man regressions)
 
 describe('overflow: the marimba is not a dumping ground', () => {
   it('keeps at most 2 guest (non-mallet) voices, names repeated tracks by channel, routes spare lines by register', () => {
-    const chordal = (name, ch, base) => trk(name, 0, ch, Array.from({ length: 16 }, (_, i) => [i, base + i % 3, 1]).flatMap(([b, m]) => [[b, m], [b, m + 4], [b, m + 7]]));
+    // (chordal SAW LEADS: a voice with no family machine — chordal pianos comp on the Marble Grand first, below)
+    const chordal = (name, ch, base) => trk(name, 81, ch, Array.from({ length: 16 }, (_, i) => [i, base + i % 3, 1]).flatMap(([b, m]) => [[b, m], [b, m + 4], [b, m + 7]]));
     const { song, warnings } = convert(file(
       trk('Lead', 0, 0, scale8(79, 16)),
       chordal('Piano', 1, 60), chordal('Piano', 2, 55), chordal('Piano', 3, 62),
@@ -519,6 +531,16 @@ describe('overflow: the marimba is not a dumping ground', () => {
     expect(warnings.some(w => /dropped "Piano \(ch\d\)".*marimba already plays/.test(w))).toBe(true);
     expect(song.parts.bass.length).toBe(16);               // the spare LOW line found the free string bass
     expect(song.parts.musicbox.length).toBe(16);           // the spare HIGH line found the free music box
+  });
+
+  it('chordal pianos comp on the Marble Grand (≤ its 2 voices); a third goes on to the marimba', () => {
+    const chordal = (name, ch, base) => trk(name, 0, ch, Array.from({ length: 16 }, (_, i) => [i, base + i % 3, 1]).flatMap(([b, m]) => [[b, m], [b, m + 4], [b, m + 7]]));
+    const { song, warnings } = convert(file(trk('Lead', 0, 0, scale8(79, 16)),
+      chordal('Comp', 1, 60), chordal('Comp', 2, 55), chordal('Comp', 3, 50)));
+    expect(warnings.filter(w => /plays on the dulcimer \(chordal/.test(w)).length).toBe(2);
+    expect(warnings.some(w => /"Comp \(ch\d\)" .*plays on the marimba \(chordal/.test(w))).toBe(true);
+    expect(song.parts.dulcimer.length).toBe(96);             // two voices × 16 triads, every chord kept
+    expect(song.parts.marimba.length).toBeGreaterThan(0);
   });
 
   it('a doubled track merges instead of taking a slot', () => {

@@ -5,6 +5,7 @@ import { solveRiff, stampAt, carriageAt, muteAt, ringAt, hitAt, voiceIdsFor, cro
          STRINGS, NUT_X, BRIDGE_X, STAMP_X, STAMP_DX, stampX, STR_DZ, MUTE_X, SCALE_L, STRING_Y, FRET_H, HEAD_R, MUTE_R, HOOK_W, LIFT_Y,
          H_PARK, V_IN, MAX_FRET, strZ, gauge, strTop, fretX, PART_LIMITS, CLEAR_UP } from './solve.js';
 import { riffVoice } from './voice.js';
+import { noteNum } from '../../engine.js';
 
 /* ============================================================
    RIFF FORGE — the distorted electric guitar machine.
@@ -68,6 +69,8 @@ export default {
 
   voice: id => riffVoice(id),
   voiceIds: part => voiceIdsFor(part),
+  /** a hit's pitch for the pan width: its LOWEST note (the root — 'E2+B2+E3:m' → E2) */
+  voiceHz: id => { const m = /^([A-G]#?)(-?\d)/.exec(String(id)); return m ? 440 * Math.pow(2, (noteNum(m[1] + m[2]) - 69) / 12) : 0; },
 
   make({ envMap, glowTex }){
     let R = null, rig = null, lanes = [], start = -Infinity, edge = makeEdge(.25), deck = null, bar = null, cones = [], tubes = [],

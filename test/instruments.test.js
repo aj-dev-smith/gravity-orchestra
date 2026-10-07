@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { laneClock, at, firstAt, makeEdge, eventTimes, lanesByNote, wrapP } from '../src/instruments/clock.js';
+import * as THREE from 'three';
 import { INSTRUMENTS } from '../src/instruments/index.js';
 import { STATIONS } from '../src/instruments/stations.js';
 import { SONGS } from '../src/songs/index.js';
@@ -91,6 +92,33 @@ describe.each(INSTRUMENTS.map(I => [I.key, I]))('instrument "%s" contract', (key
       expect(finite, id).toBe(true);
       expect(peak, id).toBeGreaterThan(.01);
       expect(peak, id).toBeLessThanOrEqual(1);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// the voice seam: voiceIds(part, ctx) bakes every id a strike fires; voiceHz reads a pitch
+// ---------------------------------------------------------------------------
+describe.each(INSTRUMENTS.map(I => [I.key, I]))('instrument "%s" voice seam', (key, I) => {
+  const ROLL_T = 2.6, LEAD_IN = 2.4;
+  const ctxAt = bpm => { const beat = 60 / bpm, loopBeats = I.demo.beats; return { beat, bpm, rollT: ROLL_T, P: ROLL_T + loopBeats * beat + 1.2, loopBeats }; };
+  it('voiceIds(part, {beat, bpm, rollT, P, loopBeats}) covers every id the machine fires (at its tempo and at a slow one)', () => {
+    for (const bpm of [I.demo.bpm, 50]){
+      const ctx = ctxAt(bpm), ids = new Set(I.voiceIds ? I.voiceIds(I.demo.part, ctx) : I.demo.part.map(e => e[1]));
+      const M = I.make({ envMap: null, glowTex: null, THREE });
+      M.build(I.demo.part, { rollT: ROLL_T, beat: ctx.beat, P: ctx.P, start: -LEAD_IN, station: STATIONS[key], floorY: -20, ceilY: 30, loopBeats: ctx.loopBeats });
+      const fired = new Set();
+      for (let t = -LEAD_IN; t < 2 * ctx.P; t += 1 / 60)
+        M.update(t, ctx.P, 1 / 60, { started: t >= 0, skipStrikes: false, onStrike: h => fired.add(h.note) });
+      expect(fired.size, `${key} fires`).toBeGreaterThan(0);
+      for (const id of fired) expect(ids.has(id), `${key} @${bpm} bpm fires "${id}" — not baked`).toBe(true);
+    }
+  });
+  it('voiceHz (when given) reads a positive pitch for every id', () => {
+    if (!I.voiceHz) return;
+    for (const id of (I.voiceIds ? I.voiceIds(I.demo.part, ctxAt(I.demo.bpm)) : I.demo.part.map(e => e[1]))){
+      const hz = I.voiceHz(id);
+      expect(Number.isFinite(hz) && hz > 20 && hz < 5000, `${key} ${id} → ${hz}`).toBe(true);
     }
   });
 });

@@ -128,10 +128,18 @@ describe('turntable + ricochet: reachable by MIDI (each was empty on all 52 file
     expect(many.part.length).toBe(PART_SPEC.ricochet.maxEvents);
   });
   it('program routing: a spare melodic line goes to the free turntable before the marimba', () => {
+    // (C is a FLUTE: a spare piano line now plays the piano machine first — the next test)
     const { song, warnings } = convert(file(
-      trk('Lead', 0, 0, line(76, 16)), trk('A', 0, 1, line(67, 16)), trk('B', 0, 2, line(60, 16)), trk('C', 0, 3, line(55, 16, 1, .5))));
+      trk('Lead', 0, 0, line(76, 16)), trk('A', 0, 1, line(67, 16)), trk('B', 0, 2, line(60, 16)), trk('C', 73, 3, line(55, 16, 1, .5))));
     expect(song.parts.turntable.length).toBe(16);
     expect(warnings.some(w => /"C" .*plays on the turntable/.test(w))).toBe(true);
+  });
+  it('program routing: a spare PIANO line plays the Marble Grand (its family machine) before the line machines', () => {
+    const { song, warnings } = convert(file(
+      trk('Lead', 0, 0, line(76, 16)), trk('A', 0, 1, line(67, 16)), trk('B', 0, 2, line(60, 16)), trk('C', 0, 3, line(55, 16, 1, .5))));
+    expect(song.parts.dulcimer.length).toBe(16);
+    expect(song.parts.turntable).toBeUndefined();
+    expect(warnings.some(w => /"C" .*plays on the dulcimer \(a spare acoustic grand piano line\)/.test(w))).toBe(true);
   });
 });
 
@@ -150,14 +158,15 @@ describe('the lead stays PRESENT (no 90-second silences on the belt)', () => {
 describe('ROLE routing: a file whose programs say nothing still fills the room', () => {
   it('no program changes (a sequencer sketch): every shape finds its machine', () => {
     const { song, warnings } = convertToSong(parseMidi(FIXTURES['sketch-band']()));
-    expect(Object.keys(song.parts).sort()).toEqual(['bass', 'bowls', 'marimba', 'musicbox', 'turntable']);
+    // (the arpeggiated chords comp on the Marble Grand — every program-less voice is "piano"; was: the marimba)
+    expect(Object.keys(song.parts).sort()).toEqual(['bass', 'bowls', 'dulcimer', 'musicbox', 'turntable']);
     expect(song.melody.slice(0, 4).map(n => n[0])).toEqual(['D5', 'E5', 'F#5', 'A5']);   // "Melody" leads (the legacy choice)
     expect(warnings[0]).toMatch(/^routed by musical role \(no program data\)/);
     expect(warnings[0]).toMatch(/"Pad" → bowls \(a sustained chordal bed\)/);
     expect(warnings[0]).toMatch(/"Low" → bass \(a low line\)/);
     expect(warnings[0]).toMatch(/"Sparkle" → musicbox/);
     expect(warnings[0]).toMatch(/"Counter" → turntable/);
-    expect(warnings[0]).toMatch(/"Arps" → marimba/);
+    expect(warnings[0]).toMatch(/"Arps" → dulcimer \(chords \/ arpeggios\)/);
     expect(song.staging).toBe('auto');
   });
 
@@ -170,13 +179,14 @@ describe('ROLE routing: a file whose programs say nothing still fills the room',
     expect(convert(bytes, { orchestra: false }).song).toEqual(song);
   });
 
-  it('one track, two hands: split into melody (lead) / left hand (string bass) / chords (marimba)', () => {
+  it('one track, two hands: split into melody (lead) / left hand (string bass) / chords (the Marble Grand)', () => {
     const { song, warnings } = convertToSong(parseMidi(FIXTURES['piano-hands']()));
     expect(warnings.some(w => /routed by musical role \(its programs give the room nothing to play\)/.test(w))).toBe(true);
     expect(warnings.some(w => /one track plays melody \+ accompaniment — split into \(melody\) \d+, \(left hand\) \d+, \(chords\) \d+/.test(w))).toBe(true);
     expect(song.melody.slice(0, 6).map(n => n[0])).toEqual(['E5', 'B4', 'C5', 'D5', 'C5', 'B4']);   // the right hand's tune
     expect(song.parts.bass.length).toBe(64);
-    expect(song.parts.marimba.length).toBeGreaterThan(0);
+    expect(song.parts.dulcimer.length).toBeGreaterThan(0);
+    expect(song.parts.marimba).toBeUndefined();
     expect(song.alto).toBeUndefined(); expect(song.bass).toBeUndefined();
     expect(warnings.some(w => /kept top note/.test(w))).toBe(false);   // (was: the whole left hand thrown away)
   });

@@ -29,7 +29,7 @@ function line(evs, start, seq, channel, vel = 90){
 
 /* ---------------------------------------------------------------------------
    ROOM TOUR — A minor, 100 bpm, 16 bars. Every station in the room on one tune:
-   piano lead (belt) · marimba arpeggios · string-ensemble pad (bowls) · acoustic
+   piano lead (belt) · marimba arpeggios · string-ensemble pad (bow wheel) · acoustic
    bass (string bass) · tubular bells · glockenspiel (music box) · drums.
    --------------------------------------------------------------------------- */
 export function roomTour(){

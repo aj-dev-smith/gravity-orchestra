@@ -170,7 +170,7 @@ export function rebuildBank(tracks, drumLanes = [], voices = []){
     if (voiceSrc.has(v.key)) return;
     try {
       const r = v.render();
-      voiceSrc.set(v.key, {samples: r.samples, sr: r.sr, wet: !!v.wet});
+      voiceSrc.set(v.key, {samples: r.samples, sr: r.sr, wet: !!v.wet, hz: v.hz});   // hz: the voice's pitch (pan width), main's voiceHzOf
       wanted.set(v.key, {voice: v.key});
     } catch(e){ console.warn('cascade: voice render failed', v.key, e); }
   });
@@ -292,7 +292,10 @@ function voiceBuffer(key){
   }
   return b;
 }
-const voiceHz = key => { const m = /:([A-G]#?\d)$/.exec(key); try { return m ? noteHz(m[1]) : 0; } catch(e){ return 0; } };
+const voiceHz = key => { const h = voiceSrc.get(key)?.hz; if (Number.isFinite(h) && h > 0) return h;   // (the plugin's pitch for a chord / suffixed id)
+  const m = /:([A-G]#?\d)$/.exec(key); try { return m ? noteHz(m[1]) : 0; } catch(e){ return 0; } };
+/** (dev: the sound sweep) is this instrument voice baked in the current bank? */
+export const hasVoice = key => voiceSrc.has(key);
 export function playVoice(key, vel = 1, { dur = 0, sp } = {}){
   if (ctx && ctx.state === 'running' && ctx.currentTime > .05){
     const buf = voiceBuffer(key);

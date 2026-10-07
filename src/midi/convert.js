@@ -345,6 +345,7 @@ export function convertToSong(parsed, opts = {}) {
       if (!inWin(q)) continue;
       list.push({
         voice: p.voice, src: p.name,
+        prog: n.program ?? p.program ?? 0,            // (the machine's timbre / articulation flag — orchestra.noteSuffix)
         beat: place(q),
         midi: n.midi,
         vel: Math.max(0.01, Math.min(1, n.vel / 127)),

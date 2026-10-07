@@ -5,7 +5,12 @@
 
      '<pitch>[|<timbre>]'       LONG   speaks, HOLDS full to HOLD (4.5 s),
                                        then a .7 s release to exact 0 (5.2 s)
-     '<…>/s'                    SHORT  the same, released at 1.05 s (1.4 s):
+     '<…>~<hold>'               BUCKET the same, released at hold (.5 / 1 / 2 s —
+                                       ../sustain.js): what strikes fire for
+                                       a note the render covers, so the iOS
+                                       <audio> path (which can't release at
+                                       `dur` — §5) stops near the note's end
+     '<…>/s'                    SHORT  (legacy) the same, released at 1.05 s (1.4 s):
                                        what an iOS <audio> element rings for a
                                        staccato note (the sample path can't
                                        release at `dur` — §5), so short chords
@@ -40,10 +45,11 @@
    sin((k−2)φ) — one sin/cos per sample per source, no per-partial trig.
    ============================================================ */
 import { noteHz } from '../../engine.js';
-import { parseId, CONT_AT, MAX_DUR } from './solve.js';
+import { parseId, CONT_AT, MAX_DUR, VOICE_HOLD } from './solve.js';
+import { splitBucket, cutHold, relFor } from '../sustain.js';
 
 export const SR = 22050;
-export const HOLD = 4.5, REL = .7, LEN = HOLD + REL;            // the LONG render
+export const HOLD = VOICE_HOLD, REL = .7, LEN = HOLD + REL;            // the LONG render
 export const S_HOLD = 1.05, S_REL = .35;                        // the SHORT tier
 export const C_FADE = .12, C_HOLD = MAX_DUR - CONT_AT + .2;    // the CONTINUATION tier (C_HOLD + REL long)
 const PEAK = { organ: .76, choir: .72, pad: .7 };
@@ -235,6 +241,12 @@ function longRender(base){
 /** id → {samples, sr}. Cached (the same Float32Array every call — deterministic). */
 export function organVoice(id){
   if (cache.has(id)) return cache.get(id);
+  const bk = splitBucket(id);
+  if (bk.hold){                                    // a DURATION BUCKET: the LONG render, released at `hold`
+    const v = { samples: cutHold(longRender(bk.base).samples, SR, bk.hold, relFor(bk.hold, REL)), sr: SR };
+    cache.set(id, v);
+    return v;
+  }
   const m = /^(.*?)(?:\/([sc]))?$/.exec(String(id));
   const base = m[1], tier = m[2] || '';
   const L = longRender(base);

@@ -17,8 +17,22 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { noteNum } from '../../engine.js';
 import { eventTimes, lanesByNote, makeEdge } from '../clock.js';
-import { bowlGeom, bowlLane, bowlAt, noteLane, noteAt, singEnv, THETA_RIM, THETA_ORB, RIM_NODE } from './solve.js';
+import { bowlGeom, bowlLane, bowlAt, noteLane, noteAt, singEnv, THETA_RIM, THETA_ORB, RIM_NODE, SOUND_MAX } from './solve.js';
 import { bowlVoice } from './voice.js';
+import { bucketId, planLadder, allBucketIds } from '../sustain.js';
+
+/* every note's [pitch, sounding s] — the build's own rotor + note lanes (geometry is the note's
+   alone), shared with voiceIds so the DURATION BUCKETS ('E4~1': the rubbing stops and the bowl
+   rings down INSIDE the iOS sample, ../sustain.js) planned from them match */
+function bowlPairs(part, { rollT, beat, P }){
+  const byNote = lanesByNote(eventTimes(part, { rollT, beat })), pairs = [];
+  for (const note of Object.keys(byNote)){
+    const ns = byNote[note].map(e => ({ t: e.t, tDur: e.tDur, vel: e.vel }));
+    noteLane(ns, P, bowlLane(ns, P, bowlGeom(note))).rec.forEach(r => pairs.push([note, r.dur]));
+  }
+  return pairs;
+}
+const bowlLadder = pairs => planLadder(pairs, () => SOUND_MAX);
 
 const TRAIL_N  = 26;        // ghost-trail samples per marble
 const TRAIL_DT = .016;      // seconds between them
@@ -280,9 +294,13 @@ export default {
   color: '#b07bff',                 // deep violet → aurora aqua
 
   voice(id){ return bowlVoice(id); },
+  voiceIds(part, { beat, rollT = 2.6, P } = {}){
+    if (beat > 0 && P > 0){ const pairs = bowlPairs(part, { rollT, beat, P }), L = bowlLadder(pairs); return [...new Set(pairs.map(([n, d]) => bucketId(n, d, SOUND_MAX, L)))]; }
+    return allBucketIds([...new Set((Array.isArray(part) ? part : []).map(e => e[1]))], () => SOUND_MAX);
+  },
 
   make({ envMap, glowTex }){
-    let lanes = [], start = -Infinity;
+    let lanes = [], start = -Infinity, ladder = [];
     const chrome = new THREE.MeshStandardMaterial({ color: 0xd8dde8, metalness: 1, roughness: .15, envMap, envMapIntensity: 1.3 });
     const dark   = new THREE.MeshStandardMaterial({ color: 0x232733, metalness: .7, roughness: .45, envMap });
     const cloth  = new THREE.MeshStandardMaterial({ color: 0x2a1d48, metalness: 0, roughness: .95 });
@@ -294,6 +312,7 @@ export default {
       const byNote = lanesByNote(eventTimes(part, { rollT, beat }));
       const notes = Object.keys(byNote).sort((a, b) => noteNum(a) - noteNum(b));
       const geoms = notes.map(bowlGeom);
+      ladder = bowlLadder(bowlPairs(part, { rollT, beat, P }));   // the part's duration buckets (voiceIds plans the same)
       const spots = layout(geoms);
       const tex = marbleTextures();
       const darkParts = [], chromeParts = [];
@@ -396,7 +415,7 @@ export default {
         if (started && c.live && ln.edge.check(c.abs, c.since, skipStrikes)){
           const p = bowlAt(L, c.abs + 1e-6, start);
           ln.strikePos.set(ln.sp.x + p.x, ln.sp.y + ln.base + p.y, ln.sp.z + p.z);
-          onStrike && onStrike({ note: ln.note, vel: c.rec.vel, pos: ln.strikePos.clone(), color: ln.color.getHex(),
+          onStrike && onStrike({ note: bucketId(ln.note, c.rec.dur, SOUND_MAX, ladder), vel: c.rec.vel, pos: ln.strikePos.clone(), color: ln.color.getHex(),
             dur: c.rec.dur, shake: 0, sparks: 4, light: .8 });
         }
         const sing = c.live ? singEnv(c.since, c.rec.dur) * (.45 + .55 * c.rec.vel) : 0;

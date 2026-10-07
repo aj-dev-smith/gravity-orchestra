@@ -5,7 +5,27 @@ import {
   fitPart, parseNote, voiceIdOf, dulcimerLane, dulcimerAt, layoutStrings, stringLen, stringR, PART_LIMITS,
   BALL_R, H, LIFT, STRIKE_U, CUP_R, SLEEVE_R, DAMP_HW, MAX_STRINGS, MAX_HOLD, A_CUP,
 } from './solve.js';
-import { grandVoice } from './voice.js';
+import { grandVoice, nativeHold } from './voice.js';
+import { bucketId, planLadder, allBucketIds } from '../sustain.js';
+
+/* the fitted part → its strings (pitch → strikes with their voice id), the build's own grouping */
+function grandStrings(fit, { rollT, beat }){
+  const byM = new Map();
+  for (const e of eventTimes(fit, { rollT, beat })){ const p = parseNote(e.note); (byM.get(p.m) || byM.set(p.m, []).get(p.m)).push({ ...e, m: p.m, id: voiceIdOf(p.m, p.ep, e.vel) }); }
+  return { byM, ms: [...byM.keys()].sort((a, b) => a - b).slice(0, MAX_STRINGS) };
+}
+/* every strike's [voice id, damper hold s] — the same lanes build() solves (shared with voiceIds, so
+   the DURATION BUCKETS planned from them match: '<id>~<hold>' = the damper's drop baked into the iOS
+   sample, ../sustain.js) */
+function grandPairs(fit, ctx){
+  const { byM, ms } = grandStrings(fit, ctx), pairs = [];
+  for (const m of ms){
+    const lane = dulcimerLane(byM.get(m).map(e => ({ t: e.t, vel: e.vel, hold: e.tDur, id: e.id })), ctx.P, { m });
+    lane.ids.forEach((id, i) => pairs.push([id, lane.hold[i]]));
+  }
+  return pairs;
+}
+const grandLadder = pairs => planLadder(pairs, nativeHold);
 
 /* ============================================================
    MARBLE GRAND — an open grand piano whose action is made of marbles.
@@ -65,15 +85,20 @@ export default {
   color: SIGNATURE,
 
   voice: id => grandVoice(id),
-  /* every id a strike can fire: the build's own fit (main passes {beat}: holds clamp to the damper's
-     MAX_HOLD in beats, as build does; per-string thinning only drops, so this covers it) */
-  voiceIds(part, { beat } = {}){
+  /* every id a strike can fire: the build's own fit + string lanes at this tempo (main passes {beat,
+     rollT, P}) — each strike's DURATION BUCKET ('C4~1', 'C4:e:p~0.5'); without a tempo, every rung
+     of every id (a superset) */
+  voiceIds(part, { beat, rollT = 2.6, P } = {}){
     const { part: fit } = fitPart(part, beat > 0 ? { maxDurBeats: MAX_HOLD / beat } : {});
-    return [...new Set(fit.map(e => { const p = parseNote(e[1]); return voiceIdOf(p.m, p.ep, e[2]); }))];
+    if (beat > 0 && P > 0){
+      const pairs = grandPairs(fit, { rollT, beat, P }), ladder = grandLadder(pairs);
+      return [...new Set(pairs.map(([id, h]) => bucketId(id, h, nativeHold(id), ladder)))];
+    }
+    return allBucketIds([...new Set(fit.map(e => { const p = parseNote(e[1]); return voiceIdOf(p.m, p.ep, e[2]); }))], nativeHold);
   },
 
   make({ envMap, glowTex }){
-    let lanes = [], start = -Infinity, rig = null;
+    let lanes = [], start = -Infinity, rig = null, ladder = [];
 
     function build(part, { rollT, beat, P, start: s0 = -Infinity, station, floorY = -20 }){
       const group = new THREE.Group();
@@ -81,10 +106,8 @@ export default {
       const W = station?.w ?? 11.6, D = station?.d ?? 10;
       const { part: fit, warnings } = fitPart(part, { maxDurBeats: MAX_HOLD / beat });
       // one lane per pitch (the ':e' timbre flag rides on each strike's voice id)
-      const ev = eventTimes(fit, { rollT, beat });
-      const byM = new Map();
-      for (const e of ev){ const p = parseNote(e.note); (byM.get(p.m) || byM.set(p.m, []).get(p.m)).push({ ...e, m: p.m, id: voiceIdOf(p.m, p.ep, e.vel) }); }
-      const ms = [...byM.keys()].sort((a, b) => a - b).slice(0, MAX_STRINGS);
+      const { byM, ms } = grandStrings(fit, { rollT, beat });
+      ladder = grandLadder(grandPairs(fit, { rollT, beat, P }));   // the part's duration buckets (voiceIds plans the same)
       const n = ms.length;
       if (!n) return group;
       let dropped = 0;
@@ -325,7 +348,7 @@ varying float vU; varying float vLen; varying float vSing; varying float vHot; v
         const vel = s.armed ? 0 : lane.vel[s.i];
 
         if (started && !s.armed && ln.edge.check(s.abs, s.since, skipStrikes)){
-          onStrike && onStrike({ note: lane.ids[s.i], vel, pos: ln.contact.clone(), color: ln.col.getHex(), dur: lane.hold[s.i],
+          onStrike && onStrike({ note: bucketId(lane.ids[s.i], lane.hold[s.i], nativeHold(lane.ids[s.i]), ladder), vel, pos: ln.contact.clone(), color: ln.col.getHex(), dur: lane.hold[s.i],
             shake: ln.shake ? .015 + .025 * vel : 0, sparks: Math.round(3 + 6 * vel), light: .7 + .6 * vel });
         }
 

@@ -42,9 +42,10 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeEdge } from '../clock.js';
-import { fitPart, organLane, laneAt, packetsAt, layoutPipes, strikeIds, RB, H_MAG, BELLOWS_R, PACKETS,
+import { fitPart, organLane, organLadder, laneAt, packetsAt, layoutPipes, strikeIds, VOICE_HOLD, RB, H_MAG, BELLOWS_R, PACKETS,
          CONT_AT, XFADE, SHORT_MAX } from './solve.js';
 import { organVoice } from './voice.js';
+import { allBucketIds } from '../sustain.js';
 import { noteHz } from '../../engine.js';
 
 const ICE = 0x8fd8ff, ICE_DEEP = 0x2f7fd0, AMBER = 0xffa04a;
@@ -124,17 +125,20 @@ export default {
   color: '#8fd8ff',                 // ice-blue → white
 
   voice(id){ return organVoice(id); },
-  /* the exact tiered ids: main hands voiceIds the tempo + loop ({beat, rollT, P}), so the fit is
-     the very one build() makes. (Called without it — an old caller — every tier a 100-bpm reading
-     would need is baked, plus LONG + SHORT for every base id.) */
+  /* the exact tiered ids: main hands voiceIds the tempo + loop ({beat, rollT, P}), so the fit — and
+     the duration-bucket ladder planned from it — is the very one build() makes. (Called without
+     it — an old caller — every rung below HOLD is baked for every base id, plus the CONT tier a
+     100-bpm reading would need.) */
   voiceIds(part, { beat, rollT = 2.6, P } = {}){
     const ids = new Set();
     if (beat > 0 && P > 0){
-      for (const e of fitPart(part, { rollT, beat, P }).events){ const s = strikeIds(e); ids.add(s.first); if (s.cont) ids.add(s.cont); }
+      const { events } = fitPart(part, { rollT, beat, P }), ladder = organLadder(events);
+      for (const e of events){ const s = strikeIds(e, ladder); ids.add(s.first); if (s.cont) ids.add(s.cont); }
       return [...ids];
     }
     const { events } = fitPart(part, { rollT: 2.6, beat: .6, P: 2.6 + .6 * 64 + 1.2 });
-    for (const e of events){ const s = strikeIds(e); ids.add(e.base); ids.add(`${e.base}/s`); if (s.cont) ids.add(s.cont); }
+    for (const id of allBucketIds([...new Set(events.map(e => e.base))], () => VOICE_HOLD)) ids.add(id);
+    for (const e of events){ const s = strikeIds(e); if (s.cont) ids.add(s.cont); }
     return [...ids];
   },
   /** the pipe's pitch for the pan width ('C4|choir', 'C4/s', 'C4|pad/c' → C4) */
@@ -150,6 +154,7 @@ export default {
       lanes = []; start = s0; R = null;
       const { events } = fitPart(part, { rollT, beat, P });
       if (!events.length) return group;
+      const ladder = organLadder(events);              // the part's duration buckets (voiceIds plans the same)
 
       const byPitch = new Map();
       for (const e of events) (byPitch.get(e.pitch) || byPitch.set(e.pitch, []).get(e.pitch)).push(e);
@@ -268,7 +273,7 @@ export default {
 
       // ---- lanes ----
       pipes.forEach((p, li) => {
-        const lane = organLane(byPitch.get(p.note), P);
+        const lane = organLane(byPitch.get(p.note), P, ladder);
         const G = p.G;
         lanes.push({ li, note: p.note, x: p.x, G, lane, edge: makeEdge(.25), cEdge: makeEdge(.25),
           mouthPos: new THREE.Vector3(p.x, WC_H + G.mouthY + G.mouthH / 2, G.r + .02) });

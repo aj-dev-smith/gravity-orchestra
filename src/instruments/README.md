@@ -66,6 +66,12 @@ export default {
   // (main passes the song's tempo + loop: bucket voices by a note's length in SECONDS, exactly as
   // build() will; an old caller may omit it — fall back to a superset)
   voiceIds(part, ctx){ ... },
+  // SUSTAINED voices (the iOS <audio> path can't release at `dur` — it plays the whole WAV): fire a
+  // DURATION BUCKET id '<base>~<hold>' (../sustain.js: bucketId / planLadder / cutHold) whose render
+  // has the release baked in at .5 / 1 / 2 s. Plan ONE ladder per part from the same [base, hold]
+  // pairs in build() and voiceIds (capped: BUCKET_CAP). main bakes a '~' id's bare base LIVE-ONLY
+  // and the live path plays that base, releasing at `dur` exactly. organ / bowwheel / horns /
+  // dulcimer / bowls do this; test/sustain.test.js runs the checks on each.
   // optional: an id's pitch in Hz for the spatial pan width (low voices sit near the centre).
   // Default: the FIRST pitch in the id ('E2+B2:m', 'C4|choir', 'stab:D4') — list chord notes low → high.
   voiceHz(id){ ... },

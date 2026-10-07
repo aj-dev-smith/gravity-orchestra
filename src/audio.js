@@ -158,7 +158,15 @@ export function rebuildBank(tracks, drumLanes = [], voices = []){
   bankStat = { t0: performance.now(), n: 0, wavBytes: 0, floatBytes: 0, byKind: {} };
   Object.values(bank).forEach(a => {
     try { a.pause(); } catch(e){}
-    if (a.dataset.real) URL.revokeObjectURL(a.dataset.real);
+    const real = a.dataset.real;
+    if (real){
+      // (the ERR_FILE_NOT_FOUND console noise on song change / import, fixed: a prime play() still
+      //  pending on this element resolved AFTER the revoke and swapped the dead URL in — so forget
+      //  it first; and an element still LOADING its WAV is detached before its URL dies)
+      delete a.dataset.real;
+      if (a.src === real){ try { a.removeAttribute('src'); a.load(); } catch(e){} }
+      URL.revokeObjectURL(real);
+    }
     a.remove();
   });
   bank = {}; primed = false;
@@ -171,7 +179,7 @@ export function rebuildBank(tracks, drumLanes = [], voices = []){
     try {
       const r = v.render();
       voiceSrc.set(v.key, {samples: r.samples, sr: r.sr, wet: !!v.wet, hz: v.hz});   // hz: the voice's pitch (pan width), main's voiceHzOf
-      wanted.set(v.key, {voice: v.key});
+      if (!v.live) wanted.set(v.key, {voice: v.key});   // live: the live path's source only — no <audio> element (no strike fires it bare)
     } catch(e){ console.warn('cascade: voice render failed', v.key, e); }
   });
   voiceSrc.forEach(v => { bankStat.floatBytes += v.samples.byteLength; });
@@ -293,18 +301,23 @@ function voiceBuffer(key){
   return b;
 }
 const voiceHz = key => { const h = voiceSrc.get(key)?.hz; if (Number.isFinite(h) && h > 0) return h;   // (the plugin's pitch for a chord / suffixed id)
-  const m = /:([A-G]#?\d)$/.exec(key); try { return m ? noteHz(m[1]) : 0; } catch(e){ return 0; } };
+  const m = /:([A-G]#?\d)(?:~[\d.]+)?$/.exec(key); try { return m ? noteHz(m[1]) : 0; } catch(e){ return 0; } };
 /** (dev: the sound sweep) is this instrument voice baked in the current bank? */
 export const hasVoice = key => voiceSrc.has(key);
+/* a DURATION-BUCKET id ('inst:organ:C4~1' — src/instruments/sustain.js) bakes its release for the
+   sample path below; the live path plays its BASE ('inst:organ:C4') when baked and releases at
+   `dur` exactly, as every sustained voice always has */
+const liveKey = key => { const k = key.lastIndexOf('~'); return k > 0 && voiceSrc.has(key.slice(0, k)) ? key.slice(0, k) : key; };
 export function playVoice(key, vel = 1, { dur = 0, sp } = {}){
   if (ctx && ctx.state === 'running' && ctx.currentTime > .05){
-    const buf = voiceBuffer(key);
+    const lk = liveKey(key);
+    const buf = voiceBuffer(lk);
     if (!buf) return;
     const t = ctx.currentTime;
     const src = ctx.createBufferSource(); src.buffer = buf;
     const g = ctx.createGain(); g.gain.setValueAtTime(Math.max(.05, Math.min(1, vel)) * MIX.voiceTrim, t);
-    const wetV = voiceSrc.get(key).wet;                 // wet: the echo AND the room reverb send
-    src.connect(g); g.connect(place([wetV ? master : (busOut || master)], sp, wetV ? MIX.send.wet : MIX.send.voice, voiceHz(key)));
+    const wetV = voiceSrc.get(lk).wet;                  // wet: the echo AND the room reverb send
+    src.connect(g); g.connect(place([wetV ? master : (busOut || master)], sp, wetV ? MIX.send.wet : MIX.send.voice, voiceHz(lk)));
     src.start(t);
     if (dur > 0 && dur < buf.duration){                  // sustained voice: release at the note's end
       g.gain.setTargetAtTime(.0001, t + dur, .12);

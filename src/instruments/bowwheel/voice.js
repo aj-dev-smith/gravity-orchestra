@@ -18,12 +18,15 @@
    The note holds full for HOLD_MAX (solve.js clamps every stroke to it, so
    the visible press never outlives the sound), then the bow lifts: a short
    release to exactly 0. main's playVoice({dur}) releases the live path at
-   the stroke's end; the iOS sample path rings the full render. Control-rate
+   the stroke's end; the iOS sample path plays the stroke's DURATION BUCKET
+   ('C4~0.5' / '~1' / '~2' — this render cut at that hold with the bow-lift
+   baked in, ../sustain.js), so a short stroke stops short there too. Control-rate
    (16-sample) pitch/filter updates keep a song's whole id set cheap to bake.
    Deterministic: seeded PRNG only.
    ============================================================ */
 import { noteHz, noteNum } from '../../engine.js';
 import { HOLD_MAX } from './solve.js';
+import { splitBucket, cutHold, relFor } from '../sustain.js';
 
 export const SR = 22050;
 const REL = .42;                                         // bow-lift release after HOLD_MAX (s)
@@ -49,6 +52,12 @@ const run = (b, x) => { const y = b.b0 * x + b.b1 * b.x1 + b.b2 * b.x2 - b.a1 * 
 const cache = new Map();
 export function bowVoice(note){
   if (cache.has(note)) return cache.get(note);
+  const bk = splitBucket(note);
+  if (bk.hold){                                          // a DURATION BUCKET ('C4~1'): the bow lifts at `hold`
+    const v = { samples: cutHold(bowVoice(bk.base).samples, SR, bk.hold, relFor(bk.hold, REL)), sr: SR };
+    cache.set(note, v);
+    return v;
+  }
   const f0 = noteHz(note), n = Math.round(SR * LEN), m = noteNum(note);
   const out = new Float32Array(n);
   const rnd = mulberry32((m * 2654435761) ^ 0x9e3779b9);

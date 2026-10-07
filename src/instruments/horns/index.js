@@ -2,9 +2,26 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { eventTimes, lanesByNote, makeEdge } from '../clock.js';
 import { noteNum } from '../../engine.js';
-import { hornLane, hornAt, fitPart, voiceIdOf, isStab, PART_LIMITS, BALL_R, H } from './solve.js';
+import { hornLane, hornAt, fitPart, voiceIdOf, isStab, PART_LIMITS, HOLD_MAX, BALL_R, H } from './solve.js';
 import { layoutHorns, DECK, BW, Z_B, Z_H, Y_LID, Y_C, Y_MAG, MAG_R, MAG_H, Y_BEAM, TILT, FLEX, RIM_R, SLIDE_TOP, SLIDE_X, SLIDE_Z, VALVE_Y0, VALVE_DY } from './layout.js';
 import { hornVoice } from './voice.js';
+import { bucketId, planLadder, allBucketIds } from '../sustain.js';
+
+/* every strike's [voice base, hold s] at this tempo — the build's own fit and lane solve (hold =
+   holdFor(dur, beat, gap)), shared with voiceIds so the duration buckets planned from it match */
+function hornPairs(fit, { rollT, beat, P }){
+  const byNote = lanesByNote(eventTimes(fit, { rollT, beat }));
+  const pairs = [];
+  for (const note of Object.keys(byNote)){
+    const evs = byNote[note], lane = hornLane(evs.map(e => e.t), evs.map(e => e.vel), evs.map(e => e.dur), P, { beat });
+    lane.plan.forEach((p, i) => pairs.push([voiceIdOf(note, lane.dur[i]), p.h]));
+  }
+  return pairs;
+}
+/* a held note fires its DURATION BUCKET ('C4~0.5' / '~1' / '~2' — ../sustain.js: the exhale baked
+   into the iOS sample); a stab ('stab:C4') is already short, and keeps its id */
+const strikeId = (base, h, ladder) => base.startsWith('stab:') ? base : bucketId(base, h, HOLD_MAX, ladder);
+const hornLadder = pairs => planLadder(pairs.filter(([b]) => !b.startsWith('stab:')), () => HOLD_MAX);
 
 /* ============================================================
    BELLOWS HORNS — a brass section played by gravity.
@@ -52,16 +69,22 @@ export default {
   color: '#ffa21f',
 
   voice: id => hornVoice(id),
-  /* ids = the pitch (held) or 'stab:<pitch>'. Given the tempo (main passes {beat, loopBeats}) this is
-     EXACTLY the build's fit (its same-pitch thinning is in seconds); without it, the same fit
-     minus thinning (octave folds + horn merges; thinning only drops, so it is a superset) */
-  voiceIds(part, { beat, loopBeats = Infinity } = {}){
+  /* ids = the pitch's duration bucket ('C4~1', held) or 'stab:<pitch>'. Given the tempo (main passes
+     {beat, rollT, P, loopBeats}) this is EXACTLY the build's fit + lane holds (its same-pitch thinning
+     is in seconds); without it, the same fit minus thinning (octave folds + horn merges; thinning
+     only drops, so it is a superset) with every rung of every held pitch */
+  voiceIds(part, { beat, rollT = 2.6, P, loopBeats = Infinity } = {}){
+    if (beat > 0 && P > 0){
+      const pairs = hornPairs(fitPart(part, { beat, loopBeats }), { rollT, beat, P }), ladder = hornLadder(pairs);
+      return [...new Set(pairs.map(([b, h]) => strikeId(b, h, ladder)))];
+    }
     const fit = beat > 0 ? fitPart(part, { beat, loopBeats }) : fitPart(part, { limits: { ...PART_LIMITS, gap: 0 } });
-    return [...new Set(fit.map(e => voiceIdOf(e[1], e[3])))];
+    const bases = [...new Set(fit.map(e => voiceIdOf(e[1], e[3])))];
+    return [...bases.filter(b => b.startsWith('stab:')), ...allBucketIds(bases.filter(b => !b.startsWith('stab:')), () => HOLD_MAX)];
   },
 
   make({ envMap, glowTex }){
-    let lanes = [], start = -Infinity, S = 1;
+    let lanes = [], start = -Infinity, S = 1, ladder = [];
     const instB = { body: null, pleat: null };
 
     function build(part, { rollT, beat, P, start: s0 = -Infinity, station, floorY = -20, loopBeats = Infinity }){
@@ -73,6 +96,7 @@ export default {
       const notes = Object.keys(byNote).sort((a, b) => noteNum(a) - noteNum(b));
       const n = notes.length;
       if (!n) return group;
+      ladder = hornLadder(hornPairs(fit, { rollT, beat, P }));   // the part's duration buckets (voiceIds plans the same)
 
       const Lo = layoutHorns(notes, W);
       S = Lo.scale;
@@ -249,7 +273,7 @@ export default {
 
         // ---- strike edge: the marble meets the lid → the horn speaks ----
         if (started && !s.armed && ln.edge.check(s.abs, s.since, skipStrikes)){
-          const id = voiceIdOf(ln.note, ln.lane.dur[s.i]);
+          const id = strikeId(voiceIdOf(ln.note, ln.lane.dur[s.i]), p.h, ladder);
           onStrike && onStrike({ note: id, vel, pos: ln.contact.clone(), color: ln.glowC.getHex(), dur: p.h,
             shake: (stab && vel > .8) || (ln.q.fam === 'tba' && vel > .85) ? .02 + .03 * vel : 0,
             sparks: stab ? Math.round(6 + 8 * vel) : Math.round(2 + 3 * vel), light: stab ? 1.2 + .6 * vel : .8 + .5 * vel });

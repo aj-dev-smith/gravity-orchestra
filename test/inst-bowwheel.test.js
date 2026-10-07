@@ -1,3 +1,4 @@
+import { splitBucket, BUCKET_CAP } from '../src/instruments/sustain.js';
 import { describe, it, expect } from 'vitest';
 import { eventTimes, lanesByNote, wrapP } from '../src/instruments/clock.js';
 import {
@@ -308,8 +309,10 @@ describe('bowwheel: voice', () => {
     }
   });
   it('a demo song\'s whole id set bakes fast', () => {
-    const ids = bowwheel.voiceIds(bowwheel.demo.part);
-    expect(ids.length).toBeLessThanOrEqual(MAX_STRINGS);
+    const { part, bpm, beats } = bowwheel.demo, beat = 60 / bpm;
+    const ids = bowwheel.voiceIds(part, { beat, bpm, rollT: 2.6, P: 2.6 + beats * beat + 1.2, loopBeats: beats });
+    expect(new Set(ids.map(i => splitBucket(i).base)).size).toBeLessThanOrEqual(MAX_STRINGS);   // one base per string…
+    expect(ids.filter(i => splitBucket(i).hold).length).toBeLessThanOrEqual(BUCKET_CAP);        // …+ its duration buckets, capped
   });
 });
 

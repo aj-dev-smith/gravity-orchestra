@@ -209,8 +209,16 @@ song can get one, and **MIDI import now generates drums from channel 9** (§6).
   route `onStrike({note, vel, pos, color, dur, shake})` → sparks + a SHARED constant-size
   strike-light pool + `audio.playVoice('inst:<key>:<note>', vel, {dur})`.
 - Audio: one pure `voice()` render feeds BOTH the live path (AudioBuffer, gain = vel, `dur`
-  release) and the iOS `<audio>` bank (WAV) — iOS-war internals untouched. On the sample path
-  sustained voices ring their full render (no `dur` release; el.volume is ignored anyway).
+  release) and the iOS `<audio>` bank (WAV) — iOS-war internals untouched. The sample path can't
+  release at `dur` (el.volume is ignored), so SUSTAINED plugins (organ, bowwheel, horns, dulcimer,
+  bowls) fire **duration buckets** — `'<base>~<hold>'` ids (`src/instruments/sustain.js`) whose
+  render is the base cut at .5 / 1 / 2 s with the release BAKED in, the rung nearest the note's
+  hold (log-nearest: ≤ √2 off). voiceIds gets the tempo, so build() and voiceIds plan the same
+  ladder from the same lane solve; a part over `BUCKET_CAP` (40) bucket ids coarsens the ladder.
+  main bakes a '~' id's bare base LIVE-ONLY (Float32, no `<audio>`); `playVoice` plays that base
+  on the live path and releases at `dur` exactly, as before. Measured (all songs + demos): WAV bank
+  −12 %, Float32 sources +32 %, bake time ≈ unchanged (cuts are slices; horns re-render natively).
+  `test/sustain.test.js`.
 - **Room director** (src/directorplan.js, pure + tested; main `syncDirector` → camera.js plays it back):
   the song is data, so the loop's whole EDIT is solved at song load. Every machine — **the belt is
   just one of them, no protagonist floor** (AJ: "I don't see the belt as too special") — is scored
@@ -272,6 +280,17 @@ noise + tonal body, hat = bright noise transient — routed **dry to `busOut`** 
 melody's echo) so they punch. Baked `renderDrumWav` for the iOS path. Known degradations,
 both already in this ledger: iOS drum samples play full-velocity; a dense hat run can clip
 its own tail (one `<audio>` element per drum). The webaudio path has neither.
+
+**Song-change console noise (`ERR_FILE_NOT_FOUND` on a blob URL, + the status line flashing
+"audio: sample blocked") — fixed in `rebuildBank`'s teardown only.** Cause: a song change is a
+gesture, so main re-primes the new bank; a quick second change tears that bank down while its
+elements' priming `play()` promises are still pending. The old teardown revoked each element's
+real WAV URL, then the late `.then` in `primeSamples` swapped that dead URL in (`a.src =
+a.dataset.real`) on the detached element → a failed load + its `error` listener. (An element
+still loading its real WAV when revoked failed the same way.) Fix: the teardown forgets
+`dataset.real` before revoking (the late `.then` then finds no WAV and does nothing audible), and
+an element whose src IS the real WAV is detached (`removeAttribute('src'); load()`) first. The
+unlock dance itself (`primeSamples`, `realSrc`, the silent clip) is untouched.
 
 Also: `MediaStreamDestination → <audio>.srcObject` is a parallel iOS output; the recording
 tap (`captureStream`) hangs off the final mix. `navigator.wakeLock` keeps the screen on.

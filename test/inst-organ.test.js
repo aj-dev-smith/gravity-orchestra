@@ -341,14 +341,15 @@ describe('organ voice', () => {
     expect(a2[1].t - a2[0].t).toBeLessThan(CONT_AT + .05);
     expect(a2[0].dur + XFADE).toBeCloseTo(CONT_AT + XFADE, 6);               // the first voice releases as the continuation enters
     expect(a2[1].dur).toBeCloseTo(6 - CONT_AT, 6);                           // …which releases at the note's end (8 beats = 6 s)
-    expect(hits.filter(h => h.note === 'E4/s').length).toBe(1);
+    expect(hits.filter(h => h.note === 'E4~1').length).toBe(1);                // (a 1-beat .75 s note → the 1 s bucket)
   });
   it('the hold covers the stroke: a long note re-sources before the render runs out', () => {
     expect(CONT_AT + .12).toBeLessThan(HOLD);
     expect(CONT_AT + C_HOLD).toBeGreaterThanOrEqual(MAX_DUR);   // one continuation covers the longest note
     expect(SHORT_MAX).toBeLessThan(1.05);
-    expect(strikeIds({ base: 'C4', tDur: .5 })).toEqual({ first: 'C4/s', cont: null });
-    expect(strikeIds({ base: 'C4|pad', tDur: 2 })).toEqual({ first: 'C4|pad', cont: null });
+    expect(strikeIds({ base: 'C4', tDur: .5 })).toEqual({ first: 'C4~0.5', cont: null });     // duration buckets (../sustain.js)
+    expect(strikeIds({ base: 'C4|pad', tDur: 2 })).toEqual({ first: 'C4|pad~2', cont: null });
+    expect(strikeIds({ base: 'C4|pad', tDur: 3.5 })).toEqual({ first: 'C4|pad', cont: null });  // nearer the LONG render's hold
     expect(strikeIds({ base: 'C4', tDur: 6 })).toEqual({ first: 'C4', cont: 'C4/c' });
   });
 });

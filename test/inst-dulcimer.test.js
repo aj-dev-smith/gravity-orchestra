@@ -1,3 +1,4 @@
+import { splitBucket, BUCKET_CAP } from '../src/instruments/sustain.js';
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { eventTimes, wrapP } from '../src/instruments/clock.js';
@@ -367,8 +368,11 @@ describe('dulcimer: the voice', () => {
   });
 
   it('every demo id renders, and the whole demo bakes fast', () => {
-    const ids = grand.voiceIds(grand.demo.part);
-    expect(ids.length).toBeLessThanOrEqual(2 * MAX_STRINGS);
+    const { part, bpm, beats } = grand.demo, beat = 60 / bpm;
+    const ids = grand.voiceIds(part, { beat, bpm, rollT: 2.6, P: 2.6 + beats * beat + 1.2, loopBeats: beats });
+    expect(new Set(ids.map(i => splitBucket(i).base)).size).toBeLessThanOrEqual(2 * MAX_STRINGS);   // ≤ 2 layers per string…
+    expect(ids.filter(i => splitBucket(i).hold).length).toBeLessThanOrEqual(BUCKET_CAP);            // …+ duration buckets, capped
+    for (const id of grand.voiceIds(part)) expect(grandVoice(id).samples.every(Number.isFinite)).toBe(true);   // (the tempo-free superset too)
     for (const id of ids) expect(grandVoice(id).samples.every(Number.isFinite)).toBe(true);
   });
 });

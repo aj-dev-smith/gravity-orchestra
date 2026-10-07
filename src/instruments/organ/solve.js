@@ -45,6 +45,7 @@
    ============================================================ */
 import { G, noteNum } from '../../engine.js';
 import { laneClock, at, wrapP, normalizeEvent } from '../clock.js';
+import { bucketId, planLadder, LADDER } from '../sustain.js';
 
 export const g = -G.y;                         // |gravity| = 14.5
 
@@ -231,18 +232,25 @@ export function fitPart(part, { rollT, beat, P }, L = PART_LIMITS){
   return { events: out, report };
 }
 
-/** The voice id a fitted note plays at its strike (index.js) — and the tier ids voiceIds bakes. */
-export function strikeIds(n){
-  if (n.tDur <= SHORT_MAX) return { first: `${n.base}/s`, cont: null };
-  return { first: n.base, cont: n.tDur > CONT_AT + .1 ? `${n.base}/c` : null };
+/** The voice id a fitted note plays at its strike (index.js) — and the tier ids voiceIds bakes.
+    A note the render covers fires a DURATION BUCKET ('C4~0.5', 'C4|pad~2' — ../sustain.js: the
+    release baked into the sample, so the iOS <audio> path stops near the note's end too), or the
+    bare LONG id when it is nearer the render's own HOLD; a note held past CONT_AT fires the LONG id
+    and is re-sourced by its CONTINUATION. `ladder` = the part's planned rungs (organLadder). */
+export const VOICE_HOLD = 4.5;                 // the LONG render's full hold (voice.js HOLD)
+export function strikeIds(n, ladder = LADDER){
+  if (n.tDur > CONT_AT + .1) return { first: n.base, cont: `${n.base}/c` };
+  return { first: bucketId(n.base, n.tDur, VOICE_HOLD, ladder), cont: null };
 }
+/** one ladder for a whole fitted part (build and voiceIds both plan it from fitPart's events) */
+export const organLadder = events => planLadder(events.filter(e => e.tDur <= CONT_AT + .1).map(e => [e.base, e.tDur]), () => VOICE_HOLD);
 
 /* ---- one pipe's lane: its fitted notes → per-gap solved motion ----
    notes: [{t (wrapped), tDur, vel, timbre, base}] for ONE pitch, already fitted (spaced ≥
    IOI_MIN cyclically, each stroke leaving ≥ GAP_MIN). */
 const sm  = x => { const u = Math.min(1, Math.max(0, x)); return u * u * (3 - 2 * u); };
 const smd = x => (x <= 0 || x >= 1) ? 0 : 6 * x * (1 - x);
-export function organLane(notes, P){
+export function organLane(notes, P, ladder = LADDER){
   const ns = [...notes].sort((a, b) => a.t - b.t).map(n => ({ ...n, t: +wrapP(n.t, P).toFixed(9) }));
   const L = laneClock(ns.map(n => n.t), P);
   const N = ns.length;
@@ -250,7 +258,7 @@ export function organLane(notes, P){
     const dur = n.tDur, s = sinkDepth(dur);
     const nextOn = i + 1 < N ? ns[i + 1].t : ns[0].t + P;
     const D = nextOn - n.t - dur;                         // the gap after this note (cyclic)
-    const r = { t: n.t, dur, s, vel: n.vel, timbre: n.timbre, base: n.base, ids: strikeIds(n), D, sinkV: s / dur };
+    const r = { t: n.t, dur, s, vel: n.vel, timbre: n.timbre, base: n.base, ids: strikeIds(n, ladder), D, sinkV: s / dur };
     const tu = tUp(s), dStar = tu + T_DOWN;
     const hopMin = Math.max(HOP_MIN, Math.sqrt(3 * s / g) * 1.02);
     if (D < hopMin) r.mode = 'ride';

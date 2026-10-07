@@ -45,6 +45,11 @@ const EXPECTED_KEYS = [
   'danse-macabre',
   'marionette',
   'mars',
+  'toccata-loft',
+  'entertainer',
+  'winter',
+  'scarborough',
+  'forge',
 ];
 
 describe('SONGS catalogue', () => {

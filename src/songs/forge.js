@@ -332,7 +332,7 @@ export default {
   label: 'Forge of the Marble King', sub: 'original thrash · the riff forge, brass, light organ',
   bpm: 60 * 7 / 3.8,                                   // ≈ 110.53: the 3.8 s breath = 7 beats; 121 + 7 = 32 bars
   scale: ['E', 'F', 'F#', 'G', 'A', 'A#', 'B', 'C', 'D#'],
-  room: 'void',
+  room: 'arena',
   melody,
   parts: { riff, bass, horns, organ },
   mix,

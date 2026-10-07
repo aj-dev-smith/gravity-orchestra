@@ -16,6 +16,11 @@ import baldMountain from './bald-mountain.js';
 import danseMacabre from './danse-macabre.js';
 import marionette from './marionette.js';
 import mars from './mars.js';
+import toccataLoft from './toccata-loft.js';
+import entertainer from './entertainer.js';
+import winter from './winter.js';
+import scarborough from './scarborough.js';
+import forge from './forge.js';
 
 export const SONGS = {
   'daybreak-engine': daybreakEngine,
@@ -36,6 +41,11 @@ export const SONGS = {
   'danse-macabre': danseMacabre,
   'marionette': marionette,
   'mars': mars,
+  'toccata-loft': toccataLoft,
+  'entertainer': entertainer,
+  'winter': winter,
+  'scarborough': scarborough,
+  'forge': forge,
 };
 
 /* The picker's SHELVES — data, not engine. One table: shelf label → song keys, in menu
@@ -44,13 +54,12 @@ export const SONGS = {
    from the menu just because nobody shelved it. */
 export const SONG_GROUPS = [
   ['Showcase', ['daybreak-engine']],
+  ["Tonight's machines", ['forge', 'mars', 'toccata-loft', 'entertainer', 'winter', 'scarborough']],
   ['The Orchestra', ['canon-orchestra', 'carol-of-the-bells', 'morning-mood']],
   ['October', ['danse-macabre', 'bald-mountain', 'marionette']],
   ['Classics', ['fur-elise', 'ode-to-joy', 'canon-in-d', 'greensleeves', 'gymnopedie',
                 'prelude-in-c', 'mountain-king', 'toccata', 'dies-irae']],
-  ['Tonight\'s machines', ['mars']],
   ['Drum showcase', ['backbeat']],
-  ["Tonight's machines", ['toccata-loft']],
 ];
 
 /** [[label, [keys…]], …] for every key in `songs`: shelved ones in shelf order, the rest under 'More'. */

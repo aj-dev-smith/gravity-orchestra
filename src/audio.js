@@ -223,6 +223,13 @@ export function rebuildBank(tracks, drumLanes = [], voices = [], onBaked = null)
   if (!bakeQ.length && !metalQ.length) done();
   const step = dl => {                                  // (dl: an idle deadline — a truly idle page lends a longer slice)
     if (gen !== bankGen) return;                         // a newer bank replaced this one
+    // PERF (phones): while the LIVE path is healthy no element plays, so the background pass
+    // has nothing to serve — on a phone it was eating whole frames for seconds after every song
+    // change (Blob + createObjectURL of ~150 WAVs). It sleeps and re-checks; the moment the
+    // context is not running-and-ticking (never built, zombie, interrupted) it carries on, and an
+    // element that has to play before its WAV exists encodes it on the spot (ready → realSrc),
+    // exactly as before. Nothing in the unlock dance changes.
+    if (liveOK()){ setTimeout(step, 1000); return; }
     const t0 = performance.now();
     const slice = Math.max(6, Math.min(40, dl && dl.timeRemaining ? dl.timeRemaining() : 0));
     while (metalQ.length && performance.now() - t0 < slice) metalQ.shift()();
@@ -254,6 +261,7 @@ function bakeInto(src, pend, stat, key){
 /* the CURRENT bank's voice source for `key`, rendered now if its slice hasn't come yet */
 const voiceOf = key => voiceSrc.get(key) || bakeInto(voiceSrc, voicePend, bankStat, key);
 let bankGen = 0;
+const liveOK = () => !!ctx && ctx.state === 'running' && ctx.currentTime > .05;   // (the same test every play* uses)
 const wavSpec = new WeakMap();                           // <audio> → what its real WAV is, until it is made
 /* the element's real sample URL, encoding it now if the idle pass hasn't reached it yet */
 function realSrc(a){

@@ -50,6 +50,7 @@ export const SONG_GROUPS = [
                 'prelude-in-c', 'mountain-king', 'toccata', 'dies-irae']],
   ['Tonight\'s machines', ['mars']],
   ['Drum showcase', ['backbeat']],
+  ["Tonight's machines", ['toccata-loft']],
 ];
 
 /** [[label, [keys…]], …] for every key in `songs`: shelved ones in shelf order, the rest under 'More'. */

@@ -32,6 +32,7 @@ import { makeEditor } from './editor/index.js';
 import { planEdit, shotAt, signatureOf } from './directorplan.js';
 import { RIDE, ridePose, rideMoments, rideWindowAt } from './ridecam.js';
 import { makeFollow, solveShots as solveShotsIn, resolveRoom, solidBox, roomSolids } from './shotrig.js';
+import { fitWide, screenSize, UI_BOTTOM } from './shotsolve.js';
 import { makeXR } from './xr.js';
 import { U_PER_M } from './xrplan.js';
 import { makeXRDetail, collectGlow, XR_DETAIL } from './xrdetail.js';
@@ -918,13 +919,17 @@ function syncDirector(S, view){
   // The direction is SEARCHED (searchWide): the hand-picked angle first, then its neighbours —
   // the first that keeps every subject in frame with the eye inside the room and the strike
   // band clear of other machines wins (else the least-cropped, least-blocked one).
+  // THE GALLERY STAR: when the machine the song is about (its signature, or the station its
+  // director pulls clearly hardest for) stands up on the rear gallery, the wide comes round to
+  // ITS side — it is the farthest machine in the hall, the one a fitted wide shrinks the most
+  const star = full ? galleryStar(S, sig) : null;
   const wide = full
-    ? { ...searchWide(stageFrame(), WIDE_DIRS, 1.6, .94, 0), fov: WIDE_FOV, fitMax: 1,
+    ? { ...searchWide(stageFrame(), star ? starDirs(star).concat(WIDE_DIRS) : galleryUp() ? GALLERY_DIRS.concat(WIDE_DIRS) : WIDE_DIRS, 1.6, .94, WIDE_UI, star, WIDE_LENSES), fitMax: 1,
         // a phone held upright can't fit the room's width — so it frames the PROTAGONISTS (the
         // belt band → top housing, the chandelier, the turntable's record) down a diagonal, with
         // the title/song-select block's height kept clear at the top (PORTRAIT_INSET); the wings
         // enter from the frame edges as context
-        portrait: { ...searchWide(stageFrame(true), PORTRAIT_DIRS, .5, .92, PORTRAIT_INSET), fov: WIDE_FOV, fitMax: 1 } }
+        portrait: { ...searchWide(stageFrame(true), PORTRAIT_DIRS, .5, .92, { top: PORTRAIT_INSET }), fov: WIDE_FOV, fitMax: 1 } }
     : { aim: new THREE.Vector3(view.cx, 4, 2), eye: new THREE.Vector3(view.cx + 4, 15, 39) };
   lastWide = wide;
   // every station's eye is SOLVED from its designer's preferred framing (shotsolve.js); a narrow
@@ -1026,6 +1031,8 @@ function solveShots(shots){
    machine is never cut in half; only its nearest lip may graze the bottom of the frame, the way
    a concert film shoots past the nearest players). From the built geometry, per song. */
 const FRONT_KEEP = .25;
+/* the song raised a floor machine onto the rear GALLERY (stations.js layoutStations) */
+const galleryUp = () => instLive.some(r => !r.slot.hang && r.station.position.y > 2);
 function stageFrame(core = false){
   const pts = [], add = (x0, x1, y0, y1, z0, z1) => { for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) pts.push(new THREE.Vector3(x, y, z)); };
   if (!stageWall.isEmpty()) add(stageWall.min.x, stageWall.max.x, STAGE_Y - 3, stageWall.max.y, stageWall.min.z, stageWall.max.z);
@@ -1057,66 +1064,73 @@ function stageFrame(core = false){
    back off just far enough that all of them fit `fill` of the frame at `aspect` — then pull
    in so the eye stays inside the room (whatever then falls outside crops). */
 const WIDE_FOV = 68;                                    // the wide's lens (camera.js eases into it)
+/* …widened (to ≤ 80°) only when the room's walls would otherwise crop a LOW eye: a big hall (ten
+   machines, a raised gallery) then keeps the concert-film angle instead of climbing to a top-down
+   one to back off. LENS_COST per degree: 5° of lens ≈ one step down the direction list. */
+const WIDE_LENSES = [WIDE_FOV, 74, 80], LENS_COST = .004;
 const dirOf = (x, y, z) => new THREE.Vector3(x, y, z).normalize();
 /* the wide's candidate directions (unit aim → eye), preferred first: a LOW front-left three-
    quarter (the hall reads as a machine-hall, not a floor plan), then steeper / squarer */
 const WIDE_DIRS = [[-.15, .43, .89], [-.08, .5, .89], [-.22, .5, .86], [0, .55, .85], [-.15, .62, .8], [.1, .55, .85], [-.3, .58, .8]].map(d => dirOf(...d));
+/* …and when the song raised machines onto the rear GALLERY: a LOWER eye first (a concert-film wide —
+   from the stalls, the riser reads as a riser, not a floor plan seen from the lighting rig) */
+const GALLERY_DIRS = [[-.15, .26, .95], [-.08, .3, .95], [-.22, .3, .93], [-.15, .35, .92]].map(d => dirOf(...d));
+/* the gallery star's candidates: the low wide swung round toward its side (mirrored for a star
+   right of the belt), the wider swings first-to-last; STAR_PULL: how much the star's size in
+   frame (screenSize, ≈ .1–.3) may outweigh the candidate order (.02 a step) */
+const STAR_DIRS = [[-.2, .26, .94], [-.32, .26, .91], [-.44, .26, .86], [-.32, .34, .88]];
+const STAR_PULL = .6;
+const starDirs = box => { const c = box[0] + box[1] - (stageWall.isEmpty() ? 0 : stageWall.min.x + stageWall.max.x), m = c > 0 ? -1 : 1;
+  return STAR_DIRS.map(([x, y, z]) => dirOf(x * m, y, z)); };
+function galleryStar(S, sig){
+  let key = sig ? cues.find(c => c.key === sig)?.owner : null;
+  if (!key){                                             // the station the song's director pulls clearly hardest for
+    const w = instLive.map(r => [r.I.key, dirWeight(S, r.I.key)]).sort((a, b) => b[1] - a[1]);
+    if (w.length && w[0][1] >= 2 && w[0][1] - (w[1]?.[1] ?? 1) >= .3) key = w[0][0];
+  }
+  const r = key && instLive.find(q => q.I.key === key);
+  if (!r || r.slot.hang || r.station.position.y <= 2) return null;   // (only a GALLERY machine is far enough to need it)
+  const b = visBox(r.station);
+  return b.isEmpty() ? null : [b.min.x, b.max.x, Math.max(b.min.y, r.station.position.y - 1.5), b.max.y, b.min.z, b.max.z];
+}
 const PORTRAIT_DIRS = [[.45, .36, .82], [.3, .4, .87], [.6, .33, .74], [.15, .42, .9], [-.2, .42, .89], [.45, .5, .76], [0, .5, .87], [-.4, .42, .82]].map(d => dirOf(...d));
 const PORTRAIT_INSET = .13;                             // the top of a phone frame belongs to the title + song select
+const WIDE_UI = { top: .03, bottom: UI_BOTTOM };      // a desktop wide is fitted ABOVE the button row (the front row's decks no longer run under it)
 const _occRay = new THREE.Raycaster();
 /* fit each candidate direction; score = how much the room clamp crops (1 − k) + how much of
    the strike band other machines hide from the eye. First candidate that is clean wins. */
-function searchWide(pts, dirs, aspect, fill, inset){
+function searchWide(pts, dirs, aspect, fill, ui, star = null, lenses = [WIDE_FOV]){
   const band = [];
   if (!stageWall.isEmpty()) for (let i = 0; i <= 6; i++) for (const dy of [0, 2.5])
     band.push(new THREE.Vector3(THREE.MathUtils.lerp(stageWall.min.x + 1.5, stageWall.max.x - 1.5, i / 6), STAGE_Y + dy, (stageWall.min.z + stageWall.max.z) / 2));
   const belt = new Set(tracks.map(t => t.stage));
   const top = o => { while (o.parent && o.parent !== world) o = o.parent; return o; };
   const shown = o => { for (let p = o; p && p !== world; p = p.parent) if (!p.visible) return false; return true; };
-  let best = null;
+  let best = null; const tried = [];
   dirs.forEach((d, i) => {
-    const f = fitShot(pts, d, aspect, fill, WIDE_FOV, inset);
+    // (a lens per direction: the house lens, or — when the room's walls would crop a low eye — a
+    //  wider one, before the search has to climb to a steeper, top-down angle to back off)
+    let f, fov;
+    for (fov of lenses){ f = fitShot(pts, d, aspect, fill, fov, ui); if (f.k >= .995) break; }
     let blocked = 0;
     for (const q of band){
       const v = q.clone().sub(f.eye), L = v.length();
       _occRay.set(f.eye, v.divideScalar(L)); _occRay.far = L - .5; _occRay.camera = camera;
       if (_occRay.intersectObject(world, true).some(h => (h.object.isMesh || h.object.isInstancedMesh) && shown(h.object) && !belt.has(top(h.object)))) blocked++;
     }
-    const score = (1 - f.k) * 3 + (band.length ? blocked / band.length : 0) * 2 + i * .02;
-    if (!best || score < best.score) best = { ...f, score, dir: i, blocked };
+    // (a gallery STAR: how big the song's star machine reads from here — a nearer angle on it wins)
+    const sz = star ? screenSize(f.eye.toArray(), f.aim.toArray(), star, fov, aspect) : 0;
+    const score = (1 - f.k) * 3 + (band.length ? blocked / band.length : 0) * 2 + i * .02 + (fov - WIDE_FOV) * LENS_COST - sz * STAR_PULL;
+    tried.push([i, +score.toFixed(3), +f.k.toFixed(2), blocked, +sz.toFixed(3), fov]);   // (__dev.wide.tried: the search, for the audit)
+    if (!best || score < best.score) best = { ...f, score, dir: i, blocked, star: +sz.toFixed(3), fov };
   });
-  return best;
+  return { ...best, tried };
 }
-function fitShot(pts, dir, aspect, fill = .94, fov = camera.fov, inset = 0){
-  dir = dir.clone();
-  const R = new THREE.Vector3().crossVectors(dir.clone().negate(), _Yup).normalize();
-  const U = new THREE.Vector3().crossVectors(R, dir.clone().negate()).normalize();
-  // (an inset frame: the subject fills the lower 1 − inset of the frame's height)
-  const tanV0 = Math.tan(THREE.MathUtils.degToRad(fov / 2)), tanV = tanV0 * fill * (1 - inset), tanH = tanV0 * fill * aspect;
-  const aim = new THREE.Vector3();
-  pts.forEach(p => aim.add(p)); aim.divideScalar(Math.max(1, pts.length));
-  const q = new THREE.Vector3();
-  let D = 10;
-  for (let it = 0; it < 6; it++){
-    D = 0;
-    for (const p of pts){ q.subVectors(p, aim); const f = q.dot(dir);
-      D = Math.max(D, f + Math.abs(q.dot(R)) / tanH, f + Math.abs(q.dot(U)) / tanV); }
-    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-    for (const p of pts){ q.subVectors(p, aim); const dep = D - q.dot(dir), sx = q.dot(R) / dep, sy = q.dot(U) / dep;
-      x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy); }
-    aim.addScaledVector(R, (x0 + x1) / 2 * D * .9).addScaledVector(U, ((y0 + y1) / 2 + tanV0 * inset) * D * .9);
-  }
-  // keep the eye inside the room box (the smallest room's walls — STAGE), with room for the
-  // director's slow orbit drift (camera.js sways a held shot ±.12 rad about its aim)
-  const pad = 1.5; let k = 1;
-  const lim = (a, v, lo, hi) => { if (v > 1e-6) k = Math.min(k, (hi - a) / v); else if (v < -1e-6) k = Math.min(k, (lo - a) / v); };
-  for (const th of [-.13, 0, .13]){
-    const r = dir.clone().applyAxisAngle(_Yup, th).multiplyScalar(D);
-    lim(aim.x, r.x, -ROOM.HW + pad, ROOM.HW - pad);
-    lim(aim.y, r.y, ROOM.FLOOR + pad, ROOM.CEIL - pad);
-    lim(aim.z, r.z, ROOM.BACK + pad, ROOM.FRONT - pad);
-  }
-  return { aim, eye: aim.clone().addScaledVector(dir, D * Math.max(.3, k)), k };
+function fitShot(pts, dir, aspect, fill = .94, fov = camera.fov, ui = {}){
+  // (the room box — the smallest room's walls, STAGE — with room for the director's slow orbit drift)
+  const pad = 1.5, room = { x0: -ROOM.HW + pad, x1: ROOM.HW - pad, y0: ROOM.FLOOR + pad, y1: ROOM.CEIL - pad, z0: ROOM.BACK + pad, z1: ROOM.FRONT - pad };
+  const f = fitWide(pts.map(p => p.toArray()), dir.toArray(), { aspect, fov, fill, top: ui.top || 0, bottom: ui.bottom || 0, room });
+  return { aim: new THREE.Vector3().fromArray(f.aim), eye: new THREE.Vector3().fromArray(f.eye), k: f.k };
 }
 const _Yup = new THREE.Vector3(0, 1, 0);
 /* song.director — optional per-machine pull for THIS song ({ bowls: 2.2, belt: .5 }): a hint
@@ -1842,7 +1856,7 @@ if (new URLSearchParams(location.search).has('debug')){
     xrPerf: () => ({ lite: xrLite, batch: xrBatch.stats, detail: xrDetail.stats }),   // the VR detail profile at work (scripts/xr-perf.mjs)                    // creation tools: .openMap() .toggleEdit() .stage.state() .stage.select(k)
     // staging-audit handles (scripts/staging-audit.mjs): the live camera, the song's world, the live marbles
     get three(){ return THREE; }, get camera(){ return camera; }, get world(){ return world; }, get marbles(){ return devMarbles; }, get P(){ return ROLL_T + LOOP_T; },
-    get shots(){ return lastShots.map(s => ({ key: s.key, owner: s.owner, eye: s.eye.toArray(), aim: s.aim.toArray(), pref: s.pref?.toArray(), rays: s.rays, fg: s.fg, fitMax: s.fitMax, portrait: s.portrait?.eye.toArray() })); },
+    get shots(){ return lastShots.map(s => ({ key: s.key, owner: s.owner, eye: s.eye.toArray(), aim: s.aim.toArray(), pref: s.pref?.toArray(), rays: s.rays, fg: s.fg, fitMax: s.fitMax, pk: s.pk, portrait: s.portrait?.eye.toArray() })); },
     get solve(){ const f = lastSolve?.follow; return lastSolve && { ms: lastSolve.ms, split: lastSolve.split, kept: lastSolve.kept, solids: lastSolve.solids, room: solvedRoom, follow: lastShots.length && f?.land ? { land: f.land, portrait: f.portrait, rays: f.rays } : null }; },
     get follow(){ return followRig; }, shotCtx: () => shotCtx(),
     roomSolids: () => roomSolids(rooms.group).map(s => s.box),   // the room's standing geometry, as the shot solve sees it

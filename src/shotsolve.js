@@ -90,15 +90,43 @@ export function boxDist(p, b){
   const dx = Math.max(b[0] - p[0], 0, p[0] - b[1]), dy = Math.max(b[2] - p[1], 0, p[1] - b[3]), dz = Math.max(b[4] - p[2], 0, p[2] - b[5]);
   return Math.hypot(dx, dy, dz);
 }
-/** fraction of the subject's points inside a fov/aspect frame from eye → aim */
-export function framed(eye, aim, pts, fov = 55, aspect = 1.5){
+/* THE UI's bars: what of the frame a subject may NOT use. The bottom button row (~90 px of an
+   800 px desktop frame) is drawn over the canvas; a machine whose deck sits under it reads as
+   cropped. Fractions of the frame's height (a station shot is framed above it). */
+export const UI_BOTTOM = .11;
+/** fraction of the subject's points inside a fov/aspect frame from eye → aim (bottom: the share
+    of the frame's height, from its lower edge, the subject may not use — the UI's button row) */
+export function framed(eye, aim, pts, fov = 55, aspect = 1.5, bottom = 0){
   if (!pts?.length) return 1;
   const f = norm(sub(aim, eye)), R = norm(cross(f, [0, 1, 0])), U = cross(R, f);
-  const tv = Math.tan(fov * Math.PI / 360), th = tv * aspect;
+  const tv = Math.tan(fov * Math.PI / 360), th = tv * aspect, lo = -1 + 2 * bottom;
   let n = 0;
-  for (const p of pts){ const v = sub(p, eye), z = dot(v, f);
-    if (z > .1 && Math.abs(dot(v, R) / (z * th)) <= 1 && Math.abs(dot(v, U) / (z * tv)) <= 1) n++; }
+  for (const p of pts){ const v = sub(p, eye), z = dot(v, f), sy = dot(v, U) / (z * tv);
+    if (z > .1 && Math.abs(dot(v, R) / (z * th)) <= 1 && sy <= 1 && sy >= lo) n++; }
   return n / pts.length;
+}
+/* THE DESIGNER'S ANGLE AT THE DISTANCE THAT FRAMES IT. A plugin's (or a song's) hand-tuned
+   {dist, up, x} is an ANGLE first: tuned on one room, at one size, a close dist can leave a tall
+   machine half out of the frame (the bells' gantry: 3 of its 8 corners in, in every room). So
+   before the ring search the preference is walked back along its OWN line — never swung — in
+   FIT_STEP steps, at most FIT_PULL × its length, until the subject sits in the frame above the
+   UI's button row (≥ FRAME_FIT of its points: 7 of a box's 8 corners — a bounding box's nearest
+   low corner is mostly air), with the eye in the room (sway room included) and in clear air.
+   Pure; a pref that already frames its station is returned as is. */
+export const FRAME_FIT = .875, FIT_PULL = 1.4, FIT_STEP = .05;
+export function fitPref(aim, pref, subject, { fov = 55, aspect = 1.5, bottom = UI_BOTTOM, ok = () => true } = {}){
+  if (!subject?.length) return pref;
+  const off = sub(pref, aim);
+  let best = pref, bf = framed(pref, aim, subject, fov, aspect, bottom);
+  if (bf >= FRAME_FIT) return pref;
+  for (let k = 1 + FIT_STEP; k <= FIT_PULL + 1e-9; k += FIT_STEP){
+    const e = [aim[0] + off[0] * k, aim[1] + off[1] * k, aim[2] + off[2] * k];
+    if (!ok(e)) break;                                               // (the room's wall or a neighbour: no further back)
+    const fr = framed(e, aim, subject, fov, aspect, bottom);
+    if (fr > bf + 1e-9){ best = e; bf = fr; }
+    if (bf >= FRAME_FIT) break;
+  }
+  return best;
 }
 /** the 8 corners of a box (from yMin up — a station's legs to the floor may crop) */
 export function boxPts(b, yMin = -Infinity){
@@ -113,12 +141,18 @@ export function boxPts(b, yMin = -Infinity){
     blocked(eye, dir, far) → bool — does this probe ray hit ANOTHER machine first
     others: [box] — every other machine's 3D box (clear air: an eye stays ≥ `air` from each)
     subject: [x,y,z][] — the points that should be in frame (framing is kept ≥ the pref's − .15)
-    Returns { eye, rays, az, lift, k, cost } — rays = blocked probe rays of the winner. */
-export function solveShotEye({ aim, pref, room, blocked, others = [], subject = null, air = 1.2, fov = 55, aspect = 1.5, fgMax = FG_MAX, fgNear = .6, fgPts = EDGE, fgBudget = 40, maxCands = Infinity }){
-  const off0 = sub(pref, aim);
+    Returns { eye, rays, az, lift, k, cost, pk } — rays = blocked probe rays of the winner; pk = the
+    fitPref walk-back factor (1: the designer's distance). */
+export function solveShotEye({ aim, pref, room, blocked, others = [], subject = null, air = 1.2, fov = 55, aspect = 1.5, fgMax = FG_MAX, fgNear = .6, fgPts = EDGE, fgBudget = 40, maxCands = Infinity, fit = true, bottom = UI_BOTTOM }){
   const inRoom = e => e[0] >= room.x0 && e[0] <= room.x1 && e[1] >= room.y0 && e[1] <= room.y1 && e[2] >= room.z0 && e[2] <= room.z1;
   const swayIn = e => { const o = sub(e, aim); return [-SWAY, 0, SWAY].every(a => { const r = rotY(o, a); return inRoom([aim[0] + r[0], aim[1] + r[1], aim[2] + r[2]]); }); };
-  const fr0 = subject ? framed(pref, aim, subject, fov, aspect) : 1;
+  // the designer's angle at the distance that frames its station (fitPref): the search starts there
+  // (pk: how far it walked back — a phone's own pull-back (shotrig/camera.js) is relative to the
+  //  DESIGNER's distance, so it divides this out instead of stacking on top of it)
+  const d0 = Math.hypot(...sub(pref, aim));
+  if (fit && subject) pref = fitPref(aim, pref, subject, { fov, aspect, bottom, ok: e => swayIn(e) && !others.some(b => boxDist(e, b) < air) });
+  const off0 = sub(pref, aim), pk = d0 > 1e-6 ? Math.hypot(...off0) / d0 : 1;
+  const fr0 = subject ? framed(pref, aim, subject, fov, aspect, bottom) : 1;
   // candidates in order of how far they stray from the preference (the designer's angle first)
   const cands = [];
   for (const az of AZ) for (const lift of LIFT) for (const k of DIST){
@@ -134,15 +168,71 @@ export function solveShotEye({ aim, pref, room, blocked, others = [], subject = 
     if (!swayIn(eye)) continue;
     if (others.some(b => boxDist(eye, b) < air)) continue;
     const rays = blockedRays(eye, aim, blocked);
-    const fr = subject ? framed(eye, aim, subject, fov, aspect) : 1;
+    const fr = subject ? framed(eye, aim, subject, fov, aspect, bottom) : 1;
     // (cast only for an eye that already sees its station; it stops counting once it has failed)
     if (rays <= CLEAR_RAYS && fgBudget-- <= 0) break;               // (a bounded search: the best so far wins)
     const fg = rays <= CLEAR_RAYS ? foreground(eye, aim, blocked, { aspect, fov, near: fgNear, pts: fgPts, stop: Math.floor(fgMax * fgPts.length) + 2 }) : 1;
     const cost = rays * 10 + c.dev + Math.max(0, fr0 - .15 - fr) * 8 + Math.max(0, fg - fgMax) * 12;
-    if (!best || cost < best.cost) best = { eye, rays, fg, az: c.az, lift: c.lift, k: c.k, cost, framed: fr };
+    if (!best || cost < best.cost) best = { eye, rays, fg, az: c.az, lift: c.lift, k: c.k, cost, framed: fr, pk };
     if (rays <= CLEAR_RAYS && fr >= fr0 - .15 && fg <= fgMax) break;   // the first clean one in preference order wins
   }
-  return best || { eye: pref, rays: blockedRays(pref, aim, blocked), fg: 0, az: 0, lift: 0, k: 1, cost: Infinity, framed: fr0, none: true };   // (none: no candidate stood in the room)
+  return best || { eye: pref, rays: blockedRays(pref, aim, blocked), fg: 0, az: 0, lift: 0, k: 1, cost: Infinity, framed: fr0, pk, none: true };   // (none: no candidate stood in the room)
+}
+
+/* ---- the room's WIDE (main.js searchWide fits one per candidate direction) ----
+   Look along −dir (dir = unit aim → eye) and back off just far enough that every point sits in
+   a WINDOW of the frame: `fill` of it, minus the UI's bars — `top` / `bottom` are the shares of
+   the frame's height the title block / the button row own (the subject is fitted between them,
+   not under them). The aim is re-centred on the window (a few damped passes: perspective is not
+   linear), then the eye is pulled IN until it stands inside `room` (already inset) with sway room
+   for the held shot's slow orbit — whatever then falls outside crops (k < 1 reports how much).
+   Pure (arrays): fitWide(pts, dir, opts) → { aim, eye, D, k }. */
+export function fitWide(pts, dir, { aspect = 1.6, fov = 68, fill = .94, top = 0, bottom = 0, room = null, sway = SWAY } = {}){
+  const back = [-dir[0], -dir[1], -dir[2]];
+  const R = norm(cross(back, [0, 1, 0])), U = norm(cross(R, back));
+  const tv0 = Math.tan(fov * Math.PI / 360);
+  const hh = tv0 * aspect * fill, yc = tv0 * (bottom - top), hv = tv0 * (1 - top - bottom) * fill;
+  const ylo = yc - hv, yhi = yc + hv;                                        // (the window, in tan units; ylo < 0 < yhi)
+  const aim = [0, 0, 0];
+  for (const p of pts){ aim[0] += p[0]; aim[1] += p[1]; aim[2] += p[2]; }
+  for (let i = 0; i < 3; i++) aim[i] /= Math.max(1, pts.length);
+  let D = 10;
+  for (let it = 0; it < 8; it++){
+    D = 0;
+    for (const p of pts){ const q = sub(p, aim), f = dot(q, dir), x = dot(q, R), y = dot(q, U);
+      D = Math.max(D, f + Math.abs(x) / hh, f + (y > 0 ? y / yhi : y / ylo)); }
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const p of pts){ const q = sub(p, aim), dep = D - dot(q, dir), sx = dot(q, R) / dep, sy = dot(q, U) / dep;
+      x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy); }
+    const mx = (x0 + x1) / 2 * D * .9, my = ((y0 + y1) / 2 - yc) * D * .9;
+    for (let i = 0; i < 3; i++) aim[i] += R[i] * mx + U[i] * my;
+  }
+  let k = 1;
+  if (room){
+    const lim = (a, v, lo, hi) => { if (v > 1e-6) k = Math.min(k, (hi - a) / v); else if (v < -1e-6) k = Math.min(k, (lo - a) / v); };
+    for (const th of [-sway, 0, sway]){
+      const r = rotY(dir, th);
+      lim(aim[0], r[0] * D, room.x0, room.x1); lim(aim[1], r[1] * D, room.y0, room.y1); lim(aim[2], r[2] * D, room.z0, room.z1);
+    }
+  }
+  const s = D * Math.max(.3, k);
+  return { aim, eye: [aim[0] + dir[0] * s, aim[1] + dir[1] * s, aim[2] + dir[2] * s], D, k };
+}
+/** how big a box reads in a frame from eye → aim: √(width × height) of its projected corners'
+    extent, as shares of the frame (clipped to it — a box off the edge reads no bigger for it) */
+export function screenSize(eye, aim, b, fov = 55, aspect = 1.5){
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const p of boxPts(b)){ const [sx, sy, z] = project(eye, aim, p, fov, aspect); if (z <= .1) continue;
+    x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy); }
+  if (!(x1 > x0)) return 0;
+  const c = v => Math.max(-1, Math.min(1, v)), w = (c(x1) - c(x0)) / 2, h = (c(y1) - c(y0)) / 2;
+  return Math.sqrt(Math.max(0, w) * Math.max(0, h));
+}
+/** where points land in a frame from eye → aim: [sx, sy] in NDC (−1…1; fov vertical) */
+export function project(eye, aim, p, fov = 55, aspect = 1.5){
+  const f = norm(sub(aim, eye)), R = norm(cross(f, [0, 1, 0])), U = cross(R, f), tv = Math.tan(fov * Math.PI / 360);
+  const v = sub(p, eye), z = dot(v, f);
+  return [dot(v, R) / (z * tv * aspect), dot(v, U) / (z * tv), z];
 }
 
 /* ---- the BELT's follow shot (camera.js 'all' / 'lead' / 'alto' / 'bass' in a full room) ----

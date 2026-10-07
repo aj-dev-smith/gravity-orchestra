@@ -29,6 +29,7 @@ import { makeEditor } from './editor/index.js';
 import { planEdit, shotAt } from './directorplan.js';
 import { makeFollow, solveShots as solveShotsIn, resolveRoom, solidBox, roomSolids } from './shotrig.js';
 import { makeXR } from './xr.js';
+import { U_PER_M } from './xrplan.js';
 /* ============================================================
    CASCADE — melody-driven marble run, now multi-track.
    A song is one or more tracks of [note, beats-until-next-hit].
@@ -179,6 +180,7 @@ const HALO_A = .12, EMI = 1.2;
    step back up toward their pre-bloom job while presenting (main's xrSession swaps them) */
 const XR_HALO_A = .34, XR_EMI = 2.1;
 let haloA = HALO_A, emi = EMI;
+const xrLit = []; let xrLitAge = 0, xrSaved = new Float32Array(0);   // (xrRender: the lights it re-scales)
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 /* PERF GOVERNOR (src/perfgov.js): a device that can't hold the frame at its pixel ratio steps
@@ -862,6 +864,7 @@ function syncDirector(S, view){
 /* VR teleport pads (src/xrplan.js): every solved shot eye + the wide + one per belt bay, kept
    clear of every machine's box. Cheap (no rays) — re-run whenever the director re-solves. */
 function xrAnchors(){
+  xrLitAge = 0;                                         // (a new world: re-collect its lights for xrRender)
   const box = o => { const b = visBox(o); return b.isEmpty() ? null : [b.min.x, b.max.x, b.min.y, b.max.y, b.min.z, b.max.z]; };
   const belts = tracks.map(tr => { const b = box(tr.machine.group) || box(tr.stage);
     return b && { role: tr.role, x: (b[0] + b[1]) / 2, z0: b[4], z1: b[5], bandY: STAGE_Y }; }).filter(Boolean);
@@ -1357,7 +1360,7 @@ function animate(){
   if (convDbgOn) convDebug(leadRender ? leadRender.y : cam.target.y, camera.position.y);
   editor.update();                                      // stage edit: name tags follow their machines
   watchFrozen();                                        // re-check a slice of the frozen still parts (mergestatic.js)
-  if (xr.presenting) renderer.render(scene, camera);    // XR: straight to the headset (no composer; ACES still applies)
+  if (xr.presenting) xrRender();                        // XR: straight to the headset (no composer; ACES still applies)
   else {
     composer.render();
     gov.frame(frameT0, started && playRate > 0 && document.visibilityState === 'visible');   // adaptive resolution (perfgov.js)
@@ -1365,6 +1368,25 @@ function animate(){
   for (let i = frameTaps.length - 1; i >= 0; i--) if (frameTaps[i]()) frameTaps.splice(i, 1);   // (dev: renderInfo counts frames HERE — XR has no window rAF)
 }
 const frameTaps = [];
+/* XR SCALE HONESTY: the rig is scaled U_PER_M, so the VIEW space three lights + fogs in is METRES,
+   not world units — every Point/SpotLight would read U^decay (≈2.2×) brighter and reach U farther,
+   and the fog would thin by U. Undo that for the headset render only: owners keep setting their
+   intensities per frame, so the scaled values are restored right after (nothing persists). */
+function xrRender(){
+  if (xrLitAge-- <= 0){
+    xrLit.length = 0; scene.traverse(o => { if (o.isPointLight || o.isSpotLight) xrLit.push(o); });
+    if (xrSaved.length < xrLit.length * 2) xrSaved = new Float32Array(xrLit.length * 4);
+    xrLitAge = 60;                                      // re-collect ~once a second (+ on every director re-solve)
+  }
+  for (let i = 0; i < xrLit.length; i++){ const l = xrLit[i];
+    xrSaved[2 * i] = l.intensity; xrSaved[2 * i + 1] = l.distance;
+    l.intensity /= Math.pow(U_PER_M, l.decay); l.distance /= U_PER_M; }
+  const f = scene.fog, fd = f?.density, fn = f?.near, ff = f?.far;
+  if (f?.isFogExp2) f.density *= U_PER_M; else if (f?.isFog){ f.near /= U_PER_M; f.far /= U_PER_M; }
+  renderer.render(scene, camera);
+  for (let i = 0; i < xrLit.length; i++){ xrLit[i].intensity = xrSaved[2 * i]; xrLit[i].distance = xrSaved[2 * i + 1]; }
+  if (f?.isFogExp2) f.density = fd; else if (f?.isFog){ f.near = fn; f.far = ff; }
+}
 animate();
 renderer.setAnimationLoop(animate);                     // (not window rAF: a headset session drives its own frame loop)
 setTimeout(() => rooms.prewarm(camera), 1200);    // build + compile the other rooms in idle time (no first-swap stall)

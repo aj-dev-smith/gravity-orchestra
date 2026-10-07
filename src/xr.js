@@ -105,7 +105,6 @@ export function makeXR({ renderer, scene, camera, envMap, glowTex, enterSound, g
     ctrl.addEventListener('connected', e => { h.src = e.data; if (e.data.handedness) hands[e.data.handedness] = h;
       if (e.data.handedness === 'left') grip.add(panel); });
     ctrl.addEventListener('disconnected', () => { for (const k in hands) if (hands[k] === h) delete hands[k]; h.src = null; });
-    ctrl.addEventListener('selectstart', () => gestureRetry?.());   // a select IS a user gesture (WebXR spec)
     dolly.add(ctrl, grip);
   }
 
@@ -166,8 +165,10 @@ export function makeXR({ renderer, scene, camera, envMap, glowTex, enterSound, g
   /* ---------------- sessions ---------------- */
   async function enter(m = 'vr'){
     if (session || !navigator.xr) return false;
-    try { enterSound?.(); } catch(e){}                  // THE gesture: build audio inside it (§5 round 2)
-    try { gestureRetry?.(); } catch(e){}
+    // THE gesture: build audio inside it (§5 round 2). No gestureRetry here: a context built a
+    // moment ago still reads currentTime 0 and would be torn down and rebuilt at once (and the
+    // page's own pointerdown listener already retries for this same tap once audio has started)
+    try { enterSound?.(); } catch(e){}
     const s = await navigator.xr.requestSession(m === 'ar' ? 'immersive-ar' : 'immersive-vr',
       { optionalFeatures: ['local-floor', 'bounded-floor', 'layers', 'hand-tracking'] });
     session = s; mode = m;
@@ -180,7 +181,7 @@ export function makeXR({ renderer, scene, camera, envMap, glowTex, enterSound, g
     dolly.add(camera); camera.add(veil); veil.visible = true;
     scene.add(root);
     fade = 1; fadeDir = -1;                              // open from black: the program compiles happen behind it
-    s.addEventListener('selectstart', () => gestureRetry?.());
+    s.addEventListener('selectstart', () => gestureRetry?.());   // a select IS a user gesture (WebXR spec) — once per press, any input
     onSession?.(true, m);
     place(Math.max(0, cur));
     await renderer.xr.setSession(s);

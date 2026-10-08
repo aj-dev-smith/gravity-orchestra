@@ -23,9 +23,9 @@ drum machine, instrument plugins, rooms, room director, creation tools, phrase-l
 import) was fast-forwarded into `main`, the `v2` branch was deleted, and `main` was
 deployed to cascade.ajsmithhq.com. Work on feature branches off `main`.
 
-**The 2026-10-07 overnight wave lives on the `overnight` integration branch** (merged from
-`ov/*` feature branches) — NOT merged to `main`, NOT deployed. What it is and how to try each
-piece: [`docs/OVERNIGHT-2026-10-07.md`](docs/OVERNIGHT-2026-10-07.md).
+**The 2026-10-07 overnight wave** (merged from `ov/*` feature branches onto `overnight`) was
+fast-forwarded into `main` and deployed on 2026-10-08. What it is and how to try each piece:
+[`docs/OVERNIGHT-2026-10-07.md`](docs/OVERNIGHT-2026-10-07.md). Rollback target = 189abf7.
 
 `convDbgOn` (the conveyor debug HUD — rulers + height graph, key `G`) now defaults to
 **`false`**. Keep it off in anything you ship.

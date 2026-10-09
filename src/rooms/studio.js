@@ -118,6 +118,8 @@ function neonTex(text){
   return canvasTex(1024, 256, (x, w, h) => {
     x.fillStyle = '#000'; x.fillRect(0, 0, w, h);
     x.font = 'italic 700 150px "Snell Roundhand", "Brush Script MT", cursive';
+    const fit = Math.min(1, w * .88 / x.measureText(text).width);     // a long name shrinks to the sign
+    if (fit < 1) x.font = `italic 700 ${Math.floor(150 * fit)}px "Snell Roundhand", "Brush Script MT", cursive`;
     x.textAlign = 'center'; x.textBaseline = 'middle';
     x.shadowColor = '#ff4fa0'; x.shadowBlur = 28; x.strokeStyle = '#ff9ccc'; x.lineWidth = 9;
     x.strokeText(text, w / 2, h / 2); x.shadowBlur = 10; x.lineWidth = 3; x.strokeStyle = '#fff0f8';
@@ -247,7 +249,7 @@ export default {
     group.add(glows);
 
     const neon = new THREE.Mesh(new THREE.PlaneGeometry(24, 6),
-      new THREE.MeshBasicMaterial({ map: neonTex('Cascade'), color: new THREE.Color(1.8, 1.8, 1.8), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+      new THREE.MeshBasicMaterial({ map: neonTex('Gravity Orchestra'), color: new THREE.Color(1.8, 1.8, 1.8), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
     neon.position.set(-HW + 2.2, F + 34, 4); neon.rotation.y = Math.PI / 2; group.add(neon);
     // a dark backing plate on stand-offs, proud of the panels + diffusers, so the sign reads clean
     const plate = new THREE.Mesh(new THREE.BoxGeometry(.25, 7.4, 25.5), new THREE.MeshStandardMaterial({ color: 0x050508, roughness: .4, metalness: .6, envMap, envMapIntensity: .4 }));

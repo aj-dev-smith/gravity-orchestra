@@ -1,72 +1,96 @@
-# Cascade — marble melody machine
+# Gravity Orchestra
 
-**Live: [cascade.ajsmithhq.com](https://cascade.ajsmithhq.com)** · drop any `.mid` on the page — the solver does the rest.
+**Marbles play music, and every arc is solved from the melody.**
 
-![Cascade](public/og.png)
+**▶ Live: [cascade.ajsmithhq.com](https://cascade.ajsmithhq.com)** · drop any `.mid` file on the page and the solver orchestrates it.
+
+![Gravity Orchestra](public/og.png)
+
+An open-source love letter to [Animusic](https://en.wikipedia.org/wiki/Animusic): impossible
+machines that play real music in 3D. Wayne Lytle's films taught a generation that you could
+*watch* a song. Gravity Orchestra tries to make that interactive, live in the browser, for any song.
 
 ## The idea
 
 **The melody is authored first; the physics is solved backward from it.**
-Pads are not simulated — each pad's launch velocity is the closed-form
-ballistic solution that lands the marble on the next pad in exactly the
-note's duration:
+
+Nothing is simulated. Each launch is the closed-form ballistic solution that lands the marble
+on its target in exactly the note's duration:
 
 ```
 v0 = (ΔP − ½·g·dt²) / dt
 ```
 
-Position during an arc is the analytic `P(t) = P0 + v0·t + ½·g·t²`. There is
-no integrator, therefore no drift, therefore audio/visual sync is
-structurally perfect forever. Rhythm is literally visible: long notes are
-tall arcs, fast runs are flat skims.
+Position along an arc is the analytic `P(t) = P0 + v0·t + ½·g·t²`. There is no integrator,
+so there is no drift, so audio/visual sync is structurally perfect forever. You can *see*
+rhythm: long notes throw tall arcs, fast runs are flat skims.
 
-Time is the only state — every marble position, pad swing, and anticipation
-glow is a pure function of `T`. That's why the director camera can cut to
-the action *before it happens*, why you can scrub the timeline (`?debug`),
-and why a recording started and stopped at the loop seam produces a
-seamlessly looping video.
+**Time is the only state.** Every marble, piston, magnet and camera cut is a pure function of
+`songTime`. That's why the director camera can cut to the action *before it happens*, why you
+can scrub the timeline (`?debug`), and why a recording started at the loop seam loops seamlessly.
 
-## Features
+## What's in the box
 
-- **9-song catalog** — Beethoven, Bach, Pachelbel, Grieg, Satie, and friends,
-  each hand-transcribed as pure data
-- **MIDI import** — drag any `.mid` onto the page; onsets are quantized and
-  the physics re-solves
-- **Share links** — the whole song travels in the URL (`#s=`,
-  deflate-compressed), no backend
-- **Record one perfect loop** — seam-to-seam capture that loops seamlessly,
-  with the audio mix
-- **Dual-path audio** — raw Web Audio synth, with a pre-rendered WAV
-  `<audio>`-element fallback hardened against iOS WebKit (see
-  `CLAUDE.md` §3 for the war)
+- **15 instruments, each a different honest machine**: a robot marimbist, a pinned music-box
+  cylinder, a hurdy-gurdy bow wheel, a piano action made of marbles, a light organ whose
+  marbles sink the bellows, pogo-stick bass strings, a riff forge with solenoid stamps, and more.
+  Plus a marble drum machine: one ball per drum, pistons and electromagnets, real cymbals.
+- **25 songs** (public domain or original): Bach, Beethoven, Grieg, Holst, Joplin, Saint-Saëns,
+  Vivaldi, and a few written for the machines.
+- **MIDI import**: drop a file and it's routed by General MIDI program (or by musical role)
+  onto the right machines, channel 10 becomes the drum kit, and long songs import as their
+  best loopable phrase.
+- **A room director** that solves the whole camera edit from the song data, plus a ride cam
+  that sits on the marble.
+- **7 rooms**: grid, cathedral, studio, void, graveyard, metal arena (with pyro solved from the
+  drums) and a starship.
+- **Share links** (the whole song travels in the URL, no backend), **one-perfect-loop video
+  recording**, and **WebXR** (Quest: stand inside the machine at true 9.81 m/s² gravity).
 
-## Development
+## Run it
 
 ```bash
 npm install
-npm run dev           # vite dev server
-npm test              # vitest: lock-rule + MIDI + share suites
-npm run build         # production build (dist/)
-npm run build:single  # regenerate marble-cascade.html, the single-file artifact
+npm run dev           # vite dev server — open the printed URL
+npm test              # vitest (~2–3 min)
+npm run build         # production build → dist/
 ```
 
-## Song format
+Handy URL flags: `?song=<key>` · `?room=<key>` · `?solo=<instrument>` (one machine's demo) ·
+`?midi=/midi/room-tour.mid` · `?debug` (scrub bar + `window.__dev`).
 
-```js
-{
-  label, sub, bpm,
-  scale: ['A','B','C', ...],        // pitch classes, drives pad-rim hues
-  melody: [['E5', .5], ...],        // [note, beats-until-next-hit]
-  alto:  { delay, notes },          // optional
-  bass:  { delay, notes },          // optional
-}
+## Build an instrument
+
+This is the best part to contribute to. An instrument is **one folder** in
+`src/instruments/<key>/`, auto-registered with no shared-file edits:
+
+```
+solve.js   pure timing/physics: where's the ball at songTime t? (no THREE, no DOM)
+voice.js   pure DSP: note → Float32Array samples
+index.js   the 3D build + per-frame update
+test/inst-<key>.test.js   honesty tests: lands on the beat, at rest at contact, no penetration
 ```
 
-**The lock rule:** for every track, `sum(beats) + delay` must equal the
-melody's total exactly, or it desyncs at the loop seam. The test suite
-enforces it; the MIDI converter guarantees it by construction.
+The design rule is **a hit = a target + a launch solve**. Every change of motion needs a visible
+cause (a piston kicks, a magnet holds, a latch releases), and contact is honest. Read
+[`src/instruments/README.md`](src/instruments/README.md) for the full contract, then try
+`npm run dev` with `?solo=marimba` to see one machine on its own.
 
----
+Songs (pure data in `src/songs/`) and rooms (pure set dressing in `src/rooms/`) are the other
+two easy ways in. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Born as a single-file [Claude](https://claude.ai) artifact, raised into a
-repo. The full architecture notes live in `CLAUDE.md`.
+## Docs
+
+- [`CLAUDE.md`](CLAUDE.md) is the architecture notes and scar tissue: the static-band conveyor,
+  the instrument seam, the song format and its lock rule, and the four-round iOS audio war.
+  It's written as a handoff brief for AI coding agents, and it reads fine for humans too.
+- [`VISION.md`](VISION.md) is where this is heading: a 3D music creation and visualization tool.
+- [`docs/XR.md`](docs/XR.md) covers testing on a Quest.
+
+## Credits
+
+Inspired by Animusic (Wayne Lytle and Animusic, LLC). This project isn't affiliated with or
+endorsed by them. Built on [three.js](https://threejs.org). It started as a single-file
+[Claude](https://claude.ai) artifact and was raised into a repo with Claude Code.
+
+[MIT](LICENSE) © 2026 AJ Smith

@@ -719,7 +719,8 @@ function labelTexture(){
   g.lineWidth = 2; g.beginPath(); g.arc(c, c, c * .82, 0, 2 * Math.PI); g.stroke();
   g.fillStyle = '#f6e2b8';
   g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.font = 'bold 64px Georgia, serif'; g.fillText('CASCADE', c, c - 92);
+  g.font = 'bold 54px Georgia, serif'; g.fillText('GRAVITY', c, c - 112, 340);
+  g.font = 'bold 42px Georgia, serif'; g.fillText('ORCHESTRA', c, c - 64, 380);
   g.font = 'italic 30px Georgia, serif'; g.fillText('marble melody machine', c, c + 92);
   g.font = 'bold 34px Georgia, serif'; g.fillText('33⅓', c, c + 140);
   { g.fillStyle = '#20080a'; g.beginPath(); g.arc(c, c, 14, 0, 2 * Math.PI); g.fill(); }

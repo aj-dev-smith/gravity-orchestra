@@ -4,9 +4,14 @@
 
 set -euo pipefail
 
-BUCKET="s3://cascade.ajsmithhq.com"
-DISTRIBUTION_ID="E1U4B3EV2WPMZS"
-LIVE_URL="https://cascade.ajsmithhq.com"
+# Where to deploy comes from the environment (or a git-ignored .env.deploy — see
+# .env.deploy.example), so a fork never points at someone else's bucket.
+[[ -f .env.deploy ]] && source .env.deploy
+: "${DEPLOY_BUCKET:?set DEPLOY_BUCKET (e.g. s3://my-bucket) — see .env.deploy.example}"
+: "${CLOUDFRONT_DISTRIBUTION_ID:?set CLOUDFRONT_DISTRIBUTION_ID — see .env.deploy.example}"
+BUCKET="${DEPLOY_BUCKET}"
+DISTRIBUTION_ID="${CLOUDFRONT_DISTRIBUTION_ID}"
+LIVE_URL="${LIVE_URL:-https://${BUCKET#s3://}}"
 
 # Verify the build output exists and is non-empty
 if [[ ! -d dist ]] || [[ -z "$(ls -A dist)" ]]; then

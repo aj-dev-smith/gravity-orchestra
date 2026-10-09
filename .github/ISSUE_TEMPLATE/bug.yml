@@ -1,0 +1,22 @@
+name: Bug report
+description: Something sounds, looks or behaves wrong
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: What you saw or heard, and what you expected instead.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Link to reproduce
+      description: The URL with flags (?song= / ?room= / ?solo= / a share link #s=…), or attach the .mid file.
+  - type: input
+    attributes:
+      label: Browser and device
+      placeholder: e.g. Safari on iPhone 15, Chrome 140 on macOS, Quest Browser
+  - type: textarea
+    attributes:
+      label: Status line / console
+      description: The bottom-right status readout (audio state / clock / path) and any console errors help a lot with audio bugs.

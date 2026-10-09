@@ -1,0 +1,19 @@
+name: Instrument idea
+description: Propose a new machine (or claim one to build)
+labels: [instrument]
+body:
+  - type: textarea
+    attributes:
+      label: The instrument
+      description: What does it sound like, and what does the machine look like?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: The mechanism
+      description: "A hit = a target + a launch solve. What's the target, what throws the ball (or striker), and where does a long gap park? See src/instruments/README.md."
+  - type: checkboxes
+    attributes:
+      label: Building it?
+      options:
+        - label: I'd like to build this one

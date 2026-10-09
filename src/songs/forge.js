@@ -2,7 +2,7 @@
    RIFF FORGE (the drop-forge electric guitar) and the machines that came up with it the
    same night: the BELLOWS HORNS, the LIGHT ORGAN, the string bass and the marble drum
    machine. The belt marble plays the LEAD GUITAR — long notes over the gallop are its
-   tallest arcs, the harmony runs are its skims. Original composition (AJ / Cascade).
+   tallest arcs, the harmony runs are its skims. Original composition (AJ / Gravity Orchestra).
 
    KEY: E minor, with the metal's two favourite spices: F natural (the Phrygian ♭2 — the
    chromatic G·F#·F that drags every phrase back down to E) and A# (the tritone, diabolus

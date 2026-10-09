@@ -1,4 +1,4 @@
-# CASCADE — marble melody machine
+# GRAVITY ORCHESTRA (née CASCADE) — marble melody machine
 ## Handoff brief for Claude Code
 
 This project began as "a shiny track, a glowing marble, surfaces to bounce off" in
@@ -29,6 +29,13 @@ fast-forwarded into `main` and deployed on 2026-10-08. What it is and how to try
 
 `convDbgOn` (the conveyor debug HUD — rulers + height graph, key `G`) now defaults to
 **`false`**. Keep it off in anything you ship.
+
+**Open-source launch (2026-10-08, branch `launch-prep`):** renamed **Gravity Orchestra**, MIT. The
+user-visible brand (title, HUD, XR menu, turntable label, studio neon, recording filename) says
+Gravity Orchestra; internal names (`cascade:` localStorage keys — renaming them would wipe saved
+layouts — console prefixes, `marble-cascade.html`, the domain) are deliberately unchanged.
+`deploy.sh` reads `DEPLOY_BUCKET` / `CLOUDFRONT_DISTRIBUTION_ID` / `LIVE_URL` from the environment
+or a git-ignored `.env.deploy` (template: `.env.deploy.example`).
 
 `npm run deploy` builds + ships to production. It does not care which branch you're
 on. Treat it as live, and confirm with the human before running it.

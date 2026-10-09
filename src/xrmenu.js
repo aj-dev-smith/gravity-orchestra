@@ -77,11 +77,11 @@ export function makeXRMenu({ getState, onPress }){
     g.fillStyle = 'rgba(7,6,14,.9)'; g.beginPath(); g.roundRect(4, 4, MENU_W - 8, MENU_H - 8, 34); g.fill();
     g.strokeStyle = 'rgba(255,183,100,.6)'; g.lineWidth = 4; g.stroke();
     g.textBaseline = 'middle';
-    g.font = '600 46px ui-monospace, Menlo, monospace'; g.fillStyle = '#ffb764';
-    g.fillText('CASCADE', 36, 62);
+    g.font = '600 40px ui-monospace, Menlo, monospace'; g.fillStyle = '#ffb764';
+    g.fillText('GRAVITY ORCHESTRA', 36, 62);
     g.font = '30px ui-monospace, Menlo, monospace'; g.fillStyle = '#7d859c';
     const cur = st.songs.find(s => s.key === st.song);
-    g.textAlign = 'right'; g.fillText(`${(cur?.label || '').slice(0, 30)}  ·  ${st.time.toFixed(0)}s`, MENU_W - 36, 62); g.textAlign = 'left';
+    g.textAlign = 'right'; g.fillText(`${(cur?.label || '').slice(0, 28)}  ·  ${st.time.toFixed(0)}s`, MENU_W - 36, 62); g.textAlign = 'left';
     const head = (txt, y) => { g.font = '600 24px ui-monospace, Menlo, monospace'; g.fillStyle = '#5a6178'; g.fillText(txt, 40, y); };
     const songY = layout.find(b => b.kind === 'song')?.y, roomY = layout.find(b => b.kind === 'room')?.y;
     if (songY) head('SONG', songY - 24);

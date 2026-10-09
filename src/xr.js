@@ -122,7 +122,7 @@ export function makeXR({ renderer, scene, camera, envMap, glowTex, enterSound, g
   let panelText = '';
   function drawPanel(){
     const a = anchors[hover >= 0 ? hover : cur];
-    const lines = [songLabel?.() || 'CASCADE',
+    const lines = [songLabel?.() || 'GRAVITY ORCHESTRA',
       `${hover >= 0 ? '→ ' : ''}${a ? a.label : ''}`,
       `${tour ? 'TOUR' : 'FREE'}${getRate() ? '' : ' · PAUSED'} · ${getTime().toFixed(0)}s · Y MENU`];
     const s = lines.join('|');

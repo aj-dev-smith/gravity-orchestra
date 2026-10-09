@@ -1,7 +1,24 @@
 {
-  "name": "cascade",
+  "name": "gravity-orchestra",
   "version": "1.0.0",
-  "description": "Cascade — melody-driven marble run. The melody is authored first; the physics is solved backward from it.",
+  "description": "Gravity Orchestra — marbles play music. The melody is authored first; the physics is solved backward from it.",
+  "license": "MIT",
+  "author": "AJ Smith",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aj-dev-smith/gravity-orchestra.git"
+  },
+  "homepage": "https://cascade.ajsmithhq.com",
+  "keywords": [
+    "music",
+    "visualization",
+    "midi",
+    "threejs",
+    "webaudio",
+    "webxr",
+    "animusic",
+    "physics"
+  ],
   "type": "module",
   "scripts": {
     "dev": "vite",

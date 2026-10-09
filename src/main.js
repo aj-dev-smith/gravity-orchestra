@@ -40,7 +40,7 @@ import { U_PER_M } from './xrplan.js';
 import { makeXRDetail, collectGlow, XR_DETAIL } from './xrdetail.js';
 import { makeXRBatch } from './xrbatch.js';
 /* ============================================================
-   CASCADE — melody-driven marble run, now multi-track.
+   GRAVITY ORCHESTRA (née Cascade) — melody-driven marble run, now multi-track.
    A song is one or more tracks of [note, beats-until-next-hit].
    Every track gets its own solved pad chain, rail, and marble;
    they share the clock, so harmony is geometry.
@@ -1683,7 +1683,7 @@ function resetRecUI(){
 }
 function showRecCard(blob){
   const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
-  const file = new File([blob], `cascade-${sel.value}.${ext}`, {type: blob.type});
+  const file = new File([blob], `gravity-orchestra-${sel.value}.${ext}`, {type: blob.type});
   const url = URL.createObjectURL(blob);
   const card = document.createElement('div'); card.id = 'reccard';
   const vid = document.createElement('video');

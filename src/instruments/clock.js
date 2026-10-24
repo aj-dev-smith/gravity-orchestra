@@ -13,8 +13,10 @@
    Timeline facts (same as the drums):
      · a beat b strikes at absolute loop time  rollT + b·beat
      · the loop period is P = ROLL_T + LOOP_T
-     · songTime starts at `start` = −LEAD_IN (the count-in); a strike
-       before `start` never happened (no sound, no envelope)
+     · songTime starts at −LEAD_IN (the count-in); `start` = ARM_AT
+       (transport.js, −.6 s — in the loop's strike-free breath tail): a
+       strike before `start` never happened (no sound, no envelope), so
+       every machine sits ARMED through the count-in
    ============================================================ */
 
 export const wrapP = (t, P) => ((t % P) + P) % P;

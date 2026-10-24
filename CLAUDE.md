@@ -44,6 +44,14 @@ classic belt (a paternoster bay + one marble per voice) and its crane planner ar
 (`d6e8758` and earlier have them). Rollback target = `d6e8758` (the 2026-10-08 build). Not pushed
 to GitHub yet (origin/main = `d6e8758`) — pushing publishes the MIT / README launch commit too.
 
+**PLANNER-FIRST + the transport SHIPPED 2026-10-24** (AJ: "under no circumstances does a song start
+before the planner is done … a start stop and restart button"; `main` fast-forwarded to the
+`planner-first` commit, deployed; rollback target = `b0cdc97`): a song never reaches songTime 0 before
+its belt's plan is in — the count-in runs while it is solved, then waits (§3b, `src/transport.js`); the
+machines sit the count-in out (ARM_AT, §7 Transport); the search runs as parallel worker jobs and a
+page remembers its plans (same plans, bit for bit); the HUD has ■ STOP / ▶ START and ↺ RESTART.
+Still not pushed to GitHub.
+
 `npm run deploy` builds + ships to production. It does not care which branch you're
 on. Treat it as live, and confirm with the human before running it.
 
@@ -59,7 +67,12 @@ on. Treat it as live, and confirm with the human before running it.
     src/juggle.js    pure: THE BELT's plan — the JUGGLER (§3b): every belt voice on ONE machine,
                      juggled multiball. test/juggle.test.js. src/jugglebelt.js draws it (render
                      subsystem); src/juggle-baked.json = the catalog's solves (scripts/juggle-bake.mjs);
-                     src/juggle.worker.js solves anything else off the main thread.
+                     anything else: src/jugglejobs.js runs the search as parallel worker JOBS
+                     (src/juggle.worker.js hosts one), src/jugglecache.js remembers what this page
+                     solved (localStorage). test/jugglejobs.test.js, test/jugglecache.test.js.
+    src/transport.js pure: how songTime moves — THE PLANNER GATE (a song never reaches songTime 0
+                     before its belt's plan is in), STOP / START, the belt's count-in spin-up, and
+                     ARM_AT (every machine's `start`: they sit the count-in out). transport.test.js.
     src/paternoster.js  the belt's PARTS KIT (render, THREE only): tone-plate, brass node cradle,
                      chain sprocket, drive gear, housing wash, merge / bakeStill + the PTGEO
                      dimensions — what's left of the classic per-voice paternoster (retired 2026-10-24).
@@ -114,7 +127,7 @@ on. Treat it as live, and confirm with the human before running it.
     src/main.js      scene, rigs, buildWorld, ballPos, animate(), controls — the orchestrator
     test/            Vitest: engine ballistics, song lock-rule, drum validation, MIDI, the
                      juggler's plan audit + bake, share round-trip, every plugin's honesty suite,
-                     staging audit, director, XR (49 files / 2497 tests, 2026-10-24; ~1.5 min)
+                     staging audit, director, XR (52 files / 2521 tests, 2026-10-24; ~1.5 min)
     docs/OVERNIGHT-2026-10-07.md   the night's changelog: what each new machine / room / song
                      is and the URL to try it
     VISION.md        the product north star (vision, not spec)
@@ -226,21 +239,34 @@ voice; the audit (no ball–ball / ball–plate / ball–ARM / carriage contact,
 periodicity) is the test. The arm's geometry (shoe on the chain → hub behind the plate) lives in
 the plan (`plateAt` → `hub`, `shoe`; `JUGGLE.ARM`), so the render draws what the check cleared.
 
-How it runs: the SEARCH takes up to seconds (Bald Mountain ≈ 12 s), so a page load never runs it —
-`layoutJuggler` (fast) + the BAKED solve (with its holds) keyed by `jugglerKey(song)` (the belt
-notes + bpm + `JUGGLE_VERSION`), else the worker solves (and holds) while the machine stands ready
-but empty, then main swaps the full machine in. **Until a worker's plan is in, the timeline HOLDS in
-the count-in** (animate: `if (!jplan || jplan.solved) songTime += …`; the note line reads
-"planning the juggle…") — an import, a share link or a MAP re-route used to run on with a silent
-belt for its whole solve (canon-in-d.mid ≈ 6 s; any catalog song ~10–30 s right after a
-`JUGGLE_VERSION` bump, before the re-bake). **After ANY change to juggle.js that can change a
-plan: bump `JUGGLE_VERSION`, run `node scripts/juggle-bake.mjs`** — test/juggle.test.js fails on
-a stale or missing bake (it compares every catalog solve against it). `tracks` are thin VIEWS of
+How it runs: the SEARCH takes up to seconds (Bald Mountain ≈ 10 s on one core), so a page load
+never runs it — `layoutJuggler` (fast) + the BAKED solve (with its holds) keyed by
+`jugglerKey(song)` (the belt notes + bpm + `JUGGLE_VERSION`), else a plan THIS page solved before
+(`src/jugglecache.js`: localStorage, same key, LRU ≤ 40 plans / 1.5 MB, a bad entry is dropped and
+re-solved), else the WORKERS solve it while the machine stands ready but empty, then main swaps the
+full machine in. The search is split into pure JOBS — one per (voice, beam width), `solveVoiceAt`,
+settled per voice exactly as `solveJuggler` decides (`settleVoice`: the first width whose best plan
+is clean, else the best of all), then one HOLDS job — and `src/jugglejobs.js planInWorkers` runs
+them side by side (≤ min(3, cores − 1) workers, narrow widths first, a voice's wider job cancelled
+once it settles): the SAME plan, bit for bit (test/jugglejobs.test.js checks it against the bake;
+all 96 catalog + MIDI plans fingerprinted identical). 71 MIDIs: solve median 1.2 → .9 s, p90 5.0 →
+3.2 s, worst 9.9 → 7.3 s. **THE PLANNER GATE (src/transport.js `advance`): a song NEVER reaches
+songTime 0 before its plan is in** — the count-in runs WHILE the plan is solved, then WAITS at
+−RUN_IN (1.2 s; the note line reads "planning the juggle…"), so a solve under ~1.2 s costs nothing
+(a dropped MoP: first note 7.9 → 5.9 s after the drop, its 1.1 s solve hidden in the count-in) and
+a long one starts the moment it lands. Every other machine sits the count-in out ARMED (§7
+Transport). A failed solve never starts (the note line says so). (History: before the gate, the
+timeline held at −LEAD_IN for the whole solve and THEN counted in; before that an import ran on
+with a silent belt.) **After ANY change to juggle.js that can change a plan: bump `JUGGLE_VERSION`,
+run `node scripts/juggle-bake.mjs`** — test/juggle.test.js fails on a stale or missing bake (it
+compares every catalog solve against it); a cached plan simply misses (the key carries the version). `tracks` are thin VIEWS of
 the plan's voices (role / pads / rollT / total / deep / V), so the camera, director, audio bank and
 rides read them. Ball identity (`ballAt`) is a pure fn: the ride cam rides one ball.
-The COUNT-IN spins the machine up (main `jugTime`: a slowed clock that reaches full speed, C1,
-at songTime 0, covering only the breath after the last dock) — the belt is silent in the
-count-in; the loop's last bar never plays before the first note. Key `M` hides the machine's
+The COUNT-IN spins the machine up (transport.js `spinTime`: a slowed clock, at rest R s before
+songTime 0 and at full speed, C1, at 0, covering only the breath after the last dock — R = LEAD_IN
+for a plan in at the build, what is left of the count-in (≥ RUN_IN) for a worker's; a pending
+machine stands still) — the belt is silent in the count-in; the loop's last bar never plays
+before the first note. Key `M` hides the machine's
 frame (`jug.frame`: housings, chains, gantry) — plates and balls stay.
 Residuals (pinned in the test's KNOWN): Bald Mountain lead 8 limit overruns + 1 alto ball–ball
 (6 cm), Mars 1 throw at 10.7 u/s. `node scripts/juggle-report.mjs` prints the catalog's numbers.
@@ -705,6 +731,24 @@ parallel song branches, so merge the key lists and regenerate the fixture ONCE o
   from each loop's downbeat — the 1.2 s seam tail isn't whole beats); star streaks move `z0 + v·t mod
   L` with every speed n·L/T_WRAP and songTime mod T_WRAP on the CPU (no float drift, no snap).
 
+- **Transport** (`#transport` under the song picker; `src/transport.js` pure; main `setPlaying` /
+  `restart`). **■ STOP / ▶ START**: `playing = false` freezes the frame (time is the only state —
+  juice and the free camera keep their real dt) and `audio.silence()` cuts the sound: every live
+  voice reaches the bus through its TAKE's gates (one per destination, made on demand in `place()`),
+  which fade out + disconnect; the bus trim ducks so the echo / room tails die with them, until
+  START's `unsilence()`; the iOS path pauses only elements playing a real WAV. START plays on from
+  the same songTime. **↺ RESTART**: songTime −LEAD_IN (a fresh count-in, gated by the planner like
+  any start), the trim ducked through most of it; an ARMED recording then takes the loop from the
+  top, a running take is dropped (so is one at STOP). Space = STOP / START (a focused button keeps
+  its own Space). XR's B / menu play-pause IS this transport. A song change plays; a MAP re-route
+  keeps a stopped song stopped. **The machines sit the count-in out**: main builds every station,
+  the kit and the room's cues with `start = ARM_AT` (−.6 s) — per the plugin contract a strike
+  before `start` never happened, so each sits ARMED (loaded, waiting) until its first strike after
+  it. ARM_AT is inside the loop's strike-free breath tail (every event is pinned before P − 1.2 s),
+  after the gate (−RUN_IN), at most −DT_MAX/2 (a drum's magnet drop onto a pickup right after 0
+  starts after it) and −T_ENTER (the marimba's glide-in) — test/transport.test.js. (Before: start
+  = −LEAD_IN, so the loop's last notes in [P − 2.4, P − 1.2) — riffs, bass, drums — played in the
+  count-in, a song "starting" before the planner was done.) `merge-audit` re-proved every bake.
 - **WebXR** (`xr.js`, docs/XR.md): render-time framing only. The loop is `renderer.setAnimationLoop`
   (a headset has no window rAF); while presenting main renders scene→camera directly (no composer —
   halos/emissive step up, marble lamps off; constant light set), skips the camera rig + perf governor,
@@ -718,11 +762,12 @@ parallel song branches, so merge the key lists and regenerate the fixture ONCE o
   (studio: no per-eye Reflector). Daybreak (the full room) from the wide 1451 → 555 calls/frame, both eyes (docs/XR.md table).
   The head is never moved by the director / ride cam — TOUR teleports (blink); Y = in-world menu.
 
-Dev toggles: `G` = belt debug HUD (rulers + height graph + the plan's ball count; `convDbgOn`, OFF by default). `M` = the belt's frame on/off (plates + balls stay). `R` = next room. `?debug` = a scrub bar (time is the only
+Dev toggles: `Space` = STOP / START. `G` = belt debug HUD (rulers + height graph + the plan's ball count; `convDbgOn`, OFF by default). `M` = the belt's frame on/off (plates + balls stay). `R` = next room. `?debug` = a scrub bar (time is the only
 state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machine-gunning) + `window.__dev`:
-`song(k)`, `t`, `rate`, `cam(mode)`, `station(key, dist, up)`, `strikes()` (strikes per machine + any
-fired id with no baked voice — the sound sweep), `director()` (cuts, shares, rides, rideEvery,
-signature), `ride(t)`, `occlusion()`, `audioProbe()`, `xrPerf()`.
+`song(k)`, `t`, `rate`, `cam(mode)`, `station(key, dist, up)`, `strikes()` (strikes per machine — belt voices, plugins, `drums` — with
+their songTimes `at`, + any fired id with no baked voice — the sound sweep), `director()` (cuts, shares, rides, rideEvery,
+signature), `ride(t)`, `occlusion()`, `audioProbe()` (+ `outPeak`: the final mix — STOP must read 0),
+`transport()` / `stop()` / `start()` / `restart()`, `xrPerf()`.
 
 - **Perf (render-time only — all A/B-able by URL flag).** `mergestatic.js` bakes still parts per
   material AND parts rigid on a moving carriage (piston head, valve slide: merged into the carriage's
@@ -769,9 +814,10 @@ signature), `ride(t)`, `occlusion()`, `audioProbe()`, `xrPerf()`.
   `opts.window: 'auto' | 'full' | {fromBar, bars}`; the MAP panel offers LOOP / WHOLE SONG (rows show
   the loop's notes). Labels are guesses: "the chorus" only for a sung (vocal-named) lead.
 - Every song now opens with a **`LEAD_IN` count-in** (`main.js`, default 2.4 s): `songTime`
-  starts negative, so the belt spins up before the downbeat (and the pickup fill plays ahead of
-  it); a song whose juggle isn't baked HOLDS there until the worker's plan is in (§3b). It's a
-  feel knob — one const; tune freely.
+  starts negative, so the belt spins up before songTime 0 while every other machine sits ARMED
+  (§7 Transport — a pickup fill still plays in the roll-in after 0); a song whose juggle isn't in
+  yet runs the count-in WHILE the workers solve it, then waits at −RUN_IN (§3b). It's a feel knob
+  — one const; tune freely (keep it > RUN_IN).
 - Greensleeves uses the F#/dorian variant; Gymnopédie is the theme stated twice; Canon's late
   cycles are faithful-in-gesture simplifications. Mars (no score to hand — the fanfare, the 5/2 theme
   and the recap are faithful in SHAPE) and Winter (arranged from memory) say so in their headers.

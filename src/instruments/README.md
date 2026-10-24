@@ -183,8 +183,11 @@ LOG time (≤ √2 off below 2.8 s) — or the bare base when the render's own h
   beats ∈ `[0, loopBeats)` — pinned like drums, never chained, no lock rule.
 - `clock.eventTimes(part, {rollT, beat})` → events with `t = rollT + beat·b`
   (loop-local seconds). The loop period is `P`. `songTime` starts at
-  `start = −LEAD_IN` (negative): strikes before `start` never happened — the
-  instrument sits ARMED (loaded, waiting) until its first strike.
+  −LEAD_IN (the count-in); `start` = `ARM_AT` (src/transport.js, −.6 s, inside
+  the loop's strike-free 1.2 s breath tail): strikes before `start` never
+  happened — the instrument sits ARMED (loaded, waiting) through the count-in
+  until its first strike. (main.js never lets songTime reach 0 before the belt's
+  plan is in.)
 - `clock.laneClock(times, P)` + `clock.at(L, t, start)` → `{i, since, until, gap,
   armed, first, abs, next}`. O(log n). Don't scan every event per frame.
 - Static world space. **Never** add `DESCENT`/`beltPhase` (that's only the melody

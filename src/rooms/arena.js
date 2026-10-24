@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { STAGE, rng, canvasTex, radialTex, glowPoints, glowMat, beamMat, instanced, trs } from './common.js';
 import { solveArenaCues, lastFire, JETS, CANNONS, JET_BURN } from './arena-cues.js';
+import { ARM_AT } from '../transport.js';
 /* ============================================================
    THE METAL ARENA — the machines play the big room.
 
@@ -45,7 +46,7 @@ const AMBER = 0xffa13a, ICE = 0x86d8ff, RED = 0xff3a1e, WHITE = 0xfff1d8;
 const JET_POS = [[-42, -24], [42, -24], [-42, -2], [42, -2], [-42, 20], [42, 20], [-17, -44], [17, -44]];
 const CO2_POS = TOWER_Z.flatMap(z => [-1, 1].map(s => [s * (TOWER_X - 1.6), z]));   // on the towers, 18 u up
 const CO2_Y = 18;
-const START = -2.4;            // main's LEAD_IN count-in (cues.start overrides): nothing fired before it
+const START = ARM_AT;          // main's machine start (transport.js — cues.start overrides): nothing fired before it
 
 /* ---------------- textures (drawn once) ---------------- */
 function deckTex(){                      // 8×4 sheets of black-painted ply, scuffs, spike tape

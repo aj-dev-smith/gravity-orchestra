@@ -10,9 +10,12 @@ import { fillSongMenu, addSongOption, isRuntimeSong } from './songmenu.js';
 import { G, UP, ROLL_T, DESCENT, noteHz } from './engine.js';
 import * as audio from './audio.js';
 import { glowTex, initJuice, spawnBurst, spawnRipple, updateJuice } from './juice.js';
-import { layoutJuggler, solveJuggler, assembleJuggler, unpackSolve, ballAt as jBallAt } from './juggle.js';
+import { layoutJuggler, solveJuggler, assembleJuggler, unpackSolve, packSolve, ballAt as jBallAt } from './juggle.js';
 import JUGGLE_BAKED from './juggle-baked.json';
 import JuggleWorker from './juggle.worker.js?worker&inline';
+import { planInWorkers } from './jugglejobs.js';
+import { makeJuggleCache } from './jugglecache.js';
+import { advance, spinTime, spinFor, ARM_AT } from './transport.js';
 import { makeJugglerShop } from './jugglebelt.js';
 import { makeMarbleDrums, KIT_SOLO, KIT_ROOM, kitAnchor } from './marbledrums.js';
 import { makeCameraRig } from './camera.js';
@@ -66,6 +69,7 @@ const FIXED_ZMAX = 30;                                  // FIXED cam: cap the pu
 let muted = false;                                      // sound toggle (mute button)
 let songTime = 0;                                       // the timeline; clock only supplies deltas
 let playRate = 1, skipStrikes = false, dbg = null;      // ?debug scrub: rate + jump suppression
+let playing = true;                                     // the transport (STOP / START): a stopped song is a frozen frame
 let devStrikes = null;                                   // ?debug sound sweep: strikes per machine (+ ids with no baked voice)
 let voiceCacheStat = null;                              // dev: what the last build's voice-cache sweep kept/dropped (__dev.bank)
 let devMute = null;                                     // ?debug sound sweep: machines kept SILENT ('belt', 'drums', plugin keys) — solo levels
@@ -81,6 +85,7 @@ const LEAD_IN = 2.4;                                    // seconds of count-in B
                                                         // just ahead of the downbeat — see convert.js step 12.
 let recState = 'idle', recorder = null;                 // idle | armed | rec — transitions at the seam
 const recEl = document.getElementById('rec');
+const playEl = document.getElementById('playstop'), restartEl = document.getElementById('restart');   // the transport (STOP / START · RESTART)
 const hueOf = n => Math.max(0, SCALE.indexOf(n.replace(/\d/,''))) / Math.max(1, SCALE.length);
 
 /* ---------------- renderer / scene ---------------- */
@@ -363,15 +368,19 @@ function disposeTree(root){
    release). `tracks` are thin VIEWS of the plan's voices (role, pads, rollT, total, deep): the
    camera's buttons, the director, the audio bank and the rides read them.
    The plan's SEARCH takes up to seconds, so it never runs here: the catalog's solves are baked
-   (src/juggle-baked.json, scripts/juggle-bake.mjs — keyed by the belt's notes + tempo); anything
-   else (an import, a share link, a MAP re-route) is solved by a worker while the machine stands
-   ready but empty and the count-in holds (animate), then swapped in (jugglerSolved). Returns the
-   FIXED-cam framing + its width. */
+   (src/juggle-baked.json, scripts/juggle-bake.mjs — keyed by the belt's notes + tempo), a plan this
+   page solved before is remembered (src/jugglecache.js); anything else (an import, a share link, a
+   MAP re-route) is solved by workers (src/jugglejobs.js) while the machine stands ready but empty
+   and the count-in runs — the song never starts before it is in (transport.js) — then swapped in
+   (jugglerSolved). Returns the FIXED-cam framing + its width. */
 function buildJuggler(S, wallBox){
   const t0 = performance.now();
-  const L = jplan = layoutJuggler(S), baked = JUGGLE_BAKED.plans[L.key];   // (the key holds the solver's version too)
+  let L = layoutJuggler(S);
+  const baked = JUGGLE_BAKED.plans[L.key], cached = !baked && jugCache.get(L.key);   // (the key holds the solver's version too)
   if (baked){ assembleJuggler(L, unpackSolve(baked.voices)); L.from = 'bake'; }
-  else solveJugglerAsync(S, L);
+  else if (cached) L = fromCache(S, L, cached);
+  jplan = L;
+  if (!L.solved) solveJugglerAsync(S, L);
   LOOP_T = L.P - ROLL_T;
   tracks = L.voices.map((V, vi) => {
     const rollT = ROLL_T + V.delay * BEAT;
@@ -394,50 +403,63 @@ function mountJuggler(L, t){
   jug.frame.visible = machinesOn;
   world.add(jug.group);
   tracks.forEach(tr => { tr.stage = jug.group; tr.machine.group = jug.frame; });
-  if (L.solved) jugSpinUp(L);
-  jug.update(jugTime(t), 0, { skipStrikes: true });       // posed before anything measures it
+  if (L.solved) jugSpin = spinFor(t, jugBreath(L), LEAD_IN);
+  jug.update(L.solved ? jugTime(t) : 0, 0, { skipStrikes: true });   // posed before anything measures it (pending: standing still)
   jug.group.updateMatrixWorld(true);
   if (xrOn) jug.xr(true);
 }
-/* THE COUNT-IN, juggler: the machine SPINS UP. Before the downbeat its clock runs slow — speed
-   (1 + t/LEAD_IN)^k: at rest before the start tap, full speed (C1) at songTime 0 — covering only
-   jugD of the plan, all of it after the last ball docked. So the count-in shows the plan's own
-   breath (every ball home, nothing struck) — never the loop's last bar (Canon's would be 9 notes).
-   A pure fn of songTime (scrub-exact); the chains and their plates slow together, slip-free. */
-let jugD = 1.2;
-const jugTime = t => t >= 0 ? t : -jugD * (1 - Math.max(0, 1 + t / LEAD_IN) ** (LEAD_IN / jugD));
+/* THE COUNT-IN, juggler: the machine SPINS UP (transport.js spinTime). Before songTime 0 its clock
+   runs slow — at rest R s before it, full speed (C1) at 0 — covering only d s of the plan, all of
+   it after the last ball docked. So the count-in shows the plan's own breath (every ball home,
+   nothing struck) — never the loop's last bar (Canon's would be 9 notes). A pure fn of songTime
+   (scrub-exact); the chains and their plates slow together, slip-free. A build's plan spins up over
+   the whole count-in (R = LEAD_IN); a worker's, landing mid-count-in, over what is left of it. */
+let jugSpin = { R: LEAD_IN, d: 1.2 };
+const jugTime = t => spinTime(t, jugSpin);
 /* the voice's ball with the most time in the air per loop (what a manual RIDE follows) */
 function busiestBall(V){
   if (V._busy == null){ const air = new Array(V.balls).fill(0); for (const q of V.segs) air[q.ball] += q.t1 - q.t0; V._busy = air.indexOf(Math.max(...air)); }
   return V._busy;
 }
-function jugSpinUp(L){
+/* the plan's BREATH: the time before songTime 0 with every ball home (what a spin-up may cover) */
+function jugBreath(L){
   const home = L.P - Math.max(...L.voices.map(V => V.dockT?.length ? V.dockT[V.dockT.length - 1] : -Infinity));
-  jugD = Math.min(LEAD_IN / 2, Math.max(.05, home - .15));
+  return Math.max(.05, home - .15);
 }
-let jugWorker = null, jugReq = 0;
+const jugCache = makeJuggleCache();
+/* a plan this page solved before (jugglecache.js), assembled like a baked one; an entry that won't
+   assemble is dropped and the song solved again, on a fresh layout (assembling mutates one) */
+function fromCache(S, L, packed){
+  try { assembleJuggler(L, unpackSolve(packed)); L.from = 'cache'; return L; }
+  catch (err){ jugCache.drop(L.key); console.warn('cascade juggler: a remembered plan would not assemble — solving it again', err); return layoutJuggler(S); }
+}
+/* the SEARCH, off the main thread: every (voice, beam width) job in a worker of its own, a few at
+   once (jugglejobs.js — exactly solveJuggler's plan); no workers → here, after a paint */
+const JUG_WORKERS = Math.min(3, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
+let jugJobs = null, jugReq = 0;
 function solveJugglerAsync(S, L){
-  const id = ++jugReq, song = { bpm: S.bpm, melody: S.melody, alto: S.alto, bass: S.bass };
-  noteEl.textContent = 'planning the juggle…';            // (the count-in holds until it's in — animate)
-  const done = solved => { if (id === jugReq && jplan === L) jugglerSolved(L, solved); };
-  const local = () => setTimeout(() => { if (id === jugReq && jplan === L){ done(solveJuggler(L)); L.from = 'main'; } }, 50);   // (no worker: after a paint)
-  if (jugWorker){ jugWorker.terminate(); jugWorker = null; }   // a stale search must not delay this one
-  try {
-    jugWorker = new JuggleWorker();
-    jugWorker.onmessage = e => {
-      if (e.data.id !== id) return;
-      if (e.data.error || e.data.key !== L.key){ console.warn('cascade juggler: worker', e.data.error || 'key mismatch', '— solving here'); local(); }
-      else done(e.data.solved);
-      jugWorker?.terminate(); jugWorker = null;
-    };
-    jugWorker.onerror = e => { e.preventDefault?.(); console.warn('cascade juggler: worker failed — solving here'); jugWorker = null; local(); };
-    jugWorker.postMessage({ id, song });
-  } catch (err){ jugWorker = null; local(); }
+  const id = ++jugReq, mine = () => id === jugReq && jplan === L;
+  noteEl.textContent = 'planning the juggle…';            // (the count-in waits for it — transport.js)
+  const failed = err => { console.error('cascade juggler: the plan failed', err); noteEl.textContent = 'the juggle could not be planned'; };
+  const local = () => setTimeout(() => {
+    if (!mine()) return;
+    try { jugglerSolved(L, solveJuggler(L)); L.from = 'main'; } catch (err){ failed(err); }
+  }, 50);
+  jugJobs?.cancel();                                      // a stale search must not delay this one
+  jugJobs = planInWorkers(L, S, { makeWorker: () => new JuggleWorker(), cap: JUG_WORKERS,
+    onDone: solved => {
+      if (!mine()) return;
+      try { jugglerSolved(L, solved); L.from = 'workers'; }
+      catch (err){ console.warn('cascade juggler: the workers\' plan would not assemble — solving here', err); local(); }
+    },
+    onError: err => { if (mine()){ console.warn('cascade juggler: workers failed —', err?.message || err, '— solving here'); local(); } } });
 }
-/* the worker's solve is in: assemble it onto THIS build's layout and swap the empty machine for
-   the full one — songTime runs on, the director re-plans its rides from the new flights */
+/* the plan is in: assemble it onto THIS build's layout, remember it (jugglecache.js) and swap the
+   empty machine for the full one. The count-in runs on — the belt spinning up over what is left of
+   it — and the director re-plans its rides from the new flights */
 function jugglerSolved(L, solved){
-  assembleJuggler(L, solved); L.from = 'worker';
+  assembleJuggler(L, solved);
+  jugCache.put(L.key, packSolve(solved, L));
   noteEl.textContent = '';
   mountJuggler(L, songTime);
   if (curBuild) syncDirector(curBuild.S, curBuild.view);
@@ -478,14 +500,15 @@ function buildWorld(keyName){
   const P0 = ROLL_T + LOOP_T, loopBeats = S.melody.reduce((a, n) => a + n[1], 0);
 
   // marble drums: built song-level, added under world (so it disposes with the world on the
-  // next song change). Aligned to the lead's timeline; `start` arms every ball on its magnet
-  // for the count-in. The kit moves to the front-right tier when the room is full of plugin
-  // stations; the solve may slide it further (then it is rebuilt there: its contacts are world).
+  // next song change). Aligned to the lead's timeline; `start` (ARM_AT, like every station's —
+  // transport.js) arms every ball on its magnet for the count-in. The kit moves to the
+  // front-right tier when the room is full of plugin stations; the solve may slide it further
+  // (then it is rebuilt there: its contacts are world).
   kitSlot = editor.kitSlot(full ? KIT_ROOM : KIT_SOLO);  // (a user-placed kit — stage edit — is pinned there)
   // (posed once at the count-in instant: an un-posed ball parked at the origin would make the
   //  measured footprint reach across the room)
   const POSE0 = { started: false, skipStrikes: true, onStrike(){} };
-  const buildKit = () => { const g = drumKit.build(S.drums, { rollT: ROLL_T, beat: BEAT, P: P0, cx: stageView.cx, start: -LEAD_IN, slot: kitSlot });
+  const buildKit = () => { const g = drumKit.build(S.drums, { rollT: ROLL_T, beat: BEAT, P: P0, cx: stageView.cx, start: ARM_AT, slot: kitSlot });
     drumKit.update(-LEAD_IN, P0, 0, POSE0); return g; };
   drumGroup = buildKit();
   world.add(drumGroup);
@@ -506,7 +529,7 @@ function buildWorld(keyName){
     const z = hung ? (wallBox.min.z + wallBox.max.z) / 2 + st.z : st.z;
     station.position.set(stageView.cx + st.x, y, z);
     station.rotation.y = st.yaw;
-    const buildAt = () => rig.inst.build(part, { rollT: ROLL_T, beat: BEAT, P: P0, start: -LEAD_IN,
+    const buildAt = () => rig.inst.build(part, { rollT: ROLL_T, beat: BEAT, P: P0, start: ARM_AT,
       station: st, floorY: ROOM.FLOOR - y, ceilY: ROOM.CEIL - y, loopBeats });
     let body = buildAt();
     station.add(body);
@@ -548,7 +571,7 @@ function buildWorld(keyName){
     // (gain: the song.mix level — applied as the bank wraps the render (AudioBuffer / WAV), never a
     //  scaled copy of it: the plugin's cached render IS the bank's source, no second Float32 array)
     // (t0: the machine's first strike — the bank bakes soonest machine first, src/audio.js BAKE_SYNC_MS)
-    const t0 = rig.cue.reduce((m, c) => Math.min(m, wrapP(c.t + LEAD_IN, P0)), Infinity);
+    const t0 = rig.cue.reduce((m, c) => Math.min(m, wrapP(c.t - ARM_AT, P0)), Infinity);
     ids.forEach(id => voices.push({ key: `inst:${rig.I.key}:${id}`, wet: !!rig.I.wet, hz: voiceHzOf(rig.I, id),
       render: () => rig.I.voice(id), gain: rig.mix.base, t0 }));
     // a DURATION-BUCKET id ('C4~1', src/instruments/sustain.js) carries its release baked in for the
@@ -641,7 +664,7 @@ function buildWorld(keyName){
   rooms.cue({ storm: Array.isArray(S.storm) ? S.storm.filter(Number.isFinite) : null,
               sky: Array.isArray(S.sky) ? S.sky.filter(c => Array.isArray(c) && Number.isFinite(c[0]) && typeof c[1] === 'string') : null,
               rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T,
-              drums: S.drums || null, melody: S.melody, loopBeats, start: -LEAD_IN });   // (the arena solves its pyro cues from these)
+              drums: S.drums || null, melody: S.melody, loopBeats, start: ARM_AT });   // (the arena solves its pyro cues from these)
   curBuild = { S, view: stageView, wallW, P0, buildKit };
   placeRoom();
 
@@ -658,11 +681,12 @@ function buildWorld(keyName){
     () => { if (voiceEpoch() === epoch) voiceCacheStat = sweepVoiceCaches(); });
   gov.hold(90);                                         // a rebuild's hitch + compiles are not the device's pace
   singlePassFlats(scene);                               // PERF (perftune.js): no 2-pass draw for flat/additive see-through parts
-  // start in the loop's TAIL: songTime < 0 means no ball has spawned yet (li stays
-  // -1), so the machine + any tail/pickup drums play as a count-in, then the marble
-  // spawns at songTime 0 and rolls into the downbeat. skipStrikes guards the first
-  // frame from retro-firing every drum edge it lands on (same as a scrub jump).
+  // start in the COUNT-IN: songTime < 0 — the belt spins up (jugTime), every other machine sits
+  // ARMED (built with start = ARM_AT), and the timeline never reaches 0 before the belt's plan is in
+  // (transport.js). skipStrikes guards the first frame from retro-firing every edge it lands on
+  // (same as a scrub jump). A new song plays (STOP is per song).
   songTime = -LEAD_IN; loopIndex = -1; skipStrikes = true;
+  setPlaying(true);
   if (started) clock.start();
   editor.built();
 }
@@ -743,6 +767,7 @@ function drumStrike(hit){
   if (hit.choke){ if (audio.isReady()) try { audio.chokeDrum(hit.lane); } catch(e){} return; }
   // a closed hat strike is the pedal CHICKING the pair shut: an open hat still ringing stops
   if (hit.lane === 'hat' && audio.isReady()) try { audio.chokeDrum('hatOpen'); } catch(e){}
+  if (devStrikes){ const d = devStrikes.drums ||= { n: 0, ids: {}, unbaked: [], at: [] }; d.n++; d.ids[hit.lane] = (d.ids[hit.lane] || 0) + 1; if (d.at.length < 64) d.at.push(+songTime.toFixed(3)); }
   const c = hit.drum.contact, v = hit.vel ?? 1;
   spawnBurst(c.clone().add(UP), new THREE.Color(hit.drum.style.ball),
              Math.round(5 + 7 * v), 3.0);
@@ -1141,8 +1166,8 @@ function instStrike(rig, hit){
     L.age = 0; L.peak = 8 * (.35 + .65 * v) * (hit.light ?? 1);
   }
   if (hit.shake) cam.addShake(hit.shake * v);
-  if (devStrikes){ const k = rig.I.key, d = devStrikes[k] ||= { n: 0, ids: {}, unbaked: [] };
-    d.n++; d.ids[hit.note] = (d.ids[hit.note] || 0) + 1;
+  if (devStrikes){ const k = rig.I.key, d = devStrikes[k] ||= { n: 0, ids: {}, unbaked: [], at: [] };
+    d.n++; d.ids[hit.note] = (d.ids[hit.note] || 0) + 1; if (d.at.length < 64) d.at.push(+songTime.toFixed(3));
     if (!audio.hasVoice(`inst:${k}:${hit.note}`) && !d.unbaked.includes(hit.note)) d.unbaked.push(hit.note); }
   if (audio.isReady() && !muted && !devMute?.has(rig.I.key)){
     const beat = (wrapP(songTime, ROLL_T + LOOP_T) - ROLL_T) / BEAT;   // loop-local beat (song.mix envelope)
@@ -1185,7 +1210,7 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
   machines: INSTRUMENTS.map(I => ({ key: I.key, label: I.label, color: I.color })),
   host: {
     key: () => sel.value,
-    rebuild(keepTime){ const t = songTime; buildWorld(sel.value); if (keepTime && started){ songTime = t; skipStrikes = true; }
+    rebuild(keepTime){ const t = songTime, was = playing; buildWorld(sel.value); if (keepTime && started){ songTime = t; skipStrikes = true; if (!was) setPlaying(false); }
       audio.primeSamples(); audio.showState(); },        // (called from a tap/change: a gesture — §5)
     restage,
     pieces: () => [
@@ -1207,7 +1232,7 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
 const xr = makeXR({ renderer, scene, camera, envMap, glowTex,
   enterSound: () => enterSound(), gestureRetry: () => { if (started) audio.gestureRetry(); },
   getTime: () => songTime, setTime: v => { songTime = v; skipStrikes = true; },
-  getRate: () => playRate, setRate: r => { playRate = r; },
+  getRate: () => playing ? playRate : 0, setRate: r => { if (r){ playRate = r; setPlaying(true); } else setPlaying(false); },   // (B / the menu: the transport's STOP / START)
   nextSong(){ sel.selectedIndex = (sel.selectedIndex + 1) % sel.options.length; sel.dispatchEvent(new Event('change')); },
   songLabel: () => SONGS[sel.value]?.label,
   shotAt: now => shotAt(plan, wrapP(now, ROLL_T + LOOP_T), seamFrom),
@@ -1247,10 +1272,11 @@ if (!reduceMotion){ clock.start(); started = true; }
 function animate(){
   const frameT0 = performance.now();
   const dt = Math.min(clock.getDelta(), .05);
-  // the timeline WAITS for the belt's plan: a song whose juggle isn't baked (an import, a share link,
-  // a MAP re-route) holds its count-in — machine at rest, every station with it — until the worker's
-  // solve is in, instead of running on with a silent belt
-  if (!jplan || jplan.solved) songTime += dt * playRate;
+  // THE TRANSPORT (transport.js): a song never reaches its start before the belt's plan is in — a
+  // juggle that isn't baked (an import, a share link, a MAP re-route) is solved while the count-in
+  // runs, and the count-in then WAITS for it (every machine armed, nothing struck); a STOPPED song
+  // is a frozen frame
+  songTime = advance(songTime, dt, { playing, ready: !!jplan?.solved, rate: playRate });
   const P = ROLL_T + LOOP_T;                             // loop period (per song)
   const T = started ? ((songTime % P) + P) % P : 0;     // loop-local time (always ≥0, even during the lead-in) — display + scrub
   if (started){                                         // the loop boundary: the recording's cut point
@@ -1270,7 +1296,7 @@ function animate(){
   let leadRender = null;
   const marblePts = [];
   if (jug){                                             // THE BELT (the juggler): one machine, every voice — a pure fn of songTime
-    jug.update(jugTime(songTime), dt, { skipStrikes, haloA, emi, onStrike: juggleStrike, onDock: juggleDock });
+    jug.update(jplan?.solved ? jugTime(songTime) : 0, dt, { skipStrikes, haloA, emi, onStrike: juggleStrike, onDock: juggleDock });   // (pending: standing still)
     tracks.forEach((tr, vi) => {                        // (the camera reads each voice: its focus + its next big moment)
       tr._st = jug.st[vi];
       marblePts.push({ p: jug.focus[vi].clone(), w: tr.role === 'lead' ? 1.7 : 1, role: tr.role, vis: true });
@@ -1332,7 +1358,7 @@ function animate(){
       scene.matrixWorldAutoUpdate = true;
       flatBatch.after(); flatBatch.group.visible = false;   // (only ever drawn by this render: never in a headset frame, a raycast, a probe)
     } else composer.render();
-    gov.frame(frameT0, started && playRate > 0 && document.visibilityState === 'visible');   // adaptive resolution (perfgov.js)
+    gov.frame(frameT0, started && playing && playRate > 0 && document.visibilityState === 'visible');   // adaptive resolution (perfgov.js)
   }
   for (let i = frameTaps.length - 1; i >= 0; i--) if (frameTaps[i]()) frameTaps.splice(i, 1);   // (dev: renderInfo counts frames HERE — XR has no window rAF)
 }
@@ -1536,6 +1562,37 @@ if (midiUrl) (async () => {
     importMidi(new Uint8Array(await res.arrayBuffer()), midiUrl, false);
   } catch(err){ subEl.textContent = `couldn't load ${midiUrl}: ${err.message}`; }
 })();
+/* ---------------- the transport: STOP / START · RESTART ---------------- */
+/* STOP freezes the frame (time is the only state) and cuts the sound — everything ringing, the echo,
+   the room (audio.silence); START plays on from there; RESTART goes back to the count-in and, like
+   every start, waits there for the belt's plan (transport.js). Space = STOP / START. */
+function showPlaying(){
+  playEl.textContent = playing ? '■\u00a0STOP' : '▶\ufe0e\u00a0START';
+  playEl.classList.toggle('on', !playing);
+  playEl.title = playing ? 'stop (space)' : 'play on from here (space)';
+}
+function setPlaying(on){
+  if (on === playing) return;
+  playing = on;
+  if (on) audio.unsilence();
+  else { audio.silence(); if (recState === 'rec') abortRec(); }   // (a take with a frozen stretch in it is no loop)
+  showPlaying();
+}
+function restart(){
+  if (recState === 'rec') abortRec();                   // (an ARMED take keeps waiting for the seam: this start)
+  audio.silence(LEAD_IN - .35);                         // cut what rings — its echo + room tail with it — through the count-in
+  songTime = -LEAD_IN; loopIndex = -1; skipStrikes = true;
+  if (jplan?.solved) jugSpin = spinFor(songTime, jugBreath(jplan), LEAD_IN);
+  playing = true; showPlaying();
+}
+playEl.addEventListener('click', () => setPlaying(!playing));
+restartEl.addEventListener('click', restart);
+addEventListener('keydown', e => {
+  if (e.code !== 'Space' || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (/^(input|textarea|select|button)$/i.test(e.target.tagName) || e.target.isContentEditable) return;   // (a focused button: Space clicks it)
+  e.preventDefault(); setPlaying(!playing);
+});
+
 document.getElementById('mute').addEventListener('click', e => {
   muted = !muted;
   e.target.textContent = muted ? 'SOUND OFF' : 'SOUND ON';
@@ -1590,6 +1647,8 @@ if (new URLSearchParams(location.search).has('debug')){
     look(px, py, pz, tx, ty, tz){ cam.camera.position.set(px, py, pz); cam.target.set(tx, ty, tz); cam.orbit.target.set(tx, ty, tz); cam.orbit.update(); },
     get t(){ return songTime; }, set t(v){ songTime = v; skipStrikes = true; },
     set rate(r){ playRate = r; },
+    transport: () => ({ playing, songTime, ready: !!jplan?.solved, from: jplan?.from ?? null, spin: { ...jugSpin } }),
+    stop(){ setPlaying(false); }, start(){ setPlaying(true); }, restart(){ restart(); },
     song(k){ sel.value = k; sel.dispatchEvent(new Event('change')); },
     station(key, dist, up){ return lookAtStation(key, dist, up); },
     instruments: () => instLive.map(r => r.I.key),

@@ -85,6 +85,7 @@
    ============================================================ */
 import { G, ROLL_T, noteNum, PAD_R, PITCH_AMP, pitchSize } from '../../engine.js';
 import { normalizeEvent, laneClock, at, wrapP, lastIndex, smooth } from '../clock.js';
+import { ARM_AT } from '../../transport.js';
 
 export const g = -G.y;
 
@@ -785,11 +786,11 @@ export function discDistance(c, top, n, rho){
 }
 
 /** The MAP panel's honesty pass (editor/mapping.js LINE_SPEC.volley.refine): build the line as
-    the room will (P = ROLL_T + loop + 1.2, main's loop) and keep only what the walls can play —
+    the room will (P = ROLL_T + loop + 1.2, main's loop; start = main's ARM_AT) and keep only what the walls can play —
     the thinned notes are named in the warnings, so the panel shows what will actually sound. */
 export function refineLine(part, { bpm, loopBeats }){
   const beat = 60 / bpm, P = ROLL_T + loopBeats * beat + 1.2;
-  const R = buildVolley(part, { rollT: ROLL_T, beat, P, start: -2.4 });
+  const R = buildVolley(part, { rollT: ROLL_T, beat, P, start: ARM_AT });
   if (!R.thinned) return { part, warnings: R.ok ? [] : R.warnings.slice(0, 3) };
   const keep = new Set(R.evs.slice(0, R.n / R.loops).map(e => e.beat));
   return { part: part.filter(e => keep.has(e[0])),

@@ -350,17 +350,43 @@ export function layoutJuggler(song, opt = {}){
 
 /* the search, per voice: a voice whose plan still breaks a hard limit (a contact, a limit, a
    carriage late or out of order) is searched again with a wider beam; the cheapest plan wins.
-   Plain data out (a worker posts it back, the bake stores it). */
+   Plain data out (a worker posts it back, the bake stores it). Each (voice, width) search is its
+   own pure job — solveVoiceAt — so a page can run them side by side (jugglejobs.js: a worker each);
+   settleVoice over the jobs' results, in width order, is exactly this loop's choice. */
+export const BEAM_STEPS = L => [1, ...L.o.BEAMS];
 export function solveJuggler(L){
-  return L.voices.map(V => {
-    let best = null;
-    for (const m of [1, ...L.o.BEAMS]){
-      const plan = solveVoice(V, { ...L.o, BEAM: L.o.BEAM * m });
-      if (!best || plan.bad < best.bad || (plan.bad === best.bad && plan.cost < best.cost)) best = plan;
-      if (!best.bad) break;
+  const steps = BEAM_STEPS(L);
+  return L.voices.map((V, vi) => {
+    const tried = [];
+    for (const m of steps){
+      tried.push(solveVoiceAt(L, vi, m));
+      const best = settleVoice(tried, steps.length);
+      if (best) return best;
     }
-    return { decs: best.decs, carr: best.carr.map(k => ({ id: k.id, hand: k.hand, home: k.home })), cost: best.cost, bad: best.bad, beam: best.beam };
+    return pickBest(tried);
   });
+}
+export function solveVoiceAt(L, vi, m = 1){
+  const plan = solveVoice(L.voices[vi], { ...L.o, BEAM: L.o.BEAM * m });
+  return { decs: plan.decs, carr: plan.carr.map(k => ({ id: k.id, hand: k.hand, home: k.home })), cost: plan.cost, bad: plan.bad, beam: plan.beam };
+}
+/* the better of the plans tried for one voice, in the order tried (wider beams later): fewer
+   broken limits, then cheaper — an earlier plan keeps a tie */
+export function pickBest(plans){
+  let best = null;
+  for (const p of plans) if (p && (!best || p.bad < best.bad || (p.bad === best.bad && p.cost < best.cost))) best = p;
+  return best;
+}
+/* results[i] = the plan of width step i (undefined while still running), n = how many steps
+   there are: the voice's answer once it is decided — the first prefix whose best is clean, or
+   the best of all — else null (keep waiting) */
+export function settleVoice(results, n){
+  for (let i = 0; i < n; i++){
+    if (!results[i]) return null;
+    const best = pickBest(results.slice(0, i + 1));
+    if (!best.bad || i === n - 1) return best;
+  }
+  return null;
 }
 
 /* The BAKE's compact form of a solve (src/juggle-baked.json holds the catalog's, so a page load
@@ -580,10 +606,14 @@ function solveVoice(V, o){
   // its ball leaves it — and is then checked back against every ball segment already decided
   // near it. Every later segment checks against the known plates. Each (segment, plate) pair
   // meets once, posed as it will be built.
-  const DTS = .005, hitCache = new Map();
+  // (the caches below key on INTERNED ids — a segment's key string → sk, a pose's → pk — nested
+  //  Maps of small ints: the same entries the strings named, without building a string per check)
+  const DTS = .005, hitCache = new Map(), segIds = new Map(), poseIds = new Map();
+  const idOf = (ids, key) => { let i = ids.get(key); if (i === undefined){ i = ids.size; ids.set(key, i); } return i; };
+  const sub = (m, k) => { let n = m.get(k); if (!n) m.set(k, n = new Map()); return n; };
   const poseOf = (k, hand, vin, vout) => {
     const ct = contact(vin, vout, o), f = v => v.x.toFixed(4) + ',' + v.y.toFixed(4) + ',' + v.z.toFixed(4);
-    return { p: plateRec(k, Z[hand], ct), pk: hand + '|' + f(vin) + '|' + f(vout) };
+    return { p: plateRec(k, Z[hand], ct), pk: idOf(poseIds, hand + '|' + f(vin) + '|' + f(vout)) };
   };
   const exactHit = (seg, k, p, pk) => {
     const own = k === seg.a;
@@ -592,8 +622,8 @@ function solveVoice(V, o){
     const pa = segPos(seg, a), pb = segPos(seg, b), hx = o.plate.L * sc[k] / 2 + r + .4;
     if (Math.min(pa.x, pb.x) > X[k] + hx || Math.max(pa.x, pb.x) < X[k] - hx) return 0;
     if (Math.min(pa.y, pb.y) - r > DESCENT * (b - S[k]) + .8) return 0;   // above anywhere it can reach
-    const key = seg.key + '|' + k + '|' + pk;
-    let h = hitCache.get(key);
+    const memo = sub(sub(hitCache, seg.sk), k);
+    let h = memo.get(pk);
     if (h !== undefined) return h;
     h = 0;
     for (let t = a; t <= b + 1e-9; t += DTS){
@@ -601,7 +631,7 @@ function solveVoice(V, o){
       if (plateGap(B, q.x, q.y, q.z, r) < -2e-3){ h = 1; break; }
       if (t > S[k] && B.extend < .4 && Math.abs(B.z - q.z) > B.hz + B.hy + r) break;   // snapped back off the row
     }
-    hitCache.set(key, h);
+    memo.set(pk, h);
     return h;
   };
   const knownHits = (seg, pl) => {                           // a new ball segment vs the known plates
@@ -633,10 +663,10 @@ function solveVoice(V, o){
       if (s.t1 <= seg.t0 || s.t0 >= seg.t1) continue;
       if ((seg.ev != null && s.ev === seg.ev) || (seg.cid != null && s.cid === seg.cid)) continue;
       const need = seg.rad + s.rad + o.HIT_GAP;
-      if (seg.key && s.key){
-        const key = seg.key < s.key ? seg.key + '|' + s.key : s.key + '|' + seg.key;
-        let h = pairCache.get(key);
-        if (h === undefined){ h = segMinDist(seg, s, need) < need ? 1 : 0; pairCache.set(key, h); }
+      if (seg.key && s.key){                                 // (a pair is one entry, whichever comes first)
+        const memo = sub(pairCache, seg.sk < s.sk ? seg.sk : s.sk), other = seg.sk < s.sk ? s.sk : seg.sk;
+        let h = memo.get(other);
+        if (h === undefined){ h = segMinDist(seg, s, need) < need ? 1 : 0; memo.set(other, h); }
         hits += h;
       } else if (segMinDist(seg, s, need) < need) hits++;
     }
@@ -800,6 +830,7 @@ function solveVoice(V, o){
           if (F < o.F_HARD - 1e-9 || F > F_FREE + 1e-9) return;
           const vx = (X[j] - X[b.i]) / F, vy = g * F / 2, vz = (zj - Z[b.hand]) / F, vout = v3(vx, vy, vz);
           const seg = { t0: S[b.i], t1: S[j], x0: X[b.i], y0: 0, z0: Z[b.hand], vx, vy, vz, kind: 'flight', a: b.i, b: j, rad: r, key: `f${b.i},${j},${b.hand}${hand}` };
+          seg.sk = idOf(segIds, seg.key);
           const pose = poseOf(b.i, b.hand, b.vin, vout);
           const hits = ballHits(seg, node.segs) + exactHit(seg, b.i, pose.p, pose.pk) + knownHits(seg, node.pl) + plateBack(b.i, pose.p, pose.pk, node.segs);
           const c = flightCost(F, j - b.i - 1) + vhCost(vx) + plateCost(b.vin, vout) + (b.hand !== hand ? C.swap : 0) + C.hit * hits;
@@ -813,6 +844,7 @@ function solveVoice(V, o){
           const pick = pickCarriage(node.carr, node.nid, e, ev);
           if (!pick) continue;
           const seg = { t0: e.t, t1: S[j], x0: X[j], y0: HS[h], z0: zj, vx: 0, vy: 0, vz: 0, kind: 'drop', b: j, rad: r, ev, key: `d${j},${h},${hand}` };
+          seg.sk = idOf(segIds, seg.key);
           const hits = ballHits(seg, node.segs) + knownHits(seg, node.pl) + pick.segs.reduce((n, q) => n + ballHits(q, node.segs), 0);
           const c = C.entry + pick.cost + C.low * (HS[0] - HS[h]) + C.hit * hits;
           if (!best || c < best.c) best = { c, hand, open: node.open, carr: pick.carr, segs: push(node.segs, [...pick.segs, seg], S[j]), pl: node.pl,
@@ -835,6 +867,7 @@ function solveVoice(V, o){
           if (!pick) continue;
           const vout = v3(0, g * FT[h], 0), pose = poseOf(j, st.hand, st.vin, vout);
           const seg = { t0: S[j], t1: e.t, x0: X[j], y0: 0, z0: Z[st.hand], vx: 0, vy: g * FT[h], vz: 0, kind: 'rise', a: j, b: -1, rad: r, ev, key: `r${j},${h},${st.hand}` };
+          seg.sk = idOf(segIds, seg.key);
           const hits = ballHits(seg, st.segs) + exactHit(seg, j, pose.p, pose.pk) + knownHits(seg, st.pl) + plateBack(j, pose.p, pose.pk, st.segs) +
             pick.segs.reduce((n, q) => n + ballHits(q, st.segs), 0);
           const c = C.exit + pick.cost + plateCost(st.vin, vout) + C.low * (HS[0] - HS[h]) + C.hit * hits;

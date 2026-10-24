@@ -20,6 +20,7 @@ let ctx = null, master = null, rebuilds = 0;
 let eDL = null, eDR = null;
 let busOut = null, recDest = null;                     // recording tap (additive seam, not war logic)
 let mixOut = null, glue = null, limiter = null;        // MIX BUS (post-everything): glue → limiter → ceiling clipper
+let gates = new Map(), trimNode = null;                 // TRANSPORT CUT (silence): this take's voice gates + the bus trim
 let revIn = null, revOut = null;                       // room reverb send/return (synchronous IR)
 let noiseBuf = null;                                   // white-noise buffer for drum voices (per-context)
 let beat = .7;                                         // fed by setBeat() on every song build
@@ -57,6 +58,7 @@ export function setBeat(b){
 function buildAudio(){                                 // MUST be called from a gesture
   if (ctx){ try { ctx.close(); } catch(e){} }
   ctx = new AC();
+  gates = new Map();                                   // (a take's gates belong to their context)
   master = ctx.createGain(); master.gain.value = .9;
   const out = ctx.createGain();
   master.connect(out);
@@ -484,7 +486,7 @@ function ceilingCurve(top, knee){                      // odd, monotone, |y| ≤
   return c;
 }
 function buildMixBus(out){
-  const trim = ctx.createGain(); trim.gain.value = MIX.busTrim;
+  const trim = trimNode = ctx.createGain(); trim.gain.value = MIX.busTrim;
   glue = ctx.createDynamicsCompressor();
   limiter = ctx.createDynamicsCompressor();
   for (const [node, k] of [[glue, MIX.glue], [limiter, MIX.limit]])
@@ -500,7 +502,7 @@ function buildMixBus(out){
     conv.buffer = roomIR(ctx, MIX.revSecs);             // synchronous — never an empty convolver
     revIn.connect(conv); conv.connect(revOut); revOut.connect(out);
   } catch(e){ revIn = null; /* no convolver → no sends at all; the dry mix is unaffected */ }
-  revProbe = null; revMax = 0;
+  revProbe = null; revMax = 0; outProbe = null; outMax = 0;
   return clip;
 }
 /* A small, dark room: stereo decorrelated noise, ~12 ms pre-delay, a few early
@@ -536,7 +538,7 @@ function roomIR(c, secs){
    `hz` (the voice's fundamental, if known) narrows the pan for low voices (widthFor).
    No StereoPannerNode (very old WebKit) → no pan, everything else still works. */
 function place(dsts, sp, send = 0, hz = 0){
-  dsts = dsts.filter(Boolean);
+  dsts = dsts.filter(Boolean).map(gated);               // (through this take's gates: silence() cuts them)
   const wet = send > 0 && revIn ? send * (sp && sp.room != null ? sp.room : ROOM_MIN) : 0;
   if (!sp && !wet && dsts.length === 1) return dsts[0];
   let head = null, tail = null;
@@ -556,13 +558,51 @@ function place(dsts, sp, send = 0, hz = 0){
     direct = ctx.createGain(); direct.gain.value = Math.max(0, sp.gain); tail.connect(direct);
   }
   dsts.forEach(d => direct.connect(d));
-  if (wet){ const s = ctx.createGain(); s.gain.value = wet; tail.connect(s); s.connect(revIn); }
+  if (wet){ const s = ctx.createGain(); s.gain.value = wet; tail.connect(s); s.connect(gated(revIn)); }
   return head;
 }
-/* dev meter (window.__dev.audioProbe): compressor gain reduction + the reverb-return
-   PEAK SINCE THE LAST CALL (a running max, sampled every 30 ms once the probe is first
-   asked for) — proof the convolver actually makes sound. Dev-only; costs nothing until used. */
-let revProbe = null, revMax = 0;
+/* THE TRANSPORT CUT (main's STOP / RESTART). Every live voice reaches the bus through its TAKE's
+   gates (one per destination — master, the dry bus, the room send — made as the take's first
+   voice needs it): silence(back) fades this take's gates out and disconnects them, so everything
+   still ringing is cut whatever it is, and ducks the bus trim so the echo and the room's tail (what
+   was already inside them) die out with it — for `back` s (RESTART: most of the count-in — the
+   tails, ≤ revSecs, are ~−55 dB by then), or until unsilence() (STOP → START); the next voice opens
+   a fresh take. INSERTED like the mix bus — the §5 internals are untouched; the iOS sample path can
+   only PAUSE an element that is playing its real WAV (never one still on its priming clip). */
+function gated(d){
+  if (!d || !ctx) return d;
+  let g = gates.get(d);
+  if (!g){ g = ctx.createGain(); g.connect(d); gates.set(d, g); }
+  return g;
+}
+function holdParam(p, t){
+  try { p.cancelAndHoldAtTime(t); } catch(e){ p.cancelScheduledValues(t); p.setValueAtTime(p.value, t); }
+}
+export function silence(back = Infinity){
+  if (ctx){
+    const t = ctx.currentTime, old = [...gates.values()];
+    gates = new Map();
+    for (const g of old){ holdParam(g.gain, t); g.gain.setTargetAtTime(0, t, .01); }
+    setTimeout(() => old.forEach(g => { try { g.disconnect(); } catch(e){} }), 160);
+    metalLive.clear();                                   // (their voices were in the take: a later choke has nothing to cut)
+    if (trimNode){
+      const p = trimNode.gain; holdParam(p, t); p.setTargetAtTime(0, t, .012);
+      if (Number.isFinite(back)) p.setTargetAtTime(MIX.busTrim, t + back, .06);
+    }
+  }
+  for (const a of Object.values(bank))
+    if (!a.paused && a.dataset.real && a.src === a.dataset.real){ try { a.pause(); } catch(e){} }
+}
+export function unsilence(){
+  if (!ctx || !trimNode) return;
+  const t = ctx.currentTime, p = trimNode.gain;
+  holdParam(p, t); p.setTargetAtTime(MIX.busTrim, t, .03);
+}
+/* dev meter (window.__dev.audioProbe): compressor gain reduction + the reverb-return and
+   final-mix PEAKS SINCE THE LAST CALL (a running max, sampled every 30 ms once the probe is
+   first asked for) — proof the convolver actually makes sound, and that STOP is silent.
+   Dev-only; costs nothing until used. */
+let revProbe = null, revMax = 0, outProbe = null, outMax = 0;
 export function probe(){
   if (!ctx || !revOut) return null;
   if (!revProbe){
@@ -574,8 +614,17 @@ export function probe(){
       for (const x of a) revMax = Math.max(revMax, Math.abs(x));
     }, 30);
   }
-  const r = { revPeak: +revMax.toFixed(4), glueDb: +glue.reduction.toFixed(1), limDb: +limiter.reduction.toFixed(1) };
-  revMax = 0;
+  if (!outProbe && mixOut){                              // (+ the final mix, downmixed — a silence check, not a level meter)
+    const an = outProbe = ctx.createAnalyser(); an.fftSize = 2048; mixOut.connect(an);
+    const a = new Float32Array(an.fftSize);
+    const tick = setInterval(() => {
+      if (outProbe !== an) return clearInterval(tick);
+      an.getFloatTimeDomainData(a);
+      for (const x of a) outMax = Math.max(outMax, Math.abs(x));
+    }, 30);
+  }
+  const r = { revPeak: +revMax.toFixed(4), outPeak: +outMax.toFixed(4), glueDb: +glue.reduction.toFixed(1), limDb: +limiter.reduction.toFixed(1) };
+  revMax = 0; outMax = 0;
   return r;
 }
 

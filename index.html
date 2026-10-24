@@ -38,6 +38,12 @@
   #share{pointer-events:auto;display:block;margin-top:8px;background:none;border:1px solid rgba(90,97,120,.45);
     color:var(--dim);font:inherit;font-size:10px;letter-spacing:.18em;padding:5px 12px;border-radius:999px;cursor:pointer}
   #share:hover{color:var(--amber);border-color:rgba(255,183,100,.5)}
+  #transport{display:flex;gap:8px;margin-top:8px;pointer-events:auto}
+  .tp{background:rgba(7,6,14,.55);border:1px solid rgba(90,97,120,.45);color:var(--dim);font:inherit;font-size:10px;letter-spacing:.18em;
+    padding:5px 12px;border-radius:999px;cursor:pointer;transition:all .2s ease}
+  .tp:hover{color:var(--amber);border-color:rgba(255,183,100,.5)}
+  .tp:focus-visible{outline:none;border-color:var(--ink)}
+  .tp.on{color:var(--amber);border-color:var(--amber);background:rgba(255,183,100,.08)}
   #note{position:fixed;bottom:20px;left:20px;color:var(--dim);font-size:11px;letter-spacing:.2em;min-height:14px;max-width:38vw;overflow:hidden;white-space:nowrap}
   #note b{color:var(--amber);font-weight:600}
   #overlay{position:fixed;inset:0;display:flex;flex-direction:column;gap:18px;align-items:center;justify-content:center;
@@ -90,6 +96,10 @@
 <div id="hud">
   <h1>Gravity Orchestra</h1>
   <select id="song" aria-label="choose melody"></select>
+  <div id="transport">
+    <button id="playstop" class="tp" title="stop (space)">■&nbsp;STOP</button>
+    <button id="restart" class="tp" title="from the top">↺&nbsp;RESTART</button>
+  </div>
   <p id="songsub"></p>
   <button id="share" hidden>SHARE&nbsp;LINK</button>
 </div>

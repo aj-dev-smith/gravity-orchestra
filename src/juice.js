@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 
-/* ---------------- juice: trails, ripples, sparks, dust ----------------
+/* ---------------- juice: ripples, sparks, dust ----------------
    Pooled additive sprites that sell every impact. Time-state-free: every
    pool is a ring buffer advanced by spawn* calls and aged by updateJuice().
-   glowTex is shared — the marble halos (in main) are tinted from it too. */
+   glowTex is shared — the belt's ball halos and trails are tinted from it too
+   (the classic marble's trail pool went with the classic belt, 2026-10-24). */
 
 export function glowTexture(){                          // white; tinted per sprite
   const c = document.createElement('canvas'); c.width = c.height = 128;
@@ -43,7 +44,7 @@ const BB_FRAG = /* glsl */`
     #include <colorspace_fragment>
     #include <fog_fragment>
   }`;
-function glowBatch(n){
+export function glowBatch(n){
   const geo = new THREE.InstancedBufferGeometry();
   const quad = new THREE.PlaneGeometry(1, 1);
   geo.index = quad.index; geo.setAttribute('position', quad.attributes.position); geo.setAttribute('uv', quad.attributes.uv);
@@ -65,8 +66,6 @@ function glowBatch(n){
     commit(){ pos.needsUpdate = col.needsUpdate = size.needsUpdate = true; } };
 }
 
-const TRAIL = 46, trail = [];                            // fading trail (tinted per spawn)
-let trailHead = 0, trailB = null;
 const ripples = [];                                      // impact rings
 let rippleIdx = 0;
 const PARTS = 150, parts = [];                           // impact sparks
@@ -74,9 +73,8 @@ let partIdx = 0, partB = null;
 
 /* build every pool and add it to the scene (call once, after scene exists) */
 export function initJuice(scene){
-  trailB = glowBatch(TRAIL); partB = glowBatch(PARTS);
-  scene.add(trailB.mesh, partB.mesh);
-  for (let i=0;i<TRAIL;i++) trail.push({ p: new THREE.Vector3(), c: new THREE.Color(), a: 0, s: 0 });
+  partB = glowBatch(PARTS);
+  scene.add(partB.mesh);
   for (let i=0;i<10;i++){
     const r = new THREE.Mesh(new THREE.RingGeometry(.5,.532,48),   // thin crisp line
       new THREE.MeshBasicMaterial({blending:THREE.AdditiveBlending, transparent:true, opacity:0,
@@ -111,15 +109,6 @@ export function spawnBurst(pos, color, n, power){
   }
 }
 
-/* one trail puff at the marble's position (the .022s gating timer lives in the caller) */
-export function spawnTrail(pos, color, isBass){
-  const s = trail[trailHead++ % TRAIL];
-  s.p.copy(pos);
-  s.c.copy(color);
-  s.a = .5;
-  s.s = isBass ? .95 : .7;
-}
-
 /* one impact ring, oriented to the pad it struck.
    amp = launch impulse (.05..1.6): a gentle tap whispers, a big lob rings wide */
 export function spawnRipple(pos, quaternion, hue, isBass, amp = .8){
@@ -134,15 +123,8 @@ export function spawnRipple(pos, quaternion, hue, isBass, amp = .8){
   rp.life = 0;
 }
 
-/* advance trail fade, ripples, and sparks by one frame */
+/* advance ripples and sparks by one frame */
 export function updateJuice(dt){
-  // (a spent puff is size 0 in its batch — the whole pool is one draw call either way)
-  let any = false;
-  for (let i = 0; i < TRAIL; i++){ const s = trail[i];
-    s.a *= (1 - dt*3.2); s.s *= (1 - dt*.9);
-    const live = s.a > .004; any ||= live;
-    trailB.set(i, s.p, s.c, s.a, live ? s.s : 0); }
-  trailB.mesh.visible = any; trailB.commit();
   ripples.forEach(r => {
     if (r.life < 1){
       r.life = Math.min(1, r.life + dt*2.4);
@@ -153,7 +135,7 @@ export function updateJuice(dt){
       r.mesh.visible = true;
     } else { r.mesh.material.opacity = 0; r.mesh.visible = false; }
   });
-  any = false;
+  let any = false;
   for (let i = 0; i < PARTS; i++){ const p = parts[i];
     if (p.life < 1){
       p.life = Math.min(1, p.life + dt*1.9);

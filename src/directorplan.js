@@ -241,6 +241,13 @@ export function planEdit({ voices, grid, fixed = [], wides = [], rides = [], opt
   const missingOf = sh => keys.filter(k => k !== 'stage' && k !== 'ride' && !sh[k] && sal[k].some(v => v > 0) && !forced.some(f => f[2] === k));
   // COVERAGE: a machine that plays but never got the camera takes its best free window
   // (the machine with the FEWEST free windows chooses first — two machines can want the same gap)
+  // (o._protect — the re-run when an edit still left a machine unseen: a cover never takes a
+  //  window that leaves another machine less than a shot of screen time, while there is any other)
+  const uncovers = (k, a, b) => {
+    const left = {};
+    for (const [x, y, j] of segs) if (j !== k && j !== 'stage' && j !== 'ride') left[j] = (left[j] || 0) + (y - x) - Math.max(0, Math.min(y, b) - Math.max(x, a));
+    return segs.some(([x, y, j]) => j in left && left[j] < Lmin && x < b && y > a);
+  };
   const windows = k => {
     const L = Math.min(Lmin, N), out = [];
     for (let a = 0; a + L <= N; a++){
@@ -248,7 +255,9 @@ export function planEdit({ voices, grid, fixed = [], wides = [], rides = [], opt
       for (let s = a; s < a + L; s++){ if (fixedKey[s] || forced.some(f => s < f[1] && s >= f[0])){ ok = false; break; } v += sal[k][s]; }
       if (ok && v > 0) out.push([a, a + L, v]);
     }
-    return out;
+    if (!o._protect) return out;
+    const safe = out.filter(([a, b]) => !uncovers(k, a, b));
+    return safe.length ? safe : out;
   };
   const coverAll = ks => ks.map(k => [k, windows(k).length]).sort((x, y) => x[1] - y[1]).forEach(([k]) => {
     const w = windows(k); if (!w.length) return;
@@ -316,6 +325,14 @@ export function planEdit({ voices, grid, fixed = [], wides = [], rides = [], opt
     const n = forced.length; coverAll(missing);
     if (forced.length === n) break;                    // no free window left for them
     segs = solve();
+  }
+  // COVERAGE IS A PROMISE: if a machine that plays is still unseen (a cover took its only window —
+  // Bald Mountain's belt cover took the turntable's opening once a ride held the belt's own moment),
+  // re-run the edit with covers that never uncover another machine
+  if (!o._protect){
+    const sh = sharesOf(segs);
+    if (keys.some(k => k !== 'stage' && k !== 'ride' && !sh[k] && sal[k].some(v => v > 0)))
+      return planEdit({ voices, grid, fixed, wides, rides, opts: { ...opts, _protect: true } });
   }
   const cuts = segs.map(([a, , k]) => ({ t: t0 + a * beat, key: k }));
   if (cand.length){

@@ -17,7 +17,7 @@ Tick these off in order. Each one is a few minutes. Write down what felt wrong; 
 - [ ] Install **OVR Metrics Tool** (or turn on the browser's FPS overlay) so you can read real frame times. The emulator can't.
 
 **Comfort and scale (10 min)**
-- [ ] **Für Elise** (`?song=fur-elise&xr`). Tap **ENTER VR**. You should hear sound within a second and land on the lead belt's pad, eyes level with the strike band. Does a long lob read as real gravity (1 unit = 0.68 m)?
+- [ ] **Für Elise** (`?song=fur-elise&xr`). Tap **ENTER VR**. You should hear sound within a second and land on the belt's pad, eyes level with the strike band. Does a long lob read as real gravity (1 unit = 0.68 m)?
 - [ ] Right stick up, aim at a pad, release. The blink should be quick and never a glide. Try the **STAGE** pad: it's about 16 m up. Is the solid brass disc under you enough, or do you want a railing?
 - [ ] Snap-turn (right stick ← →). 30° steps. Too big? Too small?
 - [ ] Press **A** for the tour. Every cut should be a blink, never a camera move. Ride-cam shots land you on the belt pad; the headset is never flown.
@@ -102,8 +102,8 @@ The wrist label on the back of your left hand shows the song, the pad (`→ PAD`
 
 ## 3. What to try (in this order)
 
-1. **Für Elise** (`?song=fur-elise&xr`). It's light (≈ 165 draw calls per frame, both eyes, with the detail profile). You start on the **lead belt's pad**, with your eyes level with the strike band. Watch a long note lob: **that fall is 9.81 m/s²**. The rig is scaled so 1 world unit = 0.677 m, and every marble falls at true gravity. A marble is about the size of a bowling ball, and the hall is about 51 × 39 m.
-2. Throw yourself to **STAGE** (the wide). You'll be high up on a catwalk pad, so check how the height feels. Then try the bass belt's pad.
+1. **Für Elise** (`?song=fur-elise&xr`). It's light (≈ 165 draw calls per frame, both eyes, with the detail profile). You start on the **belt's pad**, with your eyes level with the strike band. Watch a long note lob: **that fall is 9.81 m/s²**. The rig is scaled so 1 world unit = 0.677 m, and every marble falls at true gravity. A marble is about the size of a bowling ball, and the hall is about 51 × 39 m.
+2. Throw yourself to **STAGE** (the wide). You'll be high up on a catwalk pad, so check how the height feels.
 3. Press **A** for the tour. The pads follow the director's edit (≥ 3 s per shot).
 4. Press **B**, then scrub with the left stick. Strikes are suppressed while scrubbing, and the machines re-derive instantly.
 5. **Mountain King** (`?song=mountain-king`): the belt plus the marble drums. Stand on the drums' pad. Then Y → Starship: only the sky banks.
@@ -125,8 +125,8 @@ URL knobs: `?xrhz=90` (target frame rate, default 72), `?xrscale=0.8` (framebuff
   - **Glow.** Additive glows dimmer than 0.025 are skipped. Emissive intensities are multiplied by 1.55 and additive opacities by 1.45 to stand in for the missing bloom. An instrument can set its own factor with the descriptor's `xrGlow` (1 = off), or use the optional `inst.xr(on)` hook (`src/instruments/README.md`).
   - **Dust.** `PointsMaterial` sizes are scaled back by U, because the head-space distances are metres and the motes would otherwise draw 1.48× too big.
   - **Rooms.** A room may implement `xr(on)`. The **studio** swaps its Reflector for a plain glossy floor (no extra scene render per eye). The **arena**'s blinders peak at 45%. The **starship**'s sky banks half as far, and the deck never moves.
-- **The director and the ride cam never move the headset.** `cam.update` is skipped while presenting, and only `xr.js` ever reparents the camera. **TOUR** replays the director's edit as blink-teleports between pads; a `ride` shot lands on the lead belt's pad. `scripts/xr-shot.mjs --tour` asserts the head stays put in the rig with the RIDE camera selected.
-- **Pads.** `xrplan.planAnchors` turns each director shot eye (already solved to sit in clear air and see its subject) into a catwalk pad: feet = eye − 1.6 m, facing the aim, pulled 15 % closer, and backed off if a standing user would intersect a machine's box. It also adds one pad per belt bay at band height, plus the wide. The pad under you is solid brass. The others are faint glass discs with a lit rim, so they don't litter other shots.
+- **The director and the ride cam never move the headset.** `cam.update` is skipped while presenting, and only `xr.js` ever reparents the camera. **TOUR** replays the director's edit as blink-teleports between pads; a `ride` shot lands on the belt's pad. `scripts/xr-shot.mjs --tour` asserts the head stays put in the rig with the RIDE camera selected.
+- **Pads.** `xrplan.planAnchors` turns each director shot eye (already solved to sit in clear air and see its subject) into a catwalk pad: feet = eye − 1.6 m, facing the aim, pulled 15 % closer, and backed off if a standing user would intersect a machine's box. It also adds one pad at the belt (band height; the juggler is one machine, so one pad), plus the wide. The pad under you is solid brass. The others are faint glass discs with a lit rim, so they don't litter other shots.
 - **Teleport arc.** It is the engine's own `solveLaunch` + `arcPos`, a solved marble throw onto the pad: a target plus a launch solve.
 - **Audio.** ENTER VR calls `enterSound()` inside the click, and every controller `selectstart` calls `audio.gestureRetry()`. `audio.js` is untouched. `placeAt()` places strikes against the **head pose** (`xrplan.earFrame`: head frame, world units, tanH 1, focus = head → the pad's aim), and `spatial.js` keeps its contract.
 - **Leaving VR.** Leaving restores the camera's parent, pose, fov and near/far, and re-syncs the renderer, composer and room sizes. The 2D director picks up where it left off.
@@ -144,6 +144,8 @@ URL knobs: `?xrhz=90` (target frame rate, default 72), `?xrscale=0.8` (framebuff
   | Daybreak Engine (grid, full room) | stage / belt | 1451 / 679 | **555 / 313** |
   | Forge of the Marble King (arena) | stage / belt | 1081 / 823 | **506 / 385** |
   | The Entertainer (studio) | stage / belt | 1273 / 853 | **500 / 320** |
+
+  (Measured 2026-10-07 with the classic belt — one paternoster per voice. The juggler belt, one machine since 2026-10-24, changes the belt column; re-measure with the command above.)
 
   The worst case is about 280 per eye, inside the 300–500 per eye a Quest 2 wants at 72 Hz. Triangles are unchanged (about 1M per frame for the full room, both eyes). If the GPU is the limit, `?xrscale=0.8` is the first knob; foveation is already at its maximum (1). Real frame timing needs the headset: use `chrome://inspect` → Performance, or OVR Metrics Tool. `__dev.xrPerf()` (with `?debug`) shows what the profile is doing: parts batched and drawn, parts drawing as themselves mid-flash, parts hidden, glows dimmed.
 - **The DOM HUD is invisible in VR.** The wrist label and the **Y menu** cover songs, rooms and the transport. MAP (re-routing) and EDIT STAGE are still 2D-only.

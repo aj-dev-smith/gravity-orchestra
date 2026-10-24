@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
 import { planEdit, shotAt, rideSpan, signatureOf, PLAN } from '../src/directorplan.js';
 
 // a synthetic room: 120 bpm (beat .5 s), 96 beats of music from t0 = 1
@@ -223,3 +224,16 @@ describe('directorplan — the edit, solved up front', () => {
   });
 });
 
+describe('coverage is a promise (every machine that plays gets the camera once a loop)', () => {
+  // Night on Bald Mountain's real edit inputs (main's __dev.planIn, juggler belt, 2026-10-24): the
+  // juggler's long flights make a RIDE that holds the belt's own moment, so coverage forced the belt
+  // into its best free window — the loop's opening, the turntable's ONLY free window — and the
+  // turntable was never on camera. The re-run's covers never uncover another machine.
+  const pi = JSON.parse(fs.readFileSync(new URL('./fixtures/director-bald-mountain.json', import.meta.url)));
+  it('Bald Mountain: every machine that plays is seen, the ride kept', () => {
+    const p = planEdit(pi);
+    for (const v of pi.voices) if (v.hits.length) expect(p.shares[v.key] ?? 0, `${v.key} on camera`).toBeGreaterThan(0);
+    expect(p.rides.length).toBeGreaterThan(0);
+    expect(planEdit(pi).cuts).toEqual(p.cuts);                       // (deterministic)
+  });
+});

@@ -7,11 +7,13 @@ import { singlePassFlats } from './perftune.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { SONGS, DEFAULT_SONG, defaultSongKey } from './songs/index.js';
 import { fillSongMenu, addSongOption, isRuntimeSong } from './songmenu.js';
-import { G, UP, UPY, ROLL_T, DESCENT, solveLaunch, arcPos, arcVel, padOffset, beltPhase, deployPose, PAD_R, padRadius, layoutPads, noteHz } from './engine.js';
+import { G, UP, ROLL_T, DESCENT, noteHz } from './engine.js';
 import * as audio from './audio.js';
-import { glowTex, initJuice, spawnBurst, spawnTrail, spawnRipple, updateJuice } from './juice.js';
-import { makePaternosterShop, makeToneBarParts, PT, BAR } from './paternoster.js';
-import { planCrane, plateField, plateEdge, plateDeploy, craneBall, segAt, hopLayout } from './crane.js';
+import { glowTex, initJuice, spawnBurst, spawnRipple, updateJuice } from './juice.js';
+import { layoutJuggler, solveJuggler, assembleJuggler, unpackSolve, ballAt as jBallAt } from './juggle.js';
+import JUGGLE_BAKED from './juggle-baked.json';
+import JuggleWorker from './juggle.worker.js?worker&inline';
+import { makeJugglerShop } from './jugglebelt.js';
 import { makeMarbleDrums, KIT_SOLO, KIT_ROOM, kitAnchor } from './marbledrums.js';
 import { makeCameraRig } from './camera.js';
 import { makeRoomHost, ROOMS } from './rooms/index.js';
@@ -42,15 +44,18 @@ import { makeXRBatch } from './xrbatch.js';
 /* ============================================================
    GRAVITY ORCHESTRA (née Cascade) — melody-driven marble run, now multi-track.
    A song is one or more tracks of [note, beats-until-next-hit].
-   Every track gets its own solved pad chain, rail, and marble;
-   they share the clock, so harmony is geometry.
-   The pure physics/music primitives live in engine.js.
+   Every track is a voice of ONE juggling machine (the belt: src/juggle.js
+   plans every throw, src/jugglebelt.js draws it); they share the clock,
+   so harmony is geometry. The pure physics/music primitives live in engine.js.
    ============================================================ */
 
 /* ---- mutable song state, filled by buildWorld() ---- */
 let BEAT = .7, SCALE = [];
 let tracks = [], LOOP_T = 0, world = null;
 let drumGroup = null;                                   // the drum machine's group (dev layout probe)
+/* THE BELT: the multiball JUGGLER — one machine for every belt voice (src/juggle.js plans it,
+   src/jugglebelt.js draws it) */
+let jug = null, jplan = null;                           // the belt machine + its plan, this song
 let stageWall = new THREE.Box3();                       // the belt machines' world box this song (staging + the wide fit)
 let curBuild = null;                                    // this song's staging inputs (stage edit re-anchors from them: restage)
 let lastLayout = null, lastWide = null, lastShots = [], devMarbles = [], lastSolve = null;                                  // dev: the last room solve (__dev.layout)
@@ -65,27 +70,15 @@ let devStrikes = null;                                   // ?debug sound sweep: 
 let voiceCacheStat = null;                              // dev: what the last build's voice-cache sweep kept/dropped (__dev.bank)
 let devMute = null;                                     // ?debug sound sweep: machines kept SILENT ('belt', 'drums', plugin keys) — solo levels
 let loopIndex = -1;                                     // floor(songTime / P); ticks once per loop → spawns balls
-/* CONVEYOR: the world no longer falls. Each pad RECIRCULATES — it rises to the
-   static band exactly at its strike (beltPhase) then wraps away off-screen. Each
-   marble is MORTAL — born once per loop, it juggles in the band via a per-ball
-   render lift = DESCENT·τ, then plunges out the bottom and is recycled. The two
-   mechanisms share no state; they meet at the band, at strikes, by construction.
+/* THE STATIC BAND: the world never falls. Every plate rides its lane's chain up to the strike
+   line exactly at its strike (beltPhase) and wraps away off-screen; the balls fly their solved
+   arcs between strikes, held over the long gaps by the magnet carriages (src/juggle.js).
    Physics is untouched — this is all render-time framing. */
-const STAGE_Y = DESCENT * ROLL_T;                       // the static strike band (~5.7) every pad rises to meet
-// STOWED pose: disc lying flat & flush on the belt (its "up" faces the camera, +z), the
-// pose a pad pops in/out at. The belt loop slerps qFlat → po.qN as the pad unfolds on entry.
-const Q_FLAT = new THREE.Quaternion().setFromUnitVectors(UPY, new THREE.Vector3(0, 0, 1));
-const _qn = new THREE.Vector3();                        // scratch: live pad normal during unfold
-const FULL_DEPLOY = { extend: 1, tilt: 1 };             // reduced-motion: pads just appear, fully deployed
-const FADE_TAIL = 1.0;                                  // seconds a plunged ball lingers before recycle
-const BIRTH_DROP = 10;                                  // world-u a newborn FREE-FALLS in (honest G, fixed height)
-const BIRTH_FALL = Math.sqrt(2 * BIRTH_DROP / -G.y);    // time that drop takes under real gravity (≈1.17s) —
-                                                        // fixed, so delayed voices just hold longer, then drop identically
-const LEAD_IN = 2.4;                                    // seconds of count-in BEFORE the marble spawns (songTime starts
-                                                        // negative): the machine runs solo so songs don't snap straight
-                                                        // in. A pickup fill (negative drum beats) rides the marble's
-                                                        // roll-in just ahead of the downbeat — see convert.js step 12.
-const RIG_POOL = 3;                                     // rigs per role — ≤2 balls alive at the seam, 3 is slack
+const STAGE_Y = DESCENT * ROLL_T;                       // the static strike band (~5.7) every plate rises to meet
+const LEAD_IN = 2.4;                                    // seconds of count-in BEFORE the downbeat (songTime starts
+                                                        // negative): the machine spins up so songs don't snap straight
+                                                        // in. A pickup fill (negative drum beats) rides the roll-in
+                                                        // just ahead of the downbeat — see convert.js step 12.
 let recState = 'idle', recorder = null;                 // idle | armed | rec — transitions at the seam
 const recEl = document.getElementById('rec');
 const hueOf = n => Math.max(0, SCALE.indexOf(n.replace(/\d/,''))) / Math.max(1, SCALE.length);
@@ -222,13 +215,7 @@ const gov = makePerfGovernor({ screen: () => ({ maxPR: Math.min(devicePixelRatio
 
 const chrome = new THREE.MeshStandardMaterial({color:0xd8dde8, metalness:1, roughness:.12, envMap, envMapIntensity:1.4});
 
-/* The visible machine: the PATERNOSTER (src/paternoster.js) — open roller chains on
-   toothed sprockets carrying tuned tone-plates, a magnet crane in the top housing.
-   beltSpeed = DESCENT is the honesty hook: plates rise at DESCENT, chains scroll at
-   DESCENT → slip-free, no state. Built per track in buildWorld, lives under tr.stage.
-   (It replaced the original solid belt WALL, conveyor.js — in git history before 3579606.) */
-const shop = makePaternosterShop({ envMap, beltSpeed: DESCENT, bandY: STAGE_Y, floorY: ROOM.FLOOR });
-let machinesOn = true;                                  // key M toggles the whole machine for A/B
+let machinesOn = true;                                  // key M toggles the belt's machine for A/B (plates + balls stay)
 
 /* The marble drum machine — one immortal ball per drum, dribbling on its own head,
    pistons for force, magnets for long rests (src/marbledrums.js). Rebuilt per song
@@ -250,44 +237,15 @@ const strikeLights = Array.from({ length: STRIKE_LIGHTS }, () => {
 let strikeLightIdx = 0;
 const _sp = new THREE.Vector3();
 
-/* ---------------- marble rigs (lead = amber, bass = ice-blue) ---------- */
-function makeRig(opt){
-  const group = new THREE.Group();
-  const core = new THREE.Mesh(new THREE.SphereGeometry(opt.r, 32, 32),
-    new THREE.MeshStandardMaterial({color:opt.body, emissive:opt.emissive, emissiveIntensity:EMI,
-      metalness:.3, roughness:.25, envMap}));
-  const deform = new THREE.Group();                     // squash & stretch happens here
-  deform.add(core);
-  const halo = new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex, color:opt.glow,
-    blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:HALO_A}));
-  halo.scale.set(opt.r*5, opt.r*5, 1);
-  const lamp = new THREE.PointLight(opt.glow, 3.5, 10, 2);  // physical units since r155
-  group.add(deform, halo, lamp);
-  group.visible = false;
-  scene.add(group);
-  return {group, core, deform, halo, lamp, glow:new THREE.Color(opt.glow), squash:0};
-}
-/* A POOL of rigs per role: the spawner checks one out for each newborn ball and
-   returns it on death. Sized RIG_POOL (3) — only the youngest ball strikes; the
-   others are the previous loops' marbles plunging away during the seam overlap. */
+/* ---------------- the belt voices' looks (lead = amber, bass = ice-blue, alto = violet) ---------- */
 const RIG_OPT = {
   lead: {r:.26, body:0xffc488, emissive:0xff9233, glow:0xffaa55},
   bass: {r:.36, body:0xa8d4ff, emissive:0x3d7dff, glow:0x66aaff},
   alto: {r:.21, body:0xe2c8ff, emissive:0x9a4dff, glow:0xc08bff},
 };
-const rigPool = {};
-for (const role of ['lead', 'bass', 'alto']){
-  rigPool[role] = Array.from({length: RIG_POOL}, () => {
-    const rg = makeRig(RIG_OPT[role]); rg.busy = false; return rg;
-  });
-}
-function checkoutRig(role){
-  const rg = rigPool[role].find(r => !r.busy);
-  if (rg){ rg.busy = true; rg.squash = 0; rg.lamp.intensity = 3.5; }
-  return rg;                                            // null only if pool exhausted (shouldn't happen)
-}
-function checkinRig(rig){ rig.busy = false; rig.group.visible = false; }
-
+/* the juggler's machine shop (one machine per song; its balls wear these looks) */
+const jugShop = makeJugglerShop({ envMap, floorY: ROOM.FLOOR - (STAGE_Y + UP.y),
+  rig: Object.fromEntries(Object.entries(RIG_OPT).map(([k, v]) => [k, { ...v, glowTex }])) });
 initJuice(scene);                                       // build trail / ripple / spark / dust pools
 
 /* ---- conveyor debug: static world rulers + height-over-time graph (toggle G) ---- */
@@ -313,7 +271,7 @@ const convHist = []; const CONV_N = 300;
 addEventListener('keydown', e => { if (e.key === 'g' || e.key === 'G'){
   convDbgOn = !convDbgOn; convCv.style.display = convDbgOn ? 'block' : 'none'; convRulers.visible = convDbgOn; }});
 addEventListener('keydown', e => { if (e.key === 'm' || e.key === 'M'){    // A/B the visible machine
-  machinesOn = !machinesOn; tracks.forEach(tr => { if (tr.machine) tr.machine.group.visible = machinesOn; }); }});
+  machinesOn = !machinesOn; if (jug) jug.frame.visible = machinesOn; }});
 addEventListener('keydown', e => { if (e.key === 'r' || e.key === 'R') rooms.cycle(); });   // cycle rooms (incl. off)
 function convDebug(markerY, camY){
   if (!convDbgOn) return;
@@ -343,74 +301,18 @@ function convDebug(markerY, camY){
   convX.fillStyle = '#7dffb0';
   convX.fillText(`marble y ${last.m.toFixed(1)}  band ${blo.toFixed(1)}…${bhi.toFixed(1)} (Δ${(bhi-blo).toFixed(1)})`, 4, H-15);
   convX.fillStyle = '#ffc87d';
-  const nBalls = tracks.reduce((s, t) => s + t.balls.length, 0);
+  const nBalls = jplan?.voices.reduce((s, V) => s + (V.balls || 0), 0) ?? 0;
   convX.fillText(`cam y ${last.c.toFixed(1)}  loop ${loopIndex}  balls ${nBalls}  (G to hide)`, 4, H-4);
 }
-let trailTick = 0;                                      // gates trail spawns to every .022s
 let expoKick = 0;                                       // exposure pop on lead strikes (camera shake lives in the rig)
-
-/* ---------------- world builder ----------------
-   Solver per track: v0 = (ΔP − ½·g·dt²)/dt — exact, no drift.
-   Descent is proportional to time, so parallel tracks fall together. */
-function buildTrack(melody, zBase, role, delayBeats = 0, deep = false){
-  const isBass = role === 'bass';
-  const voiceDeep = isBass || deep;
-  const stage = new THREE.Group();                      // the track's LOCAL frame; buildWorld places it via tr.origin
-  const rollT = ROLL_T + delayBeats * BEAT;             // late entry = lazy drop-in
-  // pad size encodes register, per voice (smaller = higher) — a pure fn of the note.
-  // hue carries pitch class; this adds the octave hue throws away. Same note → same size.
-  const radOf = padRadius(melody, role);                // world radius, layout-invariant
-  // layout spaces pads apart so fast runs clear — gravity & vertical drop untouched.
-  // (a gap too long for a free arc is a CRANE HOP — crane.js — so its step stops growing with dt)
-  const pads = layoutPads(melody, {zBase, isBass, delayBeats, beat: BEAT, radOf, ...hopLayout(-G.y)});
-  const total = pads.reduce((s, p) => s + p.dt, 0);
-  const arcs = [];
-  for (let i = 0; i < pads.length; i++){
-    const a = pads[i];
-    const target = (i === pads.length-1)
-      ? a.pos.clone().add(new THREE.Vector3(0,-9,0))
-      : pads[i+1].pos.clone();
-    const dt = a.dt;
-    arcs.push(solveLaunch(a.pos, target, dt));
-  }
-  // No rail, no landing pool: on the conveyor the marble is born dropping in
-  // above pad 0 and dies plunging out the bottom (see ballPos / the ball loop).
-
-  const bar = makeToneBarParts({ envMap });           // tone-plate parts, per track
-  // pads: normal bisects incoming & outgoing velocity
-  const padObjs = pads.map((pad, i) => {
-    const prev = (i-1+pads.length) % pads.length;
-    const vin = arcVel(arcs[prev], pads[prev].dt);
-    const n = arcs[i].clone().normalize().sub(vin.clone().normalize()).normalize();
-    if (n.y < .2) n.set(0,1,0);
-    const g = new THREE.Group();
-    g.position.copy(pad.pos).y -= .12;
-    g.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), n);
-    g.scale.setScalar(radOf(pad.note) / PAD_R);          // same source of truth as the layout
-    // a tuned steel tone-plate on brass node pins, wearing a glowing hue frame
-    const body = new THREE.Mesh(bar.barGeo, new THREE.MeshStandardMaterial({
-        color: isBass ? 0xb4c0da : 0xe2e7f0, metalness:.7, roughness:.24, envMap, envMapIntensity:1.7}));
-    const rim = new THREE.Mesh(bar.rimGeo, new THREE.MeshBasicMaterial({
-        color: new THREE.Color().setHSL(hueOf(pad.note), .9, .62).multiplyScalar(1.35),   // reads from the stage shot
-        transparent:true, opacity:.18, depthWrite:false}));
-      rim.position.y = .062;
-      g.add(new THREE.Mesh(bar.pinGeo, bar.brass));
-    g.add(body, rim); stage.add(g);
-    return {g, rim, body, flash:0, hue:hueOf(pad.note),
-            base: g.position.clone(), n: n.clone(), qN: g.quaternion.clone(),
-            amp: THREE.MathUtils.clamp(arcs[i].dot(n)*.07, .05, 1.6)};
-  });
-
-  return {stage, origin:new THREE.Vector3(), pads, arcs, padObjs, role, isBass, deep:voiceDeep, rollT, total, balls:[], active:null};
-}
 
 /* World-space bounds of what is actually DRAWN under `root` (hidden parts — a parked ball,
    a stowed pad — don't count; sprites/halos don't either). `ignoreRoot`: measure a group
-   even while it is toggled off (the M key hides the belt machines). */
+   even while it is toggled off (the M key hides the belt's machine). */
 const _vb = new THREE.Box3();
 function visBox(root, ignoreRoot = false){
   const out = new THREE.Box3();
-  root.updateWorldMatrix(true, true);                   // parents too: a fresh bay's stage hasn't rendered yet
+  root.updateWorldMatrix(true, true);                   // parents too: a fresh machine hasn't rendered yet
   (function walk(o){
     if (!o.visible && !(ignoreRoot && o === root)) return;
     if (o.isInstancedMesh){ if (o.count){ o.computeBoundingBox(); out.union(_vb.copy(o.boundingBox).applyMatrix4(o.matrixWorld)); } }
@@ -456,6 +358,93 @@ function disposeTree(root){
   });
 }
 
+/* THE BELT — the JUGGLER: ONE machine for every belt voice (src/jugglebelt.js), its whole loop
+   planned up front (src/juggle.js — who strikes what, on which hand, when the cranes catch and
+   release). `tracks` are thin VIEWS of the plan's voices (role, pads, rollT, total, deep): the
+   camera's buttons, the director, the audio bank and the rides read them.
+   The plan's SEARCH takes up to seconds, so it never runs here: the catalog's solves are baked
+   (src/juggle-baked.json, scripts/juggle-bake.mjs — keyed by the belt's notes + tempo); anything
+   else (an import, a share link, a MAP re-route) is solved by a worker while the machine stands
+   ready but empty and the count-in holds (animate), then swapped in (jugglerSolved). Returns the
+   FIXED-cam framing + its width. */
+function buildJuggler(S, wallBox){
+  const t0 = performance.now();
+  const L = jplan = layoutJuggler(S), baked = JUGGLE_BAKED.plans[L.key];   // (the key holds the solver's version too)
+  if (baked){ assembleJuggler(L, unpackSolve(baked.voices)); L.from = 'bake'; }
+  else solveJugglerAsync(S, L);
+  LOOP_T = L.P - ROLL_T;
+  tracks = L.voices.map((V, vi) => {
+    const rollT = ROLL_T + V.delay * BEAT;
+    return { role: V.role, deep: V.deep, isBass: V.role === 'bass', V, vi, rollT,
+             total: V.notes.reduce((a, q) => a + q.dt, 0),
+             pads: V.notes.map(q => ({ t: q.s - rollT, dt: q.dt, note: q.note, vel: q.vel })),
+             stage: null, machine: { group: null }, _st: null };   // (stage / machine.group: the juggler's — mountJuggler)
+  });
+  mountJuggler(L, -LEAD_IN);
+  wallBox.union(visBox(jug.frame, true));
+  L.ms = Math.round(performance.now() - t0);
+  return { stageView: { cx: 0, halfW: Math.max(6, jug.width / 2) }, wallW: jug.width };
+}
+/* build the machine for plan L (solved, or a layout still being solved) and hang it in the world */
+function mountJuggler(L, t){
+  if (jug){ world.remove(jug.group); jug.dispose(); }
+  if (L.solved && L.warnings.length) console.warn('cascade juggler:\n  ' + L.warnings.join('\n  '));
+  jug = jugShop.build(L, { hueOf });
+  jug.group.position.set(0, STAGE_Y + UP.y, 0);           // its band frame: y 0 = a ball's centre at a strike
+  jug.frame.visible = machinesOn;
+  world.add(jug.group);
+  tracks.forEach(tr => { tr.stage = jug.group; tr.machine.group = jug.frame; });
+  if (L.solved) jugSpinUp(L);
+  jug.update(jugTime(t), 0, { skipStrikes: true });       // posed before anything measures it
+  jug.group.updateMatrixWorld(true);
+  if (xrOn) jug.xr(true);
+}
+/* THE COUNT-IN, juggler: the machine SPINS UP. Before the downbeat its clock runs slow — speed
+   (1 + t/LEAD_IN)^k: at rest before the start tap, full speed (C1) at songTime 0 — covering only
+   jugD of the plan, all of it after the last ball docked. So the count-in shows the plan's own
+   breath (every ball home, nothing struck) — never the loop's last bar (Canon's would be 9 notes).
+   A pure fn of songTime (scrub-exact); the chains and their plates slow together, slip-free. */
+let jugD = 1.2;
+const jugTime = t => t >= 0 ? t : -jugD * (1 - Math.max(0, 1 + t / LEAD_IN) ** (LEAD_IN / jugD));
+/* the voice's ball with the most time in the air per loop (what a manual RIDE follows) */
+function busiestBall(V){
+  if (V._busy == null){ const air = new Array(V.balls).fill(0); for (const q of V.segs) air[q.ball] += q.t1 - q.t0; V._busy = air.indexOf(Math.max(...air)); }
+  return V._busy;
+}
+function jugSpinUp(L){
+  const home = L.P - Math.max(...L.voices.map(V => V.dockT?.length ? V.dockT[V.dockT.length - 1] : -Infinity));
+  jugD = Math.min(LEAD_IN / 2, Math.max(.05, home - .15));
+}
+let jugWorker = null, jugReq = 0;
+function solveJugglerAsync(S, L){
+  const id = ++jugReq, song = { bpm: S.bpm, melody: S.melody, alto: S.alto, bass: S.bass };
+  noteEl.textContent = 'planning the juggle…';            // (the count-in holds until it's in — animate)
+  const done = solved => { if (id === jugReq && jplan === L) jugglerSolved(L, solved); };
+  const local = () => setTimeout(() => { if (id === jugReq && jplan === L){ done(solveJuggler(L)); L.from = 'main'; } }, 50);   // (no worker: after a paint)
+  if (jugWorker){ jugWorker.terminate(); jugWorker = null; }   // a stale search must not delay this one
+  try {
+    jugWorker = new JuggleWorker();
+    jugWorker.onmessage = e => {
+      if (e.data.id !== id) return;
+      if (e.data.error || e.data.key !== L.key){ console.warn('cascade juggler: worker', e.data.error || 'key mismatch', '— solving here'); local(); }
+      else done(e.data.solved);
+      jugWorker?.terminate(); jugWorker = null;
+    };
+    jugWorker.onerror = e => { e.preventDefault?.(); console.warn('cascade juggler: worker failed — solving here'); jugWorker = null; local(); };
+    jugWorker.postMessage({ id, song });
+  } catch (err){ jugWorker = null; local(); }
+}
+/* the worker's solve is in: assemble it onto THIS build's layout and swap the empty machine for
+   the full one — songTime runs on, the director re-plans its rides from the new flights */
+function jugglerSolved(L, solved){
+  assembleJuggler(L, solved); L.from = 'worker';
+  noteEl.textContent = '';
+  mountJuggler(L, songTime);
+  if (curBuild) syncDirector(curBuild.S, curBuild.view);
+  fadeMats = collectFadeMats(world); fadeWarm = 3;
+  singlePassFlats(scene);
+}
+
 function buildWorld(keyName){
   if (recState !== 'idle') abortRec();                  // a rebuilt world invalidates the take
   const S = editor.song(keyName);                       // (the creation tools' instrument MAP may re-route it — src/editor)
@@ -463,74 +452,28 @@ function buildWorld(keyName){
   BEAT = 60 / S.bpm; SCALE = S.scale;
   document.getElementById('songsub').textContent = S.sub;
 
+  if (jug){ jug.dispose(); jug = null; jplan = null; }   // (a pending solve for the old song is dropped: jplan moved on)
   if (world){
     scene.remove(world);
     world.traverse(o => {
       if (o.geometry) o.geometry.dispose();
       if (o.material && o.material !== chrome){
         if (o.material.map) o.material.map.dispose();   // per-song belt CanvasTextures — don't leak
-        if (o.material.emissiveMap) o.material.emissiveMap.dispose();   // (the paternoster's per-track warm wash)
+        if (o.material.emissiveMap) o.material.emissiveMap.dispose();   // (the belt housings' warm wash)
         o.material.dispose();
       }
     });
   }
   world = new THREE.Group(); world.matrixAutoUpdate = false; scene.add(world);   // (never moves: lets still stations skip matrix work)
   pruneFrozen();
-  Object.values(rigPool).flat().forEach(checkinRig);   // recall every marble from the old song
-
-  // Each track now builds in its OWN local frame (zBase = 0 — the z-weave still
-  // wiggles ±~1.4 around 0, keeping arc depth; it's just no longer pushed onto a
-  // private z-plane). Placement is the bay layout below.
-  tracks = [ buildTrack(S.melody, 0, 'lead') ];
-  if (S.alto){
-    const d = Array.isArray(S.alto) ? {notes:S.alto, delay:0} : S.alto;
-    tracks.push( buildTrack(d.notes, 0, 'alto', d.delay, d.deep) );
-  }
-  if (S.bass){
-    const d = Array.isArray(S.bass) ? {notes:S.bass, delay:0} : S.bass;
-    tracks.push( buildTrack(d.notes, 0, 'bass', d.delay) );
-  }
-  LOOP_T = tracks[0].total + 1.2;
-
-  // BAY LAYOUT — side-by-side machines on a common wall (lead, alto, bass, left→right).
-  // tr.origin is a real placement transform (the seed of user-placed instruments).
-  // Sliding a track in x is a rigid translation; gravity is vertical, so the solved
-  // physics is untouched — we add tr.origin only at render time. Common wall ⇒ z=0,y=0.
-  tracks.forEach(planTrackCrane);     // conserved marble: solve each voice's magnet crane
-  const GAP = PT.GAP;
-  let cursor = 0;
-  tracks.forEach(tr => {
-    const xs = tr.padObjs.map(po => po.base.x);
-    const lo = Math.min(...xs), hi = Math.max(...xs);
-    tr.origin.set(cursor - lo, 0, 0);                   // shift the field's left edge to the cursor
-    cursor += (hi - lo) + GAP;
-  });
-  const wallW = cursor - GAP;                           // centre the whole wall on x=0
-  tracks.forEach(tr => {
-    tr.origin.x -= wallW/2; tr.stage.position.copy(tr.origin); tr.stage.name = 'belt:' + tr.role; world.add(tr.stage);
-    tr.machine = shop.buildMachine(tr);                 // visible belt machine, in the track's local frame
-    tr.machine.group.visible = machinesOn;
-    tr.stage.add(tr.machine.group);                     // under the stage → inherits the bay placement for free
-  });
-
-  // FIXED-cam framing: x-centre + half-width of the whole WALL (world x = base.x + origin.x)
-  let minX = Infinity, maxX = -Infinity;
-  tracks.forEach(tr => tr.padObjs.forEach(po => {
-    const x = po.base.x + tr.origin.x;
-    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-  }));
-  const stageView = {cx: (minX + maxX) / 2, halfW: Math.max(6, (maxX - minX) / 2)};
 
   // ---- STAGING. Everything is built at its BASE slot first, then the room is SOLVED from
   //      what was really built (stations.js layoutStations: the wings ride out with the
   //      belt's edges, overlapping footprints are pushed apart) and moved into place — a
   //      rigid translation of solved worlds, render-time only. ----
+  // THE BELT: the JUGGLER — ONE machine, every voice's balls (src/juggle.js plans, src/jugglebelt.js draws)
   const wallBox = stageWall.makeEmpty();
-  tracks.forEach(tr => {                                // pose the machine once (its chains + carriers are placed by
-    tr.padObjs.forEach(po => { po.beltY ??= STAGE_Y; }); //  update(), not at build) — the animate loop re-poses it anyway
-    tr.machine.update(0, 0);
-    wallBox.union(visBox(tr.machine.group, true));
-  });
+  const { stageView, wallW } = buildJuggler(S, wallBox);
   const full = !!(S.parts && Object.keys(S.parts).some(k => S.parts[k]?.length));
   const P0 = ROLL_T + LOOP_T, loopBeats = S.melody.reduce((a, n) => a + n[1], 0);
 
@@ -556,8 +499,8 @@ function buildWorld(keyName){
     const st = editor.slot(rig.I.key, stationFor(rig.I.key, i));   // a user-placed station (stage edit): pinned x/z/yaw
     const station = new THREE.Group(); station.name = rig.I.key;   // (names: perf/debug probes)
     // a HUNG station (the ricochet chandelier) is a crown over the belt: centred on the wall,
-    // its LOWEST part (plate, stem, the knot's wire) HANG_CLEAR above the paternoster's top
-    // housing — never across the strike band, never reading as resting on the housing
+    // its LOWEST part (plate, stem, the knot's wire) HANG_CLEAR above the belt's top housing —
+    // never across the strike band, never reading as resting on the housing
     const hung = st.hang && !wallBox.isEmpty();
     let y = hung ? wallBox.max.y + HANG_CLEAR : st.y;
     const z = hung ? (wallBox.min.z + wallBox.max.z) / 2 + st.z : st.z;
@@ -720,7 +663,6 @@ function buildWorld(keyName){
   // spawns at songTime 0 and rolls into the downbeat. skipStrikes guards the first
   // frame from retro-firing every drum edge it lands on (same as a scrub jump).
   songTime = -LEAD_IN; loopIndex = -1; skipStrikes = true;
-  tracks.forEach(tr => spawnBall(tr, 0));   // the count-in: marble hangs ARMED on its magnet
   if (started) clock.start();
   editor.built();
 }
@@ -728,7 +670,7 @@ function buildWorld(keyName){
 function placeRoom(){
   const { S, view, wallW } = curBuild;
   rooms.place([
-    { x: view.cx, z: -2.25, w: wallW + 4, d: 6, yaw: 0, y: STAGE_Y - 9.6 },   // the paternoster bays (housing bottom)
+    { x: view.cx, z: -2.25, w: wallW + 4, d: 6, yaw: 0, y: STAGE_Y - 9.6 },   // the belt machine (housing bottom)
     ...(S.drums ? [kitAnchor(view.cx, kitSlot)] : []),
     ...instLive.filter(r => !r.slot.hang).map(r => ({ x: r.station.position.x, z: r.station.position.z, yaw: r.station.rotation.y,
       w: r.slot.w, d: r.slot.d, y: r.slot.y })),
@@ -757,35 +699,6 @@ function restage(){
   fadeMats = collectFadeMats(world); fadeWarm = 3;
 }
 
-/* PATERNOSTER: the marble is CONSERVED, and the MAGNET CRANE flies every gap a free arc
-   can't (src/crane.js): any gap longer than dtFree — and the loop seam — is a CRANE HOP
-   (an APEX KISS — a real arc the magnet takes at its apex and glides level — or straight up
-   to the magnet, carried, dropped onto the next pad on its beat). The plan is choreographed
-   around the voice's own tone-plates (plateField; a plate in the way stows early / unfolds
-   late — its edge is in the plan, the render reads it). Then every pad's tilt is re-aimed to
-   bisect its REAL in/out (the plan's vOut/vIn). The free arcs themselves are untouched. */
-function planTrackCrane(tr){
-  const P = ROLL_T + LOOP_T, n = tr.pads.length, g = -G.y;
-  const padT = tr.pads.map(p => tr.rollT + p.t);
-  const clear = plateField({ padT, P, plate: BAR, stowZ: PT.STOW_Z, inner: PT.INNER, cull: PT.CULL,
-    plates: tr.padObjs.map(po => ({ x: po.base.x, z: po.base.z, s: po.g.scale.x })) });
-  tr.crane = planCrane({ g, P, rollT: tr.rollT, r: RIG_OPT[tr.role].r, clear,
-    pads: tr.pads.map(p => ({ t: p.t, dt: p.dt, x: p.pos.x, z: p.pos.z })) });
-  if (tr.crane.warnings.length) console.warn(`cascade crane (${tr.role}):\n  ` + tr.crane.warnings.join('\n  '));
-  const hopOf = i => tr.crane.hopAt[i] >= 0 ? tr.crane.hops[tr.crane.hopAt[i]] : null;
-  // falling-frame velocities (the band frame minus the belt's DESCENT)
-  // (a hop's launch/arrival are the plan's own: straight up/down, or an apex kiss's ballistic in/out)
-  const vOut = i => { const h = hopOf(i); return h ? new THREE.Vector3(h.vOut.x, h.vOut.y - DESCENT, h.vOut.z) : tr.arcs[i].clone(); };
-  const vIn = i => { const k = (i - 1 + n) % n, h = hopOf(k);
-    return h ? new THREE.Vector3(h.vIn.x, h.vIn.y - DESCENT, h.vIn.z) : arcVel(tr.arcs[k], tr.pads[k].dt); };
-  tr.padObjs.forEach((po, i) => {
-    const vout = vOut(i), nn = vout.clone().normalize().sub(vIn(i).normalize()).normalize();
-    if (nn.y < .2) nn.set(0, 1, 0);
-    po.n.copy(nn); po.qN.setFromUnitVectors(UPY, nn); po.g.quaternion.copy(po.qN);
-    po.amp = THREE.MathUtils.clamp(vout.dot(nn) * .07, .05, 1.6);
-  });
-}
-
 /* SPATIAL AUDIO: where a strike sounds = where it is relative to the CAMERA at that
    instant (src/spatial.js: pan by FRAME position, distance relative to the shot's focus,
    farther = wetter). Audio-only — as the director cuts, the next strike follows the shot. */
@@ -799,29 +712,27 @@ function placeAt(worldPos){
 }
 
 const noteEl = document.getElementById('note');
-function strike(tr, i, rig){
-  const pad = tr.pads[i], po = tr.padObjs[i];
-  // DYNAMICS: the note's velocity (song data, ['G4', 1, .6]) scales the strike's juice — the
-  // flash, lamp, ripple, sparks and punch — never the motion (the arc and the pad are the solve's)
-  const vel = pad.vel ?? 1, look = velLook(vel);
-  po.flash = look;
-  rig.lamp.intensity = 7 * look;                        // strike flash
-  if (tr.role === 'lead') noteEl.innerHTML = `<b>${pad.note}</b>&nbsp; ·&nbsp; ${'·'.repeat(Math.min(i, 40))}`;
-  const padR = new THREE.Vector3(pad.pos.x, STAGE_Y, pad.pos.z).add(tr.origin);   // every pad strikes at the band, in its bay
-  spawnRipple(padR, po.g.quaternion, po.hue, tr.isBass, po.amp * look);
-  // JUICE: sparks, squash, punch
-  const sparkColor = new THREE.Color().setHSL(po.hue, .85, .62);
-  spawnBurst(padR.clone().add(UP), sparkColor,
-             Math.max(2, Math.round(Math.min(5 + Math.round(pad.dt*7), 16) * look)),
-             (2.4 + Math.min(pad.dt*1.6, 3)) * (.6 + .4 * look));
-  rig.squash = 1;                                         // (squash is the impact — physics, not dynamics)
-  if (tr.role === 'lead'){
-    cam.addShake((.04 + pad.dt*.05) * vel);               // micro camera punch on lead strikes (a pp note doesn't shake the room)
+/* A belt strike (jugglebelt: the timeline crossing a plate's strike time): its juice and voice —
+   ripple on the plate, sparks at the ball, the lead's punch, its note. */
+function juggleStrike(h){
+  const look = h.look;
+  if (devStrikes){ const d = devStrikes['belt:' + h.role] ||= { n: 0, ids: {}, unbaked: [], at: [] }; d.n++; d.ids[h.note] = (d.ids[h.note] || 0) + 1; d.at.push(+songTime.toFixed(3)); }
+  if (h.role === 'lead') noteEl.innerHTML = `<b>${h.note}</b>&nbsp; ·&nbsp; ${'·'.repeat(Math.min(h.k, 40))}`;
+  spawnRipple(h.surf, h.quat, h.hue, h.role === 'bass', h.amp * look);
+  spawnBurst(h.pos, new THREE.Color().setHSL(h.hue, .85, .62),
+             Math.max(2, Math.round(Math.min(5 + Math.round(h.dt * 7), 16) * look)),
+             (2.4 + Math.min(h.dt * 1.6, 3)) * (.6 + .4 * look));
+  if (h.role === 'lead'){
+    cam.addShake((.04 + h.dt * .05) * h.vel);
     expoKick = Math.max(expoKick, look);
   }
   if (audio.isReady() && !muted && !devMute?.has('belt')){
-    try { audio.playNote(pad.note, tr.deep, placeAt(padR), vel); } catch(e){ /* audio must never break the run */ }
+    try { audio.playNote(h.note, h.deep, placeAt(h.pos), h.vel); } catch(e){ /* audio must never break the run */ }
   }
+}
+/* …and a ball docking on its carriage's magnet: the CLACK */
+function juggleDock(d){
+  spawnBurst(d.pos.clone().add(new THREE.Vector3(0, d.r, 0)), new THREE.Color(0xff7a3a), 10, 2.2);
 }
 
 /* A drum ball reaching its head: sparks + the percussion voice (the head ripple,
@@ -983,30 +894,18 @@ function syncDirector(S, view){
                    plan: { at: now => shotAt(plan, wrapP(now, P), seamFrom) } });
   xrAnchors();
 }
-/* ---- RIDE THE BALL (ridecam.js): every belt flight's launch, duration and apex (the render
-   height it climbs above the higher of its two ends — a crane hop's lob to the magnet counts),
-   sampled from ballPos, the source of truth. Static song data: solved once per song. ---- */
+/* ---- RIDE THE BALL (ridecam.js): every belt flight's launch, duration and apex, from the
+   juggler's plan. Static song data: solved once per song. ---- */
 let rides = [], rideWins = [], rideEvery = 1, rideDbg = null;          // (rideDbg: __dev.ride — the last pose's raw solve)
-function flightsOf(P){
-  const out = [];
-  tracks.forEach(tr => tr.pads.forEach((pd, i) => {
-    if (pd.dt < RIDE.DT_MIN || i === tr.pads.length - 1) return;   // (the last pad's flight is the seam)
-    const t0 = tr.rollT + pd.t, n = 16;
-    let top = -Infinity, y0 = 0, y1 = 0;
-    for (let k = 0; k <= n; k++){
-      const tau = t0 + pd.dt * k / n, y = ballPos(tr, tau, 0).pos.y + DESCENT * tau;
-      if (k === 0) y0 = y; if (k === n) y1 = y; top = Math.max(top, y);
-    }
-    out.push({ t: wrapP(t0, P), dt: pd.dt, apex: top - Math.max(y0, y1), role: tr.role });
-  }));
-  return out;
+function flightsOf(P){                                  // (every flight runs strike line → strike line: apex = g·F²/8)
+  return tracks.flatMap(tr => (tr.V.segs || []).filter(q => q.kind === 'flight' && q.t1 - q.t0 >= RIDE.DT_MIN)
+    .map(q => ({ t: wrapP(q.t0, P), dt: q.t1 - q.t0, apex: -G.y * (q.t1 - q.t0) ** 2 / 8, role: tr.role })));
 }
 /* The ride pose at songTime st — a pure fn of it. directed: inside a planned ride window only
-   (eased in/out of the chase); else the manual RIDE mode on the lead. The marble path is this
-   loop's ball, clamped to its life on screen (from its visible birth fall — or, on a crane belt,
-   its magnet hang — to its last landing; the plunge / seam hop are held, and the new loop's first
-   frame is a cut). Guarded: never inside a tone-plate, a machine, or out through the room. */
-const _rE = new THREE.Vector3(), _rA = new THREE.Vector3(), _rP = new THREE.Vector3(), _rd = new THREE.Vector3();
+   (eased in/out of the chase); else the manual RIDE mode on the lead. The marble path is ONE ball
+   of the juggler's plan (ballAt — every ball is conserved, so the path runs the whole loop; the
+   new loop's first frame is a cut). Guarded: never inside a machine, nor out through the room. */
+const _rE = new THREE.Vector3(), _rA = new THREE.Vector3();
 const _ride = { eye: new THREE.Vector3(), aim: new THREE.Vector3(), fov: RIDE.FOV };
 function rideCam(st, directed){
   if (!started || st < 0 || !tracks.length) return null;
@@ -1016,18 +915,15 @@ function rideCam(st, directed){
     const w = rideWindowAt(rideWins, now); if (!w || Math.round(base / P) % rideEvery) return null;
     win = { t0: base + w.t0, t1: base + w.t1 }; tr = tracks.find(t => t.role === w.role) || tr;
   }
-  const lo = base + (tr.crane ? 0 : tr.rollT - BIRTH_FALL + .3), hi = base + tr.rollT + tr.total - .05;   // (from its visible fall / magnet hang)
-  const path = s => { const tau = Math.min(hi, Math.max(lo, s)) - base, p = ballPos(tr, tau, base).pos;
-    return [p.x + tr.origin.x, p.y + DESCENT * tau + tr.origin.y, p.z + tr.origin.z]; };
+  // ride ONE ball of the plan: the one on the window's longest flight (manual RIDE: the ball that flies most)
+  const V = tr.V, w0 = win && win.t0 - base, w1 = win && win.t1 - base;
+  if (!V.pieces) return null;                           // (still being solved: nothing to ride)
+  const f = win && V.segs.filter(q => q.kind === 'flight' && q.t1 > w0 && q.t0 < w1).sort((a, b) => (b.t1 - b.t0) - (a.t1 - a.t0))[0];
+  const b = f ? f.ball : busiestBall(V), oy = STAGE_Y + UP.y;
+  const path = s => { const q = jBallAt(V, b, base + Math.min(P - 1e-3, Math.max(0, s - base))); return [q.x, q.y + oy, q.z]; };
   const r = ridePose(path, st, win, RIDE, camera.aspect);
   rideDbg = { raw: r, ball: path(st), tr: tr.role, win };
   const eye = _rE.fromArray(r.eye), aim = _rA.fromArray(r.aim);
-  // the tone-plates keep moving (they rise through the band): a soft push off any plate the eye nears
-  for (const po of tr.padObjs){
-    if (!po.g.visible) continue;
-    po.g.getWorldPosition(_rP); const d = eye.distanceTo(_rP), R = 2.1;
-    if (d < R) eye.addScaledVector(_rd.subVectors(eye, _rP).normalize(), R - d);
-  }
   // never inside a machine (step toward the marble until clear) nor out through the room
   const inBox = () => followRig.boxes.some(b => eye.x > b[0] - .6 && eye.x < b[1] + .6 && eye.y > b[2] - .6 && eye.y < b[3] + .6 && eye.z > b[4] - .6 && eye.z < b[5] + .6);
   for (let k = 0; k < 8 && inBox(); k++) eye.lerp(aim, .25);
@@ -1036,14 +932,14 @@ function rideCam(st, directed){
   _ride.eye.copy(eye); _ride.aim.copy(aim);
   return _ride;
 }
-/* VR teleport pads (src/xrplan.js): every solved shot eye + the wide + one per belt bay, kept
+/* VR teleport pads (src/xrplan.js): every solved shot eye + the wide + one at the belt, kept
    clear of every machine's box. Cheap (no rays) — re-run whenever the director re-solves. */
 function xrAnchors(){
   xrLitAge = 0;                                         // (a new world: re-collect its lights for xrRender)
   const box = o => { const b = visBox(o); return b.isEmpty() ? null : [b.min.x, b.max.x, b.min.y, b.max.y, b.min.z, b.max.z]; };
-  const belts = tracks.map(tr => { const b = box(tr.machine.group) || box(tr.stage);
+  const belts = tracks.filter((tr, i) => tracks.findIndex(q => q.machine.group === tr.machine.group) === i).map(tr => { const b = box(tr.machine.group) || box(tr.stage);
     return b && { role: tr.role, x: (b[0] + b[1]) / 2, z0: b[4], z1: b[5], bandY: STAGE_Y }; }).filter(Boolean);
-  const solids = [...instLive.map(r => box(r.station)), drumGroup && box(drumGroup), ...tracks.map(tr => box(tr.machine.group))].filter(Boolean);
+  const solids = [...instLive.map(r => box(r.station)), drumGroup && box(drumGroup), ...[...new Set(tracks.map(tr => tr.machine.group))].map(box)].filter(Boolean);
   xr.setAnchors({ wide: lastWide, belts, solids, room: { x0: -ROOM.HW, x1: ROOM.HW, y0: ROOM.FLOOR, y1: ROOM.CEIL, z0: ROOM.BACK, z1: ROOM.FRONT },
     shots: lastShots.map(s => ({ key: s.key, eye: s.eye, aim: s.aim, color: s.color,
       label: s.owner === 'drums' ? 'drums' : (instrumentByKey(s.owner)?.label || s.key) })) });
@@ -1331,7 +1227,7 @@ function xrSession(on, mode){
   for (const r of instLive) r.inst.xr?.(on);            // optional plugin hook (src/instruments/README.md)
   xrOn = on; xrMode = on ? mode : null; xrLitAge = 0; xrDetail.invalidate();
   if (!on){ scene.remove(xrBatch.group); xrBatch.dispose(); }   // (the 2D page never draws the mirror)
-  for (const role in rigPool) for (const rg of rigPool[role]) rg.lamp.visible = !on;   // XR quality: the marble lamps go dark
+  jug?.xr(on);                                          // XR quality: the marble lamps go dark
   if (mode === 'ar'){                                   // passthrough: no room, no sky, no fog over the camera feed
     if (on){ xrPrev = { room: rooms.key, bg: scene.background, fog: scene.fog.density, alpha: renderer.getClearAlpha() };
       rooms.set('off'); scene.background = null; scene.fog.density = 0; renderer.setClearAlpha(0); }
@@ -1348,80 +1244,19 @@ if (soloI) lookAtStation(soloKey);
    (reduced-motion users keep the old behavior: stillness until they opt in) */
 if (!reduceMotion){ clock.start(); started = true; }
 
-/* A mortal ball's state at LOCAL time τ (seconds since its birth). Pure: no wrap,
-   no strike side-effect — it just reports where the ball is and which pad index
-   it's on (idx). The caller adds the per-ball render lift DESCENT·τ and fires the
-   strike when idx advances. Positions are WORLD (un-lifted); the +UP marble lift
-   off the pad is baked in on the arc segments. */
-function ballPos(tr, tau, birthT = 0){
-  const pl = tr.crane;
-  if (pl){                                              // PATERNOSTER: hang / drop / rise / ride the magnet
-    const c = craneBall(pl, tau, birthT);
-    if (c){
-      const lift = STAGE_Y + UP.y - DESCENT * tau;      // contact level, minus the render lift main re-adds
-      const h = pl.hops[c.hop], seamTail = h.seam && c.seg >= 0;   // the seam's rise/ride belongs to the old ball
-      const prog = c.seg >= 0 && h.mode === 'kiss' ? THREE.MathUtils.clamp((tau - h.s) / h.gap, 0, 1)   // a kiss reads as one arc
-                 : c.mode === 'rise' ? 0 : THREE.MathUtils.clamp((tau - (c.seg < 0 ? pl.rel0 : h.carryEnd)) /
-                   ((c.seg < 0 ? pl.rollT : h.land) - (c.seg < 0 ? pl.rel0 : h.carryEnd)), 0, 1);
-      return {pos: new THREE.Vector3(c.x, c.y + lift, c.z), vel: new THREE.Vector3(c.vx, c.vy, c.vz),
-              plunge:false, idx: c.seg, nextIdx: c.seg < 0 ? 0 : seamTail ? -1 : h.j,
-              prog: seamTail ? 0 : prog, curDt: c.seg < 0 || seamTail ? 9 : h.gap,
-              nextDt: seamTail ? 9 : tr.pads[c.seg < 0 ? 0 : h.j].dt, crane: c.mode, hop: c.hop};
-    }
-  }
-  if (tau < tr.rollT){                                  // birth: free-FALL onto pad 0 under HONEST gravity
-    const p0 = tr.pads[0].pos;
-    // Wait in the mouth (longer for delayed voices), then free-fall a fixed BIRTH_DROP so the
-    // marble accelerates exactly like every other arc — no more anti-gravity float. Lands on pad 0
-    // moving (a real strike the pad flips), continuous with the first arc at tau=rollT.
-    const hold = tr.rollT - BIRTH_FALL;                 // off-screen hold absorbs the variable roll budget
-    const s = Math.max(0, tau - hold);                  // seconds into the actual fall
-    const fallY = .5 * G.y * s * s;                      // ½·g·s²: starts at rest, accelerates (−BIRTH_DROP at s=FALL)
-    const yRender = STAGE_Y + UP.y + BIRTH_DROP + fallY; // mouth → band; render re-adds DESCENT·tau, so subtract it here
-    const appear = THREE.MathUtils.clamp((s + .2) / .35, 0, 1);   // fade in as it's released (hidden during the hold)
-    return {pos: new THREE.Vector3(p0.x, yRender - DESCENT*tau, p0.z),
-            vel: new THREE.Vector3(0, G.y*s - DESCENT, 0),
-            plunge:false, idx:-1, nextIdx:0, prog: THREE.MathUtils.clamp(s/BIRTH_FALL, 0, 1),
-            curDt:9, nextDt: tr.pads[0].dt, appear};
-  }
-  // the free solved arc the ball is on: O(log n) lookup of the last struck pad
-  let i, at;
-  if (pl){ i = segAt(pl, tau); at = tau - pl.padT[i]; }
-  else { at = tau - tr.rollT; i = 0; while (i < tr.pads.length && at >= tr.pads[i].dt){ at -= tr.pads[i].dt; i++; } }
-  if (i >= tr.pads.length || (pl && i === tr.pads.length - 1 && at >= tr.pads[i].dt)){   // tail: ride the last arc down and out
-    const a = tr.pads[tr.pads.length-1];
-    const t2 = a.dt + (tau - (tr.rollT + a.t + a.dt));
-    const lastArc = tr.arcs[tr.arcs.length-1];
-    return {pos: arcPos(a.pos, lastArc, t2), vel: arcVel(lastArc, t2),
-            plunge:true, idx:tr.pads.length, nextIdx:-1, prog:0, curDt:9, nextDt:9};
-  }
-  return {pos: arcPos(tr.pads[i].pos, tr.arcs[i], at).add(UP),
-          vel: arcVel(tr.arcs[i], at),
-          plunge:false, idx:i,
-          nextIdx: i+1 < tr.pads.length ? i+1 : -1,
-          prog: at / tr.pads[i].dt,
-          curDt: tr.pads[i].dt,
-          nextDt: i+1 < tr.pads.length ? tr.pads[i+1].dt : 9};
-}
-/* Born once per loop; one strike per pad per loop. */
-function spawnBall(tr, birthT){
-  if (tr.crane && tr.balls.some(b => b.birthT === birthT)) return;   // armed early for the count-in
-  const rig = checkoutRig(tr.role);
-  if (!rig) return;                                     // pool exhausted — drop the ball, never crash
-  tr.balls.push({rig, birthT, lastIdx:-1, splashed:false});
-}
-
 function animate(){
   const frameT0 = performance.now();
   const dt = Math.min(clock.getDelta(), .05);
-  songTime += dt * playRate;
+  // the timeline WAITS for the belt's plan: a song whose juggle isn't baked (an import, a share link,
+  // a MAP re-route) holds its count-in — machine at rest, every station with it — until the worker's
+  // solve is in, instead of running on with a silent belt
+  if (!jplan || jplan.solved) songTime += dt * playRate;
   const P = ROLL_T + LOOP_T;                             // loop period (per song)
   const T = started ? ((songTime % P) + P) % P : 0;     // loop-local time (always ≥0, even during the lead-in) — display + scrub
-  if (started){                                         // spawn one ball per track at each loop boundary
+  if (started){                                         // the loop boundary: the recording's cut point
     const li = Math.floor(songTime / P);
     if (li > loopIndex){
       loopIndex = li;
-      tracks.forEach(tr => spawnBall(tr, li * P));
       if (recState === 'armed') beginRec();             // seam-to-seam: the loop boundary is the cut point
       else if (recState === 'rec') finishRec();
     }
@@ -1434,103 +1269,14 @@ function animate(){
 
   let leadRender = null;
   const marblePts = [];
-  const cullDist = Math.min(PT.CULL, DESCENT * P * .5 - .5);  // ride to the drum; never past the half-period
-  const cullC = cullDist / DESCENT;                      // …same edge, in belt-phase units
-  const innerC = PT.INNER / DESCENT;   // fully deployed within this band — strike zone never animates
-                                                         // (higher = a tighter, snappier unfold nearer the edge)
-  tracks.forEach(tr => {
-    // ---- mortal balls: render each, strike on the youngest, recycle the dead ----
-    let active = null;                                   // youngest live ball drives camera + anticipation
-    for (let bi = tr.balls.length - 1; bi >= 0; bi--){   // newest first
-      const ball = tr.balls[bi];
-      const tau = songTime - ball.birthT;
-      const r = ballPos(tr, tau, ball.birthT);
-      const rpos = r.pos.clone(); rpos.y += DESCENT * tau;   // per-ball render lift → juggles in the band
-      rpos.add(tr.origin);                                   // …in its track's bay (rigs live in scene, not the stage)
-      const rig = ball.rig;
-
-      // strike when the ball reaches a fresh, valid pad (dying balls overrun the end → never strike)
-      if (r.idx >= 0 && r.idx < tr.pads.length && r.idx !== ball.lastIdx){
-        ball.lastIdx = r.idx;
-        if (!skipStrikes) strike(tr, r.idx, rig);
-      }
-
-      // plunge fade + recycle
-      let fade = 0;
-      if (r.plunge){
-        fade = THREE.MathUtils.clamp((STAGE_Y - 1.5 - rpos.y) / 6, 0, 1);
-        if (!ball.splashed && rpos.y < STAGE_Y - 2){
-          ball.splashed = true;
-          spawnBurst(rpos.clone().add(UP), rig.glow, 18, 4.5);
-        }
-      }
-      if (tr.crane ? tau >= tr.crane.retireT : (tau > P + FADE_TAIL || fade >= 1)){ checkinRig(rig); tr.balls.splice(bi, 1); continue; }
-      // PATERNOSTER hand-off: a newborn stays hidden while its predecessor still rides the magnet
-      // (they share one position at the release instant, so only one marble is ever seen)
-      const hidden = tr.crane && r.crane === 'hang' &&
-        tr.balls.some(b => b.birthT < ball.birthT && songTime - b.birthT < tr.crane.retireT);
-      if (tr.crane && r.crane === 'docked' && ball.dockHop !== r.hop){   // the CLACK: docking on the electromagnet
-        ball.dockHop = r.hop;
-        if (!skipStrikes){
-          spawnBurst(rpos.clone().add(new THREE.Vector3(0, RIG_OPT[tr.role].r, 0)), new THREE.Color(0xff7a3a), 10, 2.2);
-          rig.squash = .6; rig.lamp.intensity = 6;
-        }
-      }
-
-      const show = hidden ? 0 : (1 - fade) * (r.appear ?? 1);   // appear<1 only during the newborn's pre-fall hold
-      rig.halo.material.opacity = haloA * show;
-      rig.core.material.emissiveIntensity = emi * show + .1;
-      rig.group.visible = show > .002;
-      rig.group.position.copy(rpos);
-      rig.core.rotation.x += dt*6; rig.core.rotation.z += dt*3.4;
-      rig.lamp.intensity += (3.5 - rig.lamp.intensity) * dt * 8;
-
-      // squash & stretch along velocity
-      const speed = r.vel.length();
-      if (speed > .01) rig.deform.quaternion.setFromUnitVectors(UPY, r.vel.clone().normalize());
-      rig.squash *= (1 - dt*9);
-      const sq = rig.squash, stretch = 1 + Math.min(speed*.014, .4);
-      const sxz = (1/Math.sqrt(stretch))*(1-sq) + 1.3*sq;
-      rig.deform.scale.set(sxz, stretch*(1-sq) + .55*sq, sxz);
-
-      if (started && trailTick > .022 && playRate && fade < .5 && show > .5)
-        spawnTrail(rpos, rig.glow, tr.isBass);
-
-      if (!active && !hidden){ active = {r, rpos, show}; }                // first live one we hit is the youngest
-    }
-    tr.active = active;
-    if (active){
-      marblePts.push({p: active.rpos.clone(), w: tr.role === 'lead' ? 1.7 : 1, role: tr.role, vis: active.show > .5});
-      tr._st = {dt: active.r.curDt, next: active.r.nextDt, prog: active.r.prog};
-      if (tr.role === 'lead') leadRender = active.rpos;
-    } else tr._st = null;
-
-    // ---- recirculating belt: each pad rises to the band at its strike, wraps off-screen ----
-    tr.padObjs.forEach((po, idx) => {
-      const c = beltPhase(songTime, tr.rollT + tr.pads[idx].t, P);
-      if (started && Math.abs(DESCENT * c) > cullDist){ po.g.visible = false; return; }
-      po.g.visible = true;
-      po.flash *= (1 - dt*4);
-      const pre = (active && idx === active.r.nextIdx) ? active.r.prog*active.r.prog : 0;
-      po.rim.material.opacity = .55 + po.flash*.5 + pre*.3;   // tone-plates wear a lit hue frame
-      po.rim.scale.setScalar(1 + pre*.22 + po.flash*.12);
-      po.body.material.emissive.setHSL(po.hue, .7, .06 + po.flash*.32 + pre*.07);   // a lit floor: the hero never goes dark
-      po.beltY = STAGE_Y - .12 + DESCENT * c;           // un-nudged belt height — the bracket spine roots here
-      // entrance/exit unfold: at the screen edges the pad lies flat & flush on the belt,
-      // then telescopes out to rest depth and tips up into catch position — sequenced
-      // (extend → tilt) and confined to the edges, so the strike zone stays rock-solid.
-      // (a plate the crane needs out of the way unfolds later / stows sooner — its own edge, planned)
-      const dep = reduceMotion ? FULL_DEPLOY : (tr.crane ? plateDeploy(c, innerC, Math.min(cullC, plateEdge(tr.crane, idx, c))) : deployPose(c, innerC, cullC));
-      po.g.quaternion.copy(Q_FLAT).slerp(po.qN, dep.tilt);
-      _qn.copy(UPY).applyQuaternion(po.g.quaternion);   // live normal (for the flipper nudge as it unfolds)
-      const z = THREE.MathUtils.lerp(PT.STOW_Z, po.base.z, dep.extend);   // belt-flush → rest depth
-      po.g.position.set(po.base.x, po.beltY, z)
-        .addScaledVector(_qn, padOffset(started ? c : 0, po.amp));
+  if (jug){                                             // THE BELT (the juggler): one machine, every voice — a pure fn of songTime
+    jug.update(jugTime(songTime), dt, { skipStrikes, haloA, emi, onStrike: juggleStrike, onDock: juggleDock });
+    tracks.forEach((tr, vi) => {                        // (the camera reads each voice: its focus + its next big moment)
+      tr._st = jug.st[vi];
+      marblePts.push({ p: jug.focus[vi].clone(), w: tr.role === 'lead' ? 1.7 : 1, role: tr.role, vis: true });
     });
-
-    // ---- the visible machine: scroll the belt in lock-step with the rising pads ----
-    if (machinesOn) tr.machine.update(reduceMotion ? 0 : dt, songTime);
-  });
+    leadRender = jug.focus[0];
+  }
 
   // ---- marble drums: one ball per drum, dribbling its solved arcs ----
   drumKit.update(songTime, P, dt, { started, skipStrikes, onStrike: drumStrike });
@@ -1540,8 +1286,6 @@ function animate(){
     rig.inst.update(songTime, P, dt, { started, skipStrikes, onStrike: hit => instStrike(rig, hit) });
   for (const L of strikeLights){ L.age += dt; L.l.intensity = L.peak * Math.exp(-L.age * 11); }
 
-  if (trailTick > .022) trailTick = 0;
-  trailTick += dt;
   skipStrikes = false;                                  // scrub jumps suppress strikes for one frame only
   updateJuice(dt);
 
@@ -1611,7 +1355,7 @@ function xrRender(){
     xrBatch.build(world); if (!xrBatch.group.parent) scene.add(xrBatch.group);
     xrLitAge = 0; xrRender.glowNow = true; }            // (its frozen looks join the glow boost below)
   if (xrRender.glowNow){ xrRender.glowNow = false; xrDetail.setGlow(collectGlow([
-    ...instLive.map(r => ({ root: r.station, k: r.I.xrGlow })), ...tracks.map(tr => ({ root: tr.stage })), { root: drumGroup }, { root: xrBatch.group }])); }
+    ...instLive.map(r => ({ root: r.station, k: r.I.xrGlow })), ...[...new Set(tracks.map(tr => tr.stage))].map(root => ({ root })), { root: drumGroup }, { root: xrBatch.group }])); }
   scene.updateMatrixWorld();                            // (poses current BEFORE the batch copies them; the render skips its own pass)
   xrDetail.before([world], xr.viewer.position, fadeMats);   // fine parts + dim glows out…
   xrBatch.before();                                     // …the rest mirrored into the batch (looks compared UN-boosted)…
@@ -1851,7 +1595,7 @@ if (new URLSearchParams(location.search).has('debug')){
     instruments: () => instLive.map(r => r.I.key),
     cam(m){ cam.mode = m; }, get shot(){ return cam.shot; },
     ride(t = songTime, directed = true){ const p = rideCam(t, directed); return p && { eye: p.eye.toArray(), aim: p.aim.toArray(), ...rideDbg }; },
-    // room layout probe: world-space XZ boxes of every station, the drum machine and the belt bays
+    // room layout probe: world-space XZ boxes of every station, the drum machine and the belt
     boxes(deep){
       const bx = o => { const b = visBox(o, true); return b.isEmpty() ? null : [b.min, b.max].map(v => [+v.x.toFixed(1), +v.y.toFixed(1), +v.z.toFixed(1)]); };
       const out = {};
@@ -1907,6 +1651,10 @@ if (new URLSearchParams(location.search).has('debug')){
     get shots(){ return lastShots.map(s => ({ key: s.key, owner: s.owner, eye: s.eye.toArray(), aim: s.aim.toArray(), pref: s.pref?.toArray(), rays: s.rays, fg: s.fg, fitMax: s.fitMax, pk: s.pk, portrait: s.portrait?.eye.toArray() })); },
     get solve(){ const f = lastSolve?.follow; return lastSolve && { ms: lastSolve.ms, split: lastSolve.split, kept: lastSolve.kept, solids: lastSolve.solids, room: solvedRoom, follow: lastShots.length && f?.land ? { land: f.land, portrait: f.portrait, rays: f.rays } : null }; },
     get follow(){ return followRig; }, shotCtx: () => shotCtx(),
+    // the belt (the juggler): where its plan came from (bake / worker / main), the build ms, balls per voice, warnings
+    get jplan(){ return jplan; },
+    jug: () => jplan && { solved: !!jplan.solved, from: jplan.from || 'pending', ms: jplan.ms, P: +jplan.P.toFixed(3),
+      voices: jplan.voices.map(V => ({ role: V.role, notes: V.notes.length, balls: V.balls ?? null, bad: V.bad ?? null })), warnings: jplan.warnings },
     roomSolids: () => roomSolids(rooms.group).map(s => s.box),   // the room's standing geometry, as the shot solve sees it
     hung: () => instLive.filter(r => r.slot.hang).map(r => ({ key: r.I.key, box: solidBox(r.station, drawn) })),   // (solid: the merged cable/glow batches aren't bulk)
     hang: () => instLive.filter(r => r.slot.hang).map(r => ({ key: r.I.key, wallTop: +stageWall.max.y.toFixed(2), low: +hangLow(r.station).toFixed(2), y: +r.station.position.y.toFixed(2) })),

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { velGain, beltVel, okBeltVel, velLook, DYN, legacyVel, legacyLane } from '../src/dynamics.js';
 import { SONGS } from '../src/songs/index.js';
-import { layoutPads } from '../src/engine.js';
+import { layoutJuggler, solveJuggler, packSolve } from '../src/juggle.js';
 
 const dB = g => 20 * Math.log10(g);
 const old = v => .35 + .65 * v;                       // the pre-dynamics drum law
@@ -78,15 +78,17 @@ describe('belt velocity — an optional 3rd element', () => {
 });
 
 describe('belt velocity never touches the solve', () => {
-  it('layoutPads: same positions / times / sizes with or without velocities; pads carry vel', () => {
+  it('the belt (juggle.js): same lanes / times / sizes and the same plan with or without velocities; notes carry vel', () => {
     const line = [['C5', 1], ['E5', .5], ['G5', 2], ['C6', .25], ['B5', 1.25], ['G4', 3]];
     const soft = line.map(([n, b], i) => [n, b, i % 2 ? .2 : .9]);
-    const o = { zBase: 0, isBass: false, beat: .5, radOf: n => n.endsWith('4') ? .9 : .7 };
-    const a = layoutPads(line, o), b = layoutPads(soft, o);
-    a.forEach((p, i) => {
-      expect(b[i].pos.equals(p.pos)).toBe(true);
-      expect(b[i].t).toBe(p.t); expect(b[i].dt).toBe(p.dt); expect(b[i].r).toBe(p.r);
-      expect(p.vel).toBe(1); expect(b[i].vel).toBe(soft[i][2]);
+    const song = melody => ({ bpm: 120, scale: ['C'], melody });
+    const La = layoutJuggler(song(line)), Lb = layoutJuggler(song(soft));
+    const a = La.voices[0].notes, b = Lb.voices[0].notes;
+    a.forEach((q, i) => {
+      expect(b[i].lane).toBe(q.lane); expect(b[i].x).toBe(q.x);
+      expect(b[i].s).toBe(q.s); expect(b[i].dt).toBe(q.dt); expect(b[i].scale).toBe(q.scale);
+      expect(q.vel).toBe(1); expect(b[i].vel).toBe(soft[i][2]);
     });
+    expect(packSolve(solveJuggler(Lb))).toEqual(packSolve(solveJuggler(La)));   // who strikes what, on which hand
   });
 });

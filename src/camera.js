@@ -54,7 +54,7 @@ const PAN_KEYS = {
 };
 
 /* ridePose(songTime, directed) → {eye, aim, fov} (THREE.Vector3s) | null — main's RIDE solve
-   (ridecam.js over ballPos). directed: only inside a planned ride window (eased in/out);
+   (ridecam.js over one belt ball's path). directed: only inside a planned ride window (eased in/out);
    otherwise the manual RIDE mode's free-running pose on the lead. */
 export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = null, ridePose = null }){
   const BASE_FOV = 55;

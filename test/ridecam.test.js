@@ -4,7 +4,7 @@ import { RIDE, ridePose, smoothAt, rideMoments, rideWindowAt } from '../src/ride
 import { G, solveLaunch, arcPos } from '../src/engine.js';
 
 /* a belt-shaped marble path from the engine's own closed-form arcs: pads at (x, y, 0), each
-   flight the solved launch for its dt — a pure fn of t, like main's ballPos */
+   flight the solved launch for its dt — a pure fn of t, like a belt ball (juggle.js ballAt) */
 function beltPath(pads){                               // pads: [[x, y, dt]] (the last is the end point)
   const segs = []; let t = 0;
   for (let i = 0; i + 1 < pads.length; i++){

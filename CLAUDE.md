@@ -37,6 +37,13 @@ layouts — console prefixes, `marble-cascade.html`, the domain) are deliberatel
 `deploy.sh` reads `DEPLOY_BUCKET` / `CLOUDFRONT_DISTRIBUTION_ID` / `LIVE_URL` from the environment
 or a git-ignored `.env.deploy` (template: `.env.deploy.example`).
 
+**The JUGGLER belt + the Gravity Orchestra rename SHIPPED 2026-10-24:** `main` was fast-forwarded to
+`launch-prep` (the rename/MIT commit + the juggler) and deployed — the live site says Gravity
+Orchestra now. The melody belt is ONE multiball juggling machine for every belt voice (§3b); the
+classic belt (a paternoster bay + one marble per voice) and its crane planner are deleted
+(`d6e8758` and earlier have them). Rollback target = `d6e8758` (the 2026-10-08 build). Not pushed
+to GitHub yet (origin/main = `d6e8758`) — pushing publishes the MIT / README launch commit too.
+
 `npm run deploy` builds + ships to production. It does not care which branch you're
 on. Treat it as live, and confirm with the human before running it.
 
@@ -45,16 +52,20 @@ on. Treat it as live, and confirm with the human before running it.
 ## 1. Repo layout, build & deploy
 
     src/engine.js    pure physics/music — solver, arcPos/arcVel, padOffset, beltPhase,
-                     deployPose, layoutPads, noteHz (unit-tested, no THREE-scene/DOM/audio)
+                     deployPose, padRadius, noteHz (unit-tested, no THREE-scene/DOM/audio)
     src/audio.js     dual-path Web Audio + iOS sample fallback (see §5). Melodic voices
                      + percussion voices. Ported VERBATIM from the single-file build.
     src/juice.js     trail / ripple / spark / dust pools, spawnBurst, glowTex
-    src/paternoster.js  the visible conveyor MACHINE (render subsystem): open roller chains
-                     on toothed sprockets, tuned tone-plates on brass node cradles, sculpted
-                     housings. Replaced the solid belt WALL (conveyor.js, deleted 2026-10-05).
-    src/crane.js     pure timing for the MAGNET CRANE: the melody marble is CONSERVED — the
-                     last pad lobs it up to a magnet (v=0 at apex), a carriage carries it back
-                     over pad 0, release lands on the next downbeat. test/crane.test.js.
+    src/juggle.js    pure: THE BELT's plan — the JUGGLER (§3b): every belt voice on ONE machine,
+                     juggled multiball. test/juggle.test.js. src/jugglebelt.js draws it (render
+                     subsystem); src/juggle-baked.json = the catalog's solves (scripts/juggle-bake.mjs);
+                     src/juggle.worker.js solves anything else off the main thread.
+    src/paternoster.js  the belt's PARTS KIT (render, THREE only): tone-plate, brass node cradle,
+                     chain sprocket, drive gear, housing wash, merge / bakeStill + the PTGEO
+                     dimensions — what's left of the classic per-voice paternoster (retired 2026-10-24).
+    src/crane.js     pure: the MAGNET CRANE's limits + motion primitives — CRANE dwells / V / A
+                     limits, dtFree (the free-flight cap), segEval (quintic carriage moves),
+                     minMoveT. juggle.js plans every carriage with them. test/crane.test.js.
     src/camera.js    the camera RIG (render subsystem): director / fixed / free-fly /
                      follow modes, orbit + WASD/QE keyboard fly. "Sees the future."
     src/marbledrums.js  the MARBLE DRUM MACHINE (render subsystem): one ball per drum,
@@ -101,9 +112,9 @@ on. Treat it as live, and confirm with the human before running it.
     src/record.js    canvas captureStream + MediaRecorder → "one perfect loop" video
     src/songs/*.js   one module per song (the comments are sacred), aggregated by index.js
     src/main.js      scene, rigs, buildWorld, ballPos, animate(), controls — the orchestrator
-    test/            Vitest: engine ballistics, song lock-rule, drum validation, MIDI,
-                     layout overlap, share round-trip, every plugin's honesty suite, staging
-                     audit, director, XR (44 files / 2489 tests, 2026-10-07; ~2–3 min)
+    test/            Vitest: engine ballistics, song lock-rule, drum validation, MIDI, the
+                     juggler's plan audit + bake, share round-trip, every plugin's honesty suite,
+                     staging audit, director, XR (49 files / 2497 tests, 2026-10-24; ~1.5 min)
     docs/OVERNIGHT-2026-10-07.md   the night's changelog: what each new machine / room / song
                      is and the URL to try it
     VISION.md        the product north star (vision, not spec)
@@ -164,34 +175,75 @@ why a new instrument is *tractable*. Protect this invariant like gravity.
 
 ---
 
-## 3. The static-band CONVEYOR (v2's big render move)
+## 3. The STATIC BAND (v2's big render move)
 
 The original engine let the whole world fall: `T = clock % P`, every track sinking at
 `DESCENT` (2.2 u/s), the camera craning down to follow. v2 keeps **all of that physics
 untouched** and reframes it at **render time** into a *static band*:
 
-- Each pad **RECIRCULATES**: it rises to a fixed strike band (`STAGE_Y = DESCENT·ROLL_T
-  ≈ 5.7`) exactly at its strike, then wraps off-screen and comes around again. The map
-  from songTime to a pad's centered height is `beltPhase(songTime, strikeTime, period)`
-  — 0 at every strike, negative just before (rising to meet the ball), positive just
-  after. The only discontinuity is the off-screen wrap, so pads stream upward forever
-  with no global loop snap.
-- Each marble is **MORTAL**: born once per loop, it juggles in the band via a per-ball
-  render lift `+ DESCENT·τ` (τ = age), then plunges out the bottom and is recycled to a
-  per-role rig pool (`RIG_POOL = 3`). Birth is an **honest free-fall** onto pad 0
-  (`BIRTH_DROP = 10` u, `BIRTH_FALL ≈ 1.17 s` under the same G as every arc; delayed
-  voices just hold longer off-screen, then drop identically).
-- The two mechanisms share no state. They meet at the band, at strikes, **by
-  construction** (`beltPhase` is 0 at a strike; the ball lift cancels descent there).
+- Each tone-plate **RECIRCULATES**: it rides its chain up to a fixed strike band (`STAGE_Y =
+  DESCENT·ROLL_T ≈ 5.7`) exactly at its strike, then wraps off-screen and comes around again.
+  The map from songTime to a plate's centred height is `beltPhase(songTime, strikeTime, period)`
+  — 0 at every strike, negative just before (rising to meet the ball), positive just after. The
+  only discontinuity is the off-screen wrap, so plates stream upward forever with no loop snap.
+- Every strike happens ON the band, so every flight runs strike line → strike line: an honest
+  free arc under the one G (apex = |G|·F²/8 — rhythm as height), or a magnet carriage's catch and
+  release when the gap is too long for a free flight (§3b).
+- The two mechanisms share no state. They meet at the band, at strikes, **by construction**
+  (`beltPhase` is 0 at a strike). The visible machine only ever *draws what the math implies*:
+  chains scrolling at `DESCENT` and plates rising at `DESCENT` are slip-free with zero state.
 
-This is the key mental model for reading `main.js`: positions come out of `ballPos`/the
-arc math in the *falling frame*; the animate loop adds `DESCENT·τ` (balls) or
-`DESCENT·beltPhase` (pads) to pin everything in the static band. To express something
-directly in rendered-band space inside `ballPos`, subtract `DESCENT·τ` so the re-add
-cancels. The visible machine (`conveyor.js`) only ever *draws what the math implies*: a
-belt scrolling at `DESCENT` and pads rising at `DESCENT` are slip-free with zero state.
+History (gone from the tree since 2026-10-24 — git history on `main` has it): the CLASSIC belt
+gave each voice its own paternoster bay (side by side) and ONE marble — first mortal (born each
+loop, a per-ball render lift `+ DESCENT·τ` over the falling-frame arcs, plunged out and recycled),
+later conserved by a magnet crane (crane hops, apex kisses, early-stowing plates). The juggler
+(§3b) replaced it. `docs/PLAN-seamless-conveyor.md` and `docs/PLAN-real-conveyor.md` are the
+reasoning trail for the static band itself.
 
-`docs/PLAN-seamless-conveyor.md` and `docs/PLAN-real-conveyor.md` are the reasoning trail.
+### 3b. THE BELT — the JUGGLER (2026-10-24; the only belt since the classic was removed)
+
+Why: every classic strike was on one strike line, so a ball left at g·F/2 — below F ≈ .30 s it
+rose slower than its own plate and got swept sideways (the high-speed "skim", 56–82 % of notes
+in the fast songs), and three voices meant three bays side by side (Dies Irae ≈ 56 u wide).
+
+What: ONE machine for every belt voice. Nine keyboard LANES (a note's lane is a pure fn of its
+pitch, low left), one roller chain each; each voice its own depth row with TWO HANDS (a ball may
+cross hands in flight); M ≤ 4 balls per voice, each held by its own MAGNET CARRIAGE on a rail over
+its hand (a catch is a straight-up throw docking at v = 0; a release free-falls onto the beat).
+Plates are posed from the strike (normal ∝ Δv, stroke speed w from restitution). Each WINDS UP
+(pulls back along −n by amp = .07 × the throw along n — the old pad's swing) and SWINGS into
+the ball, arriving at exactly w (a Hermite: the work is visible, the contact honest), then RECOILS
+(faster than g), so the minimum flight is F_HARD .22 s, not .30. After the strike a plate HOLDS
+out, rising with its chain, up to HOLD_MAX .8 s, then folds (FOLD_T): `holdPlates` (after the
+search, ≤ ~.2 s) grants a hold only while the plate AND its arm stay clear of every ball, plate
+and arm of the whole machine. The search itself plans every plate folding at once, so a hold
+never costs the plan anything; plates whose own ball is still above them when the chain catches
+up (mid-length flights to a nearby lane, ~10–40 %) fold at once as before. AJ's note
+(2026-10-24): the swing ("the pads did some work") and the hold ("too rushed") came from
+watching it; the chains were "too loud" and are now dark rough steel, the return run in shadow.
+Every ball is home across the breath. The beam search (who strikes what, on which hand) runs per
+voice; the audit (no ball–ball / ball–plate / ball–ARM / carriage contact, limits, conservation,
+periodicity) is the test. The arm's geometry (shoe on the chain → hub behind the plate) lives in
+the plan (`plateAt` → `hub`, `shoe`; `JUGGLE.ARM`), so the render draws what the check cleared.
+
+How it runs: the SEARCH takes up to seconds (Bald Mountain ≈ 12 s), so a page load never runs it —
+`layoutJuggler` (fast) + the BAKED solve (with its holds) keyed by `jugglerKey(song)` (the belt
+notes + bpm + `JUGGLE_VERSION`), else the worker solves (and holds) while the machine stands ready
+but empty, then main swaps the full machine in. **Until a worker's plan is in, the timeline HOLDS in
+the count-in** (animate: `if (!jplan || jplan.solved) songTime += …`; the note line reads
+"planning the juggle…") — an import, a share link or a MAP re-route used to run on with a silent
+belt for its whole solve (canon-in-d.mid ≈ 6 s; any catalog song ~10–30 s right after a
+`JUGGLE_VERSION` bump, before the re-bake). **After ANY change to juggle.js that can change a
+plan: bump `JUGGLE_VERSION`, run `node scripts/juggle-bake.mjs`** — test/juggle.test.js fails on
+a stale or missing bake (it compares every catalog solve against it). `tracks` are thin VIEWS of
+the plan's voices (role / pads / rollT / total / deep / V), so the camera, director, audio bank and
+rides read them. Ball identity (`ballAt`) is a pure fn: the ride cam rides one ball.
+The COUNT-IN spins the machine up (main `jugTime`: a slowed clock that reaches full speed, C1,
+at songTime 0, covering only the breath after the last dock) — the belt is silent in the
+count-in; the loop's last bar never plays before the first note. Key `M` hides the machine's
+frame (`jug.frame`: housings, chains, gantry) — plates and balls stay.
+Residuals (pinned in the test's KNOWN): Bald Mountain lead 8 limit overruns + 1 alto ball–ball
+(6 cm), Mars 1 throw at 10.7 u/s. `node scripts/juggle-report.mjs` prints the catalog's numbers.
 
 ---
 
@@ -201,10 +253,12 @@ VISION.md's core bet: adding an instrument = **design a 3D shape + solve its phy
 nothing more. The unifying runtime primitive is a **ball spawner** — mortal balls, born
 → fly a solved arc → strike → die. Two archetypes already cover huge musical ground:
 
-1. **CONVEYOR — single marble, moving instrument** (the melodic voice). A belt
-   *manufactures* the right pad for each note (sized to register, tilted to its bounce);
-   one marble chains pad → pad, each pad launching it to the next. `buildTrack` + the
-   conveyor machine. Range is effectively unlimited — the belt produces the pad on demand.
+1. **CONVEYOR — juggled balls, moving instrument** (the melodic voice). A belt
+   *manufactures* the right plate for each note (sized to register, in its pitch's lane, tilted
+   to its bounce); a voice's balls chain plate → plate, each plate launching its ball to that
+   ball's next note — a dense line juggles more balls instead of one ball flying faster.
+   `juggle.js` + `jugglebelt.js` (§3b). Range is effectively unlimited — the belt produces the
+   plate on demand. (The classic was ONE marble per voice, chaining every note: §3 history.)
 2. **STATIONARY — one marble per drum, fixed instrument** (the rhythmic voice). Each
    drum owns ONE immortal ball that only ever bounces on that drum: the flight between
    strikes is the solved vertical arc for the gap (apex = |G|·gap²/8, the belt's dt²
@@ -334,7 +388,10 @@ song can get one, and **MIDI import now generates drums from channel 9** (§6).
   beat by beat for what's SPECIAL: above its own norm, an entrance after a rest, a crescendo, a
   solo, rarity; then a 2nd-order DP over the beat grid cuts the shots (≥ 3 s, on beats, bar lines
   preferred, A-B-A ping-pong priced), share caps (belt .18 / wide .16 / station .24) and coverage
-  (every machine that plays is seen once a loop). Scripts (`song.director.at`) are fixed points;
+  (every machine that plays is seen once a loop — a PROMISE: an edit that still leaves one unseen is
+  re-run with covers that never take another machine's only screen time; Bald Mountain's belt cover
+  took the turntable's opening once the juggler's ride held the belt's own moment — the fixture in
+  test/directorplan.test.js). Scripts (`song.director.at`) are fixed points;
   `song.director.<key>` is a √-weighted hint. The seam's breath is the wide `stage` shot by default; a
   script that runs past the last note OWNS it (directorplan `held`, may wrap into the roll-in — Forge's anvil). The camera's shot is a pure function of songTime.
   `node scripts/director-audit.mjs` prints every song's shares. An IMPORT also gets a **signature**
@@ -578,26 +635,30 @@ parallel song branches, so merge the key lists and regenerate the fixture ONCE o
 
 ## 7. Render systems & their contracts (juice, camera, machines)
 
-- **Flipper pads** (`padOffset`): wind-up → stroke (last 100 ms) → follow-through wobble.
-  CONTRACT: offset is ~0 at phase 0 — the pad arrives at rest exactly at impact, so contact
-  is honest (a unit test enforces `padOffset(0,A)===0`). Amplitude `A = clamp(launchVel·
-  padNormal × .07, .05, 1.6)`.
-- **Pad size encodes register** (`padRadius`/`pitchSize`): smaller = higher, a PURE FUNCTION
+- **Flipper plates** (`juggle.js flipper` / `windT`): wind-up along −n (amp = clamp(.07 × the
+  throw along n, .06, .6), over WIND_T + WIND_K·amp) → a Hermite SWING arriving at the solved
+  stroke speed w exactly at contact (from restitution) → RECOIL (A_DROP > g) → the hold / fold.
+  CONTRACT (test/juggle.test.js): fully wound (−amp) at −STROKE_S, on its carrier and moving at
+  exactly w at contact, never past the face before it. (The classic pad's `padOffset` — at rest
+  at impact — lives on in engine.js for the volley / turntable plugins.)
+- **Plate size encodes register** (`padRadius`/`pitchSize`): smaller = higher, a PURE FUNCTION
   OF THE NOTE — never of layout/spacing (that would imply the physics of sounding a note
-  changed with context, a lie). Overlap is solved by spacing pads apart (`layoutPads`'
-  relaxation pass), never by shrinking them. `test/layout.test.js` guards no-overlap.
-- **Squash & stretch**: a `deform` node oriented along velocity; stretch with speed, impact
-  squash decaying.
-- **Anticipation glow**: the next pad's rim brightens with `prog²` — possible only because
-  the timeline is analytic.
+  changed with context, a lie). Crowding is solved by placement — a note's LANE is a pure fn
+  of its pitch, a plate that would crowd its slot is NUDGED one lane over — never by shrinking
+  it; the juggler's audit (ball–plate / ball–arm, the holds' plate–plate check) guards contact.
+- **Squash & stretch**: a `deform` node oriented along velocity; stretch with speed, squash a
+  pure fn of the time since the ball's last contact (a strike or a dock).
+- **Anticipation glow**: the next plate's rim brightens and swells with `prog²` over its
+  incoming flight — possible only because the timeline is analytic.
 - **Bloom** (r184): EffectComposer → UnrealBloom (`.12, .3, .9`) → ACES OutputPass. The
   sprite halos (`HALO_A=.12`) predate bloom and stay as the soft wide base; emissive cores
   (`EMI=1.2`) feed the real bloom. Exposure pops 1.15 + kick on lead strikes.
-- **The visible machine** (`paternoster.js`): two roller chains scrolling at exactly DESCENT
-  on phase-matched sprockets, pad carriers between them, tone-plates that unfold out of the
-  bottom housing and fold into the top one (visible run ≈ band ± 7). The marble is conserved by
-  the magnet crane (`crane.js`) — no more mortal plunge-and-respawn. Key `M` toggles it. It only
-  draws what the conveyor math already implies (§3).
+- **The visible machine** (`jugglebelt.js`, built from `paternoster.js`'s parts): one roller
+  chain per lane scrolling at exactly DESCENT on phase-matched sprockets, each tone-plate on an
+  arm (a shoe on its lane's chain → a hub under the plate), sculpted top + bottom housings
+  (visible run ≈ band ± 7) with a lit KEY tile per lane, and the crane GANTRY in front of the
+  top housing (a rail per hand per voice, a carriage per ball). Key `M` hides the frame (plates
+  and balls stay). It only draws what the plan implies (§3b).
 - **The drum kit** (`drums.js`): stationary drums + chrome spouts + a shared mortal-ball
   pool (re-derived from songTime every frame — time is the only state). Drum heads flex on
   strike; the `drumStrike` hook in main fires sparks + `audio.playDrum`.
@@ -609,19 +670,20 @@ parallel song branches, so merge the key lists and regenerate the fixture ONCE o
   WASD/arrows/QE fly (disabled until picked, so it can never swallow the iOS priming tap).
   Vertical is pinned (the band is static); x/z follow with sway + spread-dolly.
 - **Ride cam** (`src/ridecam.js` pure, `camera.js` 'ride', the RIDE button after FIXED; manual RIDE
-  follows the lead): the eye sits on the SMOOTHED belt-marble path LAG .3 s behind, raised and pushed
-  back, aiming LOOK .55 s ahead — the path is ballPos + the render lift, so the pose is a pure fn of
+  follows the lead): the eye sits on the SMOOTHED belt-ball path LAG .3 s behind, raised and pushed
+  back, aiming LOOK .55 s ahead — the path is ONE ball of the plan (`ballAt`: the ride window's
+  longest flight; manual RIDE: the voice's busiest ball), so the pose is a pure fn of
   songTime (scrub-exact). Comfort: low-passed positions, yaw = tanh of mean sideways travel (≤ ±36°),
   a soft edge limit, the horizon NEVER rolls, eye ≥ 3.2 u in front of the marble's plane, 1.2 s ease
   in/out; peak view rotation ≤ 1.36 rad/s on real songs (test budget 1.6). The DIRECTOR rides
-  sparingly: `rideMoments` (apex × the loop's biggest flight — crane hops count), ≤ 1 per 20 s,
+  sparingly: `rideMoments` (apex × the loop's biggest free flight), ≤ 1 per 20 s,
   trimmed to the flight (`rideSpan`, ≤ 6.5 s), share cap .14 but never below one ride; on short
   loops `rideEvery` = ⌈share / RIDE_LONGRUN .22⌉ rides only every n-th pass (`round(base/P) %
   rideEvery` — still pure). Reduced-motion viewers never get directed rides; XR never moves the head
-  (a ride in TOUR lands you on the lead pad). Only BELT marbles are ridden (instrument lobs: open).
+  (a ride in TOUR lands you on the lead pad). Only BELT balls are ridden (instrument lobs: open).
 - **Gallery staging tier** (`stations.js layoutStations`, main `rig.raise` + `stageFrame`): the
   floor was full at 14 machines, so a raised rear GALLERY sits `GALLERY_DROP` (2 u) under the belt's
-  top housing (y ≈ 13.7) — the audience sees it over the paternoster. riff / strum / horns / pogo
+  top housing (y ≈ 13.7) — the audience sees it over the belt. riff / strum / horns / pogo
   have gallery slots either side of the hung organ loft; dulcimer + bowwheel take the front CORNERS.
   Pass order: floor at margin 1 → .7 → .45, then the gallery opens to any station, borrowing depth
   last. Gallery machines avoid every hung footprint (organ, chandelier, court) AND the space behind
@@ -656,7 +718,7 @@ parallel song branches, so merge the key lists and regenerate the fixture ONCE o
   (studio: no per-eye Reflector). Daybreak (the full room) from the wide 1451 → 555 calls/frame, both eyes (docs/XR.md table).
   The head is never moved by the director / ride cam — TOUR teleports (blink); Y = in-world menu.
 
-Dev toggles: `G` = conveyor debug HUD (rulers + height graph; `convDbgOn`, OFF by default). `M` = machines on/off. `R` = next room. `?debug` = a scrub bar (time is the only
+Dev toggles: `G` = belt debug HUD (rulers + height graph + the plan's ball count; `convDbgOn`, OFF by default). `M` = the belt's frame on/off (plates + balls stay). `R` = next room. `?debug` = a scrub bar (time is the only
 state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machine-gunning) + `window.__dev`:
 `song(k)`, `t`, `rate`, `cam(mode)`, `station(key, dist, up)`, `strikes()` (strikes per machine + any
 fired id with no baked voice — the sound sweep), `director()` (cuts, shares, rides, rideEvery,
@@ -707,8 +769,9 @@ signature), `ride(t)`, `occlusion()`, `audioProbe()`, `xrPerf()`.
   `opts.window: 'auto' | 'full' | {fromBar, bars}`; the MAP panel offers LOOP / WHOLE SONG (rows show
   the loop's notes). Labels are guesses: "the chorus" only for a sung (vocal-named) lead.
 - Every song now opens with a **`LEAD_IN` count-in** (`main.js`, default 2.4 s): `songTime`
-  starts negative, so the machine runs solo before the marble spawns (and the pickup fill plays
-  ahead of the downbeat). It's a feel knob — one const; tune freely.
+  starts negative, so the belt spins up before the downbeat (and the pickup fill plays ahead of
+  it); a song whose juggle isn't baked HOLDS there until the worker's plan is in (§3b). It's a
+  feel knob — one const; tune freely.
 - Greensleeves uses the F#/dorian variant; Gymnopédie is the theme stated twice; Canon's late
   cycles are faithful-in-gesture simplifications. Mars (no score to hand — the fanfare, the 5/2 theme
   and the recap are faithful in SHAPE) and Winter (arranged from memory) say so in their headers.
@@ -740,7 +803,8 @@ tempo, the blob-URL console noise and the forced breath wide shot are all FIXED)
   shot frames only belt + hung + turntable; all-14-machines on 3 bays is crowded (riff behind horns,
   ~3 u of front depth borrowed). An import's SIGNATURE machine isn't moved to the front — Arena MoP's
   riff stands on the gallery. Stage edit decides gallery height only at rebuild. Winter's grand is
-  cropped bottom-left in the Void's wide.
+  cropped bottom-left in the Void's wide. Starship Groove in the graveyard: the riff station's box
+  overlaps a room prop (staging-audit `ov:1 riff×room`; on the classic belt too).
 - **Director**: whole-song imports give `ride` .28–.39 (cap .14 — pre-existing); some rooms can't fit
   every cap (Piano Man's dulcimer .41 vs .34) — the least-over edit wins; a signature's first shot can
   open ~3 beats early on an idle machine (the director pre-cuts); `shares.ride` is one pass — divide
@@ -781,7 +845,8 @@ links, recording, the **conveyor + spawner** (archetype 1), the **drum machine**
 the plugin seam + 15 instruments, rooms, the room director, the MAP / EDIT STAGE creation tools,
 phrase loops — and on 2026-10-07: the guitar + sustain families (7 machines), real cymbals, MIDI
 routing to every family machine + the import's signature shot, belt dynamics, iOS duration
-buckets, the gallery tier, the ride cam, arena + starship, 8 songs, WebXR with a VR detail profile.
+buckets, the gallery tier, the ride cam, arena + starship, 8 songs, WebXR with a VR detail profile;
+on 2026-10-24 the JUGGLER belt (one multiball machine for every belt voice — the classic removed).
 Near-term, in rough priority:
 
 1. **Hear it / wear it**: a real-iPhone listen (buckets, cymbals, velocity) and the Quest 2 pass

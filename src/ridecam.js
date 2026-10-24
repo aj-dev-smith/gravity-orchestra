@@ -3,7 +3,7 @@
    Every arc is analytic, so the marble's whole future is known: the camera can sit just
    BEHIND it on its own path (where it was LAG s ago) and look where it is going (LOOK s
    ahead). Nothing is integrated and nothing is remembered — the pose is a pure function
-   of songTime over a path sampler `path(t) → [x, y, z]` (main: ballPos + the render lift),
+   of songTime over a path sampler `path(t) → [x, y, z]` (main: one belt ball, juggle.js ballAt),
    so scrubbing is exact and the shot replays identically every loop.
 
    COMFORT (no nausea) is designed into the math, not clamped after it:

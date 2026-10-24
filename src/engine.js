@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { beltVel } from './dynamics.js';
 
 /* ============================================================
    ENGINE — the pure heart. No scene, no DOM, no audio.
@@ -89,7 +88,7 @@ export function deployPose(c, inner, edge){
 }
 
 /* ============================================================
-   DRIBBLE — the marble drum machine's buildTrack. One immortal
+   DRIBBLE — the marble drum machine's solve. One immortal
    ball per drum, and it only ever bounces on THAT drum: the
    vertical flight between two strikes is the solved arc for the
    gap (apex = |G|·gap²/8 — the belt's dt² grammar, so the groove
@@ -246,11 +245,10 @@ export function noteNum(n){
 /* ---- pad size encodes register (smaller = higher, like real resonators) ----
    A pad's size is a PURE FUNCTION OF ITS NOTE — same note, same size, always.
    It never depends on layout/spacing (that would imply the physics of sounding
-   the note changed with context, which is a lie). Overlap is solved by spacing
-   the pads apart, never by shrinking them. */
+   the note changed with context, which is a lie). Crowding is solved by placing
+   the pads apart (the belt's lanes: juggle.js LANE_D, NUDGE), never by shrinking them. */
 export const PITCH_AMP = .28;          // ± size swing across a voice's own range
 export const PAD_R     = .58;          // pad world radius at scale 1 (rim outer edge)
-export const CLEAR     = 1.06;         // neighbours kept ≥ (r_a+r_b)·CLEAR apart
 
 /* register → size multiplier within a voice's [loN, span] note range */
 export function pitchSize(note, loN, span){
@@ -258,8 +256,8 @@ export function pitchSize(note, loN, span){
 }
 
 /* Base pad scale per voice — bass pads read heavier, alto lighter. The ONE
-   source of truth: buildTrack and the overlap test both size pads from this,
-   so the no-overlap guarantee can't drift out of sync with the geometry. */
+   source of truth: the belt sizes every tone-plate from this (juggle.js:
+   padRadius → each plate's scale). */
 export const voiceScale = role => role === 'bass' ? 1.4 : (role === 'alto' ? .85 : 1);
 
 /* A track's pad radius as a pure function of the note: base voice scale × the
@@ -268,58 +266,4 @@ export function padRadius(notes, role){
   const nums = notes.map(([note]) => noteNum(note));
   const loN = Math.min(...nums), span = Math.max(1, Math.max(...nums) - loN);
   return note => PAD_R * voiceScale(role) * pitchSize(note, loN, span);
-}
-
-/* Lay out a track's pad chain. Positions are AUTHORING (ΔP), not physics:
-   gravity is one global constant and is NEVER touched here. The vertical drop
-   is locked to dt·2.2 so parallel tracks fall in sync (and apex height stays =
-   duration); every bit of extra room for fast runs comes out of the horizontal
-   axis. radOf(note) → world radius (pure fn of the note); the horizontal step
-   is widened until neighbours clear by (r_i + r_{i+1})·clear. */
-export function layoutPads(melody, { zBase, isBass, delayBeats = 0, beat, radOf, clear = CLEAR, hopOver = Infinity, xMax = Infinity }){
-  const pads = []; let t = 0;
-  let p = new THREE.Vector3(0, -DESCENT * delayBeats * beat, zBase), dir = isBass ? -1 : 1;
-  melody.forEach((entry, i) => {
-    const [note, beats] = entry, dt = beats * beat;
-    // vel: the note's dynamics (optional 3rd element, default 1) — audio + strike juice only;
-    // it never touches the geometry or the solve (a note's pad is a pure fn of the note)
-    pads.push({ pos: p.clone(), note, dt, t, r: radOf(note), vel: beltVel(entry) });
-    t += dt;
-    if (i % 4 === 3) dir *= -1;                          // weave
-    const next = melody[i+1];
-    const y = -dt * DESCENT;                             // time-proportional drop — LOCKED (track sync)
-    const z = Math.sin(i * (isBass ? 1.1 : 1.3)) * (isBass ? 1.0 : 1.4);
-    const need = next ? (radOf(note) + radOf(next[0])) * clear : 0;
-    const xMin = Math.sqrt(Math.max(0, need*need - y*y - z*z));   // widen x until they clear
-    // a gap longer than hopOver is a CRANE HOP (crane.js): the magnet carries the marble
-    // across, so the step stops growing with dt (a 30 s note no longer spans the room)
-    const step = dt > hopOver ? 0.9 + 2.0 * Math.min(Math.max(dt - hopOver, .5), hopOver) : 0.9 + dt * 2.0;
-    let x = dir * Math.max(step, xMin);
-    if (Math.abs(p.x + x) > xMax){ dir *= -1; x = -x; }   // fold back early: a long track can't wander off the bay
-    p = p.clone().add(new THREE.Vector3(x, y, z));
-  });
-  // The weave folds x back every 4 notes, so a pad can still drift near a
-  // NON-neighbour (i vs i+2). Relax those out: push the lower pad sideways only
-  // — y is locked (sync) and size is sacred, so all clearance comes from the
-  // horizontal plane. Pad 0 is pinned (it's never the lower index of a pair).
-  for (let pass = 0; pass < 80; pass++){
-    let moved = false;
-    for (let i = 0; i < pads.length; i++){
-      for (let j = i + 1; j < pads.length; j++){
-        const a = pads[i].pos, b = pads[j].pos, need = (pads[i].r + pads[j].r) * clear;
-        if (a.distanceTo(b) >= need) continue;
-        const dy = b.y - a.y;                            // fixed — we never move vertically
-        const hx = b.x - a.x, hz = b.z - a.z;
-        let hlen = Math.hypot(hx, hz), ux, uz;
-        if (hlen < 1e-6){ ux = 1; uz = 0; hlen = 0; }    // coincident in-plane → pick an axis
-        else { ux = hx / hlen; uz = hz / hlen; }
-        const push = Math.sqrt(Math.max(0, need*need - dy*dy)) - hlen;  // exact horizontal clearance
-        if (push <= 0) continue;
-        b.x += ux * push; b.z += uz * push;              // move the lower pad clear of the upper
-        moved = true;
-      }
-    }
-    if (!moved) break;
-  }
-  return pads;
 }

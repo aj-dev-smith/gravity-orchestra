@@ -4,8 +4,9 @@ import { eventTimes, lanesByNote, wrapP } from '../src/instruments/clock.js';
 import {
   bowLane, laneAt, strokeAt, laneGeom, laneX, prepPart, clearances, stringLen, stringR, bowEnv, liveFrom,
   g, T_PRESS, T_UP, F_MIN, HOLD_MIN, HOLD_MAX, MIN_REPEAT, MAG_Y, CUP_Y, BALL_R, CUP_R, SPACING, MAX_STRINGS,
-  WHEEL_R, WHEEL_Y, LANE_HW, PART_LIMITS, LO, HI,
+  WHEEL_R, WHEEL_Y, LANE_HW, PART_LIMITS, LO, HI, RIM_W,
 } from '../src/instruments/bowwheel/solve.js';
+import * as THREE from 'three';
 import { bowVoice, SR } from '../src/instruments/bowwheel/voice.js';
 import bowwheel from '../src/instruments/bowwheel/index.js';
 import { noteHz, noteNum } from '../src/engine.js';
@@ -274,6 +275,25 @@ describe('bowwheel: geometry', () => {
       expect(G.D).toBeGreaterThan(.05); expect(G.D).toBeLessThan(.2);
       expect(MAG_Y - BALL_R).toBeGreaterThan(CUP_Y + BALL_R);
     }
+  });
+  it('the soundboard lies BEHIND the wheel, under its strings, face up (it was mirrored in front, face down)', () => {
+    const M = bowwheel.make({ envMap: null, glowTex: null, THREE });
+    const { part, beats, bpm } = bowwheel.demo, beat = 60 / bpm, P = 2.6 + beats * beat + 1.2;
+    const group = M.build(part, { rollT: 2.6, beat, P, start: -.6, station: { x: 0, z: 0, yaw: 0 }, floorY: 0, ceilY: 40, loopBeats: beats });
+    group.updateMatrixWorld(true);
+    const byColor = hex => { const out = []; group.traverse(o => { if (o.isMesh && o.material.color?.getHex() === hex) out.push(o); }); return out; };
+    const boards = byColor(0x3a1418), rim = byColor(0x1e140e)[0];                     // (the wood: only the board · the rim)
+    expect(boards.length).toBe(1);
+    const wz = rim.getWorldPosition(new THREE.Vector3()).z;                            // (the machine is centred on its slot)
+    const geo = boards[0].geometry.clone().applyMatrix4(boards[0].matrixWorld);
+    geo.computeBoundingBox();
+    const b = geo.boundingBox, n = geo.attributes.normal, all = new THREE.Box3().setFromObject(group);
+    expect(b.max.z, 'behind the rim').toBeLessThan(wz - RIM_W / 2);
+    expect(b.min.z, 'back past the strings\' tails').toBeLessThan(wz - 1.5);
+    expect(b.max.z, 'never the machine\'s front').toBeLessThan(all.max.z - 2);
+    expect(b.max.y - b.min.y, 'flat').toBeLessThan(1e-6);
+    expect(b.max.y).toBeGreaterThan(WHEEL_Y); expect(b.max.y).toBeLessThan(WHEEL_Y + WHEEL_R);   // (on its rails, under the strings over the crown)
+    for (let i = 0; i < n.count; i++) expect(n.getY(i), 'face up').toBeCloseTo(1, 6);
   });
   it('the visible bow envelope exists only during the stroke', () => {
     expect(bowEnv(-.01, 1)).toBe(0); expect(bowEnv(1.01, 1)).toBe(0);

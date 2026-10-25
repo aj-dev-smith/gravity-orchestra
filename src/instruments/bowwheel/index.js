@@ -276,7 +276,7 @@ export default {
         sh.lineTo(span + .1, -zR0);
         for (let i = n - 1; i >= 0; i--) sh.lineTo(xs[i] + (i === n - 1 ? .45 : 0), -(tails[i] - .3));
         sh.lineTo(-span - .1, -(tails[0] - .3));
-        const sb = new THREE.ShapeGeometry(sh); sb.rotateX(Math.PI / 2);   // (shape y → −z)
+        const sb = new THREE.ShapeGeometry(sh); sb.rotateX(-Math.PI / 2);  // (shape y → −z: behind the wheel, under its strings; face up)
         put(wood, sb, 0, yRail - .02, 0);
         for (let i = 0; i < n; i++){
           const G = geoms[i];

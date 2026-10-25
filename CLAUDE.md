@@ -109,7 +109,8 @@ on. Treat it as live, and confirm with the human before running it.
                      (sky banks per phrase, deck never moves — test/room-starship.test.js).
                      FOOTING — what every machine stands on (§7 Rooms): footing.js (pure planner:
                      pads by height band, lofts, stairs / ladders, envelopes — test/footing.test.js),
-                     footing3d.js (the render kit + DEFAULT_STYLE — test/footing3d.test.js),
+                     footing3d.js (the render kit + DEFAULT_STYLE + tintStyle, a room's own
+                     materials — test/footing3d.test.js),
                      pulse.js (pure: a strike cue → a light envelope of songTime — test/pulse.test.js).
     src/midi/        MIDI import: parse.js (type-0/1 → tracks, FAITHFUL — keeps every
                      channel incl. 9, with velocity) + convert.js (→ song JSON, quantized,
@@ -131,7 +132,7 @@ on. Treat it as live, and confirm with the human before running it.
     src/main.js      scene, rigs, buildWorld, ballPos, animate(), controls — the orchestrator
     test/            Vitest: engine ballistics, song lock-rule, drum validation, MIDI, the
                      juggler's plan audit + bake, share round-trip, every plugin's honesty suite,
-                     staging audit + footing, director, XR (55 files / 2595 tests, 2026-10-25; ~1.5 min)
+                     staging audit + footing, director, XR (55 files / 2649 tests, 2026-10-25; ~1.5 min)
     docs/OVERNIGHT-2026-10-07.md   the night's changelog: what each new machine / room / song
                      is and the URL to try it
     VISION.md        the product north star (vision, not spec)
@@ -728,8 +729,9 @@ parallel song branches, so merge the key lists and regenerate the fixture ONCE o
   turntable) or every other station's solved position moves.
 - **Rooms** (`src/rooms/`): each room is pure set dressing in the static world — `FLOOR` stays
   `STAGE.FLOOR` (−5.5 since 2026-10-25; it was −22, every machine on ~15 m of legs) (HW/BACK/FRONT/
-  CEIL may widen, as the studio and arena do); `place(anchors)` gets every machine's footprint, deck,
-  ground, lift, bottom, low, solid box and strike cue (rooms/index.js header), NO lights of its own
+  CEIL may widen, as the studio and arena do); `place(anchors, plan)` gets every machine's footprint, deck,
+  ground, lift, bottom, low, solid box and strike cue (rooms/index.js header) + the footing plan (the
+  Void's islands carry the pads, stairs and lofts too — `voidIslands`, one rim per island), NO lights of its own
   (14 lights in every room), constant pools, per-frame work = uniforms only, scrub-safe. `rooms.cue()`
   gets `{beat, rollT, P, drums, melody, loopBeats, start}` at song load: **arena** turns the drum
   lanes into a fixed cue sheet over 8 flame jets + 4 CO2 cannons + a blinder wall (crash → every
@@ -755,6 +757,19 @@ parallel song branches, so merge the key lists and regenerate the fixture ONCE o
   fixture's `foot`). THE EDGE: a strip of the machine's colour round its pad answers its own strikes
   (pulse.js over the anchor's cue: afterglow exp(−dt/.45), max not sum, + anticipation; one uniform
   slot per pad, silent in the count-in) — an accent, never a strobe.
+  Rooms DRESS it with `tintStyle({ base, steel, deck })` (footing3d.js: the kit's forms in the room's own
+  materials, made once per built room, the room disposes them): cathedral limestone / bronze / oak,
+  graveyard granite / iron / planks, studio charcoal risers / aluminium truss, arena black decks on
+  silver truss, starship hull plating; grid keeps the default concrete (a LIGHT tint — the colour
+  multiplies a mid-grey grain, the old mid-grey was a black box in every dim room); the Void dresses its
+  pads in its islands' metal and drops the flush pad's own edge (the island rim is the line).
+  THE KIT stands on its own DECK slab (drumlook `DECK_UNDER`, −.34 under the kit's local 0) on a flush
+  pad whose WELL lets its pistons dip below the deck (drumparts `pistonDip`: the deepest dip over the
+  loop, solved round the strikes, not sampled frames). An open `stand` lifted more than `FOOT.CLIMB` (1 u)
+  gets a ladder and X-bracing in tiers ≤ `DIM.OPEN_TIER` (6 u), never through what hangs (`pad.hangY`);
+  every tower bay is braced in panels. A machine's LIFT is part of the layout: EDIT STAGE / a share link
+  stores `[x, z, yaw, lift]` when the user set one (0 = "on the floor", which outranks the gallery
+  raise; no lift = the solver decides) — editor/placement.js.
 
 - **Transport** (`#transport` under the song picker; `src/transport.js` pure; main `setPlaying` /
   `restart`). **■ STOP / ▶ START**: `playing = false` freezes the frame (time is the only state —

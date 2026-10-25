@@ -47,6 +47,9 @@ import starship from './starship.js';
    room's and drops the others. Its group lives at scene level (room 'off' has one too) — `footGroup`
    for the shot solve, `footing` (the plan), `footBoxes` (its envelopes); its reactive edge is updated
    from update(). Rooms still own no lights: the footing is lit like any machine.
+   A room's OWN reaction to a machine (a candle row, a grave's glow) reads the anchor's cue the same
+   way: makePulse(a.cue, a) (rooms/pulse.js) in place(), then .at(songTime) / .next(songTime) in
+   update() — a pure envelope of songTime, silent in the count-in, allocation-free.
    Choosing: ?room=<key>  >  a pick made THIS session (R / ROOM)  >  the song's own
    `room` field (features-as-data; suggest())  >  the viewer's remembered pick
    (localStorage — it still opens the page and dresses songs that name no room)  >

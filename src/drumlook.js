@@ -345,12 +345,15 @@ export function buildArch(F, mats){
 /* ---- the RISER DECK: an angular faceted slab sized to the kit (drumparts deckOutline),
    with a glowing lip, and a sound-grille of concentric grooves round the kick. The KICK
    SHOCKWAVE lives here: up to 3 rings (drumparts shockRing) race across the top face
-   from the kick — light through the grooves. ---- */
+   from the kick — light through the grooves. Its top face is the kit's deck (y 0); its UNDERSIDE,
+   DECK_UNDER, is what the whole kit stands on (rooms/footing.js: the floor's plinth, or a lift). ---- */
+const DECK_D = .26, DECK_BEVEL = .04;                    // the slab: its body, a bevel top and bottom
+export const DECK_UNDER = -(DECK_D + 2 * DECK_BEVEL);
 export function buildDeck(mats, kick, F){
   const outline = deckOutline(F);
   const sh = new THREE.Shape(outline.map(([x, z]) => new THREE.Vector2(x, -z)));
-  const geo = new THREE.ExtrudeGeometry(sh, { depth: .26, bevelEnabled: true, bevelThickness: .04, bevelSize: .06, bevelSegments: 2 });
-  geo.rotateX(-Math.PI / 2).translate(0, -.3, 0);        // top face at y ≈ 0
+  const geo = new THREE.ExtrudeGeometry(sh, { depth: DECK_D, bevelEnabled: true, bevelThickness: DECK_BEVEL, bevelSize: .06, bevelSegments: 2 });
+  geo.rotateX(-Math.PI / 2).translate(0, -(DECK_D + DECK_BEVEL), 0);   // top face at y 0
   const mat = new THREE.MeshStandardMaterial({ color: 0x15171f, metalness: .55, roughness: .38, envMap: mats.chrome.envMap,
     emissive: new THREE.Color(0xff7a2e), emissiveIntensity: 1 });
   const u = { uK: { value: new THREE.Vector2(kick?.x ?? 0, kick?.z ?? 0) }, uOn: { value: kick ? 1 : 0 },

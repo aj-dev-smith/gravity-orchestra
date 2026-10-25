@@ -365,6 +365,37 @@ export function cymbalPiston(members, t, start = -Infinity){
   return y;
 }
 
+/* The DEEPEST a head's piston strokes, and when: { t, off } (off ≤ 0 — below its rest: a kick's
+   wind-up retracts the head, its rod sliding down through the deck into the well its base keeps),
+   over the count-in and one whole loop (t: NaN if it never dips). A strike's wind-up bottoms out a
+   fraction of a second before it and its follow-through dips just after, so the windows round every
+   strike are scanned (one 20 ms grid — a dense lane's windows overlap) and the deepest few dips
+   refined (1 ms): a uniform sweep of the loop catches a dip only by luck. Pure: the staging measures
+   the kit's lowest solid part there (main.js, rooms/footing.js). */
+const DIP_W = [-.5, .36], DIP_STEP = .02, DIP_REFINE = 8;   // (the travel is clamped — maxA — so many strikes tie for deepest)
+export function pistonDip(L, { start = -Infinity } = {}){
+  const { s, P } = L, first = firstStrike(L, start), t0 = Number.isFinite(first) ? first : s[0];
+  const at = x => dribblePiston(L, x, { start });
+  const base = t0 + DIP_W[0], n = Math.ceil((P + DIP_W[1] - DIP_W[0]) / DIP_STEP) + 2;
+  const on = new Uint8Array(n), v = new Float64Array(n);
+  for (const si of s){
+    const a = si + Math.ceil((t0 - si) / P - 1e-9) * P;   // its first strike from t0 on…
+    for (const b of a > t0 + 1e-9 ? [a] : [a, a + P]){  // (…and the first one's next loop: an armed drop winds up its own way)
+      const k1 = Math.min(n - 1, Math.ceil((b + DIP_W[1] - base) / DIP_STEP));
+      for (let k = Math.max(0, Math.floor((b + DIP_W[0] - base) / DIP_STEP)); k <= k1; k++) on[k] = 1;
+    }
+  }
+  for (let k = 0; k < n; k++) if (on[k]) v[k] = at(base + k * DIP_STEP);
+  const dips = [];
+  for (let k = 0; k < n; k++) if (on[k] && v[k] < 0 && !(k > 0 && on[k - 1] && v[k - 1] < v[k]) && !(k + 1 < n && on[k + 1] && v[k + 1] <= v[k])) dips.push(k);
+  let off = 0, t = NaN;
+  for (const k of dips.sort((p, q) => v[p] - v[q]).slice(0, DIP_REFINE)){
+    const c = base + k * DIP_STEP;
+    for (let j = -20; j <= 20; j++){ const x = c + j * .001, y = at(x); if (y < off){ off = y; t = x; } }
+  }
+  return { t, off };
+}
+
 /* ---- the HI-HAT LINKAGE, the way a real one works: the pedal PRESSED (toe down) =
    CLOSED, released (toe up) = OPEN. The struck TOP cymbal rides the piston (contact
    stays honest), so the BOTTOM one is the mover: its pull-tube runs down the stand to a

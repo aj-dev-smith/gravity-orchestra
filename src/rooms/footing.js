@@ -12,7 +12,10 @@
    A machine whose lowest parts are NOT what it would stand on (the turntable's resonator tubes hang
    under its plinth) declares a descriptor staging hint `stand: <local y>` — the underside it rests on.
    Its ground is still set by `low` (the hanging parts clear the floor by the plinth), and its footing
-   reaches up to deck + stand, OPEN, so what hangs stays visible.
+   reaches up to deck + stand, OPEN, so what hangs stays visible. The KIT stands on its deck slab's
+   underside (marbledrums KIT_STAND) in every song: its pistons stroke briefly below it — not hanging,
+   dipping INTO its base — so its pad is solid and at least that deep there (its WELL: the plinth's
+   .4 swallows a stroke's ≤ .33).
 
    The supports change with height (h = support height above the floor), styled by each room:
      flush  h ≤ BANDS.flush   a plinth / base slab (every grounded machine)
@@ -28,14 +31,16 @@
    reactive edge: rooms/pulse.js). All in WORLD units; a rect is a centre (x, z), half extents
    (hw, hd) along its own axes and a yaw (three's rotation.y: local +u → world (cos, −sin), local +v →
    world (sin, cos)).
-     pad  { key, kind, x, z, yaw, hw, hd, top, h, band, open, loft, color, pulse, fixed, lift,
+     pad  { key, kind, x, z, yaw, hw, hd, top, h, band, open, well, loft, color, pulse, fixed, lift,
             access, feet, hang }   top = the world y it holds the machine at (its bottom); h = top − floor;
-            open: something hangs below what it stands on (low < bottom) — posts under its FEET
-            ([u, v, r] in the anchor's frame; none known: its corners), every beam kept out of HANG
-            ([u0, u1, v0, v1]); loft: its loft's id or null; pulse: its slot in `pulses`
-     loft { id, keys, x0, x1, z0, z1, x, z, hw, hd, yaw: 0, top, h, band, access }   a WORLD AABB
-            (axis-aligned: a turned member's footprint is bounded); top = its lowest member's —
-            a higher member stands on a shim
+            open: a `stand` machine (its anchor sends FEET / HANG) with something hanging below what
+            it stands on (low < bottom) — posts under its FEET ([u, v, r] in the anchor's frame; none
+            known: its corners), every beam kept out of HANG ([u0, u1, v0, v1]); well: how far under
+            its top any other machine reaches (top − low: the kit's pistons) — its support is solid at
+            least that deep; loft: its loft's id or null; pulse: its slot in `pulses`
+     loft { id, keys, x0, x1, z0, z1, x, z, hw, hd, yaw: 0, top, h, band, well, access }   a WORLD
+            AABB (axis-aligned: a turned member's footprint is bounded); top = its lowest member's —
+            a higher member stands on a shim; well: its deepest member's, under the loft's deck top
      access { kind: 'stair' | 'ladder', side: '+u'|'-u'|'+v'|'-v', a0, a1 (along the side), out,
               n, rise, tread (stair) | flights, cage (ladder) }   on the face at u = ±hw / v = ±hd;
             a ±u side runs along v, a ±v side along u. Placed on the first side (outer, then front
@@ -147,11 +152,13 @@ export function planFooting(anchors = [], { floor = -5.5, room = null } = {}){
     m = Math.max(0, m);
     const top = a.kind === 'belt' ? floor : Number.isFinite(a.bottom) ? a.bottom : Number.isFinite(a.y) ? a.y : floor;
     const h = Math.max(0, top - floor);
-    // (open: something hangs below what it stands on — a solid pad would swallow it)
-    const open = !a.fixed && Number.isFinite(a.low) && a.low < top - .05;
+    // what reaches below what it stands on: a `stand` machine's hanging parts must stay SEEN (open: a
+    // solid pad would swallow them); anything else only dips into its base — the pad hides it (well)
+    const below = !a.fixed && Number.isFinite(a.low) ? Math.max(0, top - a.low) : 0;
+    const open = below > .05 && (Array.isArray(a.feet) || Array.isArray(a.hang));
     const i = pads.length;
     pads.push({ key: a.key, kind: a.kind, x: r.x, z: r.z, yaw: r.yaw, hw: r.hw + m, hd: r.hd + m, top, h, band: bandOf(h),
-      open, loft: null, color: a.color ?? null, pulse: Math.min(i, FOOT.MAX_PULSE - 1), fixed: !!a.fixed, lift: a.lift ?? 0,
+      open, well: open ? 0 : below, loft: null, color: a.color ?? null, pulse: Math.min(i, FOOT.MAX_PULSE - 1), fixed: !!a.fixed, lift: a.lift ?? 0,
       access: null, feet: open && Array.isArray(a.feet) && a.feet.length ? a.feet : null, hang: open ? (a.hang ?? null) : null, _a: a });
     if (i < FOOT.MAX_PULSE) pulses.push({ key: a.key, cue: Array.isArray(a.cue) ? a.cue : [], P: a.P, start: a.start });
   }
@@ -214,8 +221,9 @@ function loftOf(g, floor){
   let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, top = Infinity;
   for (const p of g){ const b = rectAabb(p); x0 = Math.min(x0, b[0]); x1 = Math.max(x1, b[1]); z0 = Math.min(z0, b[2]); z1 = Math.max(z1, b[3]); top = Math.min(top, p.top); }
   const keys = g.map(p => p.key).sort(), h = Math.max(0, top - floor);
+  const well = Math.max(0, ...g.map(p => p.well - (p.top - top)));   // (a member on a shim dips into the shim first)
   return { id: 'loft:' + keys.join('+'), keys, x0, x1, z0, z1, x: (x0 + x1) / 2, z: (z0 + z1) / 2, hw: (x1 - x0) / 2, hd: (z1 - z0) / 2, yaw: 0,
-           top, h, band: bandOf(h), access: null };
+           top, h, band: bandOf(h), well, access: null };
 }
 const yHit = (a, b) => Math.min(a[1], b[1]) - Math.max(a[0], b[0]) > 1e-6;
 

@@ -126,6 +126,42 @@ describe('footing kit: the plan, drawn', () => {
     }
     f.dispose();
   });
+  it('a machine that dips into its base (the kit\'s pistons: footing.js well) — every support is solid that deep under it', () => {
+    /* the heights where a mesh's triangles cross the vertical line through (x, z) */
+    const crossing = (m, x, z) => {
+      const a = m.geometry.attributes.position.array, I = m.geometry.index.array, out = [];
+      for (let t = 0; t < I.length; t += 3){
+        const [p, q, r] = [I[t] * 3, I[t + 1] * 3, I[t + 2] * 3];
+        const d = (a[q] - a[p]) * (a[r + 2] - a[p + 2]) - (a[r] - a[p]) * (a[q + 2] - a[p + 2]);
+        if (Math.abs(d) < 1e-12) continue;                                              // (a wall: seen edge-on)
+        const u = ((x - a[p]) * (a[r + 2] - a[p + 2]) - (a[r] - a[p]) * (z - a[p + 2])) / d, v = ((a[q] - a[p]) * (z - a[p + 2]) - (x - a[p]) * (a[q + 2] - a[p + 2])) / d;
+        if (u >= 0 && v >= 0 && u + v <= 1) out.push(a[p + 1] + u * (a[q + 1] - a[p + 1]) + v * (a[r + 1] - a[p + 1]));
+      }
+      return out;
+    };
+    const kit = (h, x = 0) => ({ ...st('drums', x, 12, 18, 5.5, h), kind: 'kit', low: FL + h - .335 });
+    for (const h of [FOOT.PLINTH, 2.4, 6, 14]){
+      const p = planFooting([kit(h)], { floor: FL, room: ROOMB }), q = p.pads[0];
+      expect(q.open, `${h}`).toBe(false); expect(q.well).toBeCloseTo(.335, 12);
+      const f = buildFooting(p, DEFAULT_STYLE, { boxes: footingBoxes(p) }), M = meshes(f);
+      const at = name => M.filter(m => m.name === name).flatMap(m => crossing(m, q.x + .37, q.z - .21)).filter(y => y < q.top + 1e-6);
+      if (q.band === 'flush' || q.band === 'low'){
+        // concrete from the floor up under its cap: what dips sinks into the block
+        const base = M.find(m => m.name === 'footing:base').geometry.attributes.position.array;
+        let lo = Infinity; for (let i = 1; i < base.length; i += 3) lo = Math.min(lo, base[i]);
+        expect(lo, q.band).toBeLessThanOrEqual(FL);
+        expect(q.h, q.band).toBeGreaterThanOrEqual(q.well + .03);
+      } else {
+        // a deck plate on legs / a truss: its underside at least the well (+ a hair) under its top
+        const under = Math.min(...at('footing:deck'));
+        expect(q.top - under, `${q.band}: deck ${(q.top - under).toFixed(3)} deep`).toBeGreaterThanOrEqual(q.well + .03);
+      }
+      f.dispose();
+    }
+    // a loft shares the deepest member's well (a member on a shim dips into the shim first)
+    const L = planFooting([kit(6, -6), { ...st('bells', 7, 12, 6, 5, 6.2) }], { floor: FL, room: ROOMB }).lofts[0];
+    expect(L.keys).toEqual(['bells', 'drums']); expect(L.well).toBeCloseTo(.335, 12);
+  });
   it('dispose() takes it out of the scene and frees its geometry', () => {
     const scene = new THREE.Scene(), f = build(), freed = [];
     scene.add(f.group);

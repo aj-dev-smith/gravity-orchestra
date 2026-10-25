@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { dribbleAt, dribblePiston, firstStrike } from './engine.js';
 import { styleOf, kitPieces, pieceLane, clutchFrom, wireBuzz, shockAges, shockRing, DROP_V, DT_MAX, MAG_H, HW,
-         kitFrame, stairTreads, pieceFloor, STANDS, TRIPOD, HAT, hatLinkage,
+         kitFrame, stairTreads, pieceFloor, STANDS, TRIPOD, HAT, hatLinkage, pistonDip,
          cymbalSchedule, cymbalPose, cymbalPiston, cymbalPivot, cymbalUnder, clampLip, CLAMP } from './drumparts.js';
 import { V, fz, bar, kitMaterials, buildDrum, buildWires, cymbalProfile, cymbalGeometry, bronze,
-         buildMagnet, buildArch, buildDeck, buildStair, coilSpring, freeze } from './drumlook.js';
+         buildMagnet, buildArch, buildDeck, buildStair, coilSpring, freeze, DECK_UNDER } from './drumlook.js';
 
 /* ============================================================
    MARBLE DRUMS — the drum machine. Render subsystem, same DI'd
@@ -49,6 +49,9 @@ import { V, fz, bar, kitMaterials, buildDrum, buildWires, cymbalProfile, cymbalG
 const EDGE_W    = .25;      // strike-edge window (s): a strike fires once if we land within it
 const RISER_TOP = 1.5;      // deck height (world y) when the slot names none — main sets slot.y: the kit SET IN THE
                             // ROOM, its deck slab on the floor's plinth or lifted (rooms/footing.js)
+/* what the kit STANDS on, below its deck (kit-local y): its deck slab's underside — every song, so its
+   ground never depends on the groove. The pistons stroke deeper (lowTimes): into the well its base keeps. */
+export const KIT_STAND = DECK_UNDER;
 /* The kit's slot (x relative to the belt wall's centre, z toward the audience). It has
    two homes: beside the belt when it is the only other machine (KIT_SOLO — right of the
    belt, clear of it, in front of the wall), and the FRONT-RIGHT of the amphitheater when
@@ -456,7 +459,15 @@ export function makeMarbleDrums({ envMap, glowTex }){
     }
   }
 
-  return { build, update };
+  /* when each head's piston strokes DEEPEST this song (drumparts pistonDip) — the poses at which the
+     staging measures the kit's lowest solid part (main.js: a rod slides down through the deck slab,
+     into the well its base keeps; a uniform sweep of the loop would catch it by luck). A hung
+     cymbal's piston rides high on its boom: never the kit's low. */
+  function lowTimes(){
+    return pieces.filter(pc => !pc.cym).map(pc => pistonDip(pc.L, { start })).filter(d => d.off < -1e-3).map(d => d.t);
+  }
+
+  return { build, update, lowTimes };
 }
 
 /* ---- a marble: chrome core with a lane-tinted glow; the kick's is a cannonball ---- */

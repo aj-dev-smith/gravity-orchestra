@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { dribbleLane, dribbleAt, G } from '../src/engine.js';
+import { dribbleLane, dribbleAt, dribblePiston, G } from '../src/engine.js';
 import { GM_DRUMS } from '../src/drumkit.js';
 import { SONGS } from '../src/songs/index.js';
 import { kitPieces, pieceLane, spiralSeats, styleOf, SPIRAL, BACK, kitFrame, shellPoint, shellRungs, deckOutline,
          stairTreads, treadOutline, pieceReach, pieceDisc, pieceStand, magnetTop, STANDS, TRIPOD, HAT, hatLinkage,
-         clutchFrom, CLUTCH, wireBuzz, shockRing, shockAges, SHOCK } from '../src/drumparts.js';
+         clutchFrom, CLUTCH, wireBuzz, shockRing, shockAges, SHOCK, pistonDip, DT_MAX } from '../src/drumparts.js';
 import { KIT_SOLO } from '../src/marbledrums.js';
 
 /* ---------------------------------------------------------------------------
@@ -291,3 +291,24 @@ describe('KICK SHOCKWAVE', () => {
     for (let k = 1; k < r.length; k++) expect(r[k].age).toBeGreaterThan(r[k - 1].age);
   });
 });
+
+/* the deepest a head's piston strokes (the staging measures the kit's lowest solid part there:
+   main.js, rooms/footing.js) — exact against a brute-force scan of the piston law */
+describe('pistonDip — where a piston bottoms out', () => {
+  const ROLL_T = 2.6, START = -.6;
+  for (const key of ['backbeat', 'mountain-king', 'forge']) it(`${key}: every head's deepest stroke = a 1 ms scan of the count-in + the loop`, () => {
+    const S = SONGS[key], beat = 60 / S.bpm, P = ROLL_T + S.melody.reduce((a, n) => a + n[1], 0) * beat + 1.2;
+    for (const p of kitPieces(S.drums)){
+      if (p.cym) continue;                                // (a hung cymbal rides its own piston, high on its boom)
+      const { L } = pieceLane(p, S.drums, { rollT: ROLL_T, beat, P, dtMax: DT_MAX });
+      const d = pistonDip(L, { start: START });
+      let lo = 0;                                         // (the count-in, then a whole loop from the lane's first strike)
+      for (let t = START - .5; t < START + 2 * P + 1; t += .001) lo = Math.min(lo, dribblePiston(L, t, { start: START }));
+      expect(d.off, `${p.key}`).toBeLessThanOrEqual(lo + 1e-4);                       // (as deep as the scan finds, or deeper)
+      expect(d.off, `${p.key}`).toBeGreaterThanOrEqual(lo - .01);
+      expect(dribblePiston(L, d.t, { start: START }), `${p.key}: it IS the travel at t`).toBeCloseTo(d.off, 12);
+      expect(d.t).toBeGreaterThanOrEqual(START - .5); expect(d.t).toBeLessThan(START + 2 * P + 1);
+    }
+  });
+});
+

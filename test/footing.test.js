@@ -5,6 +5,9 @@ import { STAGE } from '../src/rooms/common.js';
 import { INSTRUMENTS } from '../src/instruments/index.js';
 import { STATIONS } from '../src/instruments/stations.js';
 import { glowy } from '../src/shotrig.js';
+import { makeMarbleDrums, KIT_STAND } from '../src/marbledrums.js';
+import { DECK_UNDER } from '../src/drumlook.js';
+import { SONGS } from '../src/songs/index.js';
 
 /* FOOTING — machines SET IN THE ROOM (src/rooms/footing.js): main builds every floor station
    supportless (floorY 0), measures its lowest SOLID part over the loop and stands it on the
@@ -30,8 +33,9 @@ describe('footing: the height law', () => {
 });
 
 /* a built machine's solid low over the loop, in its own frame — main.js solidLocal's rules:
-   no glows, no unlit wire / LED batches; each part (instance) as its turned box ∩ its sphere's */
-function solidLow(group, update, P){
+   no glows, no unlit wire / LED batches; each part (instance) as its turned box ∩ its sphere's;
+   the rest pose, 12 loop samples, and any moments it names (`at`: the kit's pistons at their deepest) */
+function solidLow(group, update, P, at = []){
   const box = new THREE.Box3(), pb = new THREE.Box3(), sp = new THREE.Sphere(), im = new THREE.Matrix4();
   let low = Infinity;
   const part = (g, m) => {
@@ -55,6 +59,7 @@ function solidLow(group, update, P){
   };
   update(-2.4, false); take();
   for (let k = 0; k < 12; k++){ update((k + .5) / 12 * P, true); take(); }
+  for (const t of at){ update(t, true); take(); }
   return low;
 }
 
@@ -81,6 +86,44 @@ describe('footing: every FLOOR machine rests on its own base when built supportl
   }
 });
 
+/* THE KIT stands on its deck slab's underside (KIT_STAND) in every song — its ground never depends on
+   the groove. Its pistons stroke briefly below the slab (a kick's wind-up retracts the head, its rod
+   slides down through the deck): main measures its low where each one bottoms out (lowTimes) — a
+   uniform sweep caught a dip by luck and floated the slab off its plinth (backbeat, finale) */
+describe('footing: the KIT stands on its deck slab — its pistons dip into the well its base keeps', () => {
+  const ROLL_T = 2.6, START = -.6;
+  const kitOf = S => {
+    const beat = 60 / S.bpm, P = ROLL_T + S.melody.reduce((a, n) => a + n[1], 0) * beat + 1.2;
+    const K = makeMarbleDrums({ envMap: null, glowTex: null });
+    const group = K.build(S.drums, { rollT: ROLL_T, beat, P, cx: 0, start: START, slot: { x: 0, z: 0, y: 0 } });   // (kit-local = world)
+    return { K, group, P, update: (t, started) => K.update(t, P, 0, { started, skipStrikes: true, onStrike(){} }) };
+  };
+  const drumSongs = Object.entries(SONGS).filter(([, S]) => S.drums && Object.keys(S.drums).length);
+  it('KIT_STAND is the deck slab\'s underside (drumlook buildDeck)', () => {
+    const { group } = kitOf(SONGS.backbeat);
+    let slab = null;                                    // (frozen + merged by material: the slab's is its own — drumlook buildDeck's 0x15171f)
+    group.traverse(o => { if (o.isMesh && [].concat(o.material)[0]?.color?.getHex() === 0x15171f) slab = o; });
+    slab.geometry.computeBoundingBox();
+    expect(KIT_STAND).toBe(DECK_UNDER);
+    expect(slab.geometry.boundingBox.min.y).toBeCloseTo(KIT_STAND, 6);                // (float32 vertices)
+    expect(slab.geometry.boundingBox.max.y).toBeCloseTo(0, 6);                       // (its top face is the deck)
+  });
+  it('backbeat: the low measured where every piston bottoms out is what a dense sweep of the loop finds', () => {
+    const { K, group, P, update } = kitOf(SONGS.backbeat);
+    const low = solidLow(group, update, P, K.lowTimes());
+    const dense = solidLow(group, update, P, Array.from({ length: Math.ceil((P + 1) / .005) }, (_, k) => START + k * .005));
+    expect(low, `${low.toFixed(4)} vs dense ${dense.toFixed(4)}`).toBeLessThanOrEqual(dense + 1e-3);   // (nothing the sweep sees is missed)
+    expect(low).toBeGreaterThan(dense - .03);                                          // (a 5 ms sweep reads a wind-up's bottom ≲ 5 % shallow)
+    expect(low, 'the pistons do dip under the slab').toBeLessThan(KIT_STAND - .05);
+  }, 60000);
+  for (const [k, S] of drumSongs) it(`${k}: what dips below the slab stays inside the plinth (its well < FOOT.PLINTH)`, () => {
+    const { K, group, P, update } = kitOf(S);
+    const low = solidLow(group, update, P, K.lowTimes());
+    expect(low, `${k} low ${low.toFixed(3)}`).toBeLessThanOrEqual(KIT_STAND + 1e-9);
+    expect(KIT_STAND - low, `${k}: well ${(KIT_STAND - low).toFixed(3)}`).toBeLessThan(FOOT.PLINTH - .04);
+  }, 30000);
+});
+
 /* ---- THE PLANNER (planFooting): anchors → pads by height band, lofts, stairs / ladders ---- */
 import { planFooting, footingBoxes, accessRect, rectAabb, railed } from '../src/rooms/footing.js';
 
@@ -100,7 +143,7 @@ const hit2 = (a, b, eps = 1e-6) => Math.min(a[1], b[1]) - Math.max(a[0], b[0]) >
    hung behind the belt, riff / strum / horns lifted onto the rear gallery, the turntable standing on its feet */
 const GAL = 13.83;
 const FINALE = [beltA,
-  { ...st('drums', 19.13, 19.15, 18.47, 5.5), kind: 'kit', y: -4.53, ground: -4.53, lift: 0 },
+  { ...st('drums', 19.13, 19.15, 18.47, 5.5), kind: 'kit', y: -4.76, ground: -4.76, lift: 0, low: -5.435 },   // (its slab on the plinth, its pistons' well)
   st('bass', -20, 5.1, 11.7, 7.79), st('bells', 26, -10, 10.9, 6.85), st('bowwheel', 28.1, 10.38, 11.24, 8.59),
   st('dulcimer', -27.5, 18.07, 11.55, 8.62), st('marimba', -25.18, -10.34, 13.02, 7),
   st('horns', 15.45, -20.19, 13.9, 3.75, GAL - FL), st('riff', -15.01, -22.05, 12.96, 5.35, GAL - FL), st('strum', -28.95, -21.27, 11.29, 2.7, GAL - FL),
@@ -117,6 +160,17 @@ describe('footing: the planner (planFooting)', () => {
     expect(q.h).toBeCloseTo(FOOT.PLINTH, 12);
     expect([q.hw, q.hd]).toEqual([5 + FOOT.MARGIN, 3 + FOOT.MARGIN]);
     expect(q.access).toBe(null); expect(q.loft).toBe(null); expect(q.open).toBe(false);
+  });
+  it('the KIT: a solid plinth under its deck slab — its pistons dip into it (a WELL, never an open stand)', () => {
+    const q = padOf(plan(FINALE), 'drums');
+    expect(q).toMatchObject({ band: 'flush', open: false, feet: null, hang: null });
+    expect(q.top).toBeCloseTo(FL + FOOT.PLINTH, 12);
+    expect(q.well).toBeCloseTo(.335, 12);
+    expect(q.well).toBeLessThan(q.h);                    // (the plinth swallows the stroke)
+    const lifted = padOf(plan([{ ...FINALE[1], y: -4.76 + 6, ground: -4.76, lift: 6, bottom: -5.1 + 6, low: -5.435 + 6 }]), 'drums');
+    expect(lifted).toMatchObject({ band: 'mid', open: false });
+    expect(lifted.well).toBeCloseTo(.335, 12);
+    expect(padOf(plan(FINALE), 'turntable').well).toBe(0);   // (open: what hangs is seen, not hidden)
   });
   it('the belt keeps its own posts: a flush pad AT the floor under them, fixed', () => {
     const q = padOf(plan([beltA]), 'belt');

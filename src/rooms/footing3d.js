@@ -52,7 +52,11 @@ const DIM = {
   POST: .08, BAR: .07, RAIL_SPAN: 2.2, TOE: .16,   // guard rails
   STILE: .09, RUNG: .05, RUNG_DY: .45, LAD_HALF: .33, LAD_OUT: .34,   // ladders
   EDGE: .09, EDGE_OUT: .02,                   // the glowing strip: height, how proud of its face
+  WELL: .04,                                  // a deck's least depth under a machine's deepest dip (footing.js well)
 };
+/* a raised support's deck depth: its band's slab, or deeper where its machine dips into it (the kit's
+   pistons stroke under its deck slab — footing.js pad.well) — what dips stays inside the deck plate */
+const deckDepth = r => Math.max(r.keys || r.band === 'high' ? DIM.DECK_HI : DIM.DECK, (r.well || 0) + DIM.WELL);
 const RAIL_H = FOOT.RAIL, HAND = 1.3;          // guard rail · stair handrail (over the nosing line)
 
 /* ---- the default materials (one set per room host: shared by every footing it builds) ---- */
@@ -408,7 +412,7 @@ function makeForms(k){
   function ladder(r, T, acc){
     const S = onSide(r, acc.side), W2 = (a, o, y) => { const [u, v] = S(a, o); return [u, y, v]; };
     const nf = acc.flights, mid = (acc.a0 + acc.a1) / 2, off = nf > 1 ? .45 : 0, O = DIM.LAD_OUT, hh = DIM.LAD_HALF;
-    const oM = -(r.band === 'high' ? DIM.COL_IN : DIM.LEG_IN), yTop = T - (r.band === 'high' ? DIM.DECK_HI : DIM.DECK);
+    const oM = -(r.band === 'high' ? DIM.COL_IN : DIM.LEG_IN), yTop = T - deckDepth(r);
     for (let f = 0; f < nf; f++){
       const y0 = F + (T - F) * f / nf, y1 = F + (T - F) * (f + 1) / nf, ac = mid + (f % 2 ? off : -off), top = f === nf - 1;
       for (const s of [-hh, hh]) k.bar('steel', W2(ac + s, O, y0), W2(ac + s, O, y1 + (top ? 1.15 : 1)), DIM.STILE, DIM.STILE * .7, ALL);
@@ -452,14 +456,16 @@ function makeForms(k){
     flush(p){ block(p, p.fixed ? F + FOOT.KERB : p.top, p.color, p.pulse); },
     low(p){ block(p, p.top, p.color, p.pulse); access(p, p.top, p.access, true); },
     mid(p){
-      deck(p, p.top, DIM.DECK, p.color, p.pulse);
-      legs(p, p.top - DIM.DECK);
+      const D = deckDepth(p);
+      deck(p, p.top, D, p.color, p.pulse);
+      legs(p, p.top - D);
       if (railed('mid')){ const [s, g0, g1] = gapOf(p.access); rails(p, p.top, s, g0, g1); }
       access(p, p.top, p.access, false);
     },
     high(p){
-      deck(p, p.top, DIM.DECK_HI, p.color, p.pulse);
-      trussFrame(p, p.top - DIM.DECK_HI, landings(p));
+      const D = deckDepth(p);
+      deck(p, p.top, D, p.color, p.pulse);
+      trussFrame(p, p.top - D, landings(p));
       const [s, g0, g1] = gapOf(p.access); rails(p, p.top, s, g0, g1);
       access(p, p.top, p.access, false);
     },
@@ -502,7 +508,7 @@ function makeForms(k){
       tape(u0 - .75, u1 + .75, v0 - .75, v1 + .75, F, p.color, p.pulse, .09);
     },
     loft(L, members){
-      const T = L.top, D = DIM.DECK_HI, yB = T - D;
+      const T = L.top, D = deckDepth(L), yB = T - D;
       deck(L, T, D, null, 0, false);
       if (L.band === 'low') k.box('base', -L.hw + .03, L.hw - .03, F - .04, yB, -L.hd + .03, L.hd - .03, NOBOT);
       else if (L.band === 'mid') legs(L, yB);

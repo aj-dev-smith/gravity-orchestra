@@ -80,3 +80,157 @@ describe('footing: every FLOOR machine rests on its own base when built supportl
     }, 30000);
   }
 });
+
+/* ---- THE PLANNER (planFooting): anchors → pads by height band, lofts, stairs / ladders ---- */
+import { planFooting, footingBoxes, accessRect, rectAabb, railed } from '../src/rooms/footing.js';
+
+const FL = STAGE.FLOOR, ROOM_B = { x0: -STAGE.HW, x1: STAGE.HW, z0: STAGE.BACK, z1: STAGE.FRONT };
+/* a station anchor standing `h` above the floor (h = .4: on its plinth) */
+const st = (key, x, z, w, d, h = FOOT.PLINTH, extra = {}) => ({ key, kind: 'station', label: key, color: '#88aaff', x, z, yaw: 0, w, d,
+  y: FL + h, ground: FL + FOOT.PLINTH, lift: h - FOOT.PLINTH, bottom: FL + h, low: FL + h, box: [x - w / 2, x + w / 2, FL + h, FL + h + 5, z - d / 2, z + d / 2],
+  cue: [{ t: 1, w: 1 }], P: 20, start: -.6, fixed: false, ...extra });
+const beltA = { key: 'belt', kind: 'belt', label: 'Belt', color: '#ffaa55', x: 0, z: -1.17, yaw: 0, w: 21.74, d: 5.77, y: FL, ground: FL, lift: 0,
+  bottom: FL, low: FL, box: [-10.87, 10.87, FL, 15.83, -4.05, 1.72], cue: [], P: 20, start: -.6, fixed: true };
+const plan = (as, room = ROOM_B) => planFooting(as, { floor: FL, room });
+const padOf = (p, k) => p.pads.find(q => q.key === k);
+/* do two world AABBs [x0, x1, z0, z1] overlap by more than eps? */
+const hit2 = (a, b, eps = 1e-6) => Math.min(a[1], b[1]) - Math.max(a[0], b[0]) > eps && Math.min(a[3], b[3]) - Math.max(a[2], b[2]) > eps;
+
+/* FINALE's anchors as main built them (grid, 2026-10-25): ten stations, the kit, the belt, the organ loft
+   hung behind the belt, riff / strum / horns lifted onto the rear gallery, the turntable standing on its feet */
+const GAL = 13.83;
+const FINALE = [beltA,
+  { ...st('drums', 19.13, 19.15, 18.47, 5.5), kind: 'kit', y: -4.53, ground: -4.53, lift: 0 },
+  st('bass', -20, 5.1, 11.7, 7.79), st('bells', 26, -10, 10.9, 6.85), st('bowwheel', 28.1, 10.38, 11.24, 8.59),
+  st('dulcimer', -27.5, 18.07, 11.55, 8.62), st('marimba', -25.18, -10.34, 13.02, 7),
+  st('horns', 15.45, -20.19, 13.9, 3.75, GAL - FL), st('riff', -15.01, -22.05, 12.96, 5.35, GAL - FL), st('strum', -28.95, -21.27, 11.29, 2.7, GAL - FL),
+  { ...st('turntable', -.36, 17.19, 14.22, 14.12, -1.29 - FL), y: -.93, low: -5.1, box: [-7.47, 6.75, -5.1, 8.13, 10.13, 24.25],
+    feet: [[-5.5, -4.5, .7], [5.5, -4.5, .7], [-5.5, 4.5, .7], [5.5, 4.5, .7]], hang: [-6.25, 4.35, 4.8, 5.7] },
+  { key: 'organ', kind: 'hung', label: 'Light Organ', color: '#c08bff', x: 0, z: -13.65, yaw: 0, w: 13.16, d: 4.64, y: 16, box: [-6.58, 6.58, FL, 24.54, -15.97, -11.33], cue: [], P: 20, start: -.6, fixed: true },
+];
+
+describe('footing: the planner (planFooting)', () => {
+  it('a grounded machine stands on a FLUSH plinth: its footprint + the margin, its top at the machine\'s bottom', () => {
+    const p = plan([st('bass', 0, 10, 10, 6)]), q = padOf(p, 'bass');
+    expect(q.band).toBe('flush');
+    expect(q.top).toBeCloseTo(FL + FOOT.PLINTH, 12);
+    expect(q.h).toBeCloseTo(FOOT.PLINTH, 12);
+    expect([q.hw, q.hd]).toEqual([5 + FOOT.MARGIN, 3 + FOOT.MARGIN]);
+    expect(q.access).toBe(null); expect(q.loft).toBe(null); expect(q.open).toBe(false);
+  });
+  it('the belt keeps its own posts: a flush pad AT the floor under them, fixed', () => {
+    const q = padOf(plan([beltA]), 'belt');
+    expect(q).toMatchObject({ band: 'flush', top: FL, h: 0, fixed: true, access: null, color: '#ffaa55' });
+  });
+  it('the support changes with height: plinth → dais + stair → braced platform → tower with a caged ladder', () => {
+    const at = h => padOf(plan([st('m', 0, 10, 10, 6, h)]), 'm');
+    expect(at(.4).band).toBe('flush');
+    const lo = at(2.4);
+    expect(lo.band).toBe('low'); expect(lo.access.kind).toBe('stair');
+    expect(lo.access.rise).toBeLessThanOrEqual(FOOT.STEP + 1e-12);
+    expect(lo.access.rise * lo.access.n).toBeCloseTo(lo.h, 12);
+    const mid = at(5);
+    expect(mid.band).toBe('mid'); expect(mid.access.kind).toBe('stair');
+    expect(at(8).access.kind).toBe('ladder');           // (above STAIR_MAX a stair would run ≈ 10 u)
+    const hi = at(20);
+    expect(hi.band).toBe('high');
+    expect(hi.access).toMatchObject({ kind: 'ladder', cage: true });
+    expect(hi.access.flights).toBe(Math.ceil(20 / FOOT.LAND_DY));
+  });
+  it('a stair fits the side it hugs; a ladder climbs within its face', () => {
+    for (const h of [1.2, 2.4, 3.5, 5, 6.4, 8, 12, 20]){
+      const q = padOf(plan([st('m', 0, 10, 10, 6, h)]), 'm'), A = q.access, L = A.side[1] === 'u' ? 2 * q.hd : 2 * q.hw;
+      expect(A.a0, `${h}`).toBeGreaterThanOrEqual(-L / 2 - 1e-9);
+      expect(A.a1, `${h}`).toBeLessThanOrEqual(L / 2 + 1e-9);
+      if (A.kind === 'stair') expect(A.a1 - A.a0).toBeCloseTo((A.n - 1) * FOOT.TREAD + FOOT.STAIR_W, 12);
+    }
+  });
+  it('neighbours: pads never meet (a close neighbour clips the margin)', () => {
+    const p = plan([st('a', 0, 0, 10, 6), st('b', 10.45, 0, 10, 6), st('c', 0, 6.3, 10, 6)]);
+    for (const x of p.pads) for (const y of p.pads) if (x !== y) expect(hit2(rectAabb(x), rectAabb(y), -FOOT.CLEAR + 1e-9), `${x.key}×${y.key}`).toBe(false);
+    expect(padOf(p, 'a').hw).toBeLessThan(5 + FOOT.MARGIN);
+  });
+  it('a LOFT: raised neighbours at one height share a deck (the rear gallery) — and only they', () => {
+    const p = plan([st('a', -8, -20, 12, 4, 14), st('b', 5.5, -20, 12, 4, 14.3), st('c', 30, -20, 6, 4, 14), st('d', -8, 10, 12, 4, 14.9)]);
+    expect(p.lofts.length).toBe(1);
+    const L = p.lofts[0];
+    expect(L.keys).toEqual(['a', 'b']);
+    expect(L.top).toBeCloseTo(FL + 14, 12);              // its lowest member's deck (b stands on a .3 shim)
+    expect(L.band).toBe('high');
+    for (const k of ['a', 'b']){ const q = padOf(p, k); expect(q.loft).toBe(L.id);
+      const b = rectAabb(q); expect(b[0] >= L.x0 - 1e-9 && b[1] <= L.x1 + 1e-9 && b[2] >= L.z0 - 1e-9 && b[3] <= L.z1 + 1e-9).toBe(true); }
+    expect(padOf(p, 'c').loft).toBe(null);               // too far
+    expect(padOf(p, 'd').loft).toBe(null);               // too far (and .9 higher)
+    expect(L.access && L.access.kind).toBe('ladder');
+    expect(padOf(p, 'a').access).toBe(null);             // (the loft is climbed, not its members)
+  });
+  it('never merges across heights, the flush band, an open stand or the belt', () => {
+    expect(plan([st('a', -8, -20, 12, 4, 14), st('b', 5.5, -20, 12, 4, 14.7)]).lofts).toEqual([]);   // Δtop .7 > LOFT_DY
+    expect(plan([st('a', -8, -20, 12, 4), st('b', 5.5, -20, 12, 4)]).lofts).toEqual([]);             // both on the floor
+    const open = { ...st('t', 5.5, -20, 12, 4, 14), low: FL + 10, feet: [[0, 0, .5]] };
+    expect(plan([st('a', -8, -20, 12, 4, 14), open]).lofts).toEqual([]);
+  });
+  it('a loft never swallows a machine standing between its members', () => {
+    const p = plan([st('a', -9, -20, 10, 4, 14), st('b', 9, -20, 10, 4, 14), st('mid', 0, -20, 2, 2)]);
+    expect(p.lofts).toEqual([]);
+  });
+  it('an OPEN stand: something hangs below what it stands on — posts under its feet, the hang kept clear', () => {
+    const p = plan(FINALE), q = padOf(p, 'turntable');
+    expect(q.open).toBe(true);
+    expect(q.top).toBeCloseTo(-1.29, 12);
+    expect(q.band).toBe(bandOf(-1.29 - FL));
+    expect(q.feet.length).toBe(4);
+    expect(q.hang).toEqual([-6.25, 4.35, 4.8, 5.7]);
+    expect(q.access).toBe(null);                         // (a stand, not a platform: nobody climbs it)
+  });
+  it('FINALE: the gallery\'s riff + strum share a loft, the horns stand on their own tower — each climbed from a free side', () => {
+    const p = plan(FINALE);
+    expect(p.lofts.map(L => L.keys)).toEqual([['riff', 'strum']]);
+    const horns = padOf(p, 'horns');
+    expect(horns.band).toBe('high'); expect(horns.loft).toBe(null);
+    expect(horns.access).toMatchObject({ kind: 'ladder', side: '+u', cage: true });   // its outer side (away from the belt)
+    expect(p.lofts[0].access).toMatchObject({ kind: 'ladder', side: '-u' });
+    for (const k of ['bass', 'bells', 'bowwheel', 'dulcimer', 'marimba', 'drums']) expect(padOf(p, k).band, k).toBe('flush');
+    expect(padOf(p, 'organ')).toBe(undefined);           // (hung: an obstacle, never a pad)
+  });
+  it('every stair / ladder stays clear of every other machine, pad, loft, access and the room\'s walls', () => {
+    const cases = [FINALE,
+      // a crowded floor with a few raised machines (the stairs must find free sides — or go without)
+      [beltA, st('a', -20, 5, 11, 7, 2.5), st('b', -20, -6, 11, 7, 6), st('c', 20, 5, 10, 8, 9), st('d', 21, -8, 12, 6, 3.2),
+        st('e', -32, 15, 8, 8, 12), st('f', 0, 18, 14, 10, 1.5), st('g', 33, 18, 7, 7, 5.5)]];
+    for (const as of cases){
+      const p = plan(as), boxes = [];
+      for (const q of p.pads.filter(q => q.access)) boxes.push([q.key, [q.key], rectAabb(accessRect(q, q.access))]);
+      for (const L of p.lofts.filter(L => L.access)) boxes.push([L.id, L.keys, rectAabb(accessRect(L, L.access))]);
+      for (const [id, own, b] of boxes){
+        expect(b[0] >= ROOM_B.x0 && b[1] <= ROOM_B.x1 && b[2] >= ROOM_B.z0 && b[3] <= ROOM_B.z1, `${id} in the room`).toBe(true);
+        for (const a of as) if (!own.includes(a.key)) expect(hit2(b, rectAabb({ x: a.x, z: a.z, hw: a.w / 2, hd: a.d / 2, yaw: a.yaw })), `${id} × ${a.key}`).toBe(false);
+        for (const q of p.pads) if (!own.includes(q.key) && !(q.loft && own.length > 1 && own.includes(q.key))) expect(hit2(b, rectAabb(q)), `${id} × pad ${q.key}`).toBe(false);
+        for (const [id2, , b2] of boxes) if (id2 !== id) expect(hit2(b, b2), `${id} × ${id2}`).toBe(false);
+      }
+      // the second case: most raised machines got their way up
+      if (as !== FINALE) expect(p.pads.filter(q => q.band !== 'flush' && !q.loft && q.access).length).toBeGreaterThanOrEqual(5);
+    }
+  });
+  it('deterministic: the same anchors give the same plan; one pulse slot per pad, in order', () => {
+    const a = plan(FINALE), b = plan(FINALE.map(x => ({ ...x })));
+    expect(JSON.stringify(b)).toBe(JSON.stringify(a));
+    expect(a.pads.map(q => q.pulse)).toEqual(a.pads.map((_, i) => i));
+    expect(a.pulses.map(s => s.key)).toEqual(a.pads.map(q => q.key));
+    expect(a.pulses[0].cue).toBe(FINALE[0].cue);         // (the anchor's own cue: no copy)
+  });
+  it('footingBoxes: every support\'s envelope — from the floor to its deck (+ its rails), its stair / ladder, its loft', () => {
+    const p = plan(FINALE), B = footingBoxes(p);
+    for (const q of p.pads.filter(q => !q.loft)){
+      const e = B.find(b => b.kind === 'pad' && b.keys[0] === q.key), r = rectAabb(q);
+      expect(e.box[2]).toBe(FL);
+      expect(e.box[3]).toBeCloseTo(q.fixed ? FL + FOOT.KERB : q.top + (railed(q.band) && !q.open ? FOOT.RAIL : 0), 12);
+      expect(e.unit).toBe(q.key);
+      expect([e.box[0], e.box[1], e.box[4], e.box[5]]).toEqual([r[0], r[1], r[2], r[3]]);
+    }
+    const L = p.lofts[0], e = B.find(b => b.kind === 'loft');
+    expect(e.keys).toEqual(L.keys); expect(e.unit).toBe(L.id);
+    expect(e.box).toEqual([L.x0, L.x1, FL, L.top + FOOT.RAIL, L.z0, L.z1]);
+    expect(B.filter(b => b.kind === 'access').length).toBe(p.pads.filter(q => q.access).length + p.lofts.filter(L => L.access).length);
+  });
+});

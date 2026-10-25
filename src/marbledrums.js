@@ -47,7 +47,8 @@ import { V, fz, bar, kitMaterials, buildDrum, buildWires, cymbalProfile, cymbalG
    ============================================================ */
 
 const EDGE_W    = .25;      // strike-edge window (s): a strike fires once if we land within it
-const RISER_TOP = 1.5;      // deck height (world y) — shared with the room/floor staging
+const RISER_TOP = 1.5;      // deck height (world y) when the slot names none — main sets slot.y: the kit SET IN THE
+                            // ROOM, its deck slab on the floor's plinth or lifted (rooms/footing.js)
 /* The kit's slot (x relative to the belt wall's centre, z toward the audience). It has
    two homes: beside the belt when it is the only other machine (KIT_SOLO — right of the
    belt, clear of it, in front of the wall), and the FRONT-RIGHT of the amphitheater when
@@ -75,7 +76,7 @@ const { ROD_VIS, ROD_IN, SLEEVE } = HW;
 let lastDeck = { x0: -9.3, x1: 9.3, z0: -6.4, z1: 3.4 };
 export function kitAnchor(cx, slot){
   const D = lastDeck;
-  return { x: cx + slot.x + (D.x0 + D.x1) / 2, z: slot.z + (D.z0 + D.z1) / 2, w: D.x1 - D.x0, d: D.z1 - D.z0, yaw: 0, y: RISER_TOP };
+  return { x: cx + slot.x + (D.x0 + D.x1) / 2, z: slot.z + (D.z0 + D.z1) / 2, w: D.x1 - D.x0, d: D.z1 - D.z0, yaw: 0, y: slot.y ?? RISER_TOP };
 }
 
 export function makeMarbleDrums({ envMap, glowTex }){
@@ -91,7 +92,7 @@ export function makeMarbleDrums({ envMap, glowTex }){
     pieces = []; start = s0; lights = []; deckU = null; kickPc = null; cyms = [];
     if (!spec || !Object.keys(spec).length) return group;
 
-    const K = V(cx + slot.x, RISER_TOP, slot.z);
+    const K = V(cx + slot.x, slot.y ?? RISER_TOP, slot.z);
     const kit = new THREE.Group(); kit.position.copy(K); group.add(kit);
     const mats = kitMaterials(envMap);
     const H = MAG_H;

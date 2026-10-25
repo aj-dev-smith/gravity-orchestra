@@ -13,7 +13,14 @@ import starship from './starship.js';
            group, FLOOR, CEIL, HW, BACK, FRONT,      // surfaces + bounds (world y / x / z)
            fog: FogExp2, background: Color|Texture,  // atmosphere
            mood?: { ambient:[hex,int], hemi:[sky,ground,int] },   // re-tint the global fills
-           place?(anchors),                          // anchor points: where things stand
+           place?(anchors),                          // where the machines stand (world space), one per
+                                                     // machine: { key, kind: 'belt'|'kit'|'station', label,
+                                                     //   color, x, z, yaw, w, d (footprint), y (deck),
+                                                     //   ground, lift (deck = ground + lift — footing.js),
+                                                     //   bottom (the y it stands on), low (its lowest solid
+                                                     //   part), box [x0,x1,y0,y1,z0,z1], cue [{t, w}] (its
+                                                     //   strikes: sorted loop times, weights), P, start,
+                                                     //   fixed (the belt: its own posts, never moves) }
            update?(dt, songTime, camera, energy, cues),   // pure-ish ambience; no allocation.
                                                      // cues = the song's weather (see cue())
            resize?(w, h, pixelRatio),                // render-target rooms (the studio mirror)

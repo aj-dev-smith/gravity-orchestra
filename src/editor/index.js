@@ -51,6 +51,7 @@ const store = (() => { try { return window.localStorage; } catch (e){ return nul
  *   pieces()         [{ key, label, color, obj, kind: 'station'|'kit', canRotate, deckY? }]
  *   wall()           the belt's world Box3 · cx() its centre x · kitPivot() the kit's slot point (world)
  *   visBox(obj)      drawn world bounds · room {x0,x1,z0,z1} where footprints may go · roomBox eye limits
+ *   floorY           the room floor's world y (the grid + the belt's footprint lie on it)
  */
 export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
   let midi = null;                                   // { parsed, label, id } — the last MIDI import
@@ -140,7 +141,7 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     return sanitizeLayout(songs[curKey]?.stage);
   }
   const slot = (key, base) => base.hang ? base : placeSlot(base, layout()[key]);
-  const kitSlot = base => { const p = layout().drums; return p ? { x: p.x, z: p.z, pin: true } : base; };
+  const kitSlot = base => placeSlot(base, layout().drums);   // (the kit faces the audience: main ignores its yaw)
 
   /* ---- the map panel ---- */
   const panel = makeMapPanel({
@@ -205,6 +206,7 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
   /* ---- stage edit ---- */
   const stage = makeStageEdit({ THREE, scene, cam, dom, onChange: syncButtons, host: {
     pieces: host.pieces, wall: host.wall, cx: host.cx, kitPivot: host.kitPivot, visBox: host.visBox, room: host.room, roomBox: host.roomBox, roomGroup: host.roomGroup,
+    floorY: host.floorY,
     place(key, entry, all){
       let L = layout();
       history.push(curId, L);                        // (undo: the layout as it was before this move)

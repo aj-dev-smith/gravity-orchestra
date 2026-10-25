@@ -4,6 +4,7 @@ import { IDLE, restEnv, anticip, sway, twitch } from '../src/instruments/idle.js
 import { eventTimes, lanesByNote } from '../src/instruments/clock.js';
 import { noteNum } from '../src/engine.js';
 import { STATIONS } from '../src/instruments/stations.js';
+import { STAGE } from '../src/rooms/common.js';
 
 import riff from '../src/instruments/riff/index.js';
 import strum from '../src/instruments/strum/index.js';
@@ -20,6 +21,9 @@ import { fitPart as organFit, organLane, organLadder, laneAt as organAt, heldRes
 import { fitPart as hornFit, hornLane, hornAt, heldRest as hornRest } from '../src/instruments/horns/solve.js';
 import { prepPart as bowPrep, laneGeom, laneX, bowLane, laneAt as bowAt, parkAt, MAG_Y } from '../src/instruments/bowwheel/solve.js';
 import { fitPart as grandFit, parseNote, dulcimerLane, dulcimerAt, damperRest } from '../src/instruments/dulcimer/solve.js';
+/* the floor / ceiling a station is built with — as main does: a FLOOR station is built supportless
+   (floorY 0 — the room sets it on its footing), a HUNG one gets the real room (rooms/footing.js) */
+const supports = st => ({ floorY: st.hang ? STAGE.FLOOR - st.y : 0, ceilY: STAGE.CEIL - st.y });
 
 /* ============================================================
    REST-POSE PERSONALITY — the honesty contract (src/instruments/idle.js):
@@ -206,7 +210,7 @@ describe('idle never touches a contact pose (render, idle off vs on)', () => {
       expect(part.length).toBeGreaterThan(2);
       const tm = timing(I.demo.bpm, I.demo.beats), st = STATIONS[key];
       const inst = I.make({ envMap: null, glowTex: null, THREE });
-      const group = inst.build(part, { ...tm, start: START, station: st, floorY: -22 - st.y, ceilY: 36 - st.y, loopBeats: I.demo.beats });
+      const group = inst.build(part, { ...tm, start: START, station: st, ...supports(st), loopBeats: I.demo.beats });
       const dt = .004, fired = [], diff = [];
       let t = START;
       try {
@@ -236,7 +240,7 @@ describe('riff: the hook hover never lifts a hook off a string it presses', () =
     const tm = timing(riff.demo.bpm, riff.demo.beats), st = STATIONS.riff, part = riff.demo.part;
     const R = solveRiff(part, tm);
     const inst = riff.make({ envMap: null, glowTex: null, THREE });
-    const group = inst.build(part, { ...tm, start: START, station: st, floorY: -22 - st.y, ceilY: 36 - st.y, loopBeats: riff.demo.beats });
+    const group = inst.build(part, { ...tm, start: START, station: st, ...supports(st), loopBeats: riff.demo.beats });
     const hooks = []; group.traverse(o => { if (o.userData.riffHook != null) hooks[o.userData.riffHook] = o; });
     expect(hooks.filter(Boolean).length).toBe(R.strings.length);
     let hot = 0, bad = 0;

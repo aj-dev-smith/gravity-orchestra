@@ -32,7 +32,8 @@ import { STAGE, rng, canvasTex, radialTex, glowPoints, glowMat, instanced, trs }
 
 const FOG = 0x0e151c;           // = the sky's horizon: far ground melts into it
 const SKY_R = 140;              // sky dome radius (camera.far is 200; the stage cam sits ≤ ~50 from the origin)
-const MOON = new THREE.Vector3(84, -5, -122);   // low, right of the chapel: from the stage shot it hangs behind the bells' arch
+const MOON = new THREE.Vector3(84, STAGE.FLOOR + 17, -122);   // low, right of the chapel: from the stage shot it hangs behind the bells' arch
+                                                 // (17 u over the ground — it was placed for the old −22 floor)
 const MOON_R = 15;
 const N_BATS = 14;
 const FENCE_Z = -58, FENCE_X = 62;

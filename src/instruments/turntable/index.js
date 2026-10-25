@@ -64,6 +64,7 @@ export default {
   lookHeight: 3.2,
   camera: { dist: 17, up: 8 },
   color: '#ff6a3d',                 // director button / shot tint: the strobe lamp's warm neon
+  stand: -.36,                      // (staging: it RESTS on its four feet — the resonator rank hangs below them)
   voice,
 
   make({ envMap, glowTex }){

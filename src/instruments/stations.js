@@ -48,7 +48,10 @@
               housing (flown forward it would cover the bays from the audience).
    yaw turns each station toward the middle of the room; the director's
    station shots look straight down each station's own +z, so a yaw is
-   also its camera angle.
+   also its camera angle. A slot's `y` no longer sets a FLOOR machine's
+   height (2026-10-25): main SETS every floor machine IN THE ROOM — on the
+   floor's plinth at its measured ground, or lifted by the user / raised
+   onto the gallery (rooms/footing.js). A HUNG one hangs off the belt's top.
 
    The slots below are tuned for a ONE-bay belt (≈ ±12.6 wide) and no
    turntable. A song's room is then SOLVED (layoutStations): the side

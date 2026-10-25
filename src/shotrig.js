@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { solveShotEye, solveFollow, blockedRays, foreground, boxDist, boxPts, rayBox, CLEAR_RAYS, FG_MAX, FG_TALL } from './shotsolve.js';
+import { STAGE } from './rooms/common.js';
 /* ============================================================
    SHOT RIG — the scene side of the director's solved eyes. shotsolve.js is
    pure (it reaches the world only through `blocked(eye, dir, far)`); this module
@@ -43,8 +44,9 @@ export function solidBox(root, drawn){
 }
 
 /* the room's STANDING geometry: opaque meshes that rise off the floor and aren't the hall's own
-   shell (floors, walls, vaults: anything wider than 40 u) — one box per instance */
-export function roomSolids(group){
+   shell (floors, walls, vaults: anything wider than 40 u) — one box per instance. `floor`: the
+   room floor's world y (the floor contract: STAGE.FLOOR) — a part within 1 u of it lies flush */
+export function roomSolids(group, floor = STAGE.FLOOR){
   const out = [];
   if (!group || !group.visible) return out;
   group.updateWorldMatrix(true, true);
@@ -60,7 +62,7 @@ export function roomSolids(group){
       if (o.isInstancedMesh){ o.getMatrixAt(i, _m); _b.applyMatrix4(_m); }
       _b.applyMatrix4(o.matrixWorld);
       if (_b.max.x - _b.min.x > 40 || _b.max.z - _b.min.z > 40) continue;       // the hall's shell, not a standing obstacle
-      if (_b.max.y < -21) continue;                                            // flush with the floor
+      if (_b.max.y < floor + 1) continue;                                      // flush with the floor
       out.push({ c: o, box: arr(_b), room: true });
     }
   });

@@ -8,15 +8,18 @@ import * as THREE from 'three';
    global fill lights via `mood`.
 
    THE FLOOR CONTRACT: every room's FLOOR is the same world y (STAGE.FLOOR).
-   Instrument legs, the belt's console legs and the drum riser are all
-   grown at song-build time down to that y (floorY = FLOOR − station.y).
-   Keeping it identical across rooms means a room swap is a pure scenery
-   swap — instant, mid-song, no world rebuild, no restarted timeline —
-   and the supports are honest in every room. A room that wants a lower
-   "ground" (the Void) puts its own surface where the legs land.
+   The machines are SET ON IT (rooms/footing.js): each stands on a plinth at
+   its ground height, or as high as the user lifts it — the supports are the
+   room's, not the plugins' — and the belt's own posts and the hung stations'
+   rods are grown at song-build time down to it. Keeping it identical across
+   rooms means a room swap is a pure scenery swap — instant, mid-song, no world
+   rebuild, no restarted timeline — and the supports are honest in every room.
+   A room that wants a lower "ground" (the Void) puts its own surface where the
+   machines stand. (Until 2026-10 the floor sat at −22, a relic of the June
+   conveyor that reached far down: every machine stood on ~15 m of legs.)
    ============================================================ */
 
-export const STAGE = { HW: 38, FLOOR: -22, CEIL: 36, BACK: -34, FRONT: 42 };
+export const STAGE = { HW: 38, FLOOR: -5.5, CEIL: 36, BACK: -34, FRONT: 42 };
 
 /* deterministic PRNG — rooms are art-directed, not random per load */
 export function rng(seed = 1){

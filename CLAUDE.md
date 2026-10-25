@@ -377,8 +377,10 @@ song can get one, and **MIDI import now generates drums from channel 9** (§6).
   — the tempo, so a plugin can name voices by a note's length in SECONDS exactly as build() will;
   optional `voiceHz(id)` (pan width for chord / suffixed ids — default = the FIRST pitch in the id,
   audio.js's regex now tolerates '~'); `PART_LIMITS` on the descriptor (orchestra.js imports it —
-  never copy the numbers); `xrGlow` / `inst.xr(on)` for the headset; a station may be RAISED onto
-  the rear GALLERY (build() is re-called with floorY ≈ −36 — legs stretch, nothing else changes).
+  never copy the numbers); `xrGlow` / `inst.xr(on)` for the headset. A FLOOR station is built ONCE
+  with floorY 0 (no legs / riser / pedestal — 2026-10-25) and SET IN THE ROOM by a rigid move: on the
+  floor's plinth at its measured ground, or lifted (the user, or the GALLERY raise) — rooms/footing.js;
+  a descriptor `stand` (local y it rests on) for a machine whose lowest parts hang (the turntable).
   Timbre / articulation rides ON THE NOTE ID (there is no per-event timbre field) — §6.
 - **clock.js makeEdge re-arms when the clock goes BACKWARDS** (finale fix): main's static-merge
   sweep poses every station at 48 songTimes; a first strike within .25 s before one of those poses
@@ -707,20 +709,23 @@ parallel song branches, so merge the key lists and regenerate the fixture ONCE o
   loops `rideEvery` = ⌈share / RIDE_LONGRUN .22⌉ rides only every n-th pass (`round(base/P) %
   rideEvery` — still pure). Reduced-motion viewers never get directed rides; XR never moves the head
   (a ride in TOUR lands you on the lead pad). Only BELT balls are ridden (instrument lobs: open).
-- **Gallery staging tier** (`stations.js layoutStations`, main `rig.raise` + `stageFrame`): the
+- **Gallery staging tier** (`stations.js layoutStations`, main `rig.setLift` + `stageFrame`): the
   floor was full at 14 machines, so a raised rear GALLERY sits `GALLERY_DROP` (2 u) under the belt's
   top housing (y ≈ 13.7) — the audience sees it over the belt. riff / strum / horns / pogo
   have gallery slots either side of the hung organ loft; dulcimer + bowwheel take the front CORNERS.
   Pass order: floor at margin 1 → .7 → .45, then the gallery opens to any station, borrowing depth
   last. Gallery machines avoid every hung footprint (organ, chandelier, court) AND the space behind
   it; drums + turntable never go up; a station the user pins behind the belt goes up. A raised
-  station is rebuilt with a low floorY so its legs reach the room floor. `stageFrame` keeps every
+  station is LIFTED (a rigid move: gallery deck − its ground; a user's own lift wins) — its supports
+  are the room's (rooms/footing.js), not its own legs. `stageFrame` keeps every
   front-row machine's full width + `FRONT_KEEP` .25 of its front half (corner machines are no longer
   cut in half). Only stations with events are placed. Shared-file scar: STATIONS is the one edit a
   new floor plugin can't avoid — run the slot search against test/stations.test.js (1–3 bays ±
   turntable) or every other station's solved position moves.
 - **Rooms** (`src/rooms/`): each room is pure set dressing in the static world — `FLOOR` stays
-  `STAGE.FLOOR` (HW/BACK/FRONT/CEIL may widen, as the studio and arena do), NO lights of its own
+  `STAGE.FLOOR` (−5.5 since 2026-10-25; it was −22, every machine on ~15 m of legs) (HW/BACK/FRONT/
+  CEIL may widen, as the studio and arena do); `place(anchors)` gets every machine's footprint, deck,
+  ground, lift, bottom, low, solid box and strike cue (rooms/index.js header), NO lights of its own
   (14 lights in every room), constant pools, per-frame work = uniforms only, scrub-safe. `rooms.cue()`
   gets `{beat, rollT, P, drums, melody, loopBeats, start}` at song load: **arena** turns the drum
   lanes into a fixed cue sheet over 8 flame jets + 4 CO2 cannons + a blinder wall (crash → every
@@ -767,7 +772,8 @@ state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machi
 `song(k)`, `t`, `rate`, `cam(mode)`, `station(key, dist, up)`, `strikes()` (strikes per machine — belt voices, plugins, `drums` — with
 their songTimes `at`, + any fired id with no baked voice — the sound sweep), `director()` (cuts, shares, rides, rideEvery,
 signature), `ride(t)`, `occlusion()`, `audioProbe()` (+ `outPeak`: the final mix — STOP must read 0),
-`transport()` / `stop()` / `start()` / `restart()`, `xrPerf()`.
+`transport()` / `stop()` / `start()` / `restart()`, `xrPerf()`, `lift(key, u)` / `anchors()` / `stage` (staging:
+a floor machine's / the kit's lift, what the room is told stands where, the floor contract; `?lift=marimba:4,drums:2`).
 
 - **Perf (render-time only — all A/B-able by URL flag).** `mergestatic.js` bakes still parts per
   material AND parts rigid on a moving carriage (piston head, valve slide: merged into the carriage's

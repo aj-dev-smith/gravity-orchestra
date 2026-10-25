@@ -61,6 +61,10 @@ export default {
   xrGlow: 1.55,                   // optional, VR: there is no bloom in a headset, so main multiplies
                                   // your emissive intensities by this (and additive opacities by a
                                   // matching factor) for the headset render only. Default 1.55; 1 = off
+  stand: -.36,                    // optional (floor stations): the local y your machine RESTS on, when
+                                  // its lowest solid parts hang below that (the turntable's resonator
+                                  // tubes under its plinth) — the room's footing then reaches up to
+                                  // deck + stand, OPEN, so what hangs stays visible (rooms/footing.js)
 
   // PURE DSP, deterministic, no AudioContext: one render feeds BOTH the live
   // Web Audio path (AudioBuffer, gain = vel) and the iOS <audio> fallback (WAV).
@@ -93,11 +97,14 @@ export default {
       // LOCAL frame (see stations.js: +x across, +y up, +z toward the audience,
       // y=0 = deck top, stay inside |x|≤w/2, |z|≤d/2). main parents it to the
       // station. The group is disposed on song change (main traverses + disposes).
-      // floorY = the room floor in your local y (grow legs down to it). A crowded
-      // room may raise your station onto the rear GALLERY behind the belt (deck ≈
-      // the belt's top housing − 2): build() is then called again with a much
-      // lower floorY (~ −36) — legs must stretch, nothing else changes.
-      build(part, { rollT, beat, P, start, station, floorY, loopBeats }){ ... },
+      // floorY = the room floor in your local y. A FLOOR station is always built with
+      // floorY 0 (2026-10-25): it grows NO legs / riser / pedestal — main measures
+      // its lowest SOLID part over the loop and SETS it in the room (rooms/footing.js:
+      // on the floor's plinth, or lifted by the user / onto the rear GALLERY — a rigid
+      // move, never a rebuild), and the ROOM draws its supports. Gate any support you
+      // draw on floorY < 0. A HUNG station (descriptor slot hang) still gets the real
+      // floor (floorY = FLOOR − its y) and ceilY for its rods / footprint ring.
+      build(part, { rollT, beat, P, start, station, floorY, ceilY, loopBeats }){ ... },
 
       // Per frame. A PURE fn of songTime (scrub-safe: ?debug can jump anywhere).
       // !started → render the ARMED pose at t = start. Fire each strike ONCE
@@ -153,9 +160,12 @@ bowwheel, dulcimer — the SUSTAIN family; CLAUDE.md §4). Their seam gaps becam
   500 random events + garbage in your test file.
 - **Sustained voices fire DURATION BUCKETS** (below) — a plugin whose notes have a held length longer
   than ~.5 s and a render longer than that should.
-- **Gallery raise / floorY**: a crowded room may raise your station onto the rear gallery; build() is
-  called again with floorY ≈ −36. Grow legs/plinth to floorY; nothing else may change. Measure your
-  footprint honestly (`STATIONS` w/d) — `test/stations.test.js` runs every key at once in 1–3 bays.
+- **Height / floorY**: a floor station is built ONCE with floorY 0 and then moved rigidly to its
+  height (its ground on the floor's plinth + any lift — the gallery raise is a lift too), so nothing
+  in it may depend on its world y (only ricochet / volley, both hung, read ceilY). Draw no supports
+  below your base (the room's footing does — rooms/footing.js); declare `stand` if your lowest parts
+  hang below what you rest on. Measure your footprint honestly (`STATIONS` w/d; a slot's `y` is no
+  longer used for a floor station) — `test/stations.test.js` runs every key at once in 1–3 bays.
 - **Count-in pose**: during the LEAD_IN every lane is ARMED (marble on its magnet / latch); a lane
   whose first reachable stroke is mid-loop must ENTER honestly (bowwheel `entryAt`: release from the
   magnet so the fall lands at rest before the first stroke) — or loop 1 is silent there.

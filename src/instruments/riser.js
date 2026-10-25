@@ -1,6 +1,7 @@
 /* THE RISER — a shared open truss tower a station stands on when its deck sits far above the
-   room floor (every floor station plants on STAGE.FLOOR ≈ 22 below its origin; a GALLERY station
-   ≈ 36 — stations.js). Replaces the solid stage-riser box, which read as a featureless black
+   room floor. (Since 2026-10-25 main builds every floor station with floorY 0 and the ROOM draws
+   the supports — rooms/footing.js — so this only runs for a build handed a real floor, e.g. the
+   plugin's own tests.) Replaces the solid stage-riser box, which read as a featureless black
    monolith: four square chord posts, ring beams every few units, X-bracing on every face (wide
    faces split into bays), chrome foot plates, a thin lit edge line under the deck and at each
    front ring, and a service ladder up one end.

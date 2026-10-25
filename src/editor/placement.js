@@ -44,10 +44,13 @@ export function sanitizeLayout(obj){
 /** layout → the compact share-link form { key: [x, z, yaw] } */
 export const encodeLayout = layout => Object.fromEntries(Object.entries(sanitizeLayout(layout)).map(([k, p]) => [k, p.yaw ? [p.x, p.z, p.yaw] : [p.x, p.z]]));
 
-/** a station's slot with the user's placement on top (pinned), or the base slot untouched */
+/** a station's slot with the user's placement on top (pinned), or the base slot untouched. A placement
+    may carry a LIFT (u above the machine's ground — rooms/footing.js; main clamps it): kept only when
+    it is a finite number ≥ 0 */
 export function placeSlot(base, placed){
   if (!placed) return base;
-  return { ...base, x: placed.x, z: placed.z, yaw: Number.isFinite(placed.yaw) ? placed.yaw : base.yaw, pin: true };
+  const lift = Number.isFinite(placed.lift) && placed.lift >= 0 ? { lift: placed.lift } : {};
+  return { ...base, x: placed.x, z: placed.z, yaw: Number.isFinite(placed.yaw) ? placed.yaw : base.yaw, pin: true, ...lift };
 }
 
 /* ---- footprints ----

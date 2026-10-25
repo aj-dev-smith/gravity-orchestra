@@ -47,8 +47,9 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   const lineMat = (color, opacity) => new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false, fog: false });
   const fillMat = (color, opacity) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false, side: THREE.DoubleSide, fog: false });
   const tag = o => { o.renderOrder = GIZMO_ORDER; o.userData.noMerge = true; o.userData.noFadeGate = true; o.raycast = () => {}; return o; };
-  // the floor grid: minor lines every SNAP·2 = 1 u, major every 5 u — at the decks' working level
-  const grid = new THREE.Group(); gizmo.add(grid);
+  // the floor grid: minor lines every SNAP·2 = 1 u, major every 5 u — on the room floor (the machines stand on it)
+  const FLOOR_Y = (host.floorY ?? 0) + .02;
+  const grid = new THREE.Group(); grid.position.y = FLOOR_Y; gizmo.add(grid);
   {
     const minor = [], major = [], R = 60;
     for (let i = -R; i <= R; i++) (i % 5 ? minor : major).push(-R, 0, i, R, 0, i, i, 0, -R, i, 0, R);
@@ -121,7 +122,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       return piece;
     });
     const wb = host.wall();
-    if (wb && !wb.isEmpty()){ setRect(beltLine, beltFill, boxCorners([wb.min.x, wb.max.x, wb.min.z, wb.max.z]), 0); beltLine.visible = beltFill.visible = true; }
+    if (wb && !wb.isEmpty()){ setRect(beltLine, beltFill, boxCorners([wb.min.x, wb.max.x, wb.min.z, wb.max.z]), FLOOR_Y + .04); beltLine.visible = beltFill.visible = true; }
     else beltLine.visible = beltFill.visible = false;
     sel = pieces.find(p => p.key === keep) || null;
     check(); paint();

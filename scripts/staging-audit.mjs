@@ -31,6 +31,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 /* ---- in-page probes (run inside the page; THREE comes from __dev.three) ---- */
 function probeStatic(){
   const D = window.__dev, T = D.three, world = D.world, cam = D.camera;
+  const ROOMB = D.stage || { HW: 38, FLOOR: -22, CEIL: 36, BACK: -34, FRONT: 42 };   // the floor contract (rooms/common.js STAGE)
   const owner = o => { while (o.parent && o.parent !== world) o = o.parent; return o; };
   const roomGroups = D.scene.children.filter(c => c !== world && c.isGroup && c.visible && !c.getObjectsByProperty('isLight', true).length);   // (rooms own no lights; marble rigs carry a lamp)
   // the room's STANDING geometry (opaque meshes that rise off the floor and aren't sky/walls far away)
@@ -48,7 +49,7 @@ function probeStatic(){
       _b.applyMatrix4(o.matrixWorld);
       const sx = _b.max.x - _b.min.x, sz = _b.max.z - _b.min.z;
       if (sx > 40 || sz > 40) continue;                                  // floors, walls, decks: not standing obstacles
-      if (_b.max.y < -21) continue;                                     // flush with the floor
+      if (_b.max.y < ROOMB.FLOOR + 1) continue;                         // flush with the floor
       solid.push({ name: o.name || o.geometry.type, b: [_b.min.x, _b.max.x, _b.min.y, _b.max.y, _b.min.z, _b.max.z] });
     }
   });
@@ -134,7 +135,7 @@ function probeStatic(){
     }
     const S = D.three ? null : null;
     occ[sh.key] = { blocked: +(blocked / 15).toFixed(2), self: selfHits, by, inFrame,
-      eyeIn: Math.abs(eye.x) <= 38 && eye.y >= -22 && eye.y <= 36 && eye.z >= -34 && eye.z <= 42,
+      eyeIn: Math.abs(eye.x) <= ROOMB.HW && eye.y >= ROOMB.FLOOR && eye.y <= ROOMB.CEIL && eye.z >= ROOMB.BACK && eye.z <= ROOMB.FRONT,
       eye: eye.toArray().map(v => +v.toFixed(1)) };
   }
   return { boxes, overlaps, occ, solids: solid.length, layout: D.layout ? { solved: D.layout.solved } : null };

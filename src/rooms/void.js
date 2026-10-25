@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { STAGE, rng, canvasTex, radialTex, glowPoints, beamMat, trs } from './common.js';
+import { accessRect } from './footing.js';
 /* ============================================================
    THE VOID — no room at all: an infinite starfield + nebula with a
    ringed planet low on the horizon, a neon horizon grid far below
@@ -8,7 +9,9 @@ import { STAGE, rng, canvasTex, radialTex, glowPoints, beamMat, trs } from './co
    plinth floating at the stage floor (the floor contract: legs still
    land at STAGE.FLOOR — the plinth is the floor). From each plinth a
    pillar of light falls away into the haze, so nothing just hovers.
-   The plinths come from `place(anchors)` — the Room's anchor points.
+   The islands come from `place(anchors, plan)` — the Room's anchor points
+   and what they stand on (rooms/footing.js: a loft's shared deck, every
+   stair and ladder stands on an island too) — voidIslands, pure.
    ============================================================ */
 
 const FOG = 0x0a0822;
@@ -17,6 +20,55 @@ const MAX_PLINTHS = 16;
 const DECKS = [[-40, .9, 0x6a58c8, .9], [-68, 1, 0x3a2c88, 1.3]];
 const DECK_W = 360;               // deck size: its faded rim stays inside camera.far (200) from the stage   // two cloud decks: [y, opacity, tint, tex repeat] — plinth / cloud / cloud / grid depth layers
 const PILLAR = 70;                // light-pillar length below each plinth
+
+/* THE ISLANDS (pure — test/staging-audit.test.js): what floats under the machines. A piece per
+   standing machine (its footprint + PAD) and, given the footing plan (rooms/footing.js), per structure
+   that reaches past them: a LOFT's shared deck (its columns stand at the deck's corners, not its
+   members') and every STAIR / LADDER (+ KEEP). Pieces whose raw rects come within GAP join one
+   cluster; a cluster is ONE island: the convex hull of its pieces' padded corners (CCW in x, z) — a
+   clean outline with one rim (+ RIM), never a zig-zag stack of slabs. machines = how many machines
+   stand on it (one: its own colour). Hung machines float: no island. */
+const PAD = 1.2, GAP = .6, KEEP = .6, RIM = .14;
+const rectCorners = (r, pad) => {
+  const c = Math.cos(r.yaw || 0), s = Math.sin(r.yaw || 0), hw = r.hw + pad, hd = r.hd + pad;
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => [r.x + c * hw * u + s * hd * v, r.z - s * hw * u + c * hd * v]);
+};
+function rectsTouch(A, B){                                  // separating axes on the two rects grown by GAP / 2
+  const pa = rectCorners(A, GAP / 2), pb = rectCorners(B, GAP / 2);
+  for (const P of [pa, pb]) for (let i = 0; i < 2; i++){
+    const ax = P[i + 1][0] - P[i][0], az = P[i + 1][1] - P[i][1];
+    const pr = Q => { let lo = Infinity, hi = -Infinity; for (const q of Q){ const d = q[0] * ax + q[1] * az; lo = Math.min(lo, d); hi = Math.max(hi, d); } return [lo, hi]; };
+    const [a0, a1] = pr(pa), [b0, b1] = pr(pb);
+    if (a1 < b0 || b1 < a0) return false;
+  }
+  return true;
+}
+function hull(pts){                                         // monotone chain, CCW in (x, z)
+  pts = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], up = [];
+  for (const p of pts){ while (lo.length > 1 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+  for (const p of pts.reverse()){ while (up.length > 1 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
+}
+export function voidIslands(anchors = [], plan = null){
+  const pieces = [];
+  for (const a of anchors) if (a && a.kind !== 'hung' && a.w > 0 && a.d > 0)
+    pieces.push({ key: a.key, machine: true, x: a.x, z: a.z, yaw: a.yaw || 0, hw: a.w / 2, hd: a.d / 2, pad: PAD });
+  if (plan){
+    for (const L of plan.lofts || []) pieces.push({ key: L.id, x: L.x, z: L.z, yaw: L.yaw || 0, hw: L.hw, hd: L.hd, pad: KEEP });
+    for (const U of [...(plan.pads || []), ...(plan.lofts || [])])
+      if (U.access) pieces.push({ key: `${U.key || U.id}:${U.access.kind}`, ...accessRect(U, U.access), pad: KEEP });
+  }
+  const par = pieces.map((_, i) => i), find = i => par[i] === i ? i : (par[i] = find(par[i]));
+  for (let i = 0; i < pieces.length; i++) for (let j = i + 1; j < pieces.length; j++) if (rectsTouch(pieces[i], pieces[j])) par[find(i)] = find(j);
+  const groups = new Map();
+  pieces.forEach((p, i) => { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(p); });
+  return [...groups.values()].map(g => ({
+    keys: g.map(p => p.key), machines: g.filter(p => p.machine).length,
+    hull: hull(g.flatMap(p => rectCorners(p, p.pad))), rim: hull(g.flatMap(p => rectCorners(p, p.pad + RIM))),
+  }));
+}
 
 function skyTex(){
   return canvasTex(2048, 1024, (x, w, h) => {
@@ -155,6 +207,11 @@ export default {
 
     // ---- floating islands: hull-shaped decks (rebuilt per song by place()) + instanced light pillars ----
     const slabMat = new THREE.MeshStandardMaterial({ color: 0x14152a, metalness: .85, roughness: .22, envMap, envMapIntensity: 1.1 });
+    /* what the machines stand on (rooms/footing3d.js style): plinths and daises are cut from the island's
+       own metal (a shade lighter, so the step reads), and a grounded machine's line is its ISLAND's rim —
+       no second neon edge stacked a plinth above it (a raised deck keeps its own) */
+    const footBase = new THREE.MeshStandardMaterial({ color: 0x1d1f3a, metalness: .8, roughness: .3, envMap, envMapIntensity: 1 });
+    const footing = { mats: () => ({ base: footBase }), edge: p => p.band === 'flush' ? new THREE.Group() : null };
     const keelMat = new THREE.MeshStandardMaterial({ color: 0x0d0e1c, metalness: .7, roughness: .4, envMap, envMapIntensity: .8 });
     const rimMat = new THREE.MeshBasicMaterial({ vertexColors: true });
     const isl = { slab: new THREE.Mesh(new THREE.BufferGeometry(), slabMat), keel: new THREE.Mesh(new THREE.BufferGeometry(), keelMat),
@@ -167,34 +224,10 @@ export default {
     for (const im of [pillar, halo]){ im.count = 0; im.frustumCulled = false; group.add(im); }
     const PAL = [0x5fd8ff, 0xb57bff, 0xff7ac8, 0x7affc8, 0xffb36a];
 
-    /* Islands. Anchors whose RAW footprints touch (oriented-rect SAT, small clearance) join one
-       cluster; each cluster becomes ONE island shaped to the convex hull of its members' padded
-       corners — a clean outline with one rim, never a zig-zag stack of overlapping slabs. A
-       freestanding station keeps its own (yawed-rect) island. Pillars + halos stay per anchor. */
-    const PAD = 1.2, GAP = .6;                              // island margin round the legs, cluster clearance
+    /* Islands (voidIslands): one per cluster of machines + the structures they stand on (rooms/footing.js
+       plan: lofts, stairs, ladders) — a freestanding station keeps its own (yawed-rect) island. Pillars +
+       halos stay per anchor. */
     const _c = new THREE.Color();
-    const corners = (a, pad) => {
-      const yaw = a.yaw || 0, c = Math.cos(yaw), s = Math.sin(yaw), hw = a.w / 2 + pad, hd = a.d / 2 + pad;
-      return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => [a.x + c * hw * u + s * hd * v, a.z - s * hw * u + c * hd * v]);
-    };
-    function touch(A, B){                                   // separating-axis test on two oriented rects
-      const pa = corners(A, GAP / 2), pb = corners(B, GAP / 2);
-      for (const P of [pa, pb]) for (let i = 0; i < 2; i++){
-        const ax = P[i + 1][0] - P[i][0], az = P[i + 1][1] - P[i][1];
-        const pr = Q => { let lo = Infinity, hi = -Infinity; for (const q of Q){ const d = q[0] * ax + q[1] * az; lo = Math.min(lo, d); hi = Math.max(hi, d); } return [lo, hi]; };
-        const [a0, a1] = pr(pa), [b0, b1] = pr(pb);
-        if (a1 < b0 || b1 < a0) return false;
-      }
-      return true;
-    }
-    function hull(pts){                                     // monotone chain, CCW in (x, z)
-      pts = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-      const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-      const lo = [], up = [];
-      for (const p of pts){ while (lo.length > 1 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
-      for (const p of pts.reverse()){ while (up.length > 1 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
-      return lo.slice(0, -1).concat(up.slice(0, -1));
-    }
     // extrude a hull (scaled k about its centroid) downward from y=top by `depth`; optional flat colour
     function slabGeo(H, k, top, depth, col){
       const cx = H.reduce((a, p) => a + p[0], 0) / H.length, cz = H.reduce((a, p) => a + p[1], 0) / H.length;
@@ -206,20 +239,15 @@ export default {
         g.setAttribute('color', new THREE.BufferAttribute(c, 3)); }
       return g;
     }
-    function place(anchors){
+    function place(anchors, plan = null){
       const list = anchors.filter(a => a.kind !== 'hung').slice(0, MAX_PLINTHS);   // (a hung machine floats: no island)
-      const par = list.map((_, i) => i), find = i => par[i] === i ? i : (par[i] = find(par[i]));
-      for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) if (touch(list[i], list[j])) par[find(i)] = find(j);
-      const groups = {};
-      list.forEach((a, i) => (groups[find(i)] ||= []).push(a));
       const slabs = [], keels = [], rims = [];
-      Object.values(groups).forEach((g, gi) => {
+      voidIslands(anchors, plan).forEach((I, gi) => {
         const top = F + .003 * gi;                                   // staggered tops: coplanar islands can never z-fight
-        const H = hull(g.flatMap(a => corners(a, PAD))), HR = hull(g.flatMap(a => corners(a, PAD + .14)));
-        _c.setHex(g.length > 1 ? 0x5fd8ff : PAL[(gi + 1) % PAL.length]).multiplyScalar(1.8);
-        rims.push(slabGeo(HR, 1, top - .14, .22, _c));
-        slabs.push(slabGeo(H, 1, top, 1.8));
-        keels.push(slabGeo(H, .82, top - 1.8, 2.6), slabGeo(H, .55, top - 4.4, 3.4), slabGeo(H, .25, top - 7.8, 3));   // stepped keel
+        _c.setHex(I.machines > 1 ? 0x5fd8ff : PAL[(gi + 1) % PAL.length]).multiplyScalar(1.8);
+        rims.push(slabGeo(I.rim, 1, top - .14, .22, _c));
+        slabs.push(slabGeo(I.hull, 1, top, 1.8));
+        keels.push(slabGeo(I.hull, .82, top - 1.8, 2.6), slabGeo(I.hull, .55, top - 4.4, 3.4), slabGeo(I.hull, .25, top - 7.8, 3));   // stepped keel
       });
       for (const [m, gs] of [[isl.slab, slabs], [isl.keel, keels], [isl.rim, rims]]){
         m.geometry.dispose();
@@ -246,7 +274,7 @@ export default {
       group, ...STAGE, HW: 200, BACK: -200, FRONT: 200, CEIL: 200,
       fog: new THREE.FogExp2(FOG, .016), background: sky,
       mood: { ambient: [0x1a1840, 1.5], hemi: [0x7a6ad8, 0x0a1838, .55] },
-      place,
+      place, footing,
       update(dt, songTime, camera, energy = 0){
         gu.uTime.value = songTime; gu.uCam.value.copy(camera.position);
         grid.position.x = Math.round(camera.position.x / CELL) * CELL;
@@ -260,7 +288,7 @@ export default {
         pillar.material.uniforms.uGain.value = pillarBase * (1 + .08 * Math.sin(songTime * 1.3) + .5 * energy);
         rimMat.color.setScalar(1 + .7 * energy);                // island rims pulse with the kick / lead strikes
       },
-      dispose(){ sky.dispose(); cloud.dispose(); edge.dispose(); decks.forEach(dk => dk.t.dispose()); },
+      dispose(){ sky.dispose(); cloud.dispose(); edge.dispose(); decks.forEach(dk => dk.t.dispose()); footBase.dispose(); },
     };
   },
 };

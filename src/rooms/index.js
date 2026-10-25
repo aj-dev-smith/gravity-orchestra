@@ -15,7 +15,7 @@ import starship from './starship.js';
            group, FLOOR, CEIL, HW, BACK, FRONT,      // surfaces + bounds (world y / x / z)
            fog: FogExp2, background: Color|Texture,  // atmosphere
            mood?: { ambient:[hex,int], hemi:[sky,ground,int] },   // re-tint the global fills
-           place?(anchors),                          // where the machines stand (world space), one per
+           place?(anchors, plan),                    // where the machines stand (world space), one per
                                                      // machine: { key, kind: 'belt'|'kit'|'station'|'hung',
                                                      //   label, color, x, z, yaw, w, d (footprint), y (deck),
                                                      //   ground, lift (deck = ground + lift — footing.js),
@@ -26,7 +26,10 @@ import starship from './starship.js';
                                                      //   feet / hang (an open `stand`: footing.js) }
                                                      // 'hung' (the organ loft, the chandelier, the court):
                                                      //   no footing — its solid box is an obstacle (the
-                                                     //   organ loft's posts reach the floor)
+                                                     //   organ loft's posts reach the floor); `plan` = what
+                                                     //   they stand on (rooms/footing.js planFooting: pads,
+                                                     //   lofts, stairs / ladders — accessRect): what a room
+                                                     //   that builds its own ground under them must carry
            footing?: Style,                          // how its supports look (rooms/footing3d.js) — else
                                                      //   the kit's DEFAULT_STYLE
            update?(dt, songTime, camera, energy, cues),   // pure-ish ambience; no allocation.
@@ -143,7 +146,7 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
       scene.background = BASE.background; applyMood(null);
     } else {
       cur = built[k] || buildRoom(R);
-      if (cur.place && cur.anchorGen !== anchorGen){ cur.place(anchors); cur.anchorGen = anchorGen; }
+      if (cur.place && cur.anchorGen !== anchorGen){ cur.place(anchors, footPlan()); cur.anchorGen = anchorGen; }
       cur.group.visible = true;
       if (cur.xrOn !== xrOn){ cur.xr?.(xrOn); cur.xrOn = xrOn; }   // the headset variant follows the room in
       fog.color.copy(cur.fog.color); fog.density = cur.fog.density;
@@ -159,7 +162,7 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
      footing is rebuilt on them now (a stale one for another room is dropped: rebuilt on its swap) */
   function place(list){
     anchors = list; anchorGen++;
-    if (cur && cur.place){ cur.place(anchors); cur.anchorGen = anchorGen; }
+    if (cur && cur.place){ cur.place(anchors, footPlan()); cur.anchorGen = anchorGen; }
     for (const k in foots) if (k !== key){ foots[k].f.dispose(); delete foots[k]; }
     foot();
   }

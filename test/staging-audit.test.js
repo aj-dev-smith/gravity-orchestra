@@ -7,6 +7,7 @@ import { DESCENT, ROLL_T } from '../src/engine.js';
 const STAGE_Y = DESCENT * ROLL_T;                                 // (main.js: the static strike band)
 import { STAGE } from '../src/rooms/common.js';
 import { planFooting, footingBoxes, accessRect, FOOT } from '../src/rooms/footing.js';
+import { voidIslands } from '../src/rooms/void.js';
 
 /* THE STAGING AUDIT, locked in. Every song's room (all songs + the two MIDI fixtures), as
    MEASURED from the built geometry (test/fixtures/staging-rooms.json — regenerate with
@@ -58,6 +59,33 @@ function footingAt(R, solved, boxOf){
   const plan = planFooting(anchors, { floor: STAGE.FLOOR, room: FOOT_ROOM });
   return { anchors, plan, env: footingBoxes(plan) };
 }
+/* every support the plan builds: a pad's column (not a loft member's: its loft is), a loft, a stair /
+   ladder — its turned rect, and the heights it fills (floor → deck + rails) */
+function supportUnits(P){
+  const F = STAGE.FLOOR, units = [];
+  for (const p of P.pads){
+    if (!p.loft) units.push({ what: `pad ${p.key}`, own: [p.key], r: p, y: [F, p.fixed ? F + FOOT.KERB : p.top] });
+    if (p.access) units.push({ what: `${p.access.kind} ${p.key}`, own: [p.key], r: accessRect(p, p.access), y: [F, p.top + FOOT.RAIL] });
+  }
+  for (const L of P.lofts){
+    units.push({ what: L.id, own: L.keys, r: L, y: [F, L.top] });
+    if (L.access) units.push({ what: `${L.access.kind} ${L.id}`, own: L.keys, r: accessRect(L, L.access), y: [F, L.top + FOOT.RAIL] });
+  }
+  return units;
+}
+const rectPts = R => { const c = Math.cos(R.yaw || 0), s = Math.sin(R.yaw || 0);
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => [R.x + c * u * R.hw + s * v * R.hd, R.z - s * u * R.hw + c * v * R.hd]); };
+/* how far (x, z) lies outside a convex CCW hull (0 inside) */
+function outOf(H, x, z){
+  let inside = true, d = Infinity;
+  for (let i = 0; i < H.length; i++){
+    const a = H[i], b = H[(i + 1) % H.length], ex = b[0] - a[0], ez = b[1] - a[1], L2 = ex * ex + ez * ez;
+    if (ex * (z - a[1]) - ez * (x - a[0]) < -1e-9) inside = false;
+    const t = Math.max(0, Math.min(1, ((x - a[0]) * ex + (z - a[1]) * ez) / L2));
+    d = Math.min(d, Math.hypot(x - a[0] - t * ex, z - a[1] - t * ez));
+  }
+  return inside ? 0 : d;
+}
 /* do two turned rects ({x, z, hw, hd, yaw}) overlap by more than eps? (separating axes) */
 function rectsMeet(A, B, eps = .05){
   const pts = R => { const c = Math.cos(R.yaw || 0), s = Math.sin(R.yaw || 0);
@@ -103,21 +131,26 @@ describe('staging audit: every song lays out clean and every station shot sees i
     it(`${R.song}: what each machine stands on never runs into another machine`, () => {
       // every support (a pad's column, a loft, a stair / ladder: its turned rect, floor → deck + rails)
       // against every OTHER machine's solid footprint (the anchor's turned rect) over its solid height
-      const F = STAGE.FLOOR, P = FT.plan, units = [];
-      for (const p of P.pads){
-        if (!p.loft) units.push({ what: `pad ${p.key}`, own: [p.key], r: p, y: [F, p.fixed ? F + FOOT.KERB : p.top] });
-        if (p.access) units.push({ what: `${p.access.kind} ${p.key}`, own: [p.key], r: accessRect(p, p.access), y: [F, p.top + FOOT.RAIL] });
-      }
-      for (const L of P.lofts){
-        units.push({ what: L.id, own: L.keys, r: L, y: [F, L.top] });
-        if (L.access) units.push({ what: `${L.access.kind} ${L.id}`, own: L.keys, r: accessRect(L, L.access), y: [F, L.top + FOOT.RAIL] });
-      }
+      const F = STAGE.FLOOR, units = supportUnits(FT.plan);
       for (const u of units) for (const a of FT.anchors){
         if (u.own.includes(a.key)) continue;
         const ay = a.box ? [a.box[2], a.box[3]] : [F, STAGE.CEIL];
         if (Math.min(u.y[1], ay[1]) - Math.max(u.y[0], ay[0]) <= .05) continue;
         expect(rectsMeet(u.r, { x: a.x, z: a.z, hw: a.w / 2, hd: a.d / 2, yaw: a.yaw || 0 }), `${u.what} × ${a.key}`).toBe(false);
       }
+    });
+
+    it(`${R.song} in the Void: every machine and everything it stands on stands on ONE island (src/rooms/void.js voidIslands)`, () => {
+      // (the Void has no floor: a loft's corner column or a ladder that misses its island hangs in the air)
+      const I = voidIslands(FT.anchors, FT.plan);
+      const on = (r, what) => {
+        const pts = rectPts(r);
+        const best = Math.min(...I.map(isl => Math.max(...pts.map(([x, z]) => outOf(isl.hull, x, z)))));
+        expect(best, `${what}: ${best.toFixed(2)} u off its island`).toBeLessThanOrEqual(1e-6);
+      };
+      for (const u of supportUnits(FT.plan)) on(u.r, u.what);
+      for (const a of FT.anchors) if (a.kind !== 'hung') on({ x: a.x, z: a.z, yaw: a.yaw || 0, hw: a.w / 2, hd: a.d / 2 }, a.key);
+      expect(I.reduce((n, isl) => n + isl.machines, 0)).toBe(FT.anchors.filter(a => a.kind !== 'hung').length);
     });
 
     if (R.shots.length) for (const [roomKey, solids] of Object.entries(ROOMSOLIDS))

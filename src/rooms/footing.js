@@ -35,7 +35,8 @@
             access, feet, hang }   top = the world y it holds the machine at (its bottom); h = top − floor;
             open: a `stand` machine (its anchor sends FEET / HANG) with something hanging below what
             it stands on (low < bottom) — posts under its FEET ([u, v, r] in the anchor's frame; none
-            known: its corners), every beam kept out of HANG ([u0, u1, v0, v1]); well: how far under
+            known: its corners), every beam kept out of HANG ([u0, u1, v0, v1]) — down to hangY (the world
+            y of the lowest part that hangs: below it a brace may cross); well: how far under
             its top any other machine reaches (top − low: the kit's pistons) — its support is solid at
             least that deep; loft: its loft's id or null; pulse: its slot in `pulses`
      loft { id, keys, x0, x1, z0, z1, x, z, hw, hd, yaw: 0, top, h, band, well, access }   a WORLD
@@ -64,6 +65,8 @@ export const FOOT = {
   TREAD: .42,                                   // a stair's going (≈ 28 cm)
   STAIR_W: 1.1,                                 // a stair's width (≈ 75 cm): it hugs the pad's side, landing at the top
   STAIR_MAX: 6.5,                               // a platform higher than this is climbed by ladder (its stair would run ≈ 10 u)
+  CLIMB: 1,                                     // an OPEN stand lifted more than this gets a ladder (at its own height its
+                                                // posts are the machine's legs: nobody climbs them)
   LADDER_W: 1.4,                                // a ladder's envelope along the face it climbs (stiles + cage)…
   LADDER_D: 1.2,                                // …and out from it
   CAGE: 5,                                      // a ladder climbing more than this gets a safety cage (≈ 3.4 m)…
@@ -159,7 +162,8 @@ export function planFooting(anchors = [], { floor = -5.5, room = null } = {}){
     const i = pads.length;
     pads.push({ key: a.key, kind: a.kind, x: r.x, z: r.z, yaw: r.yaw, hw: r.hw + m, hd: r.hd + m, top, h, band: bandOf(h),
       open, well: open ? 0 : below, loft: null, color: a.color ?? null, pulse: Math.min(i, FOOT.MAX_PULSE - 1), fixed: !!a.fixed, lift: a.lift ?? 0,
-      access: null, feet: open && Array.isArray(a.feet) && a.feet.length ? a.feet : null, hang: open ? (a.hang ?? null) : null, _a: a });
+      access: null, feet: open && Array.isArray(a.feet) && a.feet.length ? a.feet : null, hang: open ? (a.hang ?? null) : null,
+      hangY: open ? a.low : null, _a: a });
     if (i < FOOT.MAX_PULSE) pulses.push({ key: a.key, cue: Array.isArray(a.cue) ? a.cue : [], P: a.P, start: a.start });
   }
 
@@ -184,10 +188,11 @@ export function planFooting(anchors = [], { floor = -5.5, room = null } = {}){
   }
   lofts.sort((A, B) => A.id < B.id ? -1 : 1);
 
-  // 3. ACCESS: every raised support gets a stair or a ladder on a free side
+  // 3. ACCESS: every raised support gets a stair or a ladder on a free side (an open stand: a ladder,
+  //    once the user has lifted it off its own legs)
   const beltX = list.find(a => a.kind === 'belt')?.x ?? 0;
   const placed = [];
-  const units = [...pads.filter(p => !p.loft && !p.open && !p.fixed && p.band !== 'flush'), ...lofts];
+  const units = [...pads.filter(p => !p.loft && !p.fixed && p.band !== 'flush' && (!p.open || p.lift > FOOT.CLIMB)), ...lofts];
   for (const P of units){
     const own = P.keys ? pads.filter(p => p.loft === P.id) : [P];
     const clear = R => {
@@ -199,7 +204,7 @@ export function planFooting(anchors = [], { floor = -5.5, room = null } = {}){
       return !placed.some(Q => overlap(R, Q, FOOT.CLEAR));
     };
     const outer = Math.sign(P.x - beltX) || -1;
-    const kinds = P.band === 'low' || (P.band === 'mid' && P.h <= FOOT.STAIR_MAX) ? ['stair', 'ladder'] : ['ladder'];
+    const kinds = !P.open && (P.band === 'low' || (P.band === 'mid' && P.h <= FOOT.STAIR_MAX)) ? ['stair', 'ladder'] : ['ladder'];
     for (const kind of kinds){
       const pref = s => { const [nx, nz] = sideNormal(P, s); return nx * outer + (kind === 'stair' ? .7 : -.5) * nz; };
       const order = SIDES.slice().sort((s, t) => pref(t) - pref(s) || SIDES.indexOf(s) - SIDES.indexOf(t));

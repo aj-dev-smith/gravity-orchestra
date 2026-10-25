@@ -162,6 +162,48 @@ describe('footing kit: the plan, drawn', () => {
     const L = planFooting([kit(6, -6), { ...st('bells', 7, 12, 6, 5, 6.2) }], { floor: FL, room: ROOMB }).lofts[0];
     expect(L.keys).toEqual(['bells', 'drums']); expect(L.well).toBeCloseTo(.335, 12);
   });
+  it('every face of a tower is braced — a long bay in panels (it stood on ties alone)', () => {
+    const p = planFooting([st('tower', 0, 12, 14, 6, 14)], { floor: FL, room: ROOMB }), q = p.pads[0];
+    expect(q.band).toBe('high');
+    const f = buildFooting(p, DEFAULT_STYLE, { boxes: footingBoxes(p) });
+    const a = meshes(f).find(m => m.name === 'footing:steel').geometry.attributes.position.array;
+    const hv = q.hd - .6;                                                   // (the column ring: COL_IN in from the pad)
+    for (const side of [-1, 1]){
+      if (q.access?.side === (side > 0 ? '+v' : '-v')) continue;          // (a ladder's own steel there)
+      let n = 0;
+      for (let i = 0; i < a.length; i += 3) if (Math.abs(a[i]) < .3 && Math.abs(a[i + 2] - (12 + side * hv)) < .3 && a[i + 1] > FL + 1 && a[i + 1] < q.top - 1) n++;
+      expect(n, `${side > 0 ? 'front' : 'back'} face: panel joints mid-bay`).toBeGreaterThan(0);
+    }
+    f.dispose();
+  });
+  it('a tall OPEN stand is tied + X-braced in tiers — never through what hangs above its lowest part', () => {
+    const tt = u => ({ ...st('turntable', 0, 12, 14.22, 14.12, -1.29 - FL + u), y: -.93 + u, ground: -.93, lift: u, low: -5.1 + u,
+      feet: [[-5.5, -4.5, .7], [5.5, -4.5, .7], [-5.5, 4.5, .7], [5.5, 4.5, .7]], hang: [-6.25, 4.35, 4.8, 5.7] });
+    const steelOf = u => {
+      const p = planFooting([tt(u)], { floor: FL, room: ROOMB }), f = buildFooting(p, DEFAULT_STYLE, { boxes: footingBoxes(p) });
+      const a = meshes(f).find(m => m.name === 'footing:steel').geometry.attributes.position.array.slice();
+      f.dispose(); return { q: p.pads[0], a };
+    };
+    // (a bar's vertices are its ends: a tie or a brace meeting the posts at a tier line has vertices there)
+    const tiesAt = (a, z, y) => { let n = 0; for (let i = 0; i < a.length; i += 3) if (Math.abs(a[i + 2] - z) < .6 && Math.abs(a[i + 1] - y) < .1) n++; return n; };
+    // at its own height: one tier (no intermediate tie anywhere)
+    const lo = steelOf(0), loY = [];
+    for (let i = 1; i < lo.a.length; i += 3) loY.push(lo.a[i]);
+    // lifted 14: three tiers, tied between on the back face (away from the hang) and the front (below what hangs)
+    const { q, a } = steelOf(14), y0 = FL + .3, y1 = q.top - .4, t1 = y0 + (y1 - y0) / 3, t2 = y0 + 2 * (y1 - y0) / 3;
+    expect(q.access).toMatchObject({ kind: 'ladder' });
+    for (const y of [t1, t2]){
+      expect(tiesAt(a, 12 - 4.5, y), `back tie @${y.toFixed(2)}`).toBeGreaterThan(0);
+      expect(tiesAt(lo.a, 12 - 4.5, y), `no tie @${y.toFixed(2)} unlifted`).toBe(0);
+    }
+    expect(tiesAt(a, 12 + 4.5, t1), 'front tie under the hang').toBeGreaterThan(0);
+    // nothing of the stand inside what hangs: x −6.25…4.35, z 12+4.8…12+5.7, from its lowest part up to the stand
+    for (let i = 0; i < a.length; i += 3){
+      const x = a[i], y = a[i + 1], z = a[i + 2];
+      const inside = x > -6.25 + .05 && x < 4.35 - .05 && z > 16.8 + .05 && z < 17.7 - .05 && y > q.hangY + .05 && y < q.top - .3;
+      expect(inside, `steel at ${[x, y, z].map(v => v.toFixed(2))}`).toBe(false);
+    }
+  });
   it('dispose() takes it out of the scene and frees its geometry', () => {
     const scene = new THREE.Scene(), f = build(), freed = [];
     scene.add(f.group);

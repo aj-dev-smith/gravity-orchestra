@@ -53,6 +53,7 @@ const DIM = {
   STILE: .09, RUNG: .05, RUNG_DY: .45, LAD_HALF: .33, LAD_OUT: .34,   // ladders
   EDGE: .09, EDGE_OUT: .02,                   // the glowing strip: height, how proud of its face
   WELL: .04,                                  // a deck's least depth under a machine's deepest dip (footing.js well)
+  OPEN_TIER: 6,                               // an open stand's posts: tied + X-braced every ≤ this (a tall one reads braced)
 };
 /* a raised support's deck depth: its band's slab, or deeper where its machine dips into it (the kit's
    pistons stroke under its deck slab — footing.js pad.well) — what dips stays inside the deck plate */
@@ -369,9 +370,14 @@ function makeForms(k){
       let yPrev = F + .4;
       for (const y of [...levels.filter(y => y > F + 2 && y < yH - 1.5), yH - .05]){
         if (y < yH - .2) k.bar('steel', [A[0], y, A[1]], [B[0], y, B[1]], .14, .14);
-        if (L < 9){                                              // (the short bays: X-braced between ties)
-          k.bar('steel', [A[0], yPrev, A[1]], [B[0], y, B[1]], DIM.BRACE * .8, DIM.BRACE * .5);
-          k.bar('steel', [B[0], yPrev, B[1]], [A[0], y, A[1]], DIM.BRACE * .8, DIM.BRACE * .5);
+        // X-braced between ties — a long bay in panels about as wide as the tier is tall (never a flat X),
+        // a slim strut between panels: every face of a tower reads braced, however wide
+        const n = Math.max(1, Math.round(L / Math.max(y - yPrev, 3))), at = j => [A[0] + (B[0] - A[0]) * j / n, A[1] + (B[1] - A[1]) * j / n];
+        for (let j = 0; j < n; j++){
+          const p = at(j), q = at(j + 1);
+          k.bar('steel', [p[0], yPrev, p[1]], [q[0], y, q[1]], DIM.BRACE * .8, DIM.BRACE * .5);
+          k.bar('steel', [q[0], yPrev, q[1]], [p[0], y, p[1]], DIM.BRACE * .8, DIM.BRACE * .5);
+          if (j) k.bar('steel', [p[0], yPrev, p[1]], [p[0], y, p[1]], DIM.BRACE, DIM.BRACE);
         }
         yPrev = y;
       }
@@ -492,20 +498,29 @@ function makeForms(k){
         k.box('steel', u - s - .12, u + s + .12, T - .06, T, v - s - .12, v + s + .12, ALL);   // the head plate under the foot
         k.box('steel', u - s - .2, u + s + .2, F, F + .05, v - s - .2, v + s + .2, NOBOT);
       }
+      // each face: a head beam + a foot tie, and — above 1.4 — X-braced TIERS (≤ OPEN_TIER each, tied
+      // between): a face that passes what hangs is braced only below its lowest part (hangY)
+      const y0 = F + .3, y1 = T - .4, nT = Math.max(1, Math.ceil((y1 - y0) / DIM.OPEN_TIER));
+      const yT = Array.from({ length: nT + 1 }, (_, t) => y0 + (y1 - y0) * t / nT), clearY = Number.isFinite(p.hangY) ? p.hangY - .3 : -Infinity;
       if (hull.length > 1) for (let i = 0; i < hull.length; i++){
         const a = hull[i], b = hull[(i + 1) % hull.length];
         if (hull.length === 2 && i) break;
         if (segHits(a, b, p.hang, .15)) continue;
         k.bar('steel', [a[0], T - .24, a[1]], [b[0], T - .24, b[1]], .18, .26, ALL);
         k.bar('steel', [a[0], F + .2, a[1]], [b[0], F + .2, b[1]], .14, .14, ALL);
-        if (H > 1.4 && !segHits(a, b, p.hang, 1)){
-          k.bar('steel', [a[0], F + .3, a[1]], [b[0], T - .4, b[1]], DIM.BRACE, DIM.BRACE * .6);
-          k.bar('steel', [b[0], F + .3, b[1]], [a[0], T - .4, a[1]], DIM.BRACE, DIM.BRACE * .6);
+        if (H <= 1.4) continue;
+        const near = segHits(a, b, p.hang, 1);
+        for (let t = 0; t < nT; t++){
+          if (near && yT[t + 1] > clearY) break;               // (a brace never crosses what hangs)
+          if (t) k.bar('steel', [a[0], yT[t], a[1]], [b[0], yT[t], b[1]], .12, .12, ALL);
+          k.bar('steel', [a[0], yT[t], a[1]], [b[0], yT[t + 1], b[1]], DIM.BRACE, DIM.BRACE * .6);
+          k.bar('steel', [b[0], yT[t], b[1]], [a[0], yT[t + 1], a[1]], DIM.BRACE, DIM.BRACE * .6);
         }
       }
       let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
       for (const [u, v] of feet){ u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); }
       tape(u0 - .75, u1 + .75, v0 - .75, v1 + .75, F, p.color, p.pulse, .09);
+      access(p, p.top, p.access, false);                       // (lifted off its own legs: a service ladder — footing.js)
     },
     loft(L, members){
       const T = L.top, D = deckDepth(L), yB = T - D;

@@ -147,7 +147,7 @@ const FINALE = [beltA,
   st('bass', -20, 5.1, 11.7, 7.79), st('bells', 26, -10, 10.9, 6.85), st('bowwheel', 28.1, 10.38, 11.24, 8.59),
   st('dulcimer', -27.5, 18.07, 11.55, 8.62), st('marimba', -25.18, -10.34, 13.02, 7),
   st('horns', 15.45, -20.19, 13.9, 3.75, GAL - FL), st('riff', -15.01, -22.05, 12.96, 5.35, GAL - FL), st('strum', -28.95, -21.27, 11.29, 2.7, GAL - FL),
-  { ...st('turntable', -.36, 17.19, 14.22, 14.12, -1.29 - FL), y: -.93, low: -5.1, box: [-7.47, 6.75, -5.1, 8.13, 10.13, 24.25],
+  { ...st('turntable', -.36, 17.19, 14.22, 14.12, -1.29 - FL), y: -.93, ground: -.93, lift: 0, low: -5.1, box: [-7.47, 6.75, -5.1, 8.13, 10.13, 24.25],   // (on its own feet: lift 0)
     feet: [[-5.5, -4.5, .7], [5.5, -4.5, .7], [-5.5, 4.5, .7], [5.5, 4.5, .7]], hang: [-6.25, 4.35, 4.8, 5.7] },
   { key: 'organ', kind: 'hung', label: 'Light Organ', color: '#c08bff', x: 0, z: -13.65, yaw: 0, w: 13.16, d: 4.64, y: 16, box: [-6.58, 6.58, FL, 24.54, -15.97, -11.33], cue: [], P: 20, start: -.6, fixed: true },
 ];
@@ -236,6 +236,18 @@ describe('footing: the planner (planFooting)', () => {
     expect(q.feet.length).toBe(4);
     expect(q.hang).toEqual([-6.25, 4.35, 4.8, 5.7]);
     expect(q.access).toBe(null);                         // (a stand, not a platform: nobody climbs it)
+    expect(q.hangY).toBe(-5.1);                          // (what hangs reaches down to here)
+  });
+  it('an open stand LIFTED off its own legs gets a service ladder (never a stair); unlifted, none', () => {
+    const tt = FINALE.find(a => a.key === 'turntable'), up = u => ({ ...tt, y: tt.y + u, bottom: tt.bottom + u, low: tt.low + u, lift: u,
+      box: [tt.box[0], tt.box[1], tt.box[2] + u, tt.box[3] + u, tt.box[4], tt.box[5]] });
+    expect(padOf(plan([beltA, up(FOOT.CLIMB)]), 'turntable').access).toBe(null);
+    for (const u of [2, 6, 14]){
+      const q = padOf(plan([beltA, up(u)]), 'turntable');
+      expect(q.open, `${u}`).toBe(true);
+      expect(q.access, `lift ${u}`).toMatchObject({ kind: 'ladder' });
+      expect(q.hangY).toBeCloseTo(-5.1 + u, 12);
+    }
   });
   it('FINALE: the gallery\'s riff + strum share a loft, the horns stand on their own tower — each climbed from a free side', () => {
     const p = plan(FINALE);

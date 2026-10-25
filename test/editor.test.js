@@ -4,7 +4,8 @@ import path from 'node:path';
 import { parseMidi } from '../src/midi/parse.js';
 import { convertToSong } from '../src/midi/convert.js';
 import { PART_SPEC } from '../src/midi/orchestra.js';
-import { validateSong } from '../src/share.js';
+import { validateSong, encodeSong, decodeSong } from '../src/share.js';
+import { FOOT } from '../src/rooms/footing.js';
 import { SONGS } from '../src/songs/index.js';
 import { layoutStations } from '../src/instruments/stations.js';
 import { noteNum } from '../src/engine.js';
@@ -181,6 +182,40 @@ describe('stage placement', () => {
     expect(L.huge.x).toBe(P.BOUND);
     expect(P.sanitizeLayout(P.encodeLayout(L))).toEqual(L);
     expect(P.sanitizeLayout('nope')).toEqual({}); expect(P.sanitizeLayout([1, 2])).toEqual({});
+  });
+  it('carries a machine\'s HEIGHT (lift: rooms/footing.js) — sanitized, clamped, round-tripped; old entries read as before', () => {
+    const L = P.sanitizeLayout({
+      bells: [2, 3, 0, 4.23456], marimba: { x: 1, z: 2, yaw: .5, lift: 6 }, horns: [0, -20, 0, 0],   // (0: the user's "on the floor")
+      riff: [1, 1, 0, -3], strum: [1, 1, 0, 1e6], pogo: [1, 1, 0, 'up'], dulcimer: [1, 1, null, 2], organ: [1, 1, 0, null],
+      drums: [5, 6, 0, 2.5], bass: [7, 8], bowls: [7, 8, .25],
+    });
+    expect(L.bells).toEqual({ x: 2, z: 3, yaw: 0, lift: 4.235 });
+    expect(L.marimba).toEqual({ x: 1, z: 2, yaw: .5, lift: 6 });
+    expect(L.horns).toEqual({ x: 0, z: -20, yaw: 0, lift: 0 });
+    expect(L.riff.lift).toBe(0); expect(L.strum.lift).toBe(FOOT.LIFT_MAX);           // (clamped: 0 … LIFT_MAX)
+    for (const k of ['pogo', 'organ']) expect(L[k], k).toEqual({ x: 1, z: 1, yaw: 0 });   // (no number: the room solve's height)
+    expect(L.dulcimer).toEqual({ x: 1, z: 1, yaw: 0, lift: 2 });                       // (a null yaw — JSON's hole — is unturned)
+    expect(L.drums).toEqual({ x: 5, z: 6, yaw: 0, lift: 2.5 });                        // (the kit's entry too)
+    expect(L.bass).toEqual({ x: 7, z: 8, yaw: 0 }); expect(L.bowls).toEqual({ x: 7, z: 8, yaw: .25 });
+    // the compact form: [x, z, yaw, lift] when there is a height (0 included), else as before
+    const E = P.encodeLayout(L);
+    expect(E.bells).toEqual([2, 3, 0, 4.235]); expect(E.horns).toEqual([0, -20, 0, 0]);
+    expect(E.bass).toEqual([7, 8]); expect(E.bowls).toEqual([7, 8, .25]);
+    expect(P.sanitizeLayout(P.encodeLayout(L))).toEqual(L);
+    expect(P.sanitizeLayout(JSON.parse(JSON.stringify(E)))).toEqual(L);
+    // stored per song, and a placed slot stands at it (main clamps it again)
+    const mem = new Map(), st = { getItem: k => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v), removeItem: k => mem.delete(k) };
+    P.saveLayout(st, 's', L);
+    expect(P.loadLayout(st, 's')).toEqual(L);
+    expect(P.placeSlot({ x: 0, z: 0, yaw: 0, w: 9 }, P.loadLayout(st, 's').bells)).toEqual({ x: 2, z: 3, yaw: 0, w: 9, pin: true, lift: 4.235 });
+    expect(P.placeSlot({ x: 0, z: 0, yaw: 0, w: 9 }, P.loadLayout(st, 's').bass)).not.toHaveProperty('lift');
+    // undo remembers heights too
+    const H = P.makeHistory(); H.push('s', L); expect(H.pop('s')).toEqual(L);
+  });
+  it('a share link carries the stage\'s heights (song.stage, untrusted: sanitized on the way in)', async () => {
+    const S = { ...SONGS['ode-to-joy'], stage: P.encodeLayout({ bells: { x: 2, z: 3, yaw: 0, lift: 4 }, drums: { x: 5, z: 6, yaw: 0, lift: 0 } }) };
+    const back = await decodeSong(await encodeSong(S));
+    expect(P.sanitizeLayout(back.stage)).toEqual({ bells: { x: 2, z: 3, yaw: 0, lift: 4 }, drums: { x: 5, z: 6, yaw: 0, lift: 0 } });
   });
   it('persists per song', () => {
     const mem = new Map(), st = { getItem: k => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v), removeItem: k => mem.delete(k) };

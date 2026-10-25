@@ -3,16 +3,22 @@
    a per-instrument transform applied at RENDER TIME ONLY; the solve
    never knows). Pure: no THREE, no DOM.
 
-   A layout is { <station key>: { x, z, yaw } } — x RELATIVE to the belt
-   wall's centre (like a slot in stations.js), z world, yaw about +y. The
-   drum machine's entry is its KIT slot ({ x, z }: it faces the audience).
-   A placed station is PINNED in the room solve: it stays exactly where
-   the user put it, and the auto-placed rest step around it.
+   A layout is { <station key>: { x, z, yaw, lift? } } — x RELATIVE to the
+   belt wall's centre (like a slot in stations.js), z world, yaw about +y,
+   lift = the user's HEIGHT (u above the machine's ground — rooms/footing.js;
+   absent = the room solve's: on the floor, or up on the rear gallery; 0 = ON
+   THE FLOOR, the user's word for it). The drum machine's entry is its KIT
+   slot ({ x, z, lift? }: it faces the audience). A placed station is PINNED
+   in the room solve: it stays exactly where the user put it, and the
+   auto-placed rest step around it.
 
    Persisted per song (localStorage) and carried in share links as
-   song.stage = { key: [x, z, yaw] } (compact, sanitized on the way in —
-   share links are untrusted input).
+   song.stage = { key: [x, z, yaw?, lift?] } (compact, sanitized on the way
+   in — share links are untrusted input; old 2- / 3-element entries read as
+   before).
    ============================================================ */
+
+import { clampLift } from '../rooms/footing.js';
 
 export const SNAP = .5;                       // the floor grid (world units)
 export const YAW_SNAP = Math.PI / 12;         // 15°
@@ -28,21 +34,26 @@ export function snapYaw(y, s = YAW_SNAP){
 }
 const r3 = v => Math.round(v * 1000) / 1000;
 
-/** untrusted → a clean layout (drops anything malformed; clamps to BOUND) */
+/** untrusted → a clean layout (drops anything malformed; clamps to BOUND; a lift that is a finite
+    number is kept, clamped to 0 … FOOT.LIFT_MAX — anything else leaves the height to the room solve) */
 export function sanitizeLayout(obj){
   const out = {};
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return out;
   for (const [k, v] of Object.entries(obj)){
     if (!KEY_RE.test(k)) continue;
-    const [x, z, yaw = 0] = Array.isArray(v) ? v : v && typeof v === 'object' ? [v.x, v.z, v.yaw] : [];
+    const [x, z, yaw0, lift] = Array.isArray(v) ? v : v && typeof v === 'object' ? [v.x, v.z, v.yaw, v.lift] : [];
+    const yaw = yaw0 ?? 0;                               // (absent / null: unturned)
     if (![x, z, yaw].every(Number.isFinite)) continue;
     const c = a => Math.max(-BOUND, Math.min(BOUND, a));
     out[k] = { x: r3(c(x)), z: r3(c(z)), yaw: r3(Math.atan2(Math.sin(yaw), Math.cos(yaw))) };
+    if (Number.isFinite(lift)) out[k].lift = r3(clampLift(lift));
   }
   return out;
 }
-/** layout → the compact share-link form { key: [x, z, yaw] } */
-export const encodeLayout = layout => Object.fromEntries(Object.entries(sanitizeLayout(layout)).map(([k, p]) => [k, p.yaw ? [p.x, p.z, p.yaw] : [p.x, p.z]]));
+/** layout → the compact share-link form { key: [x, z, yaw?, lift?] } — a lift is written whenever the
+    user set one, 0 included (an explicit "on the floor" outranks the room solve's gallery raise) */
+export const encodeLayout = layout => Object.fromEntries(Object.entries(sanitizeLayout(layout)).map(([k, p]) =>
+  [k, p.lift !== undefined ? [p.x, p.z, p.yaw, p.lift] : p.yaw ? [p.x, p.z, p.yaw] : [p.x, p.z]]));
 
 /** a station's slot with the user's placement on top (pinned), or the base slot untouched. A placement
     may carry a LIFT (u above the machine's ground — rooms/footing.js; main clamps it): kept only when

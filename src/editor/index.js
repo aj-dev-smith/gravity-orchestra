@@ -210,9 +210,12 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     place(key, entry, all){
       let L = layout();
       history.push(curId, L);                        // (undo: the layout as it was before this move)
+      // a machine keeps the HEIGHT the user gave it (host.lift: its live one — else its entry's); one
+      // the room solve raised (the gallery) has none to keep: the solve decides again where it lands
+      const held = (k, e) => { const u = host.lift?.(k) ?? L[k]?.lift; return Number.isFinite(u) ? { ...e, lift: u } : e; };
       if (!Object.keys(L).length)                    // the first move PINS the whole room as it stands:
-        for (const p of all) L[p.key] = { x: p.x - host.cx(), z: p.z, yaw: p.yaw };   // what you see is what stays
-      L = { ...L, [key]: entry };
+        for (const p of all) L[p.key] = held(p.key, { x: p.x - host.cx(), z: p.z, yaw: p.yaw });   // what you see is what stays
+      L = { ...L, [key]: held(key, entry) };
       saveLayout(store, curId, L);
       host.restage();
       stage.refresh();

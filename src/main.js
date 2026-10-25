@@ -1411,6 +1411,12 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
         deckY: kitSlot.y }] : []),
     ],
     wall: () => stageWall, cx: () => curBuild?.view.cx ?? 0,
+    // the HEIGHT the user gave a machine (rooms/footing.js lift: a layout entry's, or __dev.lift / ?lift=) —
+    // never the room solve's gallery raise (rig.lift): a stage move keeps it in the layout (src/editor)
+    lift(key){
+      const u = key === 'drums' ? kitSlot.lift : instLive.find(r => r.I.key === key && !r.slot.hang)?.slot.lift;
+      return Number.isFinite(u) ? clampLift(u) : undefined;
+    },
     kitPivot: () => ({ x: (curBuild?.view.cx ?? 0) + kitSlot.x + (drumGroup?.position.x || 0), z: kitSlot.z + (drumGroup?.position.z || 0) }),
     visBox: o => visBox(o),
     room: { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 },

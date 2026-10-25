@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { STAGE, rng, canvasTex, radialTex, glowPoints, glowMat, beamMat, instanced, trs } from './common.js';
+import { tintStyle } from './footing3d.js';
 /* ============================================================
    MIDNIGHT STUDIO — a sound stage after hours. A black, wet-looking
    epoxy floor that really REFLECTS (three.js Reflector, reduced-res,
@@ -127,9 +128,14 @@ function neonTex(text){
   });
 }
 
+/* how its footing looks (rooms/footing3d.js tintStyle) — one per built room: its own materials */
+const footStyle = () => tintStyle({ key: 'studio', base: { color: 0x5c5b68, roughness: .95, metalness: 0 },
+  steel: { color: 0xb4bac4, metalness: .5, roughness: .38 }, deck: { color: 0x34333c, metalness: .1, roughness: .9 } });
+
 export default {
   key: 'studio', label: 'Midnight Studio',
   build(scene, { envMap, renderer }){
+    const FOOT_STYLE = footStyle();
     const group = new THREE.Group();
     const R = rng(9);
     const F = STAGE.FLOOR;
@@ -289,6 +295,8 @@ export default {
       group, ...STAGE, HW, BACK, FRONT, CEIL,
       fog: new THREE.FogExp2(FOG, .02), background: new THREE.Color(FOG),
       mood: { ambient: [0x1c1a30, 1.4], hemi: [0x6a64b0, 0x2a1020, .5] },
+      // the footing (rooms/footing3d.js): charcoal stage risers, aluminium truss
+      footing: FOOT_STYLE,
       update(dt, songTime, camera, energy = 0){
         hazes[0].offset.x = songTime * .004; hazes[1].offset.x = -songTime * .006; hazes[2].offset.x = songTime * .003;
         glows.material.uniforms.uTime.value = songTime;
@@ -301,7 +309,7 @@ export default {
         floor.getRenderTarget().setSize(tw, th);
         floor.material.uniforms.uTexel.value.set(1 / tw, 1 / th);
       },
-      dispose(){},
+      dispose(){ FOOT_STYLE.dispose(); },
     };
   },
 };

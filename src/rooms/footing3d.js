@@ -81,11 +81,34 @@ export function makeFootingMats({ envMap = null } = {}){
   const tex = concreteTex();
   return {
     // (painted steel, not chrome: a dark room's env would turn a mirror-steel scaffold into a silhouette)
-    base: new THREE.MeshStandardMaterial({ color: 0x6b6e75, map: tex, roughness: .92, metalness: .02 }),
+    // (the concrete's colour MULTIPLIES its grain, itself a mid grey ≈ .22 linear: a light tint keeps it
+    //  concrete — ≈ .14 albedo; the old mid-grey tint left ≈ .03, a black box in every dim room)
+    base: new THREE.MeshStandardMaterial({ color: 0xc8cbd2, map: tex, roughness: .92, metalness: .02 }),
     steel: new THREE.MeshStandardMaterial({ color: 0x7c8594, metalness: .45, roughness: .48, envMap, envMapIntensity: .6 }),
     deck: new THREE.MeshStandardMaterial({ color: 0x353a44, metalness: .4, roughness: .6, envMap, envMapIntensity: .4 }),
     edge: edgeMat(),
     dispose(){ tex?.dispose(); for (const k of ['base', 'steel', 'deck', 'edge']) this[k].dispose(); },
+  };
+}
+/* A room's TINT of the kit (a room's build() → `footing`): the default forms in the room's own materials —
+   { base?, steel?, deck? }, each MeshStandardMaterial params; `grain: true` keeps the kit's concrete grain
+   on it (its map: the colour multiplies a ≈ .22 linear grey). Made once, on first use (the host's env
+   map), shared by every footing the room builds; the room disposes them (style.dispose()). */
+export function tintStyle({ key = 'tint', ...spec }){
+  let made = null;
+  return {
+    key,
+    mats(kit, ctx = {}){
+      if (made) return made;
+      made = {};
+      for (const slot of ['base', 'steel', 'deck']){
+        if (!spec[slot]) continue;
+        const { grain, ...p } = spec[slot];
+        made[slot] = new THREE.MeshStandardMaterial({ map: grain ? kit.mats[slot]?.map ?? null : null, envMap: ctx.envMap ?? null, envMapIntensity: .5, ...p });
+      }
+      return made;
+    },
+    dispose(){ if (made) for (const m of Object.values(made)) m.dispose(); made = null; },
   };
 }
 /* the reactive edge: additive, unlit, fog-free; each vertex reads its machine's slot of uPulse */

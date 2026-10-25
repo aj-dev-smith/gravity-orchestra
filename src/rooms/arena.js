@@ -3,6 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { STAGE, rng, canvasTex, radialTex, glowPoints, glowMat, beamMat, instanced, trs } from './common.js';
 import { solveArenaCues, lastFire, JETS, CANNONS, JET_BURN } from './arena-cues.js';
 import { ARM_AT } from '../transport.js';
+import { tintStyle } from './footing3d.js';
 /* ============================================================
    THE METAL ARENA — the machines play the big room.
 
@@ -316,9 +317,14 @@ function co2Mat(){
   });
 }
 
+/* how its footing looks (rooms/footing3d.js tintStyle) — one per built room: its own materials */
+const footStyle = () => tintStyle({ key: 'arena', base: { color: 0x6a6e78, metalness: .4, roughness: .5 },
+  steel: { color: 0xc9ced6, metalness: .5, roughness: .34 }, deck: { color: 0x34363d, metalness: .45, roughness: .5 } });
+
 export default {
   key: 'arena', label: 'Metal Arena',
   build(scene, { envMap }){
+    const FOOT_STYLE = footStyle();
     const group = new THREE.Group();
     const R = rng(666);
     const F = STAGE.FLOOR;
@@ -589,6 +595,8 @@ export default {
       group, ...STAGE, HW: HWA, BACK: BACKA, FRONT: FRONTA, CEIL: CEILA,
       fog: new THREE.FogExp2(FOG, .016), background,
       mood: { ambient: [0x2a1e1a, 1.25], hemi: [0x8ab0e8, 0x3a1a08, .75] },   // ice from above, amber bounce off the deck
+      // the footing (rooms/footing3d.js): black steel stage decks on silver touring truss
+      footing: FOOT_STYLE,
       update(dt, songTime, camera, energy = 0, cues = null){
         const t = songTime, S = solve(cues), start = cues && Number.isFinite(cues.start) ? cues.start : START;
         const P = cues?.P || 1, beat = cues?.beat || .5;
@@ -657,7 +665,7 @@ export default {
         }
       },
       xr(on){ blindK = on ? .45 : 1; },
-      dispose(){},
+      dispose(){ FOOT_STYLE.dispose(); },
     };
   },
 };

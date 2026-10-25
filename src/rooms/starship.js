@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { STAGE, rng, canvasTex, radialTex, beamMat, instanced, trs } from './common.js';
+import { tintStyle } from './footing3d.js';
 /* ============================================================
    STARSHIP DECK — the stage is the open deck of a ship cruising through
    deep space (animusic.md §4 R2). A plated hull deck with railings, a
@@ -298,9 +299,14 @@ function outline(){
   return pts;
 }
 
+/* how its footing looks (rooms/footing3d.js tintStyle) — one per built room: its own materials */
+const footStyle = () => tintStyle({ key: 'starship', base: { color: 0x9aa4b4, metalness: .45, roughness: .42 },
+  steel: { color: 0x8a96a8, metalness: .55, roughness: .36 }, deck: { color: 0x56616f, metalness: .5, roughness: .45 } });
+
 export default {
   key: 'starship', label: 'Starship',
   build(scene, { envMap }){
+    const FOOT_STYLE = footStyle();
     const group = new THREE.Group();
     const R = rng(1977);
 
@@ -468,6 +474,8 @@ export default {
       group, ...STAGE,
       fog: new THREE.FogExp2(FOG, .014), background: new THREE.Color(0x010208),
       mood: { ambient: [0x1c2a48, 1.35], hemi: [0x6f90e0, 0x141018, .6] },
+      // the footing (rooms/footing3d.js): hull plating, bulkhead steel
+      footing: FOOT_STYLE,
       update(dt, songTime, camera, energy = 0, cues = null){
         const t = songTime, tc = skyClock(t);
         // SKY: bank (roll about the forward axis + a coordinated nose-yaw) — the deck never moves
@@ -507,7 +515,7 @@ export default {
         glass.uniforms.uGain.value = 1 + .4 * energy;
       },
       xr(on){ bankK = on ? .5 : 1; },
-      dispose(){ sky.dispose(); tex.map.dispose(); tex.emi.dispose(); puff.dispose(); glowT.dispose(); },
+      dispose(){ sky.dispose(); tex.map.dispose(); tex.emi.dispose(); puff.dispose(); glowT.dispose(); FOOT_STYLE.dispose(); },
     };
   },
 };

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { STAGE, rng, canvasTex, radialTex, glowPoints, glowMat, instanced, trs } from './common.js';
+import { tintStyle } from './footing3d.js';
 /* ============================================================
    THE GRAVEYARD — a ruined churchyard at midnight, for October.
 
@@ -224,9 +225,14 @@ function treeGeo(R, h0 = 34){
   return mergeGeometries(parts);
 }
 
+/* how its footing looks (rooms/footing3d.js tintStyle) — one per built room: its own materials */
+const footStyle = () => tintStyle({ key: 'graveyard', base: { color: 0xd6dcd2, grain: true, roughness: .96, metalness: 0 },
+  steel: { color: 0x4a5056, metalness: .45, roughness: .6 }, deck: { color: 0x4d4034, metalness: .05, roughness: .85 } });
+
 export default {
   key: 'graveyard', label: 'Midnight Graveyard',
   build(scene, { envMap }){
+    const FOOT_STYLE = footStyle();
     const group = new THREE.Group();
     const R = rng(1031);
     const F = STAGE.FLOOR;
@@ -469,6 +475,8 @@ export default {
       group, ...STAGE, HW: FENCE_X, BACK: FENCE_Z, FRONT: 40,
       fog: new THREE.FogExp2(FOG, .017), background,
       mood: { ambient: [0x26324a, 1.6], hemi: [0x9db4e0, 0x141c16, .95] },   // cold moonlight
+      // the footing (rooms/footing3d.js): weathered granite, wrought iron, old planks
+      footing: FOOT_STYLE,
       update(dt, songTime, camera, energy = 0, cues = null){
         const t = songTime;
         const L = lightning(t, cues), Dn = dawnAt(t, cues);
@@ -501,7 +509,7 @@ export default {
           background.copy(fog.color);
         }
       },
-      dispose(){},
+      dispose(){ FOOT_STYLE.dispose(); },
     };
   },
 };

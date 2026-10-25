@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { STAGE, rng, canvasTex, radialTex, shaftTex, glowPoints, glowMat, instanced, trs } from './common.js';
+import { tintStyle } from './footing3d.js';
 /* ============================================================
    CATHEDRAL NAVE — clustered stone piers marching away into warm haze,
    a pointed-arch arcade, a clerestory of stained glass throwing slanted
@@ -162,9 +163,14 @@ function roseTex(){
   });
 }
 
+/* how its footing looks (rooms/footing3d.js tintStyle) — one per built room: its own materials */
+const footStyle = () => tintStyle({ key: 'cathedral', base: { color: 0xfff0d8, grain: true, roughness: .9, metalness: 0 },
+  steel: { color: 0x6a5c4e, metalness: .45, roughness: .5 }, deck: { color: 0x5a412b, metalness: .05, roughness: .75 } });
+
 export default {
   key: 'cathedral', label: 'Cathedral Nave',
   build(scene, { envMap }){
+    const FOOT_STYLE = footStyle();
     const group = new THREE.Group();
     const R = rng(42);
     const F = STAGE.FLOOR;
@@ -330,6 +336,8 @@ export default {
       group, ...STAGE, FRONT: Z0, BACK: zEnd, HW: NAVE_X, CEIL: CLER_TOP,
       fog: new THREE.FogExp2(FOG, .017), background: new THREE.Color(FOG),
       mood: { ambient: [0x2a1f16, 1.3], hemi: [0x9a7a58, 0x1a120c, .55] },
+      // the footing (rooms/footing3d.js): limestone daises, blackened-bronze scaffolds, oak decks
+      footing: FOOT_STYLE,
       update(dt, songTime, camera, energy = 0){
         flames.material.uniforms.uTime.value = songTime; halos.material.uniforms.uTime.value = songTime;
         motes.material.uniforms.uTime.value = songTime;
@@ -339,7 +347,7 @@ export default {
         shaftMat.opacity = SHAFT_A * (1 + .12 * Math.sin(songTime * .7)) * (1 + .4 * energy);
         flames.material.uniforms.uBoost.value = 1 + .25 * energy;
       },
-      dispose(){},
+      dispose(){ FOOT_STYLE.dispose(); },
     };
   },
 };

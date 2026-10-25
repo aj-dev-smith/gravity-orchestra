@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { planFooting, footingBoxes, FOOT } from '../src/rooms/footing.js';
-import { buildFooting, makeFootingMats, DEFAULT_STYLE } from '../src/rooms/footing3d.js';
+import { buildFooting, makeFootingMats, DEFAULT_STYLE, tintStyle } from '../src/rooms/footing3d.js';
 import { makePulse } from '../src/rooms/pulse.js';
 import { STAGE } from '../src/rooms/common.js';
 
@@ -109,6 +109,19 @@ describe('footing kit: the plan, drawn', () => {
     expect(Array.from(M.find(m => m.name === 'footing:edge').geometry.attributes.aPulse.array).includes(bass)).toBe(false);
     f.dispose(); base.dispose();
     expect(disposed).toBe(false);
+  });
+  it('a room TINT (tintStyle): the kit\'s forms in the room\'s materials — made once, shared by every build, the room\'s to dispose', () => {
+    const mats = makeFootingMats(), style = tintStyle({ key: 'x', base: { color: 0xfff0d8, grain: true }, steel: { color: 0x6a5c4e, metalness: .45 } });
+    const a = build(style, { mats }), b = build(style, { mats });
+    const mat = (f, slot) => meshes(f).find(m => m.name === 'footing:' + slot).material;
+    expect(mat(a, 'base')).toBe(mat(b, 'base'));                                       // (one set per room)
+    expect(mat(a, 'base').color.getHex()).toBe(0xfff0d8);
+    expect(mat(a, 'base').map).toBe(mats.base.map);                                   // (the grain: the kit's own)
+    expect(mat(a, 'steel').map).toBe(null);
+    expect(mat(a, 'deck')).toBe(mats.deck);                                            // (a slot it leaves: the kit's)
+    let gone = 0; mat(a, 'base').addEventListener('dispose', () => gone++);
+    a.dispose(); b.dispose(); expect(gone).toBe(0);                                    // (never the footing's to free)
+    style.dispose(); expect(gone).toBe(1);
   });
   it('every face looks out: its winding agrees with its normal (a flipped face would be culled away)', () => {
     const f = build();

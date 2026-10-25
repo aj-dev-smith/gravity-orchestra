@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { STAGE, disposeTree } from './common.js';
+import { planFooting, footingBoxes } from './footing.js';
+import { buildFooting, makeFootingMats, DEFAULT_STYLE } from './footing3d.js';
 import grid from './grid.js';
 import cathedral from './cathedral.js';
 import studio from './studio.js';
@@ -14,13 +16,19 @@ import starship from './starship.js';
            fog: FogExp2, background: Color|Texture,  // atmosphere
            mood?: { ambient:[hex,int], hemi:[sky,ground,int] },   // re-tint the global fills
            place?(anchors),                          // where the machines stand (world space), one per
-                                                     // machine: { key, kind: 'belt'|'kit'|'station', label,
-                                                     //   color, x, z, yaw, w, d (footprint), y (deck),
+                                                     // machine: { key, kind: 'belt'|'kit'|'station'|'hung',
+                                                     //   label, color, x, z, yaw, w, d (footprint), y (deck),
                                                      //   ground, lift (deck = ground + lift — footing.js),
                                                      //   bottom (the y it stands on), low (its lowest solid
                                                      //   part), box [x0,x1,y0,y1,z0,z1], cue [{t, w}] (its
                                                      //   strikes: sorted loop times, weights), P, start,
-                                                     //   fixed (the belt: its own posts, never moves) }
+                                                     //   fixed (the belt: its own posts, never moves),
+                                                     //   feet / hang (an open `stand`: footing.js) }
+                                                     // 'hung' (the organ loft, the chandelier, the court):
+                                                     //   no footing — its solid box is an obstacle (the
+                                                     //   organ loft's posts reach the floor)
+           footing?: Style,                          // how its supports look (rooms/footing3d.js) — else
+                                                     //   the kit's DEFAULT_STYLE
            update?(dt, songTime, camera, energy, cues),   // pure-ish ambience; no allocation.
                                                      // cues = the song's weather (see cue())
            resize?(w, h, pixelRatio),                // render-target rooms (the studio mirror)
@@ -32,7 +40,13 @@ import starship from './starship.js';
    swap never rebuilds the song's world or restarts the timeline.
    'arena' (the Metal Arena) also reads cues.drums / melody / loopBeats / start: its
    pyro + CO2 + blinder cue sheet is solved from them at song load (arena-cues.js).
-   'off' = no room: the original bare dark void + fog.
+   'off' = no room: the original bare dark void + fog (the machines still stand on DEFAULT_STYLE).
+   FOOTING (rooms/footing.js plans it, rooms/footing3d.js builds it): what every machine stands on —
+   one PLAN per set of anchors, one built footing per room (its style), the live room's shown; a swap
+   re-dresses the supports (cached for the anchors it was built on), a new place() rebuilds the live
+   room's and drops the others. Its group lives at scene level (room 'off' has one too) — `footGroup`
+   for the shot solve, `footing` (the plan), `footBoxes` (its envelopes); its reactive edge is updated
+   from update(). Rooms still own no lights: the footing is lit like any machine.
    Choosing: ?room=<key>  >  a pick made THIS session (R / ROOM)  >  the song's own
    `room` field (features-as-data; suggest())  >  the viewer's remembered pick
    (localStorage — it still opens the page and dresses songs that name no room)  >
@@ -63,6 +77,31 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
 
   const built = {};                                           // key → built room (cached)
   let cur = null, key = 'off', anchors = [], anchorGen = 0;
+  // the FOOTING: one plan per anchorGen; per room key (incl. 'off') the footing built on it
+  const footRoot = new THREE.Group(); footRoot.name = 'footing'; footRoot.matrixAutoUpdate = false;
+  scene.add(footRoot);
+  const foots = {};                                           // key → { gen, f }
+  let plan = null, boxes = [], planGen = -1, footMats = null;
+  const FOOT_ROOM = { x0: -STAGE.HW, x1: STAGE.HW, z0: STAGE.BACK, z1: STAGE.FRONT };   // (the smallest room's walls: one plan for every room)
+  function footPlan(){
+    if (planGen !== anchorGen){ plan = planFooting(anchors, { floor: STAGE.FLOOR, room: FOOT_ROOM }); boxes = footingBoxes(plan); planGen = anchorGen; }
+    return plan;
+  }
+  /* the live room's footing, built if it isn't (lazily: a set() during a song build sees stale anchors) */
+  function foot(){
+    let e = foots[key];
+    if (!e || e.gen !== anchorGen){
+      e?.f.dispose();
+      const p = footPlan();
+      footMats ||= makeFootingMats({ envMap });
+      const f = buildFooting(p, cur?.footing || DEFAULT_STYLE, { mats: footMats, envMap, renderer, boxes, room: key });
+      footRoot.add(f.group);
+      e = foots[key] = { gen: anchorGen, f };
+      showFoot();
+    }
+    return e.f;
+  }
+  const showFoot = () => { for (const k in foots) foots[k].f.group.visible = k === key && foots[k].gen === anchorGen; };
 
   // a small fading label when the room changes (R) — self-contained, no CSS file
   const tag = document.createElement('div');
@@ -107,16 +146,19 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
       fog.color.copy(cur.fog.color); fog.density = cur.fog.density;
       scene.background = cur.background; applyMood(cur.mood);
     }
+    showFoot();
     if (announce) flashTag(cur ? cur.label : 'no room');
     btnText();
     return key;
   }
 
-  /* where things stand this song: [{x, z, w, d, yaw, y}] in world space (y = deck top).
-     Only rooms that grow anchor geometry (the Void's plinths) care. */
+  /* where things stand this song (the anchors, world space — see the header): the live room's
+     footing is rebuilt on them now (a stale one for another room is dropped: rebuilt on its swap) */
   function place(list){
     anchors = list; anchorGen++;
     if (cur && cur.place){ cur.place(anchors); cur.anchorGen = anchorGen; }
+    for (const k in foots) if (k !== key){ foots[k].f.dispose(); delete foots[k]; }
+    foot();
   }
 
   // per-viewer memory (a convenience only — storage can throw / be empty; the page works without it)
@@ -193,6 +235,9 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
     frame: STAGE,                                             // FLOOR etc. — identical across rooms
     get key(){ return key; },
     get group(){ return cur ? cur.group : null; },             // the live room's group (stage edit lifts its ceiling for the plan view; the director's shot solve sees its piers / graves)
+    get footGroup(){ return foot().group; },                   // the live footing (the shot solve sees its towers: userData.boxes)
+    get footing(){ return footPlan(); },                       // the plan (rooms/footing.js)
+    get footBoxes(){ footPlan(); return boxes; },              // its envelopes (footingBoxes)
     set, place, prewarm,
     cycle(){ const k = set(ROOM_KEYS[(ROOM_KEYS.indexOf(key) + 1) % ROOM_KEYS.length], { announce: true }); save(k); return k; },
     /* a song's preferred room (song data `room` field). ?room and a pick made this session
@@ -209,10 +254,15 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
        studio drops its per-eye mirror pass, the arena tames its blinders, the starship banks
        its sky less. Applied to the live room now and to any room set while presenting. */
     xr(on){ xrOn = !!on; if (cur && cur.xrOn !== xrOn){ cur.xr?.(xrOn); cur.xrOn = xrOn; } },
-    update(dt, songTime, camera, energy){ if (cur && cur.update) cur.update(dt, songTime, camera, energy, weather); },
+    update(dt, songTime, camera, energy){
+      foot().update(songTime);                                 // the reactive edge (uniforms only)
+      if (cur && cur.update) cur.update(dt, songTime, camera, energy, weather);
+    },
     resize(w, h, pr){ for (const b of Object.values(built)) b.resize?.(w, h, pr); },
     dispose(){
       for (const b of Object.values(built)){ scene.remove(b.group); disposeTree(b.group); b.dispose?.(); }
+      for (const k in foots) foots[k].f.dispose();
+      scene.remove(footRoot); footMats?.dispose();
       tag.remove(); btn.remove(); warmRT?.dispose();
     },
   };

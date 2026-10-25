@@ -6,6 +6,7 @@ import { SONGS } from '../src/songs/index.js';
 import { DESCENT, ROLL_T } from '../src/engine.js';
 const STAGE_Y = DESCENT * ROLL_T;                                 // (main.js: the static strike band)
 import { STAGE } from '../src/rooms/common.js';
+import { planFooting, footingBoxes, accessRect, FOOT } from '../src/rooms/footing.js';
 
 /* THE STAGING AUDIT, locked in. Every song's room (all songs + the two MIDI fixtures), as
    MEASURED from the built geometry (test/fixtures/staging-rooms.json — regenerate with
@@ -17,9 +18,15 @@ import { STAGE } from '../src/rooms/common.js';
        studio gear, graves / trees / gate piers; the Void's islands grow under each song's machines,
        so it isn't tabled) every director station shot is CLEAR — ≤ 20 % of its 15 probe rays hit
        another machine or the room first — its eye inside the room (with sway room) and in clear air;
-     • the belt's follow offset, RE-SOLVED here, is clean for marbles anywhere along the wall.
+     • the belt's follow offset, RE-SOLVED here, is clean for marbles anywhere along the wall;
+     • what the machines stand on (rooms/footing.js — re-planned here wherever the solve puts them)
+       never runs into another machine.
    The test's occluders are the machines' 3D BOUNDING BOXES — conservative (a bandshell's box is
-   solid where the real arch is air), so a shot that clears here clears the real meshes too. */
+   solid where the real arch is air), so a shot that clears here clears the real meshes too — and
+   their FOOTING's envelopes: every support from the floor up to its deck and rails, every loft,
+   stair and ladder, solid (the machines no longer bring their own legs: a gallery machine's box
+   floats; the tower under it is just as much in the way as the old legs were — and the real
+   browser solve sees it too). */
 const FIXFILE = JSON.parse(fs.readFileSync(new URL('./fixtures/staging-rooms.json', import.meta.url)));
 const FIX = FIXFILE.songs, ROOMSOLIDS = FIXFILE.rooms;
 const ROOM = { x0: -STAGE.HW + 2.5, x1: STAGE.HW - 2.5, z0: STAGE.BACK + 2.5, z1: 31 };
@@ -32,12 +39,45 @@ const galleryOpts = R => ({ cx: R.cx, bandY: R.bandY, eyeY: 20, wallTop: R.wall[
 /* a station's world box as solved (one the solve raised onto the rear GALLERY stands its whole height higher) */
 const boxSolved = (solved, it) => { const p = solved[it.key], up = p.y === undefined ? 0 : p.y - (it.deck ?? 0);
   return [p.x + it.box[0], p.x + it.box[1], it.y0 + up, it.top + up, p.z + it.box[2], p.z + it.box[3]]; };
+/* the FOOTING at the solved spots: each item's footprint + heights as main anchored it (the fixture's
+   `foot`, relative to its spot and deck), the belt from its wall, the hung stations as obstacles —
+   planned as the room host plans it (rooms/index.js) */
+const FOOT_ROOM = { x0: -STAGE.HW, x1: STAGE.HW, z0: STAGE.BACK, z1: STAGE.FRONT };
+function footingAt(R, solved, boxOf){
+  const w = R.wall, anchors = w ? [{ key: 'belt', kind: 'belt', x: (w[0] + w[1]) / 2, z: (w[4] + w[5]) / 2, yaw: 0, w: w[1] - w[0], d: w[5] - w[4],
+    y: STAGE.FLOOR, bottom: STAGE.FLOOR, low: w[2], box: w, cue: [], fixed: true }] : [];   // (no wall: a song with no floor machine — nothing solved)
+  for (const it of R.items){
+    const f = it.foot, p = solved[it.key];
+    if (!f || !p) continue;
+    const deck = p.y ?? f.deck;
+    anchors.push({ key: it.key, kind: it.key === 'drums' ? 'kit' : 'station', x: p.x + f.dx, z: p.z + f.dz, yaw: f.yaw, w: f.w, d: f.d,
+      y: deck, bottom: deck + f.bot, low: deck + f.low, box: boxOf(it), feet: f.feet, hang: f.hang, cue: [], fixed: false });
+  }
+  for (const h of R.fixed || []) anchors.push({ key: h.key, kind: 'hung', x: (h.box[0] + h.box[1]) / 2, z: (h.box[4] + h.box[5]) / 2, yaw: 0,
+    w: h.box[1] - h.box[0], d: h.box[5] - h.box[4], box: h.box, cue: [], fixed: true });
+  const plan = planFooting(anchors, { floor: STAGE.FLOOR, room: FOOT_ROOM });
+  return { anchors, plan, env: footingBoxes(plan) };
+}
+/* do two turned rects ({x, z, hw, hd, yaw}) overlap by more than eps? (separating axes) */
+function rectsMeet(A, B, eps = .05){
+  const pts = R => { const c = Math.cos(R.yaw || 0), s = Math.sin(R.yaw || 0);
+    return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => [R.x + c * u * R.hw + s * v * R.hd, R.z - s * u * R.hw + c * v * R.hd]); };
+  const pa = pts(A), pb = pts(B);
+  for (const P of [pa, pb]) for (let i = 0; i < 2; i++){
+    const ax = P[i + 1][0] - P[i][0], az = P[i + 1][1] - P[i][1], L = Math.hypot(ax, az);
+    const pr = Q => Q.map(q => (q[0] * ax + q[1] * az) / L);
+    const a = pr(pa), b = pr(pb);
+    if (Math.min(Math.max(...a), Math.max(...b)) - Math.max(Math.min(...a), Math.min(...b)) <= eps) return false;
+  }
+  return true;
+}
 describe('staging audit: every song lays out clean and every station shot sees its station', () => {
   it('the fixture covers every song + the MIDI imports, and every room but the Void', () => {
     const have = new Set(FIX.map(R => R.song));
     for (const k of Object.keys(SONGS)) expect(have.has(k), `${k} missing from the fixture — regenerate it`).toBe(true);
     for (const m of ['room-tour.mid', 'canon-in-d.mid']) expect(have.has(m), m).toBe(true);
     expect(Object.keys(ROOMSOLIDS).sort()).toEqual(['arena', 'cathedral', 'graveyard', 'grid', 'starship', 'studio']);
+    for (const R of FIX) for (const it of R.items) expect(it.foot, `${R.song} ${it.key}: no footing anchor — regenerate the fixture`).toBeTruthy();
   });
   for (const R of FIX){
     const wall = R.wall;                                        // [x0,x1,y0,y1,z0,z1]
@@ -47,6 +87,7 @@ describe('staging audit: every song lays out clean and every station shot sees i
     const boxes = Object.fromEntries(R.items.map(it => [it.key, box3(it)]));
     for (const f of R.fixed || []) boxes[f.key] = f.box;
     boxes.belt = wall;
+    const FT = footingAt(R, solved, box3), footEnv = FT.env.map(e => e.box).filter(b => b[3] >= STAGE.FLOOR + 1);   // (a plinth lies flush: shotrig roomSolids)
 
     it(`${R.song}: no footprint overlaps (stations, drums, belt bays), all inside the room`, () => {
       const keys = R.items.map(it => it.key);
@@ -59,6 +100,26 @@ describe('staging audit: every song lays out clean and every station shot sees i
       }
     });
 
+    it(`${R.song}: what each machine stands on never runs into another machine`, () => {
+      // every support (a pad's column, a loft, a stair / ladder: its turned rect, floor → deck + rails)
+      // against every OTHER machine's solid footprint (the anchor's turned rect) over its solid height
+      const F = STAGE.FLOOR, P = FT.plan, units = [];
+      for (const p of P.pads){
+        if (!p.loft) units.push({ what: `pad ${p.key}`, own: [p.key], r: p, y: [F, p.fixed ? F + FOOT.KERB : p.top] });
+        if (p.access) units.push({ what: `${p.access.kind} ${p.key}`, own: [p.key], r: accessRect(p, p.access), y: [F, p.top + FOOT.RAIL] });
+      }
+      for (const L of P.lofts){
+        units.push({ what: L.id, own: L.keys, r: L, y: [F, L.top] });
+        if (L.access) units.push({ what: `${L.access.kind} ${L.id}`, own: L.keys, r: accessRect(L, L.access), y: [F, L.top + FOOT.RAIL] });
+      }
+      for (const u of units) for (const a of FT.anchors){
+        if (u.own.includes(a.key)) continue;
+        const ay = a.box ? [a.box[2], a.box[3]] : [F, STAGE.CEIL];
+        if (Math.min(u.y[1], ay[1]) - Math.max(u.y[0], ay[0]) <= .05) continue;
+        expect(rectsMeet(u.r, { x: a.x, z: a.z, hw: a.w / 2, hd: a.d / 2, yaw: a.yaw || 0 }), `${u.what} × ${a.key}`).toBe(false);
+      }
+    });
+
     if (R.shots.length) for (const [roomKey, solids] of Object.entries(ROOMSOLIDS))
       it(`${R.song} in the ${roomKey}: every station shot is clear (≤ 20 % blocked), in the room, in clear air`, () => {
         for (const sh of R.shots){
@@ -66,7 +127,7 @@ describe('staging audit: every song lays out clean and every station shot sees i
           const at = sh.owner in solved ? solved[sh.owner] : { x: 0, z: 0 };
           const shift = v => [v[0] + at.x, v[1], v[2] + at.z];
           const aim = shift(sh.aim), pref = shift(sh.pref);
-          const others = Object.entries(boxes).filter(([k]) => k !== sh.owner).map(([, b]) => b).concat(solids);
+          const others = Object.entries(boxes).filter(([k]) => k !== sh.owner).map(([, b]) => b).concat(solids, footEnv);
           const blocked = (e, d, far) => {
             const tSelf = rayBox(e, d, self);
             let tO = Infinity; for (const b of others) tO = Math.min(tO, rayBox(e, d, b));
@@ -92,7 +153,8 @@ describe('staging audit: every song lays out clean and every station shot sees i
     expect(R.follow.rays[1], 'browser portrait follow: blocked probe rays').toBeLessThanOrEqual(MAX_BLOCKED);
     const solved = R.items.length ? layoutStations(R.items, [R.wall[0], R.wall[1], R.wall[4], R.wall[5]], ROOM, galleryOpts(R)) : {};
     const boxes = R.items.map(it => boxSolved(solved, it))
-      .concat((R.fixed || []).map(f => f.box));
+      .concat((R.fixed || []).map(f => f.box))
+      .concat(footingAt(R, solved, it => boxSolved(solved, it)).env.map(e => e.box).filter(b => b[3] >= STAGE.FLOOR + 1));   // (the supports: as the browser's follow solve sees them)
     for (const cls of ['land', 'portrait']){
       const opts = { wall: R.wall, boxes, stageY: STAGE_Y, backs: FOLLOW_BACKS[cls], room: EYE_ROOM, portrait: cls === 'portrait' };
       const r = solveFollow(opts), mine = followScore(opts, r.off), browser = followScore(opts, R.follow[cls]);

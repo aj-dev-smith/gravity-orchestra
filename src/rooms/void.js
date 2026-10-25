@@ -207,7 +207,7 @@ export default {
       return g;
     }
     function place(anchors){
-      const list = anchors.slice(0, MAX_PLINTHS);
+      const list = anchors.filter(a => a.kind !== 'hung').slice(0, MAX_PLINTHS);   // (a hung machine floats: no island)
       const par = list.map((_, i) => i), find = i => par[i] === i ? i : (par[i] = find(par[i]));
       for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) if (touch(list[i], list[j])) par[find(i)] = find(j);
       const groups = {};

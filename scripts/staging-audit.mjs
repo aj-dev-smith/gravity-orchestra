@@ -5,9 +5,10 @@
        [--shots <dir>] [--json out.json] [--detail 1] [--live 1] [--norun 1]
        [--fixture test/fixtures/staging-rooms.json]   (the measured rooms test/staging-audit.test.js replays) [--size 1200x800]
    Per song: footprint overlaps (station ↔ station ↔ drums ↔ belt bays, + the room's own
-   standing geometry: graves, piers, gate piers), every director shot's occlusion (5×3 rays
-   from the eye through the frame's middle; a hit on anything but the subject — another
-   machine OR the room — counts as blocked), how much of the subject the shot frames, then the
+   standing geometry: graves, piers, gate piers; + every OTHER machine's footing — its pad column,
+   loft, stair / ladder: `k×foot:<unit>`), every director shot's occlusion (5×3 rays from the eye
+   through the frame's middle; a hit on anything but the subject — another machine, the room OR
+   what the machines stand on ('foot') — counts as blocked), how much of the subject the shot frames, then the
    director run over a full loop at --rate: its cut list, frames whose belt shot loses the
    lead marble, frames whose camera eye sits inside a machine, glides through geometry.
    --shots writes stage + every station shot per song (first room only). Needs ?debug. */
@@ -34,11 +35,12 @@ function probeStatic(){
   const ROOMB = D.stage || { HW: 38, FLOOR: -22, CEIL: 36, BACK: -34, FRONT: 42 };   // the floor contract (rooms/common.js STAGE)
   const owner = o => { while (o.parent && o.parent !== world) o = o.parent; return o; };
   const roomGroups = D.scene.children.filter(c => c !== world && c.isGroup && c.visible && !c.getObjectsByProperty('isLight', true).length);   // (rooms own no lights; marble rigs carry a lamp)
+  const isFoot = o => { for (let p = o; p; p = p.parent) if (p.userData?.footing) return true; return false; };   // (the per-song footing: not the room's own)
   // the room's STANDING geometry (opaque meshes that rise off the floor and aren't sky/walls far away)
   const solid = [];
   const _b = new T.Box3(), _m = new T.Matrix4();
   for (const g of roomGroups) g.traverse(o => {
-    if (!(o.isMesh || o.isInstancedMesh) || !o.visible) return;
+    if (!(o.isMesh || o.isInstancedMesh) || !o.visible || isFoot(o)) return;
     const m = [].concat(o.material)[0];
     if (!m || m.transparent || m.blending === T.AdditiveBlending || m.side === T.BackSide || m.isShaderMaterial) return;
     if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
@@ -78,6 +80,15 @@ function probeStatic(){
   for (const k of keys){ const a = boxes[k];
     for (const s of solid) if (Math.min(a[1][0], s.b[1]) - Math.max(a[0][0], s.b[0]) > .05 && Math.min(a[1][2], s.b[5]) - Math.max(a[0][2], s.b[4]) > .05
       && Math.min(a[1][1], s.b[3]) - Math.max(a[0][1], s.b[2]) > .05) overlaps.push(`${k}×room:${s.name}`); }
+  // what the OTHER machines stand on (rooms/footing.js envelopes) never runs into a machine
+  const own = k => k.startsWith('belt:') ? 'belt' : k;
+  for (const k of keys){ const a = boxes[k];
+    if (k === 'ricochet') continue;                                // (hung over the belt by design)
+    for (const e of D.footBoxes()) if (!e.keys.includes(own(k)) && !(own(k) === 'belt' && e.unit === 'belt')){
+      const b = e.box;
+      if (Math.min(a[1][0], b[1]) - Math.max(a[0][0], b[0]) > .05 && Math.min(a[1][2], b[5]) - Math.max(a[0][2], b[4]) > .05
+        && Math.min(a[1][1], b[3]) - Math.max(a[0][1], b[2]) > .05) overlaps.push(`${k}×foot:${e.kind}:${e.unit}`);
+    } }
   // per-shot occlusion: 5×3 rays, eye → frame middle; hit order over world + the room's solids
   const shotSelf = k => k === 'strings' ? 'bass' : k;
   const name = g => { const b = D.boxes; return g; };
@@ -115,7 +126,7 @@ function probeStatic(){
       const h = rc.intersectObjects([world, ...roomMeshes], true).find(i => (i.object.isMesh || i.object.isInstancedMesh) && drawn(i.object)
         && !(i.object.material?.blending === T.AdditiveBlending) && !i.object.material?.transparent);
       if (!h) continue;
-      let n = 'room';
+      let n = isFoot(h.object) ? 'foot' : 'room';
       for (let p = h.object; p; p = p.parent) if (p.parent === world){ n = ownerKey.get(p) || p.type; break; }
       if (n === self || (self === 'stage')) selfHits++;
       else { blocked++; by[n] = (by[n] || 0) + 1; }
@@ -318,9 +329,14 @@ for (const [ri, room] of ROOMS.entries()){
     if (A.fixture && ri === 0) fixture.push(await pg.evaluate(name => {
       const D = window.__dev, L = D.layout, r = v => +v.toFixed(2), r3 = a => a.map(r);
       if (!L) return { song: name, wall: null, items: [], fixed: [], shots: [] };
-      const w = L.wall, at = k => L.solved[k];
+      const w = L.wall, at = k => L.solved[k], A = Object.fromEntries(D.anchors().map(a => [a.key, a]));
+      // what it stands on (rooms/footing.js anchors), relative to its solved spot + deck: the test
+      // re-plans the footing wherever the solve puts it
+      const foot = it => { const a = A[it.key], p = at(it.key); if (!a || !p) return null;
+        return { dx: r(a.x - p.x), dz: r(a.z - p.z), w: r(a.w), d: r(a.d), yaw: +(a.yaw || 0).toFixed(4), deck: r(a.y), bot: r(a.bottom - a.y), low: r(a.low - a.y),
+          ...(a.feet ? { feet: a.feet.map(r3), hang: a.hang && r3(a.hang) } : {}) }; };
       return { song: name, cx: r(L.cx), bandY: r(L.bandY), wall: r3([w.min.x, w.max.x, w.min.y, w.max.y, w.min.z, w.max.z]),
-        items: L.items.map(it => ({ key: it.key, x: r(it.x), z: r(it.z), box: r3(it.box), top: r(it.top), y0: r(it.y0), deck: r(it.deck ?? 0) })),
+        items: L.items.map(it => ({ key: it.key, x: r(it.x), z: r(it.z), box: r3(it.box), top: r(it.top), y0: r(it.y0), deck: r(it.deck ?? 0), foot: foot(it) })),
         hung: (L.hung || []).map(r3),
         fixed: D.hung().map(h => ({ key: h.key, box: r3(h.box) })),
         // the belt's follow offsets as SOLVED against the real meshes (+ their worst blocked probe rays)

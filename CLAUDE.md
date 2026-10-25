@@ -107,6 +107,10 @@ on. Treat it as live, and confirm with the human before running it.
                      void, graveyard + arena (Metal Arena — arena-cues.js solves pyro/CO2/
                      blinders from the drum lanes at load, pure, test/arena.test.js) + starship
                      (sky banks per phrase, deck never moves — test/room-starship.test.js).
+                     FOOTING — what every machine stands on (§7 Rooms): footing.js (pure planner:
+                     pads by height band, lofts, stairs / ladders, envelopes — test/footing.test.js),
+                     footing3d.js (the render kit + DEFAULT_STYLE — test/footing3d.test.js),
+                     pulse.js (pure: a strike cue → a light envelope of songTime — test/pulse.test.js).
     src/midi/        MIDI import: parse.js (type-0/1 → tracks, FAITHFUL — keeps every
                      channel incl. 9, with velocity) + convert.js (→ song JSON, quantized,
                      lock-rule-correct; channel 9 → drum lanes via drumByGm — see §6)
@@ -127,7 +131,7 @@ on. Treat it as live, and confirm with the human before running it.
     src/main.js      scene, rigs, buildWorld, ballPos, animate(), controls — the orchestrator
     test/            Vitest: engine ballistics, song lock-rule, drum validation, MIDI, the
                      juggler's plan audit + bake, share round-trip, every plugin's honesty suite,
-                     staging audit, director, XR (52 files / 2521 tests, 2026-10-24; ~1.5 min)
+                     staging audit + footing, director, XR (55 files / 2595 tests, 2026-10-25; ~1.5 min)
     docs/OVERNIGHT-2026-10-07.md   the night's changelog: what each new machine / room / song
                      is and the URL to try it
     VISION.md        the product north star (vision, not spec)
@@ -735,6 +739,22 @@ parallel song branches, so merge the key lists and regenerate the fixture ONCE o
   only the SKY (≈ 5.7° per 4-bar phrase, alternating, level through the breath; `loopBeat()` counts
   from each loop's downbeat — the 1.2 s seam tail isn't whole beats); star streaks move `z0 + v·t mod
   L` with every speed n·L/T_WRAP and songTime mod T_WRAP on the CPU (no float drift, no snap).
+- **FOOTING** (2026-10-25 — the machines no longer bring legs; the room holds them up). The host
+  (rooms/index.js) plans it once per set of anchors (`planFooting`: a pad per standing machine by
+  HEIGHT BAND — flush plinth ≤ .8 · low dais + stair ≤ 3.5 · mid braced platform, rails, stair or
+  ladder ≤ 10 · high truss tower, caged ladder, rest landings — raised neighbours at one height
+  (|Δtop| ≤ .6, ≤ 3 u apart) share ONE LOFT (the rear gallery is a loft now); an open `stand` gets a
+  post under each FOOT, beams kept out of what HANGS; hung stations are anchors of kind 'hung':
+  obstacles only) and builds it per room (`buildFooting(plan, room.footing || DEFAULT_STYLE)`:
+  merged per material — base / steel / deck + ONE edge draw for every machine — a few ms, rebuilt on
+  a lift; swapped with the room). A room styles it by returning `footing: { mats?, flush?, low?,
+  mid?, high?, loft?, edge? }` from build() (footing3d.js header) and must stay inside
+  `footingBoxes(plan)` — the envelopes the shot solve treats as solid (shotrig roomSolids reads a
+  merged mesh's `userData.boxes`), the director's glide test and the wide's band test raycast,
+  XR keeps its pads out of, and test/staging-audit.test.js re-plans at the solved spots (the
+  fixture's `foot`). THE EDGE: a strip of the machine's colour round its pad answers its own strikes
+  (pulse.js over the anchor's cue: afterglow exp(−dt/.45), max not sum, + anticipation; one uniform
+  slot per pad, silent in the count-in) — an accent, never a strobe.
 
 - **Transport** (`#transport` under the song picker; `src/transport.js` pure; main `setPlaying` /
   `restart`). **■ STOP / ▶ START**: `playing = false` freezes the frame (time is the only state —
@@ -773,7 +793,8 @@ state, so scrubbing is just assigning `songTime`; `skipStrikes` suppresses machi
 their songTimes `at`, + any fired id with no baked voice — the sound sweep), `director()` (cuts, shares, rides, rideEvery,
 signature), `ride(t)`, `occlusion()`, `audioProbe()` (+ `outPeak`: the final mix — STOP must read 0),
 `transport()` / `stop()` / `start()` / `restart()`, `xrPerf()`, `lift(key, u)` / `anchors()` / `stage` (staging:
-a floor machine's / the kit's lift, what the room is told stands where, the floor contract; `?lift=marimba:4,drums:2`).
+a floor machine's / the kit's lift, what the room is told stands where, the floor contract; `?lift=marimba:4,drums:2`),
+`footing()` / `footBoxes()` / `footStats()` (the footing plan, its envelopes, its draws / tris / build ms).
 
 - **Perf (render-time only — all A/B-able by URL flag).** `mergestatic.js` bakes still parts per
   material AND parts rigid on a moving carriage (piston head, valve slide: merged into the carriage's

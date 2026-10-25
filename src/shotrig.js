@@ -45,7 +45,10 @@ export function solidBox(root, drawn){
 
 /* the room's STANDING geometry: opaque meshes that rise off the floor and aren't the hall's own
    shell (floors, walls, vaults: anything wider than 40 u) — one box per instance. `floor`: the
-   room floor's world y (the floor contract: STAGE.FLOOR) — a part within 1 u of it lies flush */
+   room floor's world y (the floor contract: STAGE.FLOOR) — a part within 1 u of it lies flush.
+   A merged mesh that knows its parts' envelopes (userData.boxes: the FOOTING, rooms/footing3d.js —
+   every machine's support in one mesh per material) counts as one box per envelope, never its
+   room-wide bounds */
 export function roomSolids(group, floor = STAGE.FLOOR){
   const out = [];
   if (!group || !group.visible) return out;
@@ -55,6 +58,10 @@ export function roomSolids(group, floor = STAGE.FLOOR){
     for (let p = o; p && p !== group.parent; p = p.parent) if (!p.visible) return;
     const m = [].concat(o.material)[0];
     if (!m || m.transparent || glowy(m) || m.side === THREE.BackSide || m.isShaderMaterial) return;
+    if (Array.isArray(o.userData.boxes)){
+      for (const b of o.userData.boxes) if (b[3] >= floor + 1) out.push({ c: o, box: b, room: true });
+      return;
+    }
     if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
     const n = o.isInstancedMesh ? o.count : 1;
     for (let i = 0; i < n; i++){
@@ -85,8 +92,8 @@ export function makeFollow(){
   };
 }
 
-/* ctx: { world, roomGroup, belts:Set, wall:[6]|null, stageY, room:{x0..z1} (eye bounds), camera,
-          drawn, follow (makeFollow()), solveFollowNow:bool } */
+/* ctx: { world, roomGroup, footGroup (what the machines stand on), belts:Set, wall:[6]|null, stageY,
+          room:{x0..z1} (eye bounds), camera, drawn, follow (makeFollow()), solveFollowNow:bool } */
 export function scene(ctx){
   const { world, drawn, camera } = ctx;
   const kids = [];
@@ -106,7 +113,7 @@ export function scene(ctx){
       else { if (!o.geometry.boundingBox) o.geometry.computeBoundingBox(); _b.copy(o.geometry.boundingBox); }
       out.push({ c: o, box: arr(_b.applyMatrix4(o.matrixWorld)), leaf: true }); });
     return out; };
-  const solids = roomSolids(ctx.roomGroup);
+  const solids = roomSolids(ctx.roomGroup).concat(roomSolids(ctx.footGroup));
   const top = o => { while (o.parent && o.parent !== world) o = o.parent; return o; };
   // the first real hit along a ray among the entries whose box it crosses (AABB prefilter)
   const firstHit = (list, e, d, far, skip = null) => {

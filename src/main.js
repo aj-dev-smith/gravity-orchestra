@@ -130,7 +130,8 @@ function pathBlocked(a, b){
   const d = _pbDir.subVectors(b, a), L = d.length();
   if (L < .5) return false;
   _pbRay.set(a, d.divideScalar(L)); _pbRay.far = L; _pbRay.camera = cam.camera;   // (sprites need a camera)
-  return _pbRay.intersectObject(world, true).some(h => (h.object.isMesh || h.object.isInstancedMesh) && drawn(h.object));
+  return _pbRay.intersectObject(world, true).some(h => (h.object.isMesh || h.object.isInstancedMesh) && drawn(h.object))
+      || _pbRay.intersectObject(rooms.footGroup, true).some(h => drawn(h.object) && !glowy(h.object.material));   // (a tower the machines stand on)
 }
 /* is o actually drawn — itself AND every ancestor visible (a hidden parent hides its children) */
 function drawn(o){ for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; }
@@ -398,6 +399,40 @@ function solidLocal(root, pose, rest, P){
   lowMs += performance.now() - t0;
   return out;
 }
+/* An OPEN stand (a descriptor's `stand` hint — the turntable rests on its feet, its resonator rank
+   hanging below): in the station's own frame at the count-in pose, every solid part resting ON the
+   stand plane — its FEET [u, v, r], about the footprint's centre — and the u/v extent of everything that
+   hangs below the plane (HANG [u0, u1, v0, v1]). The room's open footing posts each foot and keeps its
+   beams out of the hang (rooms/footing3d.js). L: its solidLocal box (the footprint). */
+const _sb = new THREE.Box3();
+function standParts(root, stand, L){
+  const cx = (L.min.x + L.max.x) / 2, cz = (L.min.z + L.max.z) / 2, feet = [], hang = new THREE.Box3();
+  root.updateMatrixWorld(true);
+  _li.copy(root.matrixWorld).invert();
+  const part = (g, m) => {
+    _sb.makeEmpty(); partBox(g, m, _sb);
+    const hx = (_sb.max.x - _sb.min.x) / 2, hz = (_sb.max.z - _sb.min.z) / 2;
+    if (Math.abs(_sb.min.y - stand) < .06 && _sb.max.y > stand + .05){
+      // (a FOOT is a compact part on the plane — not a rail or a rod that happens to end there)
+      if (Math.min(hx, hz) >= .15 && Math.max(hx, hz) <= 1.5) feet.push([(_sb.min.x + _sb.max.x) / 2 - cx, (_sb.min.z + _sb.max.z) / 2 - cz, Math.max(hx, hz)]);
+    }
+    else if (_sb.min.y < stand - .05) hang.union(_sb);
+  };
+  root.traverse(o => {
+    if (!(o.isMesh || o.isInstancedMesh) || !o.geometry?.attributes.position) return;
+    for (let p = o; p && p !== root; p = p.parent) if (!p.visible) return;
+    const m = [].concat(o.material)[0];
+    if (!m || glowy(m) || m.isMeshBasicMaterial) return;
+    const g = o.geometry;
+    if (!g.boundingBox) g.computeBoundingBox();
+    if (!g.boundingSphere) g.computeBoundingSphere();
+    if (g.boundingBox.isEmpty()) return;
+    _lm.multiplyMatrices(_li, o.matrixWorld);
+    if (!o.isInstancedMesh) part(g, _lm);
+    else for (let i = 0; i < o.count; i++){ o.getMatrixAt(i, _im); part(g, _im.premultiply(_lm)); }
+  });
+  return { feet, hang: hang.isEmpty() ? null : [hang.min.x - cx, hang.max.x - cx, hang.min.z - cz, hang.max.z - cz] };
+}
 /* a local box (solidLocal) where `o` now stands: its world AABB [x0, x1, y0, y1, z0, z1] */
 const _wb = new THREE.Box3();
 function worldBox(L, o){
@@ -641,11 +676,12 @@ function buildWorld(keyName){
     // its HEIGHT (rooms/footing.js): ground = where it sits on the floor's plinth (its lowest solid
     // part over the loop — solidLocal); deck = ground + lift. A lift — the user's (a layout entry), or
     // the room solve raising it onto the rear GALLERY (stations.js) — is a rigid move: no legs to regrow
-    rig.lift = 0; rig.ground = y; rig.low = 0; rig.loc = null;
+    rig.lift = 0; rig.ground = y; rig.low = 0; rig.loc = null; rig.stand = null;
     rig.setLift = u => { rig.lift = u; y = rig.ground + u; station.position.y = y; station.updateMatrixWorld(true); rig.slot.y = y; };
     if (!hung){
       const L = solidLocal(station, t => rig.inst.update(t, P0, 0, RUN0), () => rig.inst.update(-LEAD_IN, P0, 0, POSE0), P0);
       if (!L.isEmpty()){ rig.loc = L; rig.low = L.min.y; }
+      if (rig.loc && Number.isFinite(rig.I.stand) && rig.low < rig.I.stand - .05) rig.stand = standParts(station, rig.I.stand, rig.loc);
       rig.ground = groundOf(rig.low, ROOM.FLOOR);
       const set = Number.isFinite(st.lift) ? st.lift : devLift[rig.I.key];   // (a user's height: the gallery solve leaves it alone)
       if (set !== undefined) rig.slot.lift = clampLift(set);
@@ -684,6 +720,7 @@ function buildWorld(keyName){
   const hungBoxes = instLive.filter(r => r.slot.hang).map(r => visBox(r.station)).filter(b => !b.isEmpty()).map(b => [b.min.x, b.max.x, b.min.z, b.max.z]);
   const kx0 = stageView.cx + kitSlot.x, kz0 = kitSlot.z;
   if (S.drums){ const box = relBox(drumGroup, kx0, kz0, 'drums'); if (box) items.push({ key: 'drums', x: kx0, z: kz0, box, top: tops.drums, pin: kitSlot.pin }); }
+  lastLayout = null;                                    // (dev: a song with no floor machine has no solve — never the last song's)
   if (items.length && !wallBox.isEmpty()){
     const solved = layoutStations(items,
       [wallBox.min.x, wallBox.max.x, wallBox.min.z, wallBox.max.z],
@@ -784,7 +821,9 @@ function buildWorld(keyName){
    w, d), its deck y (ground + lift), the world y it stands on (bottom — a `stand` hint's underside,
    else its lowest solid part) and the lowest it reaches (low), its solid box, and its strike CUE
    (loop times + weights; P, start) — so the room can plant a plinth / riser / scaffold under each
-   (rooms/footing.js) and answer its strikes. Re-sent on every staging change (restage). */
+   (rooms/footing.js) and answer its strikes; an open stand's feet + hang (standParts). A HUNG station
+   is an anchor too ('hung': no footing — its solid box is an obstacle a stair or a prop keeps out of).
+   Re-sent on every staging change (restage). */
 function placeRoom(){
   const { S, view } = curBuild, P = ROLL_T + LOOP_T, run = { P, start: ARM_AT };
   const out = [];
@@ -802,12 +841,18 @@ function placeRoom(){
       cue: loopCue(kitHits(S), P), ...run, fixed: false });
   }
   for (const r of instLive){
-    if (r.slot.hang) continue;
+    if (r.slot.hang){
+      const b = solidBox(r.station, drawn);
+      if (b) out.push({ key: r.I.key, kind: 'hung', label: r.I.label, color: r.I.color ?? null, x: (b[0] + b[1]) / 2, z: (b[4] + b[5]) / 2, yaw: 0,
+        w: b[1] - b[0], d: b[5] - b[4], y: r.station.position.y, ground: null, lift: 0, bottom: b[2], low: b[2], box: b, cue: loopCue(r.cue, P), ...run, fixed: true });
+      continue;
+    }
     const st = r.station, L = r.loc, deck = st.position.y;
     const c = L ? st.localToWorld(new THREE.Vector3((L.min.x + L.max.x) / 2, 0, (L.min.z + L.max.z) / 2)) : st.position;
     out.push({ key: r.I.key, kind: 'station', label: r.I.label, color: r.I.color ?? null, x: c.x, z: c.z, yaw: st.rotation.y,
       w: L ? L.max.x - L.min.x : r.slot.w, d: L ? L.max.z - L.min.z : r.slot.d, y: deck, ground: r.ground, lift: r.lift,
-      bottom: deck + standOf(r), low: deck + r.low, box: L ? worldBox(L, st) : null, cue: loopCue(r.cue, P), ...run, fixed: false });
+      bottom: deck + standOf(r), low: deck + r.low, box: L ? worldBox(L, st) : null, cue: loopCue(r.cue, P), ...run, fixed: false,
+      ...(r.stand ? { feet: r.stand.feet, hang: r.stand.hang } : {}) });
   }
   rooms.place(lastAnchors = out);
 }
@@ -1112,7 +1157,8 @@ function xrAnchors(){
   const box = o => { const b = visBox(o); return b.isEmpty() ? null : [b.min.x, b.max.x, b.min.y, b.max.y, b.min.z, b.max.z]; };
   const belts = tracks.filter((tr, i) => tracks.findIndex(q => q.machine.group === tr.machine.group) === i).map(tr => { const b = box(tr.machine.group) || box(tr.stage);
     return b && { role: tr.role, x: (b[0] + b[1]) / 2, z0: b[4], z1: b[5], bandY: STAGE_Y }; }).filter(Boolean);
-  const solids = [...instLive.map(r => box(r.station)), drumGroup && box(drumGroup), ...[...new Set(tracks.map(tr => tr.machine.group))].map(box)].filter(Boolean);
+  const solids = [...instLive.map(r => box(r.station)), drumGroup && box(drumGroup), ...[...new Set(tracks.map(tr => tr.machine.group))].map(box),
+    ...rooms.footBoxes.map(e => e.box)].filter(Boolean);   // (+ what they stand on: a pad never lands in a tower)
   xr.setAnchors({ wide: lastWide, belts, solids, room: { x0: -ROOM.HW, x1: ROOM.HW, y0: ROOM.FLOOR, y1: ROOM.CEIL, z0: ROOM.BACK, z1: ROOM.FRONT },
     shots: lastShots.map(s => ({ key: s.key, eye: s.eye, aim: s.aim, color: s.color,
       label: s.owner === 'drums' ? 'drums' : (instrumentByKey(s.owner)?.label || s.key) })) });
@@ -1126,7 +1172,7 @@ const followRig = makeFollow();
 let solvedRoom = null;
 function shotCtx(){
   const w = stageWall;
-  return { world, roomGroup: rooms.group, belts: new Set(tracks.map(t => t.stage)), stageY: STAGE_Y, room: eyeRoom(), camera, drawn,
+  return { world, roomGroup: rooms.group, footGroup: rooms.footGroup, belts: new Set(tracks.map(t => t.stage)), stageY: STAGE_Y, room: eyeRoom(), camera, drawn,
            wall: w.isEmpty() ? null : [w.min.x, w.max.x, w.min.y, w.max.y, w.min.z, w.max.z], follow: followRig };
 }
 function solveShots(shots){
@@ -1213,7 +1259,7 @@ function searchWide(pts, dirs, aspect, fill, ui, star = null, lenses = [WIDE_FOV
   const band = [];
   if (!stageWall.isEmpty()) for (let i = 0; i <= 6; i++) for (const dy of [0, 2.5])
     band.push(new THREE.Vector3(THREE.MathUtils.lerp(stageWall.min.x + 1.5, stageWall.max.x - 1.5, i / 6), STAGE_Y + dy, (stageWall.min.z + stageWall.max.z) / 2));
-  const belt = new Set(tracks.map(t => t.stage));
+  const belt = new Set(tracks.map(t => t.stage)), foot = rooms.footGroup;
   const top = o => { while (o.parent && o.parent !== world) o = o.parent; return o; };
   const shown = o => { for (let p = o; p && p !== world; p = p.parent) if (!p.visible) return false; return true; };
   let best = null; const tried = [];
@@ -1226,7 +1272,8 @@ function searchWide(pts, dirs, aspect, fill, ui, star = null, lenses = [WIDE_FOV
     for (const q of band){
       const v = q.clone().sub(f.eye), L = v.length();
       _occRay.set(f.eye, v.divideScalar(L)); _occRay.far = L - .5; _occRay.camera = camera;
-      if (_occRay.intersectObject(world, true).some(h => (h.object.isMesh || h.object.isInstancedMesh) && shown(h.object) && !belt.has(top(h.object)))) blocked++;
+      if (_occRay.intersectObject(world, true).some(h => (h.object.isMesh || h.object.isInstancedMesh) && shown(h.object) && !belt.has(top(h.object)))
+       || _occRay.intersectObject(foot, true).some(h => drawn(h.object) && !glowy(h.object.material))) blocked++;   // (the machines' towers too)
     }
     // (a gallery STAR: how big the song's star machine reads from here — a nearer angle on it wins)
     const sz = star ? screenSize(f.eye.toArray(), f.aim.toArray(), star, fov, aspect) : 0;
@@ -1869,6 +1916,9 @@ if (new URLSearchParams(location.search).has('debug')){
     // the floor) · what the room was told stands where (deck, ground, lift, bottom, low, box, cue) · the floor contract
     lift: (key, u) => setLift(key, u),
     anchors: () => lastAnchors,
+    footing: () => rooms.footing,                         // the plan (pads, lofts, accesses: rooms/footing.js)
+    footBoxes: () => rooms.footBoxes,                     // its envelopes, as the shot solve sees them
+    footStats: () => { const g = rooms.footGroup; return { draws: g.children.length, tris: g.children.reduce((s, m) => s + (m.geometry?.index ? m.geometry.index.count / 3 : 0), 0), ms: g.userData.ms, room: rooms.key }; },
     get stage(){ return { ...ROOM, lowMs: +lowMs.toFixed(1) }; },
     hung: () => instLive.filter(r => r.slot.hang).map(r => ({ key: r.I.key, box: solidBox(r.station, drawn) })),   // (solid: the merged cable/glow batches aren't bulk)
     hang: () => instLive.filter(r => r.slot.hang).map(r => ({ key: r.I.key, wallTop: +stageWall.max.y.toFixed(2), low: +hangLow(r.station).toFixed(2), y: +r.station.position.y.toFixed(2) })),

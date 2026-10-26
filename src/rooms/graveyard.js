@@ -24,14 +24,18 @@ import { GY, graveSlots, placeGraves, obstaclesOf, graveCandles, votives, footLi
    loop's roll-in. Both are pure fns of songTime (no state, no allocation).
 
    THE MACHINES ARE SET IN THE CHURCHYARD (2026-10-25): each stands on the yard's own masonry
-   (graveyard-footing.js — a ledger stone, a chest tomb, a mausoleum, a timber scaffold, a crypt
+   (graveyard-footing.js — a ledger stone, a chest tomb, a mausoleum, a ruined bell tower, a crypt
    terrace), the graves crowd round them at human scale (graveyard-place.js: a grave a machine or its
-   support comes within a metre of is MOVED further out — the yard stays as full; low ledgers and
-   kerbed plots fill the gaps between the machines), and the yard ANSWERS them — each a quiet accent
-   by the machine that plays, a pure fn of songTime off its strike cue (rooms/pulse.js):
+   support comes within a metre of is MOVED further out — the yard stays as full; ledgers, kerbed plots,
+   sunk broken stubs and small crosses, all under 1 u, fill the gaps between the machines), and the yard
+   ANSWERS them — each a quiet accent by the machine that plays, a pure fn of songTime off its strike cue (rooms/pulse.js):
      · the ground fog at its foot glows in its colour and is pushed out as it strikes,
      · its votive candles, its tomb's lanterns and the candles on the graves beside it flare,
      · its own will-o'-the-wisp drifts in to it while it plays, and back out over the graves when it rests.
+   Each answers in the machine's OWN measure (graveyard-place answerCue / answerTiming): its strikes over
+   its loudest (a brushed kit answers as fully as a loud one) and decaying inside its own tempo (a fast run
+   pulses, it never holds a glow); the belt — it never rests — answers with its flames only; a HUNG machine
+   (the organ loft, the chandelier) stirs the fog under it and has a wisp of its own.
    place() re-poses instance pools and rewrites point buffers (no rebuild); update() writes uniforms.
 
    Layers, near → far: the stage (instruments on the floor contract),
@@ -712,7 +716,7 @@ export default {
       group, ...STAGE, HW: FENCE_X, BACK: FENCE_Z, FRONT: 40,
       fog: new THREE.FogExp2(FOG, .017), background,
       mood: { ambient: [0x26324a, 1.6], hemi: [0x9db4e0, 0x141c16, .95] },   // cold moonlight
-      // the footing (rooms/footing3d.js): ledger stones, chest tombs, mausolea, timber scaffolds, crypt terraces
+      // the footing (rooms/footing3d.js): ledger stones, chest tombs, mausolea, ruined bell towers, crypt terraces
       footing: FOOT_STYLE,
       place,
       /** (dev) what place() put where: graves kept / moved, candles, lanterns, wisps */

@@ -12,14 +12,16 @@ import { FOOT, toWorld, sideNormal, accessRect } from './footing.js';
                                   that a machine, its support (pad, loft, stair / ladder) or a hung
                                   machine's posts come within CLEAR of is RELOCATED to a reserve plot
                                   further out (the yard keeps its density — never a hole). Low ones
-                                  (ledger slabs, kerbed plots: under 1 u, so no shot solve ever
-                                  sees them) fill the gaps between the machines, wherever there is
+                                  (ledger slabs, kerbed plots, broken stubs, small crosses: under
+                                  1 u, so no shot solve ever sees them) fill the gaps between the machines, wherever there is
                                   CLEAR air round them — the stage reads as set INTO the churchyard.
      votives(anchors, plan, obs)  two candles set out before each standing machine (its own: they
                                   gutter brighter on its strikes)
+     answerCue / answerTiming     how the yard answers a machine: its strikes over its loudest, and
+                                  envelopes that decay inside its own tempo
      footLights(plan)             the lanterns the footing style hangs (rooms/graveyard-footing.js
                                   draws their iron; the room lights their flames) — one source of
-                                  truth for both: doorOf / scaffoldOf / terraceLanterns / stairLamp
+                                  truth for both: doorOf / towerOf / terraceLanterns / stairLamp
      wispsFor(anchors)            one will-o'-the-wisp per machine, hovering off its corner
 
    Obstacles are every standing machine's footprint (its turned rect), every hung machine that comes
@@ -41,8 +43,6 @@ export const GY = {
   DOOR_MIN: 1.4, DOOR_MAX: 2.2, DOOR_H: 3.3,
   ROOF: .72,                   // a mausoleum's roof slab + cornice (its walls stop this far under its deck)
   LAMP_OUT: .3,                // a wall lantern's centre, out from the wall face
-  DECK_HI: .45,                // a scaffold's timber deck
-  BEARER: .5,                  // its bearers under the deck
   PIER_IN: 1.14,               // a mausoleum's corner pier: its inner edge, in from the face's end
 };
 
@@ -272,22 +272,6 @@ export function doorLamps(p, floor){
   const a = (lo + hi) / 2, S = onSide(p, d.side), y = floor + GY.PLINTH + d.h * .74;
   return [-1, 1].map(k => { const [u, v] = S(d.a + k * a, -GY.INS + GY.LAMP_OUT); return [u, y, v]; });
 }
-
-/** points round a rect's perimeter (±hu, ±hv), corners included, at most `span` apart — in order
-    (footing3d's ring: −v side, +u, +v, −u) */
-export function ring(hu, hv, span){
-  const nu = Math.max(1, Math.ceil(2 * hu / span - 1e-9)), nv = Math.max(1, Math.ceil(2 * hv / span - 1e-9)), out = [];
-  for (let i = 0; i < nu; i++) out.push([-hu + 2 * hu * i / nu, -hv]);
-  for (let i = 0; i < nv; i++) out.push([hu, -hv + 2 * hv * i / nv]);
-  for (let i = 0; i < nu; i++) out.push([hu - 2 * hu * i / nu, hv]);
-  for (let i = 0; i < nv; i++) out.push([-hu, hv - 2 * hv * i / nv]);
-  return out;
-}
-/** which side of the ring a post pair P[i] → P[i+1] runs along */
-export const segSide = (a, b, hu, hv) => { const mu = (a[0] + b[0]) / 2, mv = (a[1] + b[1]) / 2;
-  return Math.abs(mv + hv) < 1e-6 ? '-v' : Math.abs(mu - hu) < 1e-6 ? '+u' : Math.abs(mv - hv) < 1e-6 ? '+v' : '-u'; };
-/** a ladder's top flight: its along-centre on its side (footing3d's ladder steps sideways each landing) */
-export const ladderTop = acc => (acc.a0 + acc.a1) / 2 + (acc.flights > 1 ? ((acc.flights - 1) % 2 ? .45 : -.45) : 0);
 
 /** a RUINED BELL TOWER (high band, solid — the gallery's other machines stand on the crypt terrace, so
     the tower is built in its language: an arcade of piers and pointed arches round every storey, a belfry

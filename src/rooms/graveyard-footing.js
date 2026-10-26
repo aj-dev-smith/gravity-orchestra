@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { FOOT } from './footing.js';
-import { GY, rng, seedOf, onSide, ring, doorOf, doorApex, doorLamps, towerOf, stairLamp,
+import { GY, rng, seedOf, onSide, doorOf, doorApex, doorLamps, towerOf, stairLamp,
          terraceLanterns, arcadeOf, PIER, TERR } from './graveyard-place.js';
 /* ============================================================
    GRAVEYARD FOOTING — what the machines stand on in the Midnight Graveyard: a room STYLE for
@@ -14,20 +14,24 @@ import { GY, rng, seedOf, onSide, ring, doorOf, doorApex, doorLamps, towerOf, st
      mid    a MAUSOLEUM — its roof is the deck: ashlar walls, stepped corner piers, string courses, a
             cornice, a pointed door between two wall lanterns, wrought-iron railings with spear finials,
             climbed by a stone stair against its wall or an iron ladder
-     high   a TIMBER SCAFFOLD — posts on stone footings, ledgers lashed outboard at every tier, rickety
-            cross-braces, iron bands, a plank deck, timber rails; the top bay of its front left open as
-            a GALLOWS frame with a lantern hanging in it; a caged iron ladder, timber rest landings
+     high   a RUINED BELL TOWER — the crypt terrace's own arcade round every storey (so whatever stands at
+            gallery height is one stone ensemble), a bell hung from a timber headstock in the belfry, a
+            lantern hung in the front arch, broken pinnacles at its corners, an iron fence; climbed by an
+            iron ladder in wrought-iron hoops, resting on stone landings on iron knee brackets
      open   (something hangs below what the machine rests on: the turntable's resonators) stone PIERS
             under its feet — timber posts when it is lifted high — iron ties kept out of what hangs, a
             carved kerb round it on the ground
-     loft   a CRYPT TERRACE — a stone deck on an ARCADE of corbelled arches round every face (squat when
-            low, an aqueduct's tiers when tall), an iron fence and lanterns above the low band
+     loft   a CRYPT TERRACE — a stone deck on an ARCADE of pointed arches round every face (a ring of
+            voussoirs, a keystone, imposts; squat segments when low, an aqueduct's storeys when tall), an
+            iron fence and lanterns above the low band
 
-   THE LIGHT (one reactive accent per machine — all of it the kit's single edge draw): a line of GHOST
-   LIGHT in the carved groove of every stone a machine stands on (ledger, lid, roof, the kerb round an
-   open stand), the seam and threshold of a mausoleum's door, the glass of the lanterns that answer it
-   (wall, gallows, stair, terrace), each terrace member's stretch of the cornice — the machine's colour
-   drawn toward the marsh light, answering its own strikes. The lanterns' FLAMES are the room's
+   THE LIGHT (one reactive accent per machine — all of it the kit's single edge draw): a lit joint of GHOST
+   LIGHT under the lip of every stone a machine stands on (the ledger's carved top, the tomb's lid, the
+   mausoleum's roof, the tower's deck; the open stand's kerb at its pad's edge) — at the pad's edge, out
+   past the machine, where the audience sees it — the seam and threshold of a mausoleum's door, the glass
+   of the lanterns that answer it (wall, belfry, stair, terrace), each terrace member's stretch of the
+   cornice: the machine's colour drawn toward the marsh light, answering its own strikes (each machine's
+   strikes over its own loudest — the room writes uNorm). The lanterns' FLAMES are the room's
    (graveyard.js lights them at graveyard-place footLights — the same pure layout this file hangs their
    iron from), so they gutter brighter on the strikes too.
 

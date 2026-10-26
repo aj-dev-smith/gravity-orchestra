@@ -5,7 +5,7 @@ import { ROOMS, ROOM_KEYS } from '../src/rooms/index.js';
 import { planFooting, footingBoxes, FOOT } from '../src/rooms/footing.js';
 import { buildFooting, makeFootingMats } from '../src/rooms/footing3d.js';
 import { STAGE } from '../src/rooms/common.js';
-import { shipFooting, lampMaterial } from '../src/rooms/starship-footing.js';
+import { shipFooting, lampMaterial, walkSides } from '../src/rooms/starship-footing.js';
 import { SHIP, makeStrikeClock, makeDeckLights, cueLight, CUE, lampLayout, deckProps, rectsWithin, deckSpots, DECK_PROPS, beaconPocket } from '../src/rooms/starship-deck.js';
 import { toWorld } from '../src/rooms/footing.js';
 
@@ -259,6 +259,36 @@ describe('starship footing: ship hardware, drawn', () => {
       }
       f.dispose();
     }
+  });
+  it('a tall tower\'s service walkways rail only the face the house sees (+ a guard by the ladder): no cage of lines from the wide', () => {
+    const R = yaw => ({ x: 0, z: 0, yaw, hw: 4, hd: 2 });
+    expect(walkSides(R(0))).toEqual({ front: '+v', guard: null });                       // (+v faces +z: the house)
+    expect(walkSides(R(Math.PI))).toEqual({ front: '-v', guard: null });
+    expect(walkSides(R(Math.PI / 2)).front).toBe('-u');
+    expect(walkSides(R(.75), '-v')).toEqual({ front: '+v', guard: '-v' });              // a ladder round the back: its guard only
+    expect(walkSides(R(0), '+v')).toEqual({ front: '+v', guard: null });                // a ladder on the front: the front rail, opened for it
+    // drawn: a 24 u tower — its walkways' toe lines (hazard, at walkway height): along the whole front, along
+    // the ladder's side only a guard's length, nowhere else
+    const plan = planFooting([st('tall', 0, 0, 12, 6, 24)], { floor: FL, room: ROOMB }), pad = plan.pads[0];
+    expect(pad.band).toBe('high'); expect(pad.access.kind).toBe('ladder');
+    const f = buildShip(plan), hz = meshesOf(f).find(m => m.name === 'footing:hazard').geometry.attributes.position.array;
+    const lv = [], nf = pad.access.flights; for (let k = 1; k < nf; k++) lv.push(FL + (pad.top - FL) * k / nf);
+    expect(lv.length).toBeGreaterThan(1);
+    const near = y => lv.some(l => Math.abs(y - (l + .05)) < .04), ext = {};
+    const sides = { '+v': (x, z) => Math.abs(z - (pad.hd - .09)) < .05 && x, '-v': (x, z) => Math.abs(z + (pad.hd - .09)) < .05 && x,
+      '+u': (x, z) => Math.abs(x - (pad.hw - .09)) < .05 && z, '-u': (x, z) => Math.abs(x + (pad.hw - .09)) < .05 && z };
+    for (let i = 0; i < hz.length; i += 3){
+      const [x, y, z] = [hz[i], hz[i + 1], hz[i + 2]];
+      if (!near(y)) continue;
+      for (const [k, at] of Object.entries(sides)){ const a = at(x, z); if (a === false) continue; const e = ext[k] ||= [Infinity, -Infinity]; e[0] = Math.min(e[0], a); e[1] = Math.max(e[1], a); }
+    }
+    const len = k => ext[k] ? ext[k][1] - ext[k][0] : 0, lad = pad.access.side;
+    expect(len('+v'), 'the front rail runs the whole face').toBeGreaterThan(2 * pad.hw - .5);
+    for (const k of ['-v', '+u', '-u']){
+      if (k === lad) expect(len(k), `${k}: a guard by the ladder`).toBeGreaterThan(.5), expect(len(k), `${k}: only a guard`).toBeLessThan(pad.access.a1 - pad.access.a0 + 2 * 1.6 + .3);
+      else expect(len(k), `${k}: no rail (but the front's end caps)`).toBeLessThan(.1);
+    }
+    f.dispose();
   });
   it('fast: the crowd\'s footing builds in a few ms (a height drag rebuilds it live)', () => {
     for (let k = 0; k < 3; k++) buildShip().dispose();

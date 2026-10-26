@@ -267,11 +267,10 @@ function openLamps(out, p, F, col, slot){
 /* one lamp, from a rect's local frame (u, v) — n: the local outward normal [nu, nv] (null: facing up),
    t: the local along-direction [tu, tv] */
 function push(out, kind, slot, R, u, v, y, n, t, hl, hh, d, half, color, cube = false){
-  const [x, z] = toWorld(R, u, v), c = Math.cos(R.yaw || 0), s = Math.sin(R.yaw || 0);
-  const W = (a, b) => [c * a + s * b, -s * a + c * b];           // local direction → world (x, z)
-  const [tx, tz] = W(t[0], t[1]);
-  const nn = n ? W(n[0], n[1]) : null;
-  out.push({ kind, slot, c: [x, y, z], n: nn ? [nn[0], 0, nn[1]] : [0, 1, 0], t: [tx, tz], hl, hh, d, half, color, cube });
+  // (local → world inline: toWorld's turn, for the point and the two directions — ~1k lamps a full deck)
+  const c = Math.cos(R.yaw || 0), s = Math.sin(R.yaw || 0);
+  out.push({ kind, slot, c: [R.x + c * u + s * v, y, R.z - s * u + c * v], n: n ? [c * n[0] + s * n[1], 0, -s * n[0] + c * n[1]] : [0, 1, 0],
+    t: [c * t[0] + s * t[1], -s * t[0] + c * t[1]], hl, hh, d, half, color, cube });
 }
 
 /* ---------------- the deck furniture ---------------- */

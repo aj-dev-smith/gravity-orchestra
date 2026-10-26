@@ -22,7 +22,8 @@ export const RIPPLE = {
   REACH: 2.6,       // the cells round a machine glow with it, brightest at its edge, gone by REACH (u)
   AGE_NONE: 1e4,    // "no strike yet" (a ring that far out is long gone)
   DENSE: 1.6,       // strikes/s above which a machine answers only its ACCENTS (and its rings soften, √)
-  ACCENT_GAP: .8,   // a busy machine's accents are at least this far apart (s): the floor goes dark between them
+  ACCENT_GAP: .8,
+  LEAD: .35,        // a calm machine's cells warm before its strike by this much of the anticipation   // a busy machine's accents are at least this far apart (s): the floor goes dark between them
 };
 
 /** PURE. A busy machine's ACCENTS: when its cue runs faster than RIPPLE.DENSE, keep the heaviest strikes
@@ -84,7 +85,9 @@ export function rippleSlots(anchors = [], plan = null){
     const r = rectOf(a);
     if (a.kind === 'hung' && standing.some(s => coverOf(r, s) > .3)) continue;
     const rate = a.cue.length / a.P;
+    const dense = rate > RIPPLE.DENSE;
     out.push({ key: a.key, ...r, color: a.color ?? '#8fa6c8', cue: accentsOf(a.cue, a.P), P: a.P, start: a.start ?? -Infinity,
+      lead: dense ? 0 : RIPPLE.LEAD,                        // (a busy machine's cells don't anticipate: dark till the accent lands)
       gain: Math.min(1, Math.sqrt(RIPPLE.DENSE / Math.max(rate, 1e-6))) });
   }
   return out;
@@ -172,7 +175,7 @@ export function makeRipples(U){
         const g = slots[i].gain, o = 4 * i;
         S[o] = RIPPLE.SPEED * T[0]; S[o + 1] = T[1] * g * Math.exp(-T[0] / RIPPLE.FADE);
         S[o + 2] = RIPPLE.SPEED * T[2]; S[o + 3] = T[3] * g * Math.exp(-T[2] / RIPPLE.FADE);
-        const v = pulses[i].at(songTime) + .35 * pulses[i].next(songTime);
+        const v = pulses[i].at(songTime) + slots[i].lead * pulses[i].next(songTime);
         B[4 * i + 2] = (v > 1 ? 1 : v) * g;                     // (a busy machine answers its accents: dark between them)
       }
     },

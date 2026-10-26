@@ -254,7 +254,8 @@ describe('Greybox floor: a strike rings out across the grid', () => {
     expect(accentsOf([...vel].reverse(), 20)).toEqual(V);                             // (order-free: deterministic)
     // the slot carries the accents: the kit's floor goes dark between them
     const [s] = rippleSlots([anchor('kit', 0, 0, 4, 4, { kind: 'kit', cue: flat, P: 20 })]);
-    expect(s.cue).toEqual(A);
+    expect(s.cue).toEqual(A); expect(s.lead).toBe(0);
+    expect(rippleSlots([anchor('calm', 0, 0, 2, 2)])[0].lead).toBe(RIPPLE.LEAD);
   });
   it('packColor: three bytes in one float, decoded as the shader does', () => {
     for (const hex of ['#ff8a3d', '#2fe6c0', '#000000', '#ffffff', '#3fd0ff']){

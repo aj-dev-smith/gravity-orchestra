@@ -33,7 +33,7 @@ export const PLOT = {
   M_PER_U: .677,
   RAISED: 1,        // a machine lifted this far (u) reads its lift
   NEAR: 15, FAR: 24,// the print is full within NEAR of the eye, gone past FAR (u)
-  LOW: [-.82, -.55],// …and fades out below this band of the frame (NDC y: the HUD's button row)
+  LOW: [-.9, -.72], // …and fades out below this band of the frame (NDC y: the HUD's button row)
 };
 
 /** PURE. The label's lines: its machine's name (caps) and, when raised, by how much (its LIFT — deck

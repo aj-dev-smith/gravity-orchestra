@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { STAGE, rng, canvasTex, radialTex, glowPoints, glowMat, beamMat, instanced, trs } from './common.js';
-import { tintStyle } from './footing3d.js';
+import { studioFooting } from './studio-footing.js';
+import { makeMeter } from './studio-vu.js';
+import { micStands, MIC } from './studio-props.js';
 /* ============================================================
    MIDNIGHT STUDIO — a sound stage after hours. A black, wet-looking
    epoxy floor that really REFLECTS (three.js Reflector, reduced-res,
@@ -128,17 +130,50 @@ function neonTex(text){
   });
 }
 
-/* how its footing looks (rooms/footing3d.js tintStyle) — one per built room: its own materials */
-const footStyle = () => tintStyle({ key: 'studio', base: { color: 0x5c5b68, roughness: .95, metalness: 0 },
-  steel: { color: 0xb4bac4, metalness: .5, roughness: .38 }, deck: { color: 0x34333c, metalness: .1, roughness: .9 } });
+/* a boom MIC STAND (pole at the origin, boom along +x): tripod, pole, clutch, boom + counterweight, the
+   mic and its grille, a coil of cable on the floor — one geometry, painted from the footing's atlas
+   (its swatches), so every stand in the room is one instanced draw */
+function micStandGeometry(uv){
+  const parts = [], put = (g, sw) => { const a = g.attributes.uv, [s, t] = sw; for (let i = 0; i < a.count; i++) a.setXY(i, s, t); parts.push(g.index ? g.toNonIndexed() : g); };
+  const bar = (a, b, r, sw, seg = 6) => { const d = new THREE.Vector3().subVectors(b, a), L = d.length();
+    const g = new THREE.CylinderGeometry(r, r, L, seg, 1, false); g.translate(0, L / 2, 0);
+    g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize())); g.translate(a.x, a.y, a.z); put(g, sw); };
+  const V = (x, y, z) => new THREE.Vector3(x, y, z), P = MIC.POLE;
+  for (let k = 0; k < 3; k++){ const a = k * Math.PI * 2 / 3 + Math.PI / 6; bar(V(0, .5, 0), V(Math.cos(a) * MIC.LEG, .02, Math.sin(a) * MIC.LEG), .024, uv.black, 5); }
+  bar(V(0, 0, 0), V(0, P, 0), .036, uv.black);
+  bar(V(0, .44, 0), V(0, .58, 0), .06, uv.chrome, 8);                          // the leg collar
+  bar(V(0, P - .06, 0), V(0, P + .07, 0), .06, uv.chrome, 8);                    // the clutch
+  const tip = V(MIC.BOOM, P + MIC.RISE, 0), tail = V(-MIC.CW, P - .15, 0);
+  bar(tail, tip, .026, uv.black);
+  const cw = new THREE.CylinderGeometry(.09, .09, .2, 10); cw.rotateZ(Math.PI / 2 - Math.atan2(MIC.RISE + .15, MIC.BOOM + MIC.CW)); cw.translate(tail.x + .06, tail.y + .02, 0); put(cw, uv.chrome);
+  const mic = V(MIC.BOOM + .05, P + MIC.RISE - .3, 0);                          // the mic hangs nose-down off the clip
+  bar(tip, mic, .045, uv.black, 8);
+  const grille = new THREE.SphereGeometry(.075, 10, 8); grille.translate(mic.x, mic.y - .02, mic.z); put(grille, uv.chrome);
+  const coil = new THREE.TorusGeometry(.26, .022, 5, 18); coil.rotateX(Math.PI / 2); coil.translate(-.18, .025, .3); put(coil, uv.cable);
+  const g = mergeGeometries(parts); g.computeBoundingBox(); g.computeBoundingSphere();
+  return g;
+}
+const MAX_STANDS = 24;                                       // (a constant pool: one per floor machine at most)
 
 export default {
   key: 'studio', label: 'Midnight Studio',
   build(scene, { envMap, renderer }){
-    const FOOT_STYLE = footStyle();
     const group = new THREE.Group();
     const R = rng(9);
     const F = STAGE.FLOOR;
+    // what the machines stand on (studio-footing.js): rugs, carpeted risers, road cases, black
+    // ground support, a mezzanine catwalk — its atlas painted now (the prewarm uploads it)
+    const FOOT_STYLE = studioFooting();
+    FOOT_STYLE.mats(null, { envMap });
+    const VUS = FOOT_STYLE.vu;
+    let meters = [];
+    // the MIC STANDS (studio-props.js decides where): one instanced pool in the atlas material — which
+    // puts the atlas in the room group, so the prewarm uploads it before the footing is ever built
+    const sw = k => { const r = FOOT_STYLE.atlas.uv[k]; return [(r.s0 + r.s1) / 2, (r.t0 + r.t1) / 2]; };
+    const stands = new THREE.InstancedMesh(micStandGeometry({ black: sw('black'), chrome: sw('chrome'), cable: sw('cable') }), FOOT_STYLE.atlasMat, MAX_STANDS);
+    stands.count = 0; stands.userData.boxes = [];             // (thin poles: the shot solve looks past them)
+    stands.name = 'studio:micstands';
+    group.add(stands);
 
     // ---- the reflective floor ----
     const pr = renderer ? renderer.getPixelRatio() : 1;
@@ -221,47 +256,52 @@ export default {
     }
     group.add(instanced(new THREE.BoxGeometry(1, 1, 1), woodMat, qrdM));
 
-    // ---- practicals: tall LED tube stands + Edison pendants + a neon sign ----
+    // ---- practicals, out in the AISLES (|x| > STAGE.HW + 4, or behind STAGE.BACK: no machine and no
+    //      support ever stands there): LED tube pillars on stands, Edison pendant clusters, a neon sign.
+    //      (Sized for the −5.5 floor: a pillar ≈ 9 m, a pendant ≈ 6–8 m up — they frame the wide, never
+    //      tower over it or flare at its edges)
     const tubeCol = [0xffb36a, 0x7fc8ff, 0xff7ab8, 0xffb36a, 0x7fc8ff, 0xff7ab8, 0xffb36a, 0x7fc8ff];
-    const tubeSpots = [[-44, -30], [-46, 6], [-44, 40], [44, -30], [46, 6], [44, 40], [-22, -38], [22, -38]];
-    const TH = 26;
+    const tubeSpots = [[-44, -30], [-47, 2], [-46, 24], [44, -30], [47, 2], [46, 24], [-22, -38], [22, -38]];
+    const TH = 13, TB = 1.6;
     const tubeM = [], standM = [], tubeGlowM = [], tubeGlowC = [], gP = [], gC = [], gS = [], gPh = [];
     tubeSpots.forEach(([x, z], i) => {
-      tubeM.push(trs(x, F + 4 + TH / 2, z, 0, 0, 0, 1, TH, 1));
-      standM.push(trs(x, F + 2, z, 0, 0, 0, 1, 4, 1));
+      tubeM.push(trs(x, F + TB + TH / 2, z, 0, 0, 0, 1, TH, 1));
+      standM.push(trs(x, F + TB / 2, z, 0, 0, 0, 1, TB, 1));
       const c = new THREE.Color(tubeCol[i]);
-      tubeGlowM.push(trs(x, F + 4 + TH / 2, z, 0, 0, 0, 7, TH + 6, 7)); tubeGlowC.push(c);
+      tubeGlowM.push(trs(x, F + TB + TH / 2, z, 0, 0, 0, 5, TH + 4, 5)); tubeGlowC.push(c);
     });
-    const tubes = new THREE.InstancedMesh(new THREE.CylinderGeometry(.32, .32, 1, 10), new THREE.MeshBasicMaterial({ color: 0xffffff }), tubeM.length);
+    const tubes = new THREE.InstancedMesh(new THREE.CylinderGeometry(.24, .24, 1, 10), new THREE.MeshBasicMaterial({ color: 0xffffff }), tubeM.length);
     tubeM.forEach((m, i) => { tubes.setMatrixAt(i, m); tubes.setColorAt(i, new THREE.Color(tubeCol[i]).multiplyScalar(3)); });
     group.add(tubes);
     // each tube's soft glow: crossed additive planes with a long capsule falloff (no beads)
     const tubeGlowGeo = mergeGeometries([new THREE.PlaneGeometry(1, 1), new THREE.PlaneGeometry(1, 1).rotateY(Math.PI / 2)]);
-    const tubeGlow = new THREE.InstancedMesh(tubeGlowGeo, glowMat(capsuleTex(), 0xffffff, .55, { fog: true }), tubeGlowM.length);
+    const tubeGlow = new THREE.InstancedMesh(tubeGlowGeo, glowMat(capsuleTex(), 0xffffff, .5, { fog: true }), tubeGlowM.length);
     tubeGlowM.forEach((m, i) => { tubeGlow.setMatrixAt(i, m); tubeGlow.setColorAt(i, tubeGlowC[i]); });
     group.add(tubeGlow);
     const metal = new THREE.MeshStandardMaterial({ color: 0x1a1c24, metalness: .8, roughness: .35, envMap });
     group.add(instanced(new THREE.CylinderGeometry(.12, .9, 1, 6), metal, standM));
 
+    // Edison pendants: a cluster of three over each side aisle, front and back, on long cords
     const bulbM = [], cordM = [];
-    for (let i = 0; i < 9; i++){
-      const x = -32 + i * 8, z = 26 + (i % 2) * 6, y = 27 + (i % 3) * 2.5;
+    for (const sx of [-1, 1]) for (const zc of [-14, 13]) for (let k = 0; k < 3; k++){
+      const x = sx * (42.4 + (k % 2) * 1.5), z = zc + (k - 1) * 2.1, y = F + 8.6 + ((k * 2 + (sx > 0 ? 1 : 0) + (zc > 0 ? 1 : 0)) % 3) * 1.3;
       bulbM.push(trs(x, y, z)); cordM.push(trs(x, (y + CEIL) / 2, z, 0, 0, 0, 1, CEIL - y, 1));
-      gP.push(x, y, z); gC.push(.8, .45, .16); gS.push(6); gPh.push(R());
+      gP.push(x, y, z); gC.push(.8, .45, .16); gS.push(2.4); gPh.push(R());
     }
     const bulbs = instanced(new THREE.SphereGeometry(.45, 12, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 1.7, .7) }), bulbM);
     group.add(bulbs, instanced(new THREE.CylinderGeometry(.03, .03, 1, 4), metal, cordM));
     const glows = glowPoints(gP, { colors: gC, sizes: gS, phases: gPh, map: radialTex(64, [[0, .7], [.2, .3], [.6, .05], [1, 0]]), flicker: .06, rate: 3 });
     group.add(glows);
 
+    const NEON_Y = F + 15, NEON_Z = -12;                 // (on the left wall, over the aisle — clear of the HUD in the wide)
     const neon = new THREE.Mesh(new THREE.PlaneGeometry(24, 6),
       new THREE.MeshBasicMaterial({ map: neonTex('Gravity Orchestra'), color: new THREE.Color(1.8, 1.8, 1.8), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-    neon.position.set(-HW + 2.2, F + 34, 4); neon.rotation.y = Math.PI / 2; group.add(neon);
+    neon.position.set(-HW + 2.2, NEON_Y, NEON_Z); neon.rotation.y = Math.PI / 2; group.add(neon);
     // a dark backing plate on stand-offs, proud of the panels + diffusers, so the sign reads clean
     const plate = new THREE.Mesh(new THREE.BoxGeometry(.25, 7.4, 25.5), new THREE.MeshStandardMaterial({ color: 0x050508, roughness: .4, metalness: .6, envMap, envMapIntensity: .4 }));
-    plate.position.set(-HW + 2.0, F + 34, 4); group.add(plate);
+    plate.position.set(-HW + 2.0, NEON_Y, NEON_Z); group.add(plate);
     group.add(instanced(new THREE.CylinderGeometry(.08, .08, 1.8, 6).rotateZ(Math.PI / 2), metal,
-      [[-2.6, -10], [2.6, -10], [-2.6, 10], [2.6, 10]].map(([dy, dz]) => trs(-HW + 1.05, F + 34 + dy, 4 + dz))));
+      [[-2.6, -10], [2.6, -10], [-2.6, 10], [2.6, 10]].map(([dy, dz]) => trs(-HW + 1.05, NEON_Y + dy, NEON_Z + dz))));
 
     // ---- ceiling truss + volumetric beams onto the stage ----
     const trussM = [];
@@ -277,7 +317,7 @@ export default {
     const fixM = [], lensM = [];
     const down = new THREE.Vector3(0, -1, 0), q = new THREE.Quaternion(), e = new THREE.Euler();
     BEAMS.forEach(([x, z, tx, tz, col], i) => {
-      const src = new THREE.Vector3(x, CEIL - 6.5, z), tgt = new THREE.Vector3(tx, -2, tz);
+      const src = new THREE.Vector3(x, CEIL - 6.5, z), tgt = new THREE.Vector3(tx, F + 1, tz);
       const d = tgt.clone().sub(src), len = d.length() * 1.15;
       q.setFromUnitVectors(down, d.normalize()); e.setFromQuaternion(q);
       beams.setMatrixAt(i, trs(src.x, src.y, src.z, e.x, e.y, e.z, 1, len, 1));
@@ -295,9 +335,18 @@ export default {
       group, ...STAGE, HW, BACK, FRONT, CEIL,
       fog: new THREE.FogExp2(FOG, .02), background: new THREE.Color(FOG),
       mood: { ambient: [0x1c1a30, 1.4], hemi: [0x6a64b0, 0x2a1020, .5] },
-      // the footing (rooms/footing3d.js): charcoal stage risers, aluminium truss
       footing: FOOT_STYLE,
+      /* each machine's panel answers its strikes (studio-vu.js: pure envelopes of songTime) */
+      place(anchors, plan){
+        meters = (plan?.pulses || []).map(s => makeMeter(s.cue, { P: s.P, start: s.start }));
+        VUS.level.fill(0); VUS.peak.fill(0); VUS.tally.fill(0);
+        const mics = micStands(anchors, plan, { x0: -HW + 1, x1: HW - 1, z0: BACK + 13, z1: FRONT - 2 }).slice(0, MAX_STANDS);
+        mics.forEach((m, i) => stands.setMatrixAt(i, trs(m.x, F, m.z, 0, -m.heading, 0)));
+        stands.count = mics.length; stands.instanceMatrix.needsUpdate = true; stands.computeBoundingSphere();
+      },
       update(dt, songTime, camera, energy = 0){
+        for (let i = 0; i < meters.length; i++){ const m = meters[i];
+          VUS.level[i] = m.level(songTime); VUS.peak[i] = m.peak(songTime); VUS.tally[i] = m.tally(songTime); }
         hazes[0].offset.x = songTime * .004; hazes[1].offset.x = -songTime * .006; hazes[2].offset.x = songTime * .003;
         glows.material.uniforms.uTime.value = songTime;
         beams.material.uniforms.uGain.value = beamBase * (1 + .5 * energy);

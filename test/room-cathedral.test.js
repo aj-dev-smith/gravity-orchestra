@@ -5,6 +5,7 @@ import { buildFooting, makeFootingMats, DEFAULT_STYLE } from '../src/rooms/footi
 import { makePulse } from '../src/rooms/pulse.js';
 import { STAGE } from '../src/rooms/common.js';
 import { cathedralFooting, CATH, pointed } from '../src/rooms/cathedral-footing.js';
+import { PROPS, CORONAS, obstaclesOf, placeCoronas, placePrickets, placeCandles, coronaClear, rectDist, dxz, dInf } from '../src/rooms/cathedral-props.js';
 
 /* THE CATHEDRAL NAVE (src/rooms/cathedral*.js): what its machines stand on (STONE and OAK — a moulded
    plinth, a chancel dais, an arcaded tribune, clustered piers + a stair turret, a choir loft, stone
@@ -203,5 +204,88 @@ describe('cathedral footing: stone and oak, drawn inside the plan', () => {
     A.sort((x, y) => x - y); B.sort((x, y) => x - y);
     expect(A[4] / B[4], `median ${A[4].toFixed(2)} ms vs the kit's ${B[4].toFixed(2)}`).toBeLessThan(3.5);
     expect(A[4]).toBeLessThan(60);                                                     // (≈ 3–8 ms on a laptop)
+  });
+});
+
+/* ---- the props: clear of every machine and its footing by PROPS.CLEAR, a pure fn of the layout ---- */
+const STAGE_RECT = { x0: -STAGE.HW, x1: STAGE.HW, z0: STAGE.BACK, z1: STAGE.FRONT };
+const gapY = (a0, a1, b0, b1) => Math.max(b0 - a1, a0 - b1);                // (> 0: apart by that much)
+function coronaGap([x, y, z], obs){
+  let worst = Infinity;
+  for (const { box: b } of obs){
+    const d = dxz(x, z, b);
+    // the ring: apart sideways, or above / below by CLEAR
+    const ring = Math.max(d - PROPS.CORONA_R, gapY(y - PROPS.CORONA_DROP, y + PROPS.CORONA_UP, b[2], b[3]));
+    // the chain (from the ring up to the vault): apart sideways, or the box entirely below the ring
+    const chain = Math.max(d - .1, y - b[3]);
+    worst = Math.min(worst, ring, chain);
+  }
+  return worst;
+}
+describe('cathedral props: coronas, prickets, candles — clear of the machines', () => {
+  const OBS = obstaclesOf(CROWD, PLAN);
+  it('the obstacles are every machine\'s box (hung ones too) and every footing envelope', () => {
+    expect(OBS.length).toBe(CROWD.length + ENV.length);
+    expect(OBS.some(o => o.key === 'organ')).toBe(true);
+    expect(OBS.filter(o => o.foot).length).toBe(ENV.length);
+  });
+  it('coronas hang where they hang, unless something comes near — then raised, slid, or (never in a real layout) hidden', () => {
+    const at = placeCoronas(OBS);
+    at.forEach((c, i) => { expect(c, `corona ${i}`).not.toBe(null); expect(coronaGap(c, OBS), `corona ${i}`).toBeGreaterThanOrEqual(PROPS.CLEAR - 1e-9); });
+    // a machine lifted right under the front-left corona: it rises above the machine (and stays clear)
+    const tall = { ...st('tall', -34, 30, 8, 6, 26), box: [-38, -30, -5.5 + 26, 26.5, 27, 33] };
+    const P2 = planFooting([...CROWD, tall], { floor: FL, room: ROOMB }), O2 = obstaclesOf([...CROWD, tall], P2), c2 = placeCoronas(O2);
+    expect(c2[0][1], 'raised over it').toBeGreaterThan(CORONAS[0][1]);
+    expect(coronaGap(c2[0], O2)).toBeGreaterThanOrEqual(PROPS.CLEAR - 1e-9);
+    // a hung machine up through a corona's chain: it slides off (a hung box reaches the floor, so no height clears it)
+    const hung = { key: 'chandelier', kind: 'hung', x: 34, z: -6, yaw: 0, w: 4, d: 4, y: 30, box: [32, 36, FL, 40, -8, -4], cue: [], P: 20, start: -.6, fixed: true };
+    const O3 = obstaclesOf([...CROWD, hung], PLAN), c3 = placeCoronas(O3);
+    expect(c3[3] === null || c3[3][0] !== CORONAS[3][0] || c3[3][2] !== CORONAS[3][2], 'slid').toBe(true);
+    if (c3[3]) expect(coronaGap(c3[3], O3)).toBeGreaterThanOrEqual(PROPS.CLEAR - 1e-9);
+    expect(coronaClear(...CORONAS[3], O3)).toBe(false);
+  });
+  it('prickets stand by the piers (outside the stage) — one a layout crowds slides along the nave', () => {
+    const list = [[-40.5, 19], [40.5, 2]], ok = placePrickets(OBS, list, { floor: FL });
+    expect(ok).toEqual(list);                                               // (nothing near: as they were)
+    const near = [{ key: 'x', box: [38, 39.5, FL, 0, -1, 5] }];
+    const moved = placePrickets(near, [[40.5, 2]], { floor: FL })[0];
+    expect(moved[0]).toBe(40.5); expect(Math.abs(moved[1] - 2)).toBeGreaterThan(0);
+    expect(dxz(moved[0], moved[1], near[0].box)).toBeGreaterThanOrEqual(.6 + PROPS.CLEAR);
+  });
+  it('two candlesticks beside every standing machine: clear of everything, of each other, inside the stage, nearer their own machine', () => {
+    const avoid = [{ x: -40.5, z: 2, r: .6 }];
+    const C = placeCandles(CROWD, PLAN, OBS, { room: STAGE_RECT, avoid, floor: FL });
+    const standing = CROWD.filter(a => a.kind !== 'hung' && a.kind !== 'belt');
+    const per = {}; for (const c of C) per[c.key] = (per[c.key] || 0) + 1;
+    for (const a of standing) expect(per[a.key] || 0, a.key).toBeGreaterThanOrEqual(1);
+    expect(Object.values(per).every(n => n <= PROPS.PER)).toBe(true);
+    expect(C.filter(c => per[c.key] === 2).length).toBeGreaterThan(C.length * .7);   // (mostly pairs)
+    expect(C.length).toBeLessThanOrEqual(PROPS.POOL);
+    const slots = [...new Set(C.map(c => c.slot))].sort((a, b) => a - b);
+    expect(slots).toEqual(slots.map((_, i) => i));                                 // (contiguous: a pulse each)
+    expect(slots.length).toBeLessThanOrEqual(PROPS.MAX_SLOT);
+    for (const c of C){
+      expect(c.x >= STAGE_RECT.x0 + PROPS.STICK_R && c.x <= STAGE_RECT.x1 - PROPS.STICK_R && c.z >= STAGE_RECT.z0 + PROPS.STICK_R && c.z <= STAGE_RECT.z1 - PROPS.STICK_R, `${c.key} inside`).toBe(true);
+      for (const { key, box: b, foot } of OBS){
+        if (gapY(FL, FL + PROPS.STICK_H, b[2], b[3]) >= PROPS.CLEAR) continue;     // (well above it)
+        // CLEAR from a support; an arm's length from a machine's box along x or z (STICK_CLEAR: what a box leaves
+        // out — a record's pads — and the staging audit's box test: the stick's square misses the box grown by it)
+        if (foot) expect(dxz(c.x, c.z, b), `${c.key} candle vs ${key}`).toBeGreaterThanOrEqual(PROPS.STICK_R + PROPS.CLEAR - 1e-9);
+        else expect(dInf(c.x, c.z, b), `${c.key} candle vs ${key}`).toBeGreaterThanOrEqual(PROPS.STICK_R + PROPS.STICK_CLEAR - 1e-9);
+      }
+      for (const o of C) if (o !== c) expect(Math.hypot(o.x - c.x, o.z - c.z)).toBeGreaterThanOrEqual(2 * PROPS.STICK_R + PROPS.CLEAR - 1e-9);
+      for (const a of avoid) expect(Math.hypot(a.x - c.x, a.z - c.z)).toBeGreaterThanOrEqual(a.r + PROPS.STICK_R + PROPS.CLEAR - 1e-9);
+      // beside its own machine: nearer what it stands on than any other machine's box
+      const own = CROWD.find(a => a.key === c.key), pad = PLAN.pads.find(p => p.key === c.key);
+      const L = pad?.loft && PLAN.lofts.find(l => l.id === pad.loft);
+      const dOwn = L ? Math.min(rectDist(pad, c.x, c.z), rectDist(L, c.x, c.z)) : rectDist(pad || { ...own, hw: own.w / 2, hd: own.d / 2 }, c.x, c.z);
+      for (const b of CROWD) if (b !== own && b.kind !== 'hung') expect(dxz(c.x, c.z, b.box), `${c.key} nearer ${b.key}?`).toBeGreaterThan(dOwn);
+    }
+  });
+  it('a pure fn of the layout: the same anchors + plan, the same props, whatever ran before', () => {
+    const a = JSON.stringify([placeCoronas(OBS), placeCandles(CROWD, PLAN, OBS, { room: STAGE_RECT, floor: FL })]);
+    placeCandles(CROWD.slice(3), planFooting(CROWD.slice(3), { floor: FL, room: ROOMB }));
+    const b = JSON.stringify([placeCoronas(obstaclesOf(CROWD, PLAN)), placeCandles(CROWD, PLAN, obstaclesOf(CROWD, PLAN), { room: STAGE_RECT, floor: FL })]);
+    expect(b).toBe(a);
   });
 });

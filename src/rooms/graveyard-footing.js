@@ -555,22 +555,37 @@ function cloister(k, r, Dd, R, nT0){
    hair proud (two-centred when it rises at least half its span, else a segment), its keystone, the masonry
    behind it in courses that hide under the ring, the spandrel wall up to `top`. In the face's frame (s):
    its wall is `dep` deep round the line o = oc; DF = the wall's front + back faces in the frame. */
-function arch(k, s, a0, a1, rise, top, oc, dep, DF){
-  const span = a1 - a0, mid = (a0 + a1) / 2, yS = top - .45 - rise, ring = Math.min(.34, .16 + .06 * span);
-  // the intrados of the LEFT half: x(y) for y in yS..yS + rise, and its centre
+/** the pure shape of a pointed arch over a0..a1 springing at yS, rising `rise`: its intrados (the LEFT half:
+    xAt(y), centre cx, cy, radius Rr), the ring's depth, and the masonry COURSES behind the ring — [ya, yb, e]:
+    a course from ya to yb whose inner edge is e (left half; mirrored right; e ≥ mid − .01: one box across;
+    e − a0 < .02: none). Each course's inner edge sits on the intrados at its foot (never into the opening), and
+    it stops where the ring's OUTER edge (the extrados: the intrados' circle grown by `ring`) reaches that edge
+    — so the ring hides every step and nothing behind it is left open. ADAPTIVE: one or two tall courses up the
+    near-vertical haunches, short ones at the crown (the old .26 u courses took about twice the boxes — a
+    graveyard loft's footing build cost) */
+export function archShape(a0, a1, yS, rise){
+  const span = a1 - a0, mid = (a0 + a1) / 2, ring = Math.min(.34, .16 + .06 * span);
   let cx, cy, Rr;
   if (rise >= span / 2 - 1e-6){ Rr = (rise * rise + span * span / 4) / span; cx = a0 + Rr; cy = yS; }
   else { Rr = (span * span / 4 + rise * rise) / (2 * rise); cx = mid; cy = yS + rise - Rr; }
   const xAt = y => cx - Math.sqrt(Math.max(0, Rr * Rr - (y - cy) * (y - cy)));
-  const yA = yS + rise, w0 = dep - .04, wR = dep + .03;
-  // the masonry behind the ring: courses whose inner edge sits on the intrados at their foot (the ring hides the steps)
-  const n = Math.max(2, Math.ceil(rise / .26));
-  for (let j = 0; j < n; j++){
-    const ya = yS + rise * j / n, yb = yS + rise * (j + 1) / n, e = Math.min(mid, xAt(ya));
+  const yA = yS + rise, xIn = y => Math.min(mid, xAt(y)), Re = Rr + ring;
+  const yExt = x => cy + Math.sqrt(Math.max(0, Re * Re - (cx - x) * (cx - x)));   // (where the extrados reaches x)
+  const courses = [];
+  for (let ya = yS, guard = 0; ya < yA - 1e-6 && guard < 48; guard++){
+    const e = xIn(ya), yb = e >= mid - .01 ? yA : Math.min(yA, Math.max(ya + .06, yExt(e)));
+    courses.push([ya, yb, e]);
+    ya = yb;
+  }
+  return { span, mid, ring, cx, cy, Rr, xAt, yA, courses };
+}
+function arch(k, s, a0, a1, rise, top, oc, dep, DF){
+  const yS = top - .45 - rise, { mid, ring, cx, cy, Rr, yA, courses } = archShape(a0, a1, yS, rise);
+  const w0 = dep - .04, wR = dep + .03;
+  for (const [ya, yb, e] of courses){                     // the masonry behind the ring (archShape)
     if (e - a0 < .02) continue;
-    if (e >= mid - .01){ s.box('ashlar', a0, a1, oc - w0 / 2, oc + w0 / 2, ya, yb, DF); continue; }
-    s.box('ashlar', a0, e, oc - w0 / 2, oc + w0 / 2, ya, yb, DF);
-    s.box('ashlar', a1 - (e - a0), a1, oc - w0 / 2, oc + w0 / 2, ya, yb, DF);
+    if (e >= mid - .01) s.box('ashlar', a0, a1, oc - w0 / 2, oc + w0 / 2, ya, yb, DF);
+    else { s.box('ashlar', a0, e, oc - w0 / 2, oc + w0 / 2, ya, yb, DF); s.box('ashlar', a1 - (e - a0), a1, oc - w0 / 2, oc + w0 / 2, ya, yb, DF); }
   }
   s.box('ashlar', a0, a1, oc - w0 / 2, oc + w0 / 2, yA, top, DF | NY);                  // the spandrel
   // the ring: 4 voussoirs a side along the intrados, each standing out from it by `ring`

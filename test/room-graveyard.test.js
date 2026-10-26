@@ -3,7 +3,7 @@ import { planFooting, footingBoxes, rectAabb, FOOT } from '../src/rooms/footing.
 import { buildFooting } from '../src/rooms/footing3d.js';
 import { makePulse } from '../src/rooms/pulse.js';
 import { STAGE } from '../src/rooms/common.js';
-import { graveyardStyle } from '../src/rooms/graveyard-footing.js';
+import { graveyardStyle, archShape } from '../src/rooms/graveyard-footing.js';
 import { GY, graveSlots, placeGraves, obstaclesOf, supportRects, rectDist, graveCandles, votives, footLights, wispsFor, VOTIVE_R,
          doorOf, doorApex, doorLamps, towerOf, answerCue, answerTiming } from '../src/rooms/graveyard-place.js';
 
@@ -190,6 +190,32 @@ describe('graveyard footing: the yard\'s own masonry under every machine', () =>
       // under its carved top (≤ .05) / its planks (.07): the first surface is the slab's own underside — deeper than the well
       expect(q.top - under[0], `${q.band}: solid ${(q.top - under[0]).toFixed(3)} under the top`).toBeGreaterThanOrEqual(q.well + .03);
       f.dispose();
+    }
+  });
+});
+
+describe('graveyard arches: the masonry behind each ring, in as few courses as hide under it', () => {
+  const SHAPES = [[2.6, 1.6], [3.2, 1.2], [3.6, 2.2], [2, .8], [3.4, 1], [4.6, 3.1], [1.4, .45]];
+  it('no course fills the opening; nothing behind the ring is left open; far fewer boxes than .26 u courses', () => {
+    for (const [span, rise] of SHAPES){
+      const a0 = -span / 2, yS = 3, { mid, ring, cx, cy, Rr, xAt, yA, courses } = archShape(a0, a0 + span, yS, rise);
+      const tag = `span ${span} rise ${rise}`;
+      // contiguous from the springing to the crown
+      expect(courses[0][0], tag).toBe(yS); expect(courses[courses.length - 1][1], tag).toBeCloseTo(yA, 9);
+      for (let j = 1; j < courses.length; j++) expect(courses[j][0], tag).toBe(courses[j - 1][1]);
+      const covered = (x, y) => courses.some(([ya, yb, e]) => y >= ya - 1e-9 && y <= yb + 1e-9 && e - a0 >= .02 && (e >= mid - .01 || x <= e + 1e-9));
+      for (let y = yS + .001; y < yA; y += .01){
+        const xi = xAt(y);
+        // (1) the opening stays open: a course's inner edge is never past the intrados anywhere it stands
+        for (const [ya, yb, e] of courses) if (y >= ya && y <= yb && e - a0 >= .02 && e < mid - .01) expect(e, `${tag} y ${y.toFixed(2)}`).toBeLessThanOrEqual(xi + 1e-9);
+        // (2) masonry or ring everywhere from the pier to the intrados: past the extrados (the ring's outer edge) it is masonry
+        const dy = y - cy, xo = Rr + ring > Math.abs(dy) ? cx - Math.sqrt((Rr + ring) ** 2 - dy * dy) : mid;
+        for (let x = a0 + .005; x < Math.min(xo, mid) - .005; x += .02) expect(covered(x, y), `${tag}: open at ${x.toFixed(2)}, ${y.toFixed(2)}`).toBe(true);
+      }
+      // (3) cheaper than the uniform .26 u courses it replaced
+      const n = Math.max(2, Math.ceil(rise / .26)), boxes = cs => cs.reduce((s, [, , e]) => s + (e - a0 < .02 ? 0 : e >= mid - .01 ? 1 : 2), 0);
+      const uni = Array.from({ length: n }, (_, j) => [0, 0, Math.min(mid, xAt(yS + rise * j / n))]);
+      expect(boxes(courses), tag).toBeLessThanOrEqual(boxes(uni));
     }
   });
 });

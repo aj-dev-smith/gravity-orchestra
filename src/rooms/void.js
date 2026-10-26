@@ -1,74 +1,42 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { STAGE, rng, canvasTex, radialTex, glowPoints, beamMat, trs } from './common.js';
-import { accessRect } from './footing.js';
+import { STAGE, rng, canvasTex, radialTex, glowPoints, trs } from './common.js';
+import { FOOT } from './footing.js';
+import { makePulse } from './pulse.js';
+import { voidIslands } from './void-isles.js';
+import { voidFootingStyle, makeVoidMats, makeRuneMat, GLOW_I } from './void-footing.js';
+import { islandGeometry, runeGeometry, litOf, crystalGeometry, makeCrystalMat, makeKeelBeamMat, fillCrystals, axesOf, resample, keelDepth, GROUND } from './void-ground.js';
 /* ============================================================
-   THE VOID — no room at all: an infinite starfield + nebula with a
-   ringed planet low on the horizon, a neon horizon grid far below
-   drifting toward you, and every instrument standing on its OWN lit
-   plinth floating at the stage floor (the floor contract: legs still
-   land at STAGE.FLOOR — the plinth is the floor). From each plinth a
-   pillar of light falls away into the haze, so nothing just hovers.
-   The islands come from `place(anchors, plan)` — the Room's anchor points
-   and what they stand on (rooms/footing.js: a loft's shared deck, every
-   stair and ladder stands on an island too) — voidIslands, pure.
+   THE VOID — no room at all: an infinite starfield + nebula with a ringed planet low on the
+   horizon, a neon horizon grid far below drifting toward you — and the machines' GROUND torn
+   out of somewhere and set adrift: every machine stands on an ISLAND of dressed stone at the
+   stage floor (the floor contract: STAGE.FLOOR is the island's top), its fascia carved with
+   runes, rough rock tapering under it to a keel, a pillar of light falling from the keel into
+   the haze — so nothing just hovers.
+
+   Built for its machines (rooms/footing.js plans what each one stands on; this room dresses it):
+     · the islands come from `place(anchors, plan)` — voidIslands (void-isles.js, pure + tested):
+       a machine's footprint, a loft's shared deck, every stair and ladder, and the organ's columns
+       (a hung machine whose own supports reach the floor) all stand on an island; a chandelier
+       that never reaches the floor floats
+     · what stands on an island is cut from it (void-footing.js — the room's footing STYLE): a dais
+       of its stone; a terrace of its rock; a rock pillar; a stack of levitating stones; a floating
+       ridge for a loft; rock columns under an open stand's feet; stepping stones, carved steps or
+       a ladder of light to climb them
+     · the room ANSWERS its machines: the runes round an island's rim are lit by the nearest machine
+       on it, and the crystals hovering off its stretch of rim breathe and lift on its strikes
+       (rooms/pulse.js over each anchor's cue: pure fns of songTime, dark in the count-in). The
+       background (grid, clouds, pillars, motes) stays quiet.
+   Rooms own no lights. Per frame: uniforms only.
    ============================================================ */
 
 const FOG = 0x0a0822;
-const GRID_Y = -220;               // the horizon grid, far below the plinths
+const GRID_Y = -220;               // the horizon grid, far below the islands
 const MAX_PLINTHS = 16;
 const DECKS = [[-40, .9, 0x6a58c8, .9], [-68, 1, 0x3a2c88, 1.3]];
-const DECK_W = 360;               // deck size: its faded rim stays inside camera.far (200) from the stage   // two cloud decks: [y, opacity, tint, tex repeat] — plinth / cloud / cloud / grid depth layers
-const PILLAR = 70;                // light-pillar length below each plinth
+const DECK_W = 360;               // deck size: its faded rim stays inside camera.far (200) from the stage   // two cloud decks: [y, opacity, tint, tex repeat] — island / cloud / cloud / grid depth layers
+const PILLAR = 70;                // a light pillar's length under its island's keel
 
-/* THE ISLANDS (pure — test/staging-audit.test.js): what floats under the machines. A piece per
-   standing machine (its footprint + PAD) and, given the footing plan (rooms/footing.js), per structure
-   that reaches past them: a LOFT's shared deck (its columns stand at the deck's corners, not its
-   members') and every STAIR / LADDER (+ KEEP). Pieces whose raw rects come within GAP join one
-   cluster; a cluster is ONE island: the convex hull of its pieces' padded corners (CCW in x, z) — a
-   clean outline with one rim (+ RIM), never a zig-zag stack of slabs. machines = how many machines
-   stand on it (one: its own colour). Hung machines float: no island. */
-const PAD = 1.2, GAP = .6, KEEP = .6, RIM = .14;
-const rectCorners = (r, pad) => {
-  const c = Math.cos(r.yaw || 0), s = Math.sin(r.yaw || 0), hw = r.hw + pad, hd = r.hd + pad;
-  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => [r.x + c * hw * u + s * hd * v, r.z - s * hw * u + c * hd * v]);
-};
-function rectsTouch(A, B){                                  // separating axes on the two rects grown by GAP / 2
-  const pa = rectCorners(A, GAP / 2), pb = rectCorners(B, GAP / 2);
-  for (const P of [pa, pb]) for (let i = 0; i < 2; i++){
-    const ax = P[i + 1][0] - P[i][0], az = P[i + 1][1] - P[i][1];
-    const pr = Q => { let lo = Infinity, hi = -Infinity; for (const q of Q){ const d = q[0] * ax + q[1] * az; lo = Math.min(lo, d); hi = Math.max(hi, d); } return [lo, hi]; };
-    const [a0, a1] = pr(pa), [b0, b1] = pr(pb);
-    if (a1 < b0 || b1 < a0) return false;
-  }
-  return true;
-}
-function hull(pts){                                         // monotone chain, CCW in (x, z)
-  pts = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-  const lo = [], up = [];
-  for (const p of pts){ while (lo.length > 1 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
-  for (const p of pts.reverse()){ while (up.length > 1 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
-  return lo.slice(0, -1).concat(up.slice(0, -1));
-}
-export function voidIslands(anchors = [], plan = null){
-  const pieces = [];
-  for (const a of anchors) if (a && a.kind !== 'hung' && a.w > 0 && a.d > 0)
-    pieces.push({ key: a.key, machine: true, x: a.x, z: a.z, yaw: a.yaw || 0, hw: a.w / 2, hd: a.d / 2, pad: PAD });
-  if (plan){
-    for (const L of plan.lofts || []) pieces.push({ key: L.id, x: L.x, z: L.z, yaw: L.yaw || 0, hw: L.hw, hd: L.hd, pad: KEEP });
-    for (const U of [...(plan.pads || []), ...(plan.lofts || [])])
-      if (U.access) pieces.push({ key: `${U.key || U.id}:${U.access.kind}`, ...accessRect(U, U.access), pad: KEEP });
-  }
-  const par = pieces.map((_, i) => i), find = i => par[i] === i ? i : (par[i] = find(par[i]));
-  for (let i = 0; i < pieces.length; i++) for (let j = i + 1; j < pieces.length; j++) if (rectsTouch(pieces[i], pieces[j])) par[find(i)] = find(j);
-  const groups = new Map();
-  pieces.forEach((p, i) => { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(p); });
-  return [...groups.values()].map(g => ({
-    keys: g.map(p => p.key), machines: g.filter(p => p.machine).length,
-    hull: hull(g.flatMap(p => rectCorners(p, p.pad))), rim: hull(g.flatMap(p => rectCorners(p, p.pad + RIM))),
-  }));
-}
+export { voidIslands };
 
 function skyTex(){
   return canvasTex(2048, 1024, (x, w, h) => {
@@ -177,7 +145,7 @@ export default {
     grid.rotation.x = -Math.PI / 2; grid.position.y = GRID_Y; grid.frustumCulled = false; grid.renderOrder = -3;   // under both cloud decks (they occlude it)
     group.add(grid);
 
-    // ---- two cloud decks between the plinths and the grid: NORMAL-blended, so they occlude
+    // ---- two cloud decks between the islands and the grid: NORMAL-blended, so they occlude
     // the grid (additive clouds only brighten — they can't put anything "in front"). Sells the drop.
     const cloud = cloudTex();
     // radial falloff (green channel → alphaMap, its own untransformed uv): the decks thin out
@@ -205,71 +173,57 @@ export default {
     const motes = glowPoints(mP, { colors: mC, sizes: mS, phases: mPh, map: radialTex(32, [[0, 1], [.3, .4], [1, 0]]), flicker: .8, rate: 1.7, drift: 1.2 });
     group.add(motes);
 
-    // ---- floating islands: hull-shaped decks (rebuilt per song by place()) + instanced light pillars ----
-    const slabMat = new THREE.MeshStandardMaterial({ color: 0x14152a, metalness: .85, roughness: .22, envMap, envMapIntensity: 1.1 });
-    /* what the machines stand on (rooms/footing3d.js style): plinths and daises are cut from the island's
-       own metal (a shade lighter, so the step reads), and a grounded machine's line is its ISLAND's rim —
-       no second neon edge stacked a plinth above it (a raised deck keeps its own) */
-    const footBase = new THREE.MeshStandardMaterial({ color: 0x1d1f3a, metalness: .8, roughness: .3, envMap, envMapIntensity: 1 });
-    const footing = { mats: () => ({ base: footBase }), edge: p => p.band === 'flush' ? new THREE.Group() : null };
-    const keelMat = new THREE.MeshStandardMaterial({ color: 0x0d0e1c, metalness: .7, roughness: .4, envMap, envMapIntensity: .8 });
-    const rimMat = new THREE.MeshBasicMaterial({ vertexColors: true });
-    const isl = { slab: new THREE.Mesh(new THREE.BufferGeometry(), slabMat), keel: new THREE.Mesh(new THREE.BufferGeometry(), keelMat),
-                  rim: new THREE.Mesh(new THREE.BufferGeometry(), rimMat) };
-    for (const m of Object.values(isl)){ m.frustumCulled = false; group.add(m); }
-    const pillar = new THREE.InstancedMesh(new THREE.CylinderGeometry(.5, .5, 1, 28, 1, true).translate(0, -.5, 0),
-      beamMat({ gain: .42, falloff: 2.2, edge: 1.4 }), MAX_PLINTHS);
+    // ---- the GROUND: the room's materials, worn by the islands AND by what stands on them ----
+    const M = makeVoidMats({ envMap, floor: F });
+    const footing = voidFootingStyle(M);                                 // (rooms/footing3d.js builds it from the plan)
+    const U = new Float32Array(FOOT.MAX_PULSE);                          // the room's own answer: one slot per lit machine
+    const runeMat = makeRuneMat({ base: .3, gain: 1.5 }); runeMat.uniforms.uPulse.value = U;
+    const crystalMat = makeCrystalMat(U); crystalMat.uniforms.uLift.value = .38;
+    const mesh = (mat, name, order = 0) => { const m = new THREE.Mesh(new THREE.BufferGeometry(), mat); m.name = name; m.frustumCulled = false; m.renderOrder = order; m.matrixAutoUpdate = false; group.add(m); return m; };
+    const isl = { stone: mesh(M.stone, 'void:island-stone'), rock: mesh(M.rock, 'void:island-rock'), runes: mesh(runeMat, 'void:runes', 2), crystals: mesh(crystalMat, 'void:crystals') };
+    const pillar = new THREE.InstancedMesh(new THREE.CylinderGeometry(.34, .5, 1, 28, 1, true).translate(0, -.5, 0),
+      makeKeelBeamMat({ gain: .42, falloff: 2.2, edge: 1.4, fadeIn: .08 }), MAX_PLINTHS);
     const halo = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ map: radialTex(), transparent: true, opacity: .3, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }), MAX_PLINTHS);
     for (const im of [pillar, halo]){ im.count = 0; im.frustumCulled = false; group.add(im); }
-    const PAL = [0x5fd8ff, 0xb57bff, 0xff7ac8, 0x7affc8, 0xffb36a];
+    const _c = new THREE.Color(), SHARED = new THREE.Color(0x5fd8ff);
+    let pulses = [];
 
-    /* Islands (voidIslands): one per cluster of machines + the structures they stand on (rooms/footing.js
-       plan: lofts, stairs, ladders) — a freestanding station keeps its own (yawed-rect) island. Pillars +
-       halos stay per anchor. */
-    const _c = new THREE.Color();
-    // extrude a hull (scaled k about its centroid) downward from y=top by `depth`; optional flat colour
-    function slabGeo(H, k, top, depth, col){
-      const cx = H.reduce((a, p) => a + p[0], 0) / H.length, cz = H.reduce((a, p) => a + p[1], 0) / H.length;
-      const sh = new THREE.Shape(H.map(([x, z]) => new THREE.Vector2(cx + (x - cx) * k, cz + (z - cz) * k)));
-      const g = new THREE.ExtrudeGeometry(sh, { depth, bevelEnabled: false, curveSegments: 1 }).rotateX(Math.PI / 2);   // shape y → world z, extrudes down
-      g.translate(0, top, 0);
-      if (col){ const n = g.attributes.position.count, c = new Float32Array(n * 3);
-        for (let i = 0; i < n; i++){ c[i * 3] = col.r; c[i * 3 + 1] = col.g; c[i * 3 + 2] = col.b; }
-        g.setAttribute('color', new THREE.BufferAttribute(c, 3)); }
-      return g;
-    }
+    /* place(anchors, plan): the islands (voidIslands), their bodies, runes and crystals — a pure fn of
+       the anchors + the footing plan, rebuilt only when they change */
     function place(anchors, plan = null){
-      const list = anchors.filter(a => a.kind !== 'hung').slice(0, MAX_PLINTHS);   // (a hung machine floats: no island)
-      const slabs = [], keels = [], rims = [];
-      voidIslands(anchors, plan).forEach((I, gi) => {
-        const top = F + .003 * gi;                                   // staggered tops: coplanar islands can never z-fight
-        _c.setHex(I.machines > 1 ? 0x5fd8ff : PAL[(gi + 1) % PAL.length]).multiplyScalar(1.8);
-        rims.push(slabGeo(I.rim, 1, top - .14, .22, _c));
-        slabs.push(slabGeo(I.hull, 1, top, 1.8));
-        keels.push(slabGeo(I.hull, .82, top - 1.8, 2.6), slabGeo(I.hull, .55, top - 4.4, 3.4), slabGeo(I.hull, .25, top - 7.8, 3));   // stepped keel
+      const isles = voidIslands(anchors, plan), lit = litOf(anchors, isles);
+      const { stone, rock, glints } = islandGeometry(isles, { floor: F });
+      const swap = (m, g) => { m.geometry.dispose(); m.geometry = g; };
+      swap(isl.stone, stone); swap(isl.rock, rock);
+      swap(isl.runes, runeGeometry(isles, anchors, lit, { floor: F }).geometry);
+      const cg = crystalGeometry(); fillCrystals(cg, isles, anchors, plan, lit, glints); swap(isl.crystals, cg);
+      pulses = lit.map(a => makePulse(a.cue, a)); U.fill(0);
+      // a pillar of light under every island's keel (its colour: its one machine's, or the shared cyan)
+      let n = 0;
+      isles.forEach(I => {
+        if (n >= MAX_PLINTHS || I.hull.length < 3) return;
+        const P = resample(I.hull, GROUND.SEG), { a, ea, eb } = axesOf(P, I.cx, I.cz), D = keelDepth(eb);
+        const one = I.slots.length === 1 ? lit[I.slots[0]] : null;
+        _c.copy(one ? _c.set(one.color ?? '#5fd8ff') : SHARED);
+        const top = F + .003 * (I.group ?? 0) - GROUND.FASC - GROUND.LEDGE_DY - .6 * D;   // (inside the rock, faded in: no rim shows)
+        pillar.setMatrixAt(n, trs(I.cx, top, I.cz, 0, -Math.atan2(a[1], a[0]), 0, Math.max(.8, ea * .7), PILLAR, Math.max(.8, eb * 1.05)));
+        pillar.setColorAt(n, _c); n++;
       });
-      for (const [m, gs] of [[isl.slab, slabs], [isl.keel, keels], [isl.rim, rims]]){
-        m.geometry.dispose();
-        m.geometry = gs.length ? mergeGeometries(gs) : new THREE.BufferGeometry();
-        gs.forEach(g => g.dispose());
-      }
-      list.forEach((a, i) => {
-        const yaw = a.yaw || 0, r = Math.min(a.w, a.d);
-        _c.setHex(PAL[i % PAL.length]);
-        pillar.setMatrixAt(i, trs(a.x, F - 2, a.z, 0, yaw, 0, r * .55, PILLAR, r * .55));
-        pillar.setColorAt(i, _c);
-        halo.setMatrixAt(i, trs(a.x, F + .06 + .002 * i, a.z, 0, yaw, 0, a.w * 1.2, 1, a.d * 1.2));
-        halo.setColorAt(i, _c.multiplyScalar(.45));
+      pillar.count = n;
+      // a soft pool of each machine's colour on the stone round it
+      const ms = lit.filter(a => a.kind !== 'hung').slice(0, MAX_PLINTHS);
+      ms.forEach((a, i) => {
+        _c.set(a.color ?? '#5fd8ff').multiplyScalar(.4);
+        halo.setMatrixAt(i, trs(a.x, F + .06 + .002 * i, a.z, 0, a.yaw || 0, 0, a.w * 1.2, 1, a.d * 1.2));
+        halo.setColorAt(i, _c);
       });
-      for (const im of [pillar, halo]){
-        im.count = list.length; im.instanceMatrix.needsUpdate = true;
-        if (im.instanceColor) im.instanceColor.needsUpdate = true;
-      }
+      halo.count = ms.length;
+      for (const im of [pillar, halo]){ im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; }
     }
 
     const pillarBase = pillar.material.uniforms.uGain.value;
-    const gu = grid.material.uniforms;
+    const gu = grid.material.uniforms, cu = crystalMat.uniforms;
     return {
       group, ...STAGE, HW: 200, BACK: -200, FRONT: 200, CEIL: 200,
       fog: new THREE.FogExp2(FOG, .016), background: sky,
@@ -283,12 +237,19 @@ export default {
           dk.m.position.x = camera.position.x; dk.m.position.z = camera.position.z;
           dk.t.offset.set(camera.position.x / dk.k + songTime * dk.sx, -camera.position.z / dk.k - songTime * dk.sz);
         }
-        gu.uGain.value = 1 + .6 * energy;
+        gu.uGain.value = 1 + .4 * energy;
         motes.material.uniforms.uTime.value = songTime;
-        pillar.material.uniforms.uGain.value = pillarBase * (1 + .08 * Math.sin(songTime * 1.3) + .5 * energy);
-        rimMat.color.setScalar(1 + .7 * energy);                // island rims pulse with the kick / lead strikes
+        pillar.material.uniforms.uGain.value = pillarBase * (1 + .06 * Math.sin(songTime * 1.3) + .25 * energy);
+        // the room answers its machines: each one's runes + crystals (pure fns of songTime)
+        for (let i = 0; i < pulses.length; i++){ const v = pulses[i].at(songTime) + .35 * pulses[i].next(songTime); U[i] = v > 1 ? 1 : v; }
+        cu.uTime.value = songTime;
+        M.glow.emissiveIntensity = GLOW_I * (1 + .1 * Math.sin(songTime * .7));   // the stone's crystal veins breathe, slowly
       },
-      dispose(){ sky.dispose(); cloud.dispose(); edge.dispose(); decks.forEach(dk => dk.t.dispose()); footBase.dispose(); },
+      dispose(){
+        sky.dispose(); cloud.dispose(); edge.dispose(); decks.forEach(dk => dk.t.dispose());
+        for (const m of Object.values(isl)) m.geometry.dispose();
+        M.dispose(); runeMat.dispose(); crystalMat.dispose();
+      },
     };
   },
 };

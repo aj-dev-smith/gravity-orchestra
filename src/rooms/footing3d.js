@@ -135,7 +135,7 @@ function edgeMat(){
 }
 
 /* ---- the WRITER: growable buffers, quads with flat normals + world-space (box-projected) uvs ---- */
-function newBuf(edge = false){
+export function newBuf(edge = false){
   return { edge, p: new Float32Array(3 * 2048), n: edge ? null : new Float32Array(3 * 2048), uv: edge ? null : new Float32Array(2 * 2048),
            c: edge ? new Float32Array(3 * 2048) : null, k: edge ? new Float32Array(2048) : null, i: new Uint32Array(3 * 2048), nv: 0, ni: 0 };
 }
@@ -149,7 +149,7 @@ function grow(b, nv, ni){
 }
 const UVK = .25;                                                     // a 4 u texture tile
 /* one quad a b c d (counter-clockwise seen from its normal n) */
-function quad(b, P, nx, ny, nz, col, pulse){
+export function quad(b, P, nx, ny, nz, col, pulse){
   grow(b, 4, 6);
   const v = b.nv, ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
   for (let j = 0; j < 4; j++){
@@ -180,7 +180,7 @@ function obox(b, cx, cy, cz, X, Y, Z, faces, col, pulse){
   if (faces & PZ){ put(0, -1, -1, 1); put(1, 1, -1, 1); put(2, 1, 1, 1); put(3, -1, 1, 1); face(nrm(Z, 1)); }
   if (faces & NZ){ put(0, -1, -1, -1); put(1, -1, 1, -1); put(2, 1, 1, -1); put(3, 1, -1, -1); face(nrm(Z, -1)); }
 }
-function toGeometry(b){
+export function toGeometry(b){
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(b.p.slice(0, b.nv * 3), 3));
   if (b.n){ g.setAttribute('normal', new THREE.BufferAttribute(b.n.slice(0, b.nv * 3), 3)); g.setAttribute('uv', new THREE.BufferAttribute(b.uv.slice(0, b.nv * 2), 2)); }

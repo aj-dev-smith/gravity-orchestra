@@ -15,7 +15,7 @@ const ROOM = { x0: -STAGE.HW + 2.5, x1: STAGE.HW - 2.5, z0: STAGE.BACK + 2.5, z1
 const FOOT_ROOM = { x0: -STAGE.HW, x1: STAGE.HW, z0: STAGE.BACK, z1: STAGE.FRONT };
 /* (test/staging-audit.test.js: main's solve inputs → the solved spots → the anchors the room is told about) */
 const galleryOpts = R => ({ cx: R.cx, bandY: R.bandY, eyeY: 20, wallTop: R.wall[3], hung: R.hung || (R.fixed || []).map(f => [f.box[0], f.box[1], f.box[4], f.box[5]]) });
-const boxSolved = (solved, it) => { const p = solved[it.key], up = p.y === undefined ? 0 : p.y - (it.deck ?? 0);
+const boxSolved = (solved, it) => { const p = solved[it.key], up = p.y === undefined ? (p.lift || 0) : p.y - (it.deck ?? 0);   // (p.lift: a riser — stations.js)
   return [p.x + it.box[0], p.x + it.box[1], it.y0 + up, it.top + up, p.z + it.box[2], p.z + it.box[3]]; };
 function anchorsOf(R){
   const w = R.wall, solved = R.items.length ? layoutStations(R.items.map(({ key, x, z, box, top }) => ({ key, x, z, box, top })),

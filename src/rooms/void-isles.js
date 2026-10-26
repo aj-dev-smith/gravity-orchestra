@@ -38,7 +38,7 @@ export const ISLE = {
   RIM: .14,            // the rim outline sits this far past the hull (the chamfer's lip)
 };
 export const RUNE = { STEP: .95, END: 1, H: .28, W: .2 };           // spacing along an edge, kept off its corners (the platform's are inset), glyph size
-export const CRYSTAL = { PER: 3, OUT: 1.35, SEP: 2.4, CLEAR: 1, R: .3, MAX: 96 };
+export const CRYSTAL = { PER: 2, OUT: 1, SEP: 2.4, CLEAR: 1, R: .36, MAX: 96 };   // (close to its rim, few: a machine's, not confetti)
 
 /** the machines the room lights (and floats crystals for): every standing anchor, in order, ≤ 32 */
 export const machinesOf = anchors => (anchors || []).filter(a => a && a.kind !== 'hung' && a.w > 0 && a.d > 0).slice(0, 32);
@@ -227,13 +227,16 @@ export function runeSpots(isles, anchors){
   return out;
 }
 
+/* the plan's envelopes, once per plan object (crystalSpots and crystalClearance both ask) */
+const ENV = new WeakMap();
+const envOf = plan => { let e = ENV.get(plan); if (!e){ e = footingBoxes(plan).map(b => b.box); ENV.set(plan, e); } return e; };
 /** CRYSTALS: up to CRYSTAL.PER shards per machine, hovering CRYSTAL.OUT off its own stretch of rim — at
     its island's edge, or just under its deck when it stands high — clear of everything (see the header):
     [{ x, y, z, r, slot, phase, tilt, spin }] */
 export function crystalSpots(isles, anchors, plan = null){
   const ms = machinesOf(anchors), F = plan?.floor ?? -5.5, out = [];
   const solids = (anchors || []).filter(a => a && Array.isArray(a.box)).map(a => a.box);
-  const env = plan ? footingBoxes(plan).map(e => e.box) : [];
+  const env = plan ? envOf(plan) : [];
   const boxGap = (b, x, y0, y1, z) => Math.hypot(Math.max(b[0] - x, 0, x - b[1]), Math.max(b[4] - z, 0, z - b[5]), Math.max(b[2] - y1, 0, y0 - b[3]));
   isles.forEach((I, ii) => {
     if (!I.slots.length) return;
@@ -257,7 +260,7 @@ export function crystalSpots(isles, anchors, plan = null){
       for (const s of mine){
         if (got.length >= CRYSTAL.PER) break;
         if (got.some(g => Math.hypot(g.x - s.x, g.z - s.z) < CRYSTAL.SEP)) continue;
-        const h = hash2(s.x, s.z, 3), out_ = CRYSTAL.OUT + .5 * h, x = s.x + s.nx * out_, z = s.z + s.nz * out_;
+        const h = hash2(s.x, s.z, 3), out_ = CRYSTAL.OUT + .3 * h, x = s.x + s.nx * out_, z = s.z + s.nz * out_;
         const r = CRYSTAL.R * (.75 + .5 * hash2(s.x, s.z, 5));
         const y = raised ? a.bottom - 1.3 - 1.4 * hash2(s.x, s.z, 7) : F + .35 + .9 * hash2(s.x, s.z, 7);
         const y0 = y - r * 1.6, y1 = y + r * 1.6 + .45;                           // (its body, + how high a strike lifts it)
@@ -274,7 +277,7 @@ export function crystalSpots(isles, anchors, plan = null){
 
 /** how close any crystal comes to a machine's solid box or a support's envelope (the test's audit) */
 export function crystalClearance(spots, anchors, plan){
-  const env = plan ? footingBoxes(plan).map(e => e.box) : [];
+  const env = plan ? envOf(plan) : [];
   const solids = (anchors || []).filter(a => a && Array.isArray(a.box)).map(a => a.box);
   let worst = Infinity;
   for (const c of spots){

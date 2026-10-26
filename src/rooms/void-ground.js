@@ -240,7 +240,7 @@ export function makeCrystalMat(U){
     vertexShader: /* glsl */`
       attribute vec3 iPos; attribute vec4 iA; attribute vec4 iB; attribute vec3 iCol;
       uniform float uPulse[${FOOT.MAX_PULSE}]; uniform float uTime, uLift;
-      varying vec3 vN, vC, vV; varying float vG, vFog;
+      varying vec3 vN, vC, vV; varying float vG, vFog, vF;
       vec3 turn(vec3 q, float ct, float st, float cs, float sn){
         q = vec3(q.x, q.y * ct - q.z * st, q.y * st + q.z * ct);
         return vec3(q.x * cs + q.z * sn, q.y, -q.x * sn + q.z * cs);
@@ -256,16 +256,18 @@ export function makeCrystalMat(U){
         vN = normalize(normalMatrix * turn(normal, ct, st, cs, sn));
         vC = iCol;
         vG = .62 + .22 * sin(uTime * .5 + ph * 6.2832) + .9 * p;
+        vF = pow(p, 6.);                                           // (a white flash on the strike itself: ~80 ms, then the colour's afterglow)
         vFog = -mv.z; vV = normalize(-mv.xyz);
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: /* glsl */`
       uniform vec3 fogColor; uniform float fogDensity;
-      varying vec3 vN, vC, vV; varying float vG, vFog;
+      varying vec3 vN, vC, vV; varying float vG, vFog, vF;
       void main(){
         vec3 N = normalize(vN);
         float f = abs(dot(N, normalize(vec3(-.35, .8, .5)))), fr = pow(1. - abs(dot(N, normalize(vV))), 2.);
         vec3 col = vC * (.08 + .3 * f) + vC * vG * (.3 + 1.1 * fr) + vec3(.9, .95, 1.) * pow(f, 16.) * .45 * vG;
+        col += vec3(1., .97, .93) * vF * .85;
         col = mix(col, fogColor, 1. - exp(-fogDensity * fogDensity * vFog * vFog));
         gl_FragColor = vec4(col, 1.);
         #include <tonemapping_fragment>
@@ -303,3 +305,12 @@ export function fillCrystals(geo, isles, anchors, plan, lit, glints){
 const _glass = new THREE.Color(0x7fe0ff), _hsl = { h: 0, s: 0, l: 0 };
 /** is (x, z) on any island (with a margin)? (dev / tests: what hovers must not) */
 export const onIsland = (isles, x, z, m = 0) => isles.some(I => outOf(I.hull, x, z) <= m);
+
+/** each sky rock's world AABB [x0, x1, y0, y1, z0, z1] (its own geometry's bounds) */
+export function skyBoxes(sky, floor){
+  return sky.map(I => {
+    const g = islandGeometry([I], { floor }), bb = new THREE.Box3();
+    for (const m of [g.stone, g.rock]){ m.computeBoundingBox(); bb.union(m.boundingBox); m.dispose(); }
+    return [bb.min.x, bb.max.x, bb.min.y, bb.max.y, bb.min.z, bb.max.z];
+  });
+}

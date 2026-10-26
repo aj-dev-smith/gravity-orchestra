@@ -41,7 +41,7 @@ export const VD = {
   RUNE_H: .26, RUNE_STEP: .62,                    // fascia runes: glyph height, spacing
   GAP: .34, STONE: 3.9,     // a levitating cairn: the air between stones (varied ±), a stone's mean height
   POST: .11, RAIL_Y: 1.02, RAIL_SPAN: 2.2,        // rails of light on stone posts (≤ FOOT.RAIL)
-  STEP_T: .2,               // a stepping stone's slab
+  STEP_T: .32,              // a stepping stone's slab
   BAR: .055, RUNG: .042,    // a ladder of light: stile, rung
   VEIN: .075,               // a crystal vein's width
   TIER: 5.5,                // an open stand's columns: tied by stone lintels every ≤ this (≤ kit.DIM.OPEN_TIER)
@@ -406,19 +406,22 @@ function stack(kit, S, r, yTop, { cu = 0, cv = 0, ru = r.hw, rv = r.hd, k = 11, 
 function steppingStones(kit, S, r, T, acc){
   const F = kit.floor, k = acc.side[0] === '+' ? 1 : -1, ow = acc.out, tr = acc.tread, aL = acc.a1 - ow;
   const loc = (a, o) => acc.side[1] === 'u' ? [k * (r.hw + o), a] : [a, k * (r.hd + o)];
-  const stone = (a0, a1, o0, o1, y, t, depth, kk) => {
+  const stone = (a0, a1, o0, o1, y, t, depth, kk, tip = false) => {
     const [u0, v0] = loc(a0, o0), [u1, v1] = loc(a1, o1), cu = (u0 + u1) / 2, cv = (v0 + v1) / 2, hu = Math.abs(u1 - u0) / 2, hv = Math.abs(v1 - v0) / 2;
     const poly = oct(hu, hv, Math.min(hu, hv) * .3, cu, cv), inset = oct(hu - .03, hv - .03, Math.max(0, Math.min(hu, hv) * .3 - .01), cu, cv);
     const air = y - t - F;                                              // (what's under it: near the ground a stone rests on it)
+    // a soft line of light along its nosing (the edge you step up onto): the stair reads as treads
+    const [nu0, nv0] = loc(a0 + .05, o0 + .06), [nu1, nv1] = loc(a0 + .05, o1 - .06);
+    kit.bar('haze', [nu0, y - .015, nv0], [nu1, y - .015, nv1], .05, .04, 63);
     if (air < depth + .45){ chamferSlab(kit, S.stone, S.stone, poly, F - .04, y, .03, inset); return; }
     chamferSlab(kit, S.stone, S.stone, poly, y - t, y, .03, inset);
-    keel(kit, S.rock, rockRing(kit, poly, 1, y - t, kk, cu, cv, .02), depth, kk, S.glow);
+    keel(kit, S.rock, rockRing(kit, poly, 1, y - t, kk, cu, cv, .02), depth, kk, tip ? S.glow : null);
   };
   for (let i = 1; i < acc.n; i++){
     const a0 = acc.a0 + (i - 1) * tr;
-    stone(a0 + .03, Math.min(aL - .03, a0 + tr - .03), .1, ow - .1, F + i * acc.rise, VD.STEP_T, .3, 50 + i);
+    stone(a0 + .03, Math.min(aL - .03, a0 + tr - .03), .1, ow - .1, F + i * acc.rise, VD.STEP_T, .34, 50 + i);
   }
-  stone(aL + .02, acc.a1 - .02, .02, ow - .05, T, .3, .55, 49);
+  stone(aL + .02, acc.a1 - .02, .02, ow - .05, T, .3, .55, 49, true);
 }
 
 /* a LADDER OF LIGHT (footing.js access: flights, landings, a cage past FOOT.CAGE) */

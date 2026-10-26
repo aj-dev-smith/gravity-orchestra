@@ -5,7 +5,9 @@ import { makePulse } from '../src/rooms/pulse.js';
 import { STAGE } from '../src/rooms/common.js';
 import { voidFootingStyle, makeVoidMats } from '../src/rooms/void-footing.js';
 import { voidIslands, skyRocks, runeSpots, crystalSpots, crystalClearance, machinesOf, outOf, rectDist, sepGap, grown, ISLE, CRYSTAL } from '../src/rooms/void-isles.js';
-import { islandGeometry, runeGeometry, runeSlots, litOf, crystalGeometry, fillCrystals, CRYSTAL_MAX, QUIET, GROUND } from '../src/rooms/void-ground.js';
+import { islandGeometry, runeGeometry, runeSlots, litOf, crystalGeometry, fillCrystals, skyBoxes, CRYSTAL_MAX, QUIET, GROUND } from '../src/rooms/void-ground.js';
+import { roomSolids } from '../src/shotrig.js';
+import * as THREE from 'three';
 
 /* THE VOID (src/rooms/void.js + void-footing.js + void-isles.js): what its machines stand on — stone that
    grows with height, written into the footing kit's merged slots, never outside the plan's envelopes —
@@ -303,6 +305,22 @@ describe('the Void\'s SKY ROCKS (void-isles.js skyRocks): a chandelier whose rod
     expect(soffit).toBeGreaterThan(0);                      // its dressed stone faces down, at the ceiling: the rods' ends meet it
     expect(keel).toBeGreaterThan(0);                        // its rock tapers up
     expect(G.glints).toEqual(base.glints);                  // nothing hangs off it
+  });
+  it('the shot solve sees the sky rock as its own box — never the island meshes\' floor-to-ceiling bounds (a narrow stage: the islands < 40 u)', () => {
+    // (?solo=ricochet: the chandelier alone over a small belt island — one merged mesh holds both)
+    const A1 = [CROWD[0], CH], I = voidIslands(A1, null), S1 = skyRocks(A1, { ceil: CEIL, floor: FL }), G = islandGeometry(I.concat(S1), { floor: FL });
+    const g = new THREE.Group(), mat = new THREE.MeshStandardMaterial();
+    const boxes = skyBoxes(S1, FL);
+    for (const k of ['stone', 'rock']){ const m = new THREE.Mesh(G[k], mat); m.userData.boxes = boxes; g.add(m); }
+    const solids = roomSolids(g, FL);
+    expect(solids.length).toBe(2);                                            // (one box per mesh that carries it)
+    for (const s of solids){
+      expect(s.box[2]).toBeGreaterThanOrEqual(CEIL - 1e-6);                   // its underside is the soffit: nothing of the stage is inside it
+      expect(s.box[3] - s.box[2]).toBeLessThan(12);
+    }
+    const bare = new THREE.Group(); for (const k of ['stone', 'rock']) bare.add(new THREE.Mesh(G[k], mat));
+    expect(roomSolids(bare, FL).some(s => s.box[2] < FL + 1 && s.box[3] > CEIL - 1)).toBe(true);   // (what it would be without them)
+    expect(skyBoxes([], FL)).toEqual([]);
   });
   it('its runes run round its fascia, above the soffit, lit by the chandelier', () => {
     const I = voidIslands(A, PLAN).concat(sky), lit = litOf(A, I), R = runeSpots(I, A), S = runeSlots(R, I, A, lit);

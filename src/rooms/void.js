@@ -4,7 +4,7 @@ import { FOOT } from './footing.js';
 import { makePulse } from './pulse.js';
 import { voidIslands, skyRocks } from './void-isles.js';
 import { voidFootingStyle, makeVoidMats, makeRuneMat, GLOW_I } from './void-footing.js';
-import { islandGeometry, runeGeometry, litOf, crystalGeometry, makeCrystalMat, makeKeelBeamMat, fillCrystals, axesOf, resample, keelDepth, GROUND } from './void-ground.js';
+import { islandGeometry, runeGeometry, litOf, crystalGeometry, skyBoxes, makeCrystalMat, makeKeelBeamMat, fillCrystals, axesOf, resample, keelDepth, GROUND } from './void-ground.js';
 /* ============================================================
    THE VOID — no room at all: an infinite starfield + nebula with a ringed planet low on the
    horizon, a neon horizon grid far below drifting toward you — and the machines' GROUND torn
@@ -36,8 +36,14 @@ const MAX_PLINTHS = 16;
 const DECKS = [[-40, .9, 0x6a58c8, .9], [-68, 1, 0x3a2c88, 1.3]];
 const DECK_W = 360;               // deck size: its faded rim stays inside camera.far (200) from the stage   // two cloud decks: [y, opacity, tint, tex repeat] — island / cloud / cloud / grid depth layers
 const PILLAR = 70;                // a light pillar's length under its island's keel
+const PILLAR_W = [3.2, 2.4];      // its widest (along / across the keel), in its unit-radius scale
 
 export { voidIslands };
+
+/* a machine's afterglow: .45 s, shorter for a busy one (half its mean gap, ≥ .2 s) — the kit's runes breathe
+   with its groove instead of sitting lit */
+export const decayOf = a => { const n = a.cue?.length || 0; return n && a.P > 0 ? Math.min(.45, Math.max(.2, .5 * a.P / n)) : .45; };
+
 
 function skyTex(){
   return canvasTex(2048, 1024, (x, w, h) => {
@@ -181,7 +187,7 @@ export default {
     const M = makeVoidMats({ envMap, floor: F });
     const footing = voidFootingStyle(M);                                 // (rooms/footing3d.js builds it from the plan)
     const U = new Float32Array(FOOT.MAX_PULSE);                          // the room's own answer: one slot per lit machine
-    const runeMat = makeRuneMat({ base: .3, gain: 1.5 }); runeMat.uniforms.uPulse.value = U;
+    const runeMat = makeRuneMat({ base: .18, gain: 1.75 });   // (dim at rest, so a strike's step reads from the wide) runeMat.uniforms.uPulse.value = U;
     const crystalMat = makeCrystalMat(U); crystalMat.uniforms.uLift.value = .38;
     const mesh = (mat, name, order = 0) => { const m = new THREE.Mesh(new THREE.BufferGeometry(), mat); m.name = name; m.frustumCulled = false; m.renderOrder = order; m.matrixAutoUpdate = false; group.add(m); return m; };
     const isl = { stone: mesh(M.stone, 'void:island-stone'), rock: mesh(M.rock, 'void:island-rock'), runes: mesh(runeMat, 'void:runes', 2), crystals: mesh(crystalMat, 'void:crystals') };
@@ -195,19 +201,24 @@ export default {
        compile): the instance colours exist before place() fills them (they change the program), and
        the footing's own materials stand in on two empty meshes */
     for (const im of [pillar, halo]){ im.setColorAt(0, _c.set(0xffffff)); im.count = 0; im.frustumCulled = false; group.add(im); }
-    mesh(M.glow, 'void:warm-glow'); mesh(M.haze, 'void:warm-haze'); mesh(M.rune, 'void:warm-rune', 2);
+    /* (once drawn — the program is compiled and cached on its material — a stand-in steps out: three binds
+       a program and uploads its uniforms even for an empty draw, every frame, twice in XR) */
+    for (const m of [mesh(M.glow, 'void:warm-glow'), mesh(M.haze, 'void:warm-haze'), mesh(M.rune, 'void:warm-rune', 2)]) m.onAfterRender = () => { m.visible = false; };
     let pulses = [];
 
     /* place(anchors, plan): the islands (voidIslands), their bodies, runes and crystals — a pure fn of
        the anchors + the footing plan, rebuilt only when they change */
     function place(anchors, plan = null){
-      const isles = voidIslands(anchors, plan), all = isles.concat(skyRocks(anchors, { ceil: STAGE.CEIL, floor: F })), lit = litOf(anchors, all);
+      const isles = voidIslands(anchors, plan), sky = skyRocks(anchors, { ceil: STAGE.CEIL, floor: F }), all = isles.concat(sky), lit = litOf(anchors, all);
       const { stone, rock, glints } = islandGeometry(all, { floor: F });
       const swap = (m, g) => { m.geometry.dispose(); m.geometry = g; };
       swap(isl.stone, stone); swap(isl.rock, rock);
+      /* the shot solve's solids (shotrig roomSolids): the islands lie at the floor (nothing to stand in
+         the way), a sky rock is its own box — never the merged mesh's floor-to-ceiling bounds */
+      isl.stone.userData.boxes = isl.rock.userData.boxes = skyBoxes(sky, F);
       swap(isl.runes, runeGeometry(all, anchors, lit, { floor: F }).geometry);
       const cg = crystalGeometry(); fillCrystals(cg, isles, anchors, plan, lit, glints); swap(isl.crystals, cg);
-      pulses = lit.map(a => makePulse(a.cue, a)); U.fill(0);
+      pulses = lit.map(a => makePulse(a.cue, { ...a, decay: decayOf(a) })); U.fill(0);
       // a pillar of light under every island's keel (its colour: its one machine's, or the shared cyan)
       let n = 0;
       isles.forEach(I => {
@@ -215,8 +226,12 @@ export default {
         const P = resample(I.hull, GROUND.SEG), { a, ea, eb } = axesOf(P, I.cx, I.cz), D = keelDepth(eb);
         const one = I.slots.length === 1 ? lit[I.slots[0]] : null;
         _c.copy(one ? _c.set(one.color ?? '#5fd8ff') : SHARED);
+        /* a beam, not a slab: its width capped (a long keel's pillar is no wider than a small one's ×~2),
+           dimmer the more it was cut — the luminous area under the archipelago stays about even */
+        const sx = Math.max(.8, ea * .7), sz = Math.max(.8, eb * 1.05), cx = Math.min(sx, PILLAR_W[0]), cz = Math.min(sz, PILLAR_W[1]);
+        _c.multiplyScalar(Math.max(.55, Math.sqrt(cx * cz / (sx * sz))));
         const top = F - .003 * ((I.group ?? 0) % 4) - GROUND.FASC - GROUND.LEDGE_DY - .6 * D;   // (inside the rock, faded in: no rim shows)
-        pillar.setMatrixAt(n, trs(I.cx, top, I.cz, 0, -Math.atan2(a[1], a[0]), 0, Math.max(.8, ea * .7), PILLAR, Math.max(.8, eb * 1.05)));
+        pillar.setMatrixAt(n, trs(I.cx, top, I.cz, 0, -Math.atan2(a[1], a[0]), 0, cx, PILLAR, cz));
         pillar.setColorAt(n, _c); n++;
       });
       pillar.count = n;

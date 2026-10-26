@@ -151,7 +151,7 @@ export function graveSlots(){
   for (let i = 0; i < 14; i++) for (let j = 0; j < 13; j++){
     const x = -34 + i * 5.2 + (R() - .5) * 1.8, z = -30 + j * 5.2 + (R() - .5) * 1.8;
     if (R() < .3) continue;
-    low.push(plotAt(R, x, z, R() < .55 ? 'ledger' : 'plot', (R() - .5) * .5 + (R() < .5 ? 0 : Math.PI), .22));
+    low.push(plotAt(R, x, z, R() < .55 ? 'ledger' : 'plot', (R() - .5) * .5 + (R() < .5 ? 0 : Math.PI), .13));
   }
   return (SLOTS = { home, reserve, low });
 }

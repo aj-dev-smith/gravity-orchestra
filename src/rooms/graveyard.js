@@ -452,7 +452,7 @@ export default {
     const halos = ownedPoints(FL_CAP, { map: radialTex(64, [[0, .55], [.25, .22], [.6, .05], [1, 0]]), flicker: .3, rate: 6, pulse: PULSE, gain: 1.1, grow: .3 });
     group.add(flames, halos);
     const pools = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
-      glowMat(radialTex(), 0xff8a3a, .16, { side: THREE.FrontSide }), CAND_CAP);
+      glowMat(radialTex(), 0xff8a3a, .13, { side: THREE.FrontSide }), CAND_CAP);
     pools.count = 0; pools.frustumCulled = false; group.add(pools);
 
     // ---- WILL-O'-THE-WISPS: cold green-blue lights drifting low over the far graves — and one for each

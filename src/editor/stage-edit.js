@@ -287,11 +287,20 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     paintDock();
     hint();
   }
+  /* a machine standing on the floor right behind the belt (FLOOR on a gallery machine leaves it there): the
+     belt's wall hides it from every seat — the hint says so (the user's word stands; nothing moves it) */
+  function hidden(p){
+    const w = wallBox(), h = liftable(p) ? H(p) : null;
+    if (!w || !h || h.lift > .05) return false;
+    const [x0, x1, z0, z1] = bounds(fpOf(p));
+    return z1 <= w[2] + .5 && x0 >= w[0] - .5 && x1 <= w[1] + .5;
+  }
   function hint(){
     if (!sel){ hintEl.textContent = pieces.length ? 'click a machine to pick it up · drag empty space to orbit' : 'nothing to move — this song has only the belt'; hintEl.className = 'se-hint'; return; }
     const bad = describeConflicts(sel.bad, k => pieces.find(p => p.key === k)?.label || k);
     const turnHint = coarse() ? ' · the ring turns it' : ' · Q / E or the ring to turn';   // (no keys on a phone)
-    hintEl.textContent = bad ? `${sel.label}: ${bad}` : `${sel.label} · drag to move${sel.canRotate ? turnHint : ''}${liftable(sel) ? ' · ▲▼ height' : ''}`;
+    hintEl.textContent = bad ? `${sel.label}: ${bad}` : hidden(sel) ? `${sel.label} · hidden behind the belt — drag it forward or ▲ raise it`
+      : `${sel.label} · drag to move${sel.canRotate ? turnHint : ''}${liftable(sel) ? ' · ▲▼ height' : ''}`;
     hintEl.className = 'se-hint' + (bad ? ' bad' : '');
   }
 

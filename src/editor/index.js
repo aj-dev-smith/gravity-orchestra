@@ -218,6 +218,10 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     place(key, entry, all){
       history.push(curId, layout());                 // (undo: the layout as it was before this move)
       saveLayout(store, curId, placed(key, entry, all));
+      // a machine whose height the LAYOUT decides (no user lift) takes the height the room solve gives its new
+      // spot — what a reload would (stations.js: one the user parks behind the belt goes up on the gallery;
+      // one brought out from there comes down) — live, before the room re-anchors
+      if (key !== 'drums' && host.lift?.(key) === undefined) host.liftLive?.(key, undefined);
       host.restage({ director: false });             // (the director catches up on the way out: leave)
       stage.refresh();
     },

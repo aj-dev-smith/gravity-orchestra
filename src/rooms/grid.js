@@ -40,21 +40,23 @@ export default {
     const g = new THREE.Group();
     const { HW, FLOOR, CEIL, BACK, FRONT } = STAGE;
     const W = HW * 2, D = FRONT - BACK, H = CEIL - FLOOR, MZ = (FRONT + BACK) / 2, MY = (CEIL + FLOOR) / 2;
-    // the FLOOR (its shader carries the ripples) and the SHELL (walls + ceiling: one draw, its lines dimming as they climb)
+    // the FLOOR (its shader carries the ripples), the SHELL (four walls: one draw, its lines dimming as they climb) + the ceiling
     const rip = rippleExtra();
     const floor = surface({ key: 'floor', extra: rip });
     const shell = surface({ key: 'shell', hor: 1, fade: [FLOOR + 5, CEIL, .5] });
     const plane = (w, h, rx, ry, x, y, z) => new THREE.PlaneGeometry(w, h).rotateX(rx).rotateY(ry).translate(x, y, z);
     const floorMesh = new THREE.Mesh(plane(W, D, -Math.PI / 2, 0, 0, FLOOR, MZ), floor.m);
+    // the ceiling is its OWN mesh (same material: no new program) — EDIT STAGE's plan view lifts the
+    // eye through it by hiding whatever sits wholly at ceiling level (stage-edit.js liftCeiling)
+    const ceilMesh = new THREE.Mesh(plane(W, D, Math.PI / 2, 0, 0, CEIL, MZ), shell.m);
     const shellMesh = new THREE.Mesh(mergeGeometries([
-      plane(W, D, Math.PI / 2, 0, 0, CEIL, MZ),                   // ceiling
       plane(W, H, 0, 0, 0, MY, BACK),                             // back wall
       plane(W, H, 0, Math.PI, 0, MY, FRONT),                      // front wall (behind the camera)
       plane(D, H, 0, Math.PI / 2, -HW, MY, MZ),                   // left wall
       plane(D, H, 0, -Math.PI / 2, HW, MY, MZ),                   // right wall
     ]), shell.m);
-    floorMesh.name = 'grid:floor'; shellMesh.name = 'grid:shell';
-    g.add(floorMesh, shellMesh);
+    floorMesh.name = 'grid:floor'; shellMesh.name = 'grid:shell'; ceilMesh.name = 'grid:ceiling';
+    g.add(floorMesh, shellMesh, ceilMesh);
 
     const footing = gridFootStyle();
     const ripples = makeRipples(rip.uniforms);
@@ -67,6 +69,6 @@ export default {
       place(anchors, plan){ footing.known(anchors); ripples.place(anchors, plan); plot.place(anchors, plan); },
       update(dt, songTime){ ripples.update(songTime); },
       get ripples(){ return ripples; }, get plot(){ return plot; },
-      dispose(){ footing.dispose(); plot.dispose(); floor.m.dispose(); shell.m.dispose(); floorMesh.geometry.dispose(); shellMesh.geometry.dispose(); } };
+      dispose(){ footing.dispose(); plot.dispose(); floor.m.dispose(); shell.m.dispose(); floorMesh.geometry.dispose(); shellMesh.geometry.dispose(); ceilMesh.geometry.dispose(); } };
   },
 };

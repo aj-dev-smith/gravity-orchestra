@@ -21,8 +21,25 @@ export const RIPPLE = {
   FADE: .62,        // its light falls exp(−age / FADE)
   REACH: 2.6,       // the cells round a machine glow with it, brightest at its edge, gone by REACH (u)
   AGE_NONE: 1e4,    // "no strike yet" (a ring that far out is long gone)
-  DENSE: 1.6,       // strikes/s above which a machine's rings soften (√: a busy kit shimmers, never strobes)
+  DENSE: 1.6,       // strikes/s above which a machine answers only its ACCENTS (and its rings soften, √)
+  ACCENT_GAP: .8,   // a busy machine's accents are at least this far apart (s): the floor goes dark between them
 };
+
+/** PURE. A busy machine's ACCENTS: when its cue runs faster than RIPPLE.DENSE, keep the heaviest strikes
+    (ties: the earliest in the loop) that stand ≥ RIPPLE.ACCENT_GAP apart round the loop — so the floor
+    answers the kick on the one and the crash, and is dark in between, instead of holding a steady haze.
+    A machine at or under DENSE keeps every strike. Deterministic; returns the cue (or a new sorted one). */
+export function accentsOf(cue, P, { dense = RIPPLE.DENSE, gap = RIPPLE.ACCENT_GAP } = {}){
+  if (!Array.isArray(cue) || !cue.length || !(P > 0) || cue.length / P <= dense) return cue;
+  const g = Math.min(gap, P / 2);
+  const ev = cue.map(c => ({ t: (((+c.t || 0) % P) + P) % P, w: Math.max(0, Math.min(1, c.w ?? 1)) }))
+    .sort((a, b) => b.w - a.w || a.t - b.t);
+  const kept = [];
+  for (const e of ev){
+    if (kept.every(k => { const d = Math.abs(k.t - e.t); return Math.min(d, P - d) >= g - 1e-9; })) kept.push(e);
+  }
+  return kept.sort((a, b) => a.t - b.t);
+}
 
 /** PURE. The ages (seconds since) and weights of a cue's last `depth` strikes at songTime t —
     written into out[o + 2k] (age) / out[o + 2k + 1] (weight), newest first; a strike before `start`
@@ -54,8 +71,8 @@ export function strikeAges(cue, { P, start = -Infinity, depth = 2 } = {}){
 /** PURE. One ripple slot per machine that strikes (≤ RIPPLE.N, standing machines first, then anchor
     order): the rect its rings leave from — what it stands on (its pad: a loft member's own spot), else
     its footprint (a HUNG machine: the floor under it — unless that floor is mostly another machine's
-    stand: the floor under the belt answers the belt) — its colour, cue, and a gain that softens a
-    dense machine. */
+    stand: the floor under the belt answers the belt) — its colour, cue (a busy machine's: its accents —
+    accentsOf), and a gain that softens a dense machine. */
 export function rippleSlots(anchors = [], plan = null){
   const pads = new Map((plan?.pads || []).map(p => [p.key, p]));
   const ok = a => a && a.w > 0 && a.d > 0 && Number.isFinite(a.x) && Number.isFinite(a.z) && Array.isArray(a.cue) && a.cue.length && a.P > 0;
@@ -67,7 +84,7 @@ export function rippleSlots(anchors = [], plan = null){
     const r = rectOf(a);
     if (a.kind === 'hung' && standing.some(s => coverOf(r, s) > .3)) continue;
     const rate = a.cue.length / a.P;
-    out.push({ key: a.key, ...r, color: a.color ?? '#8fa6c8', cue: a.cue, P: a.P, start: a.start ?? -Infinity,
+    out.push({ key: a.key, ...r, color: a.color ?? '#8fa6c8', cue: accentsOf(a.cue, a.P), P: a.P, start: a.start ?? -Infinity,
       gain: Math.min(1, Math.sqrt(RIPPLE.DENSE / Math.max(rate, 1e-6))) });
   }
   return out;
@@ -115,6 +132,9 @@ export function rippleExtra(){
         vec4 A = rA[i], B = rB[i], S = rS[i];
         if (S.y < .004 && S.w < .004 && B.z < .004) continue;   // (this machine is dark: skip it)
         vec2 d = p - A.xy, dc = cc - A.xy;
+        // cull: past the farthest lit ring (or the cells' reach) from this machine's rect, nothing to add
+        float R = max(max(S.y >= .004 ? S.x : 0., S.w >= .004 ? S.z : 0.) + 3. * rK.y, B.z >= .004 ? rK.w + 1.5 : 0.) + length(A.zw);
+        if (dot(d, d) > R * R) continue;
         vec2 q = vec2(B.x * d.x - B.y * d.y, B.y * d.x + B.x * d.y), qc = vec2(B.x * dc.x - B.y * dc.y, B.y * dc.x + B.x * dc.y);
         float dist = rRect(q, A.zw), dcell = rRect(qc, A.zw);
         float x0 = (dist - S.x) / rK.y, x1 = (dist - S.z) / rK.y;
@@ -153,7 +173,7 @@ export function makeRipples(U){
         S[o] = RIPPLE.SPEED * T[0]; S[o + 1] = T[1] * g * Math.exp(-T[0] / RIPPLE.FADE);
         S[o + 2] = RIPPLE.SPEED * T[2]; S[o + 3] = T[3] * g * Math.exp(-T[2] / RIPPLE.FADE);
         const v = pulses[i].at(songTime) + .35 * pulses[i].next(songTime);
-        B[4 * i + 2] = (v > 1 ? 1 : v) * g * g;                 // (a busy machine's cells barely ever go dark: they hold softer)
+        B[4 * i + 2] = (v > 1 ? 1 : v) * g;                     // (a busy machine answers its accents: dark between them)
       }
     },
   };

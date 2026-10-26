@@ -4,7 +4,7 @@ import { planFooting, footingBoxes, FOOT } from '../src/rooms/footing.js';
 import { buildFooting, makeFootingMats } from '../src/rooms/footing3d.js';
 import { STAGE } from '../src/rooms/common.js';
 import { gridFootStyle } from '../src/rooms/grid-footing.js';
-import { RIPPLE, strikeAges, rippleSlots, packColor, rippleExtra, makeRipples } from '../src/rooms/grid-floor.js';
+import { RIPPLE, strikeAges, rippleSlots, accentsOf, packColor, rippleExtra, makeRipples } from '../src/rooms/grid-floor.js';
 import { PLOT, labelLines, labelSize, clearOf, placeLabels } from '../src/rooms/grid-plot.js';
 import { layoutStations } from '../src/instruments/stations.js';
 import fs from 'node:fs';
@@ -238,6 +238,24 @@ describe('Greybox floor: a strike rings out across the grid', () => {
     const [calm, dense] = rippleSlots([anchor('calm', 0, 0, 2, 2), anchor('dense', 9, 0, 2, 2, { cue: busy })]);
     expect(calm.gain).toBe(1); expect(dense.gain).toBeLessThan(.6);
   });
+  it('accentsOf: a busy machine answers only its accents — heaviest first, ≥ ACCENT_GAP apart round the seam; a calm one keeps every strike', () => {
+    expect(accentsOf(CUE, P)).toBe(CUE);                                             // (calm: the cue itself)
+    // a flat-velocity backbeat at 4 hits/s: thinned to ≤ 1 / ACCENT_GAP, dark between
+    const flat = Array.from({ length: 80 }, (_, i) => ({ t: i * .25, w: 1 }));
+    const A = accentsOf(flat, 20);
+    expect(A.length / 20).toBeLessThanOrEqual(1 / RIPPLE.ACCENT_GAP + 1e-9);
+    expect(A.length).toBeGreaterThan(10);
+    const gaps = A.map((e, i) => i ? e.t - A[i - 1].t : A[0].t + 20 - A[A.length - 1].t);
+    for (const g of gaps) expect(g).toBeGreaterThanOrEqual(RIPPLE.ACCENT_GAP - 1e-9);
+    // with velocities: the heavy hits survive, the ghost notes go
+    const vel = Array.from({ length: 80 }, (_, i) => ({ t: i * .25, w: i % 4 ? .3 : .95 }));
+    const V = accentsOf(vel, 20);
+    expect(V.length).toBe(20); for (const e of V) expect(e.w).toBe(.95);
+    expect(accentsOf([...vel].reverse(), 20)).toEqual(V);                             // (order-free: deterministic)
+    // the slot carries the accents: the kit's floor goes dark between them
+    const [s] = rippleSlots([anchor('kit', 0, 0, 4, 4, { kind: 'kit', cue: flat, P: 20 })]);
+    expect(s.cue).toEqual(A);
+  });
   it('packColor: three bytes in one float, decoded as the shader does', () => {
     for (const hex of ['#ff8a3d', '#2fe6c0', '#000000', '#ffffff', '#3fd0ff']){
       const c = packColor(hex), r = Math.floor(c / 65536), g = Math.floor((c - r * 65536) / 256), b = c - r * 65536 - g * 256;
@@ -299,10 +317,12 @@ describe('Greybox stage plot: each machine named on the floor, clear of everythi
     return L;
   }
 
-  it('labelLines: the machine\'s name in capitals; a raised deck reads its elevation in metres', () => {
-    expect(labelLines({ key: 'bells', label: 'Tubular Bells', y: FL + .4 }, FL)).toEqual({ name: 'TUBULAR BELLS', sub: null });
-    expect(labelLines({ key: 'horns', label: 'Bellows Horns', y: FL + 19.33 }, FL)).toEqual({ name: 'BELLOWS HORNS', sub: '+13.1 m' });
-    expect(labelLines({ key: 'x', y: FL + 1 }, FL)).toEqual({ name: 'X', sub: '+0.7 m' });
+  it('labelLines: the machine\'s name in capitals; a RAISED machine reads its lift in metres (a tall stand of its own is not a lift)', () => {
+    expect(labelLines({ key: 'bells', label: 'Tubular Bells', y: FL + .4, lift: 0 }, FL)).toEqual({ name: 'TUBULAR BELLS', sub: null });
+    expect(labelLines({ key: 'horns', label: 'Bellows Horns', y: FL + 19.33, lift: 18.93 }, FL)).toEqual({ name: 'BELLOWS HORNS', sub: '+12.8 m' });
+    expect(labelLines({ key: 'x', y: FL + 1.4, lift: 1 }, FL)).toEqual({ name: 'X', sub: '+0.7 m' });
+    expect(labelLines({ key: 'turntable', label: 'Turntable', y: FL + 4.57, lift: 0 }, FL)).toEqual({ name: 'TURNTABLE', sub: null });   // (its own stand)
+    expect(labelLines({ key: 'drums', y: FL + .9, lift: .5 }, FL).sub).toBe(null);                                                     // (a nudge is not a raise)
     const a = labelSize({ name: 'MARIMBA', sub: null }), b = labelSize({ name: 'MARIMBA', sub: '+4.2 m' });
     expect(b.w).toBe(a.w); expect(b.h).toBeGreaterThan(a.h);
   });

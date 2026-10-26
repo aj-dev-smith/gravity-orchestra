@@ -3,8 +3,13 @@ import { footingBoxes } from './footing.js';
 /* ============================================================
    THE STAGE PLOT — the Greybox's one set of props (src/rooms/grid.js). A dev room marks where things
    go: every standing machine's NAME is printed on the floor in front of the spot it stands on, in the
-   HUD's spaced capitals, with a short tape in the machine's colour — and, when it stands raised, its
-   deck's ELEVATION in metres (1 u = .677 m: "+4.2 m"). Lift a machine and its label re-reads.
+   HUD's spaced capitals, with a short tape in the machine's colour — and, when it has been RAISED (its
+   lift: by the user, or the layout's gallery raise), by how much in metres (1 u = .677 m: "+4.2 m").
+   A machine standing on its own tall stand (the turntable) is not "raised". Lift it and it re-reads.
+
+   It is for the viewer who walks the floor (free-fly, eye level, the headset): the print fades out with
+   distance from the eye (PLOT.NEAR → PLOT.FAR) and in the bottom of the frame (under the HUD's button
+   row) — the director's wide and the phone's portrait never show it. Shader-only: no per-frame work.
 
    placeLabels (PURE, tested) finds each label a spot in FRONT of what its machine stands on (the room is
    seen from +z; labels read along +x, like a plot on a page) — else beside it — slid out and along
@@ -26,14 +31,17 @@ export const PLOT = {
   TRIES: 10,
   WALL: .6,         // keep this far inside the room's walls (u)
   M_PER_U: .677,
-  RAISED: 1,        // a deck this far over the floor reads its elevation (u)
+  RAISED: 1,        // a machine lifted this far (u) reads its lift
+  NEAR: 15, FAR: 24,// the print is full within NEAR of the eye, gone past FAR (u)
+  LOW: [-.82, -.55],// …and fades out below this band of the frame (NDC y: the HUD's button row)
 };
 
-/** PURE. The label's lines: its machine's name (caps) and, raised, its elevation. */
+/** PURE. The label's lines: its machine's name (caps) and, when raised, by how much (its LIFT — deck
+    over the spot where it would sit on the floor; a tall stand of its own is not a lift). */
 export function labelLines(a, floor){
   const name = String(a.label || a.key || '').toUpperCase().trim();
-  const dy = Number.isFinite(a.y) ? a.y - floor : 0;
-  return { name, sub: dy >= PLOT.RAISED ? `+${(dy * PLOT.M_PER_U).toFixed(1)} m` : null };
+  const lift = Number.isFinite(a.lift) ? a.lift : 0;
+  return { name, sub: lift >= PLOT.RAISED ? `+${(lift * PLOT.M_PER_U).toFixed(1)} m` : null };
 }
 /** PURE. A label's size (u) from its lines — a monospace estimate (the renderer measures the same way). */
 export function labelSize({ name, sub }){
@@ -70,7 +78,7 @@ export function placeLabels(anchors = [], plan = null, { floor = plan?.floor ?? 
   const grounded = a => a.kind !== 'hung' || !Array.isArray(a.box) || a.box[2] < floor + PLOT.CLEAR;
   const obstacles = [
     ...list.filter(grounded).map(a => ofRect({ x: a.x, z: a.z, hw: a.w / 2, hd: a.d / 2, yaw: a.yaw || 0 })),
-    ...list.filter(a => a.kind === 'hung' && grounded(a) && Array.isArray(a.box)).map(a => ofBox(a.box)),
+    ...list.filter(a => grounded(a) && Array.isArray(a.box)).map(a => ofBox(a.box)),     // (and what overhangs it: the kit's arches)
     ...(plan ? footingBoxes(plan).map(e => ofBox(e.box)) : []),
   ];
   const inRoom = L => !room || (L.x - L.ha >= -room.HW + PLOT.WALL && L.x + L.ha <= room.HW - PLOT.WALL && L.z - L.hb >= room.BACK + PLOT.WALL && L.z + L.hb <= room.FRONT - PLOT.WALL);
@@ -110,6 +118,17 @@ export function makePlot({ renderer = null, floor = 0, room = null } = {}){
     blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
   mesh.name = 'grid:plot'; mesh.renderOrder = 1; mesh.frustumCulled = false;
+  // the fade: by the eye's distance, and out of the bottom of the frame (a pure fn of the view: the GPU's)
+  mat.onBeforeCompile = sh => {
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 pW; varying vec4 pC;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\npW = (modelMatrix * vec4(transformed, 1.)).xyz; pC = gl_Position;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 pW; varying vec4 pC;')
+      .replace('#include <opaque_fragment>', `#include <opaque_fragment>
+        float pF = (1. - smoothstep(${PLOT.NEAR.toFixed(1)}, ${PLOT.FAR.toFixed(1)}, distance(pW, cameraPosition)))
+                 * smoothstep(${PLOT.LOW[0].toFixed(2)}, ${PLOT.LOW[1].toFixed(2)}, pC.y / max(pC.w, 1e-4));
+        gl_FragColor.rgb *= pF;`);
+  };
+  mat.customProgramCacheKey = () => 'grid:plot';
   let canvas = null, tex = null, sig = '', labels = [], texH = 0;
   const aniso = renderer?.capabilities?.getMaxAnisotropy?.() ?? 1;
 

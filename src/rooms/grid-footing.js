@@ -185,8 +185,10 @@ function makeForms(k, marginOf){
       }
     }
   }
-  /* a LATTICE column at (u, v), y0 → y1: four graphite chords, every face laced in light */
-  function column(u, v, y0, y1){
+  /* a LATTICE column at (u, v), y0 → y1: four graphite chords; laced in light only on the faces that
+     look OUT of the tower (o = its outward direction in the deck's frame) — the inner faces stay dark,
+     so a tower reads as structure, not as a sign */
+  function column(u, v, y0, y1, o = [u, v]){
     const h = GDIM.COL / 2, c = GDIM.CHORD, Hc = y1 - y0;
     const C = [[u - h, v - h], [u + h, v - h], [u + h, v + h], [u - h, v + h]];
     for (const [x, z] of C) k.box('deck', x - c / 2, x + c / 2, y0 + .06, y1 - .06, z - c / 2, z + c / 2, SIDES);
@@ -194,7 +196,9 @@ function makeForms(k, marginOf){
     k.box('gline', u - h - .126, u + h + .126, y0 + .07, y0 + .1, v - h - .126, v + h + .126, NOBOT);   // its lit lip
     k.box('deck', u - h - .06, u + h + .06, y1 - .07, y1, v - h - .06, v + h + .06, ALL);     // head plate
     const n = Math.max(1, Math.round((Hc - .14) / GDIM.PITCH)), dy = (Hc - .14) / n;
+    const ol = Math.hypot(o[0], o[1]) || 1, N = [[0, -1], [1, 0], [0, 1], [-1, 0]];     // face f's outward normal (C[f] → C[f+1])
     for (let f = 0; f < 4; f++){
+      if ((N[f][0] * o[0] + N[f][1] * o[1]) / ol < .3) continue;
       const A = C[f], B = C[(f + 1) % 4];
       for (let j = 0; j < n; j++){
         const ya = y0 + .07 + j * dy, [p, q] = (j + f) % 2 ? [A, B] : [B, A];
@@ -219,7 +223,7 @@ function makeForms(k, marginOf){
      panels at every landing level */
   function trussFrame(r, yB, levels){
     const hu = r.hw - GDIM.COL_IN, hv = r.hd - GDIM.COL_IN, P = ring(hu, hv, GDIM.COL_SPAN), yH = yB - GDIM.BEAM;
-    for (const [u, v] of P) column(u, v, F, yH);
+    for (const [u, v] of P) column(u, v, F, yH, [u / Math.max(hu, 1e-3), v / Math.max(hv, 1e-3)]);
     for (let i = 0; i < P.length; i++){
       const a = P[i], b = P[(i + 1) % P.length];
       beam(a, b, yB);
@@ -227,7 +231,7 @@ function makeForms(k, marginOf){
       const A = [a[0] + dx * s, a[1] + dz * s], B = [b[0] - dx * s, b[1] - dz * s];
       let yPrev = F + .4;
       for (const y of [...levels.filter(y => y > F + 2 && y < yH - 1.5), yH - .05]){
-        if (y < yH - .2) k.bar('gline', [A[0], y, A[1]], [B[0], y, B[1]], GDIM.LINE, GDIM.LINE);
+        if (y < yH - .2) k.bar('glace', [A[0], y, A[1]], [B[0], y, B[1]], GDIM.LINE, GDIM.LINE);
         const n = Math.max(1, Math.round(L / Math.max(y - yPrev, 3))), at = j => [A[0] + (B[0] - A[0]) * j / n, A[1] + (B[1] - A[1]) * j / n];
         for (let j = 0; j < n; j++){
           const p = at(j), q = at(j + 1);
@@ -419,7 +423,7 @@ export function gridFootStyle(){
   let made = null, anchors = new Map();
   const shared = new THREE.Group(); shared.name = 'footing:grid';          // (what every hook returns: one empty child)
   const marginOf = p => {
-    const a = anchors.get(p.key);
+    const a = p._a || anchors.get(p.key);                                // (the planner keeps each pad's anchor: no ordering)
     if (!a || !(a.w > 0) || !(a.d > 0)) return 0;
     return Math.max(0, Math.min(FOOT.MARGIN, p.hw - a.w / 2, p.hd - a.d / 2));
   };
@@ -441,12 +445,14 @@ export function gridFootStyle(){
       const body = new THREE.MeshStandardMaterial({ color: 0x4c5568, roughness: .44, metalness: .32, envMap: env, envMapIntensity: .55 });
       gridPatch(body, { key: 'foot-body', minorW: .03, majorW: .07, minorAlb: 0x5a6a90, majorAlb: 0x7fa4e0, minorEmi: [LINE, .05], majorEmi: [LINE, .22] });
       const glass = new THREE.MeshStandardMaterial({ color: 0x1e2c44, roughness: .1, metalness: .5, envMap: env, envMapIntensity: 1.1,
-        transparent: true, opacity: .52, depthWrite: true });
+        transparent: true, opacity: .52, depthWrite: false });   // (the opaque deck carries the solids; glass must not cull glows behind it)
       gridPatch(glass, { key: 'foot-glass', minorW: .03, majorW: .07, minorAlb: 0x3a5585, majorAlb: 0x7fa4e0, minorEmi: [LINE, .06], majorEmi: [LINE, .25] });
       made = {
         deck: body, gglass: glass,
-        gline: new THREE.MeshBasicMaterial({ color: new THREE.Color(LINE).multiplyScalar(1.9) }),
-        glace: new THREE.MeshBasicMaterial({ color: new THREE.Color(0x6e9cff).multiplyScalar(.58) }),
+        // the room's structure stays QUIET: the human-scale lines (nosings, rails, rungs) at the floor's
+        // own major-line blue, the lattice dimmer still — the machine's colour edge is the brightest line on its pad
+        gline: new THREE.MeshBasicMaterial({ color: new THREE.Color(LINE).multiplyScalar(.95) }),
+        glace: new THREE.MeshBasicMaterial({ color: new THREE.Color(0x6e9cff).multiplyScalar(.3) }),
       };
       return made;
     },

@@ -20,9 +20,9 @@ import { makeJugglerShop } from './jugglebelt.js';
 import { makeMarbleDrums, KIT_SOLO, KIT_ROOM, KIT_STAND, kitAnchor } from './marbledrums.js';
 import { makeCameraRig } from './camera.js';
 import { makeRoomHost, ROOMS } from './rooms/index.js';
-import { groundOf, clampLift } from './rooms/footing.js';
+import { groundOf, clampLift, FOOT } from './rooms/footing.js';
 import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
-import { stationFor, layoutStations, HANG_CLEAR, hangPlace } from './instruments/stations.js';
+import { stationFor, layoutStations, soloStar, HANG_CLEAR, hangPlace } from './instruments/stations.js';
 import { eventTimes, wrapP } from './instruments/clock.js';
 import { splitBucket } from './instruments/sustain.js';
 import { nextVoiceEpoch, voiceEpoch, sweepVoiceCaches } from './instruments/voicecache.js';
@@ -709,7 +709,8 @@ function buildWorld(keyName){
   const items = [];
   instLive.forEach(r => { if (r.slot.hang) return;
     const p = r.station.position, box = relBox(r.station, p.x, p.z, r.I.key);
-    if (box) items.push({ key: r.I.key, x: p.x, z: p.z, box, top: tops[r.I.key], deck: p.y, rig: r, pin: r.slot.pin }); });
+    if (box) items.push({ key: r.I.key, x: p.x, z: p.z, box, top: tops[r.I.key], deck: p.y, rig: r, pin: r.slot.pin,
+      ...(Number.isFinite(r.slot.lift) ? { lift: r.slot.lift } : {}) }); });   // (the USER's height: 0 = on the floor — it never climbs)
   // (the HUNG stations' world footprints: a gallery deck keeps clear of them — the organ loft's
   //  chassis and the chandelier's crown stand where a gallery machine would)
   const hungBoxes = instLive.filter(r => r.slot.hang).map(r => visBox(r.station)).filter(b => !b.isEmpty()).map(b => [b.min.x, b.max.x, b.min.z, b.max.z]);
@@ -718,11 +719,11 @@ function buildWorld(keyName){
   lastLayout = null;                                    // (dev: a song with no floor machine has no solve — never the last song's)
   if (items.length && !wallBox.isEmpty()){
     // THE STAR (the song's signature machine — the one the director will name) stands front and centre
-    const star = stageStar(S);
+    const star = stageStar(S) ?? soloStar(items);
     const solved = layoutStations(items,
       [wallBox.min.x, wallBox.max.x, wallBox.min.z, wallBox.max.z],
       { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 },
-      { cx: stageView.cx, bandY: STAGE_Y - 1.5, eyeY: 20, wallTop: wallBox.max.y, hung: hungBoxes, star });   // (band − 1.5: the pads rising INTO the band read too)
+      { cx: stageView.cx, bandY: STAGE_Y - 1.5, eyeY: 20, wallTop: wallBox.max.y, hung: hungBoxes, star, loftGap: FOOT.LOFT_GAP });   // (band − 1.5: the pads rising INTO the band read too)
     lastLayout = { items: items.map(({ key, x, z, box, top, deck }) => ({ key, x, z, box, top, y0: bots[key], deck })), wall: wallBox.clone(), solved, cx: stageView.cx, bandY: STAGE_Y - 1.5, hung: hungBoxes, star };
     items.forEach(it => {
       const { x, y, z } = solved[it.key];
@@ -818,20 +819,41 @@ function buildWorld(keyName){
    false for none — else, for an import, directorplan signatureOf over every station's cue, a chord
    one moment). A floor station or the kit; a hung one keeps hanging (null). Pure song data. */
 function stageStar(S){
-  const cfg = S.director?.signature;
-  const owner = k => k === 'drums' ? (S.drums ? 'drums' : null) : instLive.find(r => r.I.key === k || (r.I.cameraKey ?? r.I.key) === k)?.I.key ?? null;
-  let key = null;
-  if (typeof cfg === 'string') key = owner(cfg);
-  else if (cfg !== false && S.staging === 'auto' && tracks.length){
-    const lead = tracks[0];
-    key = signatureOf(instLive.map(r => ({ key: r.I.key, hits: chordMoments(r.cue) })),
-      { t0: ROLL_T, beat: BEAT, end: lead.rollT + lead.total - .7, loop: ROLL_T + LOOP_T,
-        bar: Number.isInteger(S.barBeats) && S.barBeats >= 2 && S.barBeats <= 16 ? S.barBeats : 4 });
-  }
+  const cs = stationCues(S), sig = songSignature(S, cs), key = sig && cs.find(c => c.key === sig)?.owner;
   return key && !instLive.find(r => r.I.key === key)?.slot.hang ? key : null;
 }
-/* a station's cue as the DIRECTOR reads it (syncDirector): simultaneous hits are ONE moment — the
-   loudest + a little for the rest, its id the chord's pitch heads, sorted */
+/* THE SIGNATURE (directorplan signatureOf) — ONE answer for the room solve (stageStar) and the
+   director (syncDirector): song.director.signature names it (a station key or its shot key) or false
+   for none; an IMPORT (no curator: staging 'auto') reads it off the song data — the hook. → a cue key */
+function songSignature(S, cs){
+  const cfg = S.director?.signature;
+  if (typeof cfg === 'string') return cs.find(c => c.key === cfg || c.owner === cfg)?.key ?? null;
+  if (cfg === false || S.staging !== 'auto' || !tracks.length) return null;
+  return signatureOf(cs.map(c => ({ key: c.key, hits: c.cue, ...(c.perc ? { perc: true } : {}) })), dirGrid(S));
+}
+/* the edit's beat grid: from the loop's first beat to the engine's seam (no music, no lead marble —
+   seamFrom), song.barBeats the meter's bar (Mars is 5/4: the edit prefers its bar lines) */
+function dirGrid(S){
+  const lead = tracks[0];
+  return { t0: ROLL_T, beat: BEAT, end: lead.rollT + lead.total - .7, loop: ROLL_T + LOOP_T,
+    bar: Number.isInteger(S.barBeats) && S.barBeats >= 2 && S.barBeats <= 16 ? S.barBeats : 4 };
+}
+/* every station's CUE as the director reads it (+ the kit's: perc), keyed by its SHOT key (owner = the
+   plugin key) — loop-local times, a chord one moment (chordMoments) */
+function stationCues(S){
+  const P = ROLL_T + LOOP_T;
+  const cs = instLive.map(rig => ({ key: rig.I.cameraKey ?? rig.I.key, owner: rig.I.key, cue: chordMoments(rig.cue) }));
+  if (S.drums){
+    const cue = [];
+    Object.entries(S.drums).forEach(([lane, hits]) => hits.map(normalizeHit).forEach(h =>
+      cue.push({ t: wrapP(ROLL_T + h.beat * BEAT, P), w: h.vel, id: lane })));
+    cs.push({ key: 'drums', owner: 'drums', cue: chordMoments(cue), perc: true });
+  }
+  return cs;
+}
+/* A CHORD is one moment, not N: simultaneous hits on one station merge into one (the loudest + a
+   little for the rest) — or a pad that strikes 4-note chords reads as 4× busy. Its id: the chord's
+   pitch heads, sorted (a riff's E5 power chord and its palm-muted chug are one shape) */
 function chordMoments(cue){
   const byT = new Map();
   for (const e of cue){ const k = Math.round(e.t * 500); const g = byT.get(k); if (g) g.push(e); else byT.set(k, [e]); }
@@ -1020,7 +1042,6 @@ function syncDirector(S, view){
     shots.push({ key: ck, owner: rig.I.key, color: rig.I.color, self: st,
       aim: st.localToWorld(new THREE.Vector3(0, h + (rig.slot.hang ? 1 : 0), 0)),
       eye: st.localToWorld(new THREE.Vector3(c.x ?? 0, eyeY, (c.dist ?? 15) * hk)) });
-    cues.push({ key: ck, owner: rig.I.key, cue: rig.cue });
   });
   if (S.drums){
     const kx = view.cx + kitSlot.x, kz = kitSlot.z;     // the kit's slot this song (marbledrums.js)
@@ -1029,23 +1050,8 @@ function syncDirector(S, view){
     // (the eye rides ABOVE the kit's magnet rail: from rail height the chrome bar slices the frame)
     const ky = kitSlot.y;                               // (its deck: on the floor's plinth, or lifted)
     shots.push({ key: 'drums', owner: 'drums', color: '#ff8a3d', self: drumGroup, aim: new THREE.Vector3(kx, ky + 2.1, kz - 2.5), eye: new THREE.Vector3(kx + 1, ky + 10, kz + 12.5) });
-    const cue = [];
-    Object.entries(S.drums).forEach(([lane, hits]) => hits.map(normalizeHit).forEach(h =>
-      cue.push({ t: wrapP(ROLL_T + h.beat * BEAT, P), w: h.vel, id: lane })));
-    cues.push({ key: 'drums', owner: 'drums', cue, perc: true });
   }
-  // A CHORD is one moment, not N: simultaneous hits on one station merge into one (the
-  // loudest + a little for the rest) — or a pad that strikes 4-note chords reads as 4× busy
-  for (const c of cues){
-    const byT = new Map();
-    for (const e of c.cue){ const k = Math.round(e.t * 500); const g = byT.get(k); if (g) g.push(e); else byT.set(k, [e]); }
-    c.cue = [...byT.entries()].sort((a, b) => a[0] - b[0]).map(([k, es]) => {
-      const ws = es.map(e => e.w), mx = Math.max(...ws), sum = ws.reduce((a, b) => a + b, 0);
-      // (the chord's id: its pitch heads, sorted — a riff's E5 power chord and its palm-muted chug are one shape)
-      const id = [...new Set(es.map(e => String(e.id ?? '').replace(/[:|].*$/, '')))].sort().join('+');
-      return { t: k / 500, w: mx + .3 * (sum - mx), id };
-    });
-  }
+  cues = stationCues(S);                                // (every station's + the kit's cue, a chord one moment)
   // ENSEMBLE MOMENTS (pure song data, solved up front): every instant where ≥ 2 voices
   // land together, with how many DISTINCT machines (stations + the lead belt) hit within
   // ±.15 s. The edit goes WIDE for the big ones (the whole room on one downbeat) and the
@@ -1085,14 +1091,10 @@ function syncDirector(S, view){
   const voices = [...cues.map(c => ({ key: c.key, hits: c.cue, weight: dirWeight(S, c.owner), ...(c.perc ? { perc: true } : {}) })),   // (the song's pull only:
                   // salience is relative to each machine's own norm, so sparse voices need no boost)
                   { key: 'belt', belt: true, hits: beltHits, weight: dirWeight(S, 'belt') }];
-  // song.barBeats: the meter's bar length in beats (Mars is 5/4) — the edit prefers cuts on bar lines
-  const grid = { t0: ROLL_T, beat: BEAT, end: seamFrom, loop: P, bar: Number.isInteger(S.barBeats) && S.barBeats >= 2 && S.barBeats <= 16 ? S.barBeats : 4 };
-  // THE SIGNATURE (directorplan signatureOf): the machine the song is about earns the edit's
-  // biggest share. song.director.signature names it (a station key or its shot key) or false
-  // for none; an IMPORT (no curator: staging 'auto') reads it off the song data — the hook.
-  const sigCfg = S.director?.signature;
-  const sig = typeof sigCfg === 'string' ? cues.find(c => c.key === sigCfg || c.owner === sigCfg)?.key ?? null
-            : sigCfg === false || S.staging !== 'auto' ? null : signatureOf(voices, grid);
+  const grid = dirGrid(S);                              // (end = seamFrom, loop = P)
+  // THE SIGNATURE (songSignature): the machine the song is about earns the edit's biggest share —
+  // the same one the room solve stood front and centre (stageStar)
+  const sig = songSignature(S, cues);
   voices.forEach(v => { if (v.key === sig) v.signature = true; });
   plan = planEdit(planIn = {
     voices, grid,
@@ -1123,7 +1125,8 @@ function syncDirector(S, view){
         // belt band → top housing, the chandelier, the turntable's record) down a diagonal, with
         // the title/song-select block's height kept clear at the top (PORTRAIT_INSET); the wings
         // enter from the frame edges as context
-        portrait: { ...searchWide(stageFrame(true), PORTRAIT_DIRS, .5, .92, { top: PORTRAIT_INSET }), fov: WIDE_FOV, fitMax: 1 } }
+        //  (a floor STAR — stations.js — is a protagonist too: kept clear of the bottom button bar)
+        portrait: { ...searchWide(stageFrame(true), PORTRAIT_DIRS, .5, .92, { top: PORTRAIT_INSET, ...(lastLayout?.star ? { bottom: UI_BOTTOM } : {}) }), fov: WIDE_FOV, fitMax: 1 } }
     : { aim: new THREE.Vector3(view.cx, 4, 2), eye: new THREE.Vector3(view.cx + 4, 15, 39) };
   lastWide = wide;
   // every station's eye is SOLVED from its designer's preferred framing (shotsolve.js); a narrow
@@ -1220,26 +1223,27 @@ const bandOn = () => instLive.some(r => !r.slot.hang && r.slot.gallery);
 function stageFrame(core = false){
   const pts = [], add = (x0, x1, y0, y1, z0, z1) => { for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) pts.push(new THREE.Vector3(x, y, z)); };
   if (!stageWall.isEmpty()) add(stageWall.min.x, stageWall.max.x, STAGE_Y - 3, stageWall.max.y, stageWall.min.z, stageWall.max.z);
-  if (core){                                             // portrait: the belt, the hung plates, the record
+  if (core){                                             // portrait: the belt, the hung plates, the record (+ the STAR)
     instLive.forEach(r => {
-      if (!r.slot.hang && r.I.key !== 'turntable') return;
+      if (!r.slot.hang && r.I.key !== 'turntable' && r.I.key !== lastLayout?.star) return;
       const b = visBox(r.station), p = r.station.position;
       if (b.isEmpty()) return;
       if (r.slot.hang) add(b.min.x, b.max.x, hangLow(r.station), Math.min(b.max.y, p.y + 13), b.min.z, b.max.z);
+      else if (r.I.key === lastLayout?.star) add(b.min.x, b.max.x, p.y, b.max.y, b.min.z, (b.min.z + b.max.z) / 2);   // (the star whole, its back half)
       else add(b.min.x, b.max.x, p.y, p.y + 1, b.min.z, (b.min.z + b.max.z) / 2);
     });
     return pts;
   }
   const front = 13;                                      // a footprint centred past this z is the front row
-  const floorBox = (b, deckY) => {
+  const floorBox = (b, deckY, whole = false) => {
     const y0 = Math.max(b.min.y, deckY - 1.5), zc = (b.min.z + b.max.z) / 2;
-    add(b.min.x, b.max.x, y0, b.max.y, b.min.z, zc > front ? zc + FRONT_KEEP * (b.max.z - zc) : b.max.z);
+    add(b.min.x, b.max.x, y0, b.max.y, b.min.z, zc > front && !whole ? zc + FRONT_KEEP * (b.max.z - zc) : b.max.z);
   };
   instLive.forEach(r => {
     const b = visBox(r.station), p = r.station.position;
     if (b.isEmpty()) return;
     if (r.slot.hang) add(b.min.x, b.max.x, p.y + 1, Math.min(b.max.y, p.y + 13), b.min.z, b.max.z);   // plates + canopy, not the rods
-    else floorBox(b, p.y);
+    else floorBox(b, p.y, r.I.key === lastLayout?.star);          // (the STAR — stations.js — is held WHOLE: its keys, its lip)
   });
   if (drumGroup){ const b = visBox(drumGroup); if (!b.isEmpty()) floorBox(b, kitSlot.y - .5); }
   return pts;
@@ -1265,7 +1269,8 @@ const GALLERY_DIRS = [[-.15, .26, .95], [-.08, .3, .95], [-.22, .3, .93], [-.15,
    frame (screenSize, ≈ .1–.3) may outweigh the candidate order (.02 a step) */
 const STAR_DIRS = [[-.2, .26, .94], [-.32, .26, .91], [-.44, .26, .86], [-.32, .34, .88]];
 const STAR_PULL = .6;
-const starDirs = box => { const c = box[0] + box[1] - (stageWall.isEmpty() ? 0 : stageWall.min.x + stageWall.max.x), m = c > 0 ? -1 : 1;
+//  (a star ON the belt's centre line — the floor star — swings from the house side, the left: the kit stands right)
+const starDirs = box => { const c = box[0] + box[1] - (stageWall.isEmpty() ? 0 : stageWall.min.x + stageWall.max.x), m = c > 2 ? -1 : 1;
   return STAR_DIRS.map(([x, y, z]) => dirOf(x * m, y, z)); };
 function galleryStar(S, sig){
   let key = sig ? cues.find(c => c.key === sig)?.owner : null;
@@ -1274,7 +1279,9 @@ function galleryStar(S, sig){
     if (w.length && w[0][1] >= 2 && w[0][1] - (w[1]?.[1] ?? 1) >= .3) key = w[0][0];
   }
   const r = key && instLive.find(q => q.I.key === key);
-  if (!r || r.slot.hang || !(r.lift > 2)) return null;   // (only a GALLERY / lifted machine is far enough to need it)
+  // (only a GALLERY / lifted machine is far enough to need it — or the room solve's floor STAR, front and
+  //  centre: the wide swings a three-quarter round it, never dead head-on down the belt's axis)
+  if (!r || r.slot.hang || !(r.lift > 2 || r.I.key === lastLayout?.star)) return null;
   const b = visBox(r.station);
   return b.isEmpty() ? null : [b.min.x, b.max.x, Math.max(b.min.y, r.station.position.y - 1.5), b.max.y, b.min.z, b.max.z];
 }

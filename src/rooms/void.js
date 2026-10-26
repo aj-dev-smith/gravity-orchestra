@@ -135,12 +135,11 @@ function gridMat(){
         float glow = exp(-length(vW.xz - uCam.xz) * .006) * .05;      // a faint wash far under the stage
         gl_FragColor = vec4(c * L * fade * uGain * .5 + vec3(.25, .2, .7) * glow, 1.);
       }`,
-    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
   });
 }
-/* (forceSinglePass on a flat or additive see-through material: one pass, exactly what main's perftune.js
-   would switch it to later anyway — set here, the host's idle prewarm compiles the very program the
-   Void's first frame uses instead of the two-pass pair) */
+/* (one pass for the see-through DoubleSide flats — grid, cloud decks, keel beams — comes from the host:
+   rooms/index.js runs perftune singlePassFlats on a room before its prewarm compiles it) */
 
 export default {
   key: 'void', label: 'The Void',
@@ -167,7 +166,7 @@ export default {
     const decks = DECKS.map(([y, op, tint, rep], i) => {
       const t = cloud.clone(); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep, rep); t.needsUpdate = true;
       const m = new THREE.Mesh(new THREE.PlaneGeometry(DECK_W, DECK_W).rotateX(-Math.PI / 2),
-        new THREE.MeshBasicMaterial({ map: t, alphaMap: edge, color: tint, transparent: true, opacity: op, depthWrite: false, fog: false, side: THREE.DoubleSide, forceSinglePass: true }));
+        new THREE.MeshBasicMaterial({ map: t, alphaMap: edge, color: tint, transparent: true, opacity: op, depthWrite: false, fog: false, side: THREE.DoubleSide }));
       m.position.y = y; m.frustumCulled = false; m.renderOrder = -1 - i; group.add(m);
       return { m, t, k: DECK_W / rep, sx: .002 * (i ? -1 : 1), sz: .003 };
     });

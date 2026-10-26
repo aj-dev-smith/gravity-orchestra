@@ -110,19 +110,26 @@ export function packColor(hex){
 }
 
 /* the floor shader's ripple pass (rooms/grid-shade.js gridPatch `extra`): sees gW (world point) and
-   gM (the grid's minor / major line masks); adds to totalEmissiveRadiance */
+   gM (the grid's minor / major line masks); adds to totalEmissiveRadiance.
+   COST (measured: probe w4-grid/ripcost.mjs, finale, floor alone at 3200×1800, M-series GPU): the pass was
+   .3–.9 ms of the floor's 1.5–3.3 ms (worst case, every slot lit: up to 1.5 ms) — a fragment walked every
+   slot, dark ones too, and paid the rect distance anywhere inside a ring's whole disc. Now the CPU hands the
+   shader only the LIT slots (compacted, rN = how many) with each one's ANNULUS of influence (rR: the outer
+   and inner radius², centre distance): a fragment inside an expanding ring and clear of the cells' reach,
+   or outside it all, costs one dot product. */
 export function rippleExtra(){
   const N = RIPPLE.N;
   const uniforms = {
-    rA: { value: new Float32Array(4 * N) },        // x, z, hw, hd            (place)
-    rB: { value: new Float32Array(4 * N) },        // cos, sin, glow, colour  (glow: per frame)
-    rS: { value: new Float32Array(4 * N) },        // radius0, light0, radius1, light1  (per frame)
+    rA: { value: new Float32Array(4 * N) },        // x, z, hw, hd            (the lit slots, compacted: per frame)
+    rB: { value: new Float32Array(4 * N) },        // cos, sin, glow, colour
+    rS: { value: new Float32Array(4 * N) },        // radius0, light0, radius1, light1  (a dark ring: light 0)
+    rR: { value: new Float32Array(2 * N) },        // outer², inner² — the annulus (from the rect's centre) outside which nothing is added
     rN: { value: 0 },
     rK: { value: new THREE.Vector4(RIPPLE.SPEED, RIPPLE.WIDTH, RIPPLE.FADE, RIPPLE.REACH) },
     rG: { value: new THREE.Vector4(1.3, .04, .7, .035) },   // ring on lines, ring fill, cells on lines, cell fill
   };
   const head = /* glsl */`
-    uniform vec4 rA[${N}]; uniform vec4 rB[${N}]; uniform vec4 rS[${N}]; uniform int rN; uniform vec4 rK; uniform vec4 rG;
+    uniform vec4 rA[${N}]; uniform vec4 rB[${N}]; uniform vec4 rS[${N}]; uniform vec2 rR[${N}]; uniform int rN; uniform vec4 rK; uniform vec4 rG;
     float rRect(vec2 q, vec2 b){ vec2 e = abs(q) - b; return length(max(e, 0.)) + min(max(e.x, e.y), 0.); }
     vec3 rCol(float c){ float r = floor(c / 65536.), g = floor((c - r * 65536.) / 256.); return vec3(r, g, c - r * 65536. - g * 256.) / 255.; }`;
   const body = /* glsl */`
@@ -132,17 +139,19 @@ export function rippleExtra(){
       vec3 add = vec3(0.);
       for (int i = 0; i < ${N}; i++){
         if (i >= rN) break;
-        vec4 A = rA[i], B = rB[i], S = rS[i];
-        if (S.y < .004 && S.w < .004 && B.z < .004) continue;   // (this machine is dark: skip it)
-        vec2 d = p - A.xy, dc = cc - A.xy;
-        // cull: past the farthest lit ring (or the cells' reach) from this machine's rect, nothing to add
-        float R = max(max(S.y >= .004 ? S.x : 0., S.w >= .004 ? S.z : 0.) + 3. * rK.y, B.z >= .004 ? rK.w + 1.5 : 0.) + length(A.zw);
-        if (dot(d, d) > R * R) continue;
-        vec2 q = vec2(B.x * d.x - B.y * d.y, B.y * d.x + B.x * d.y), qc = vec2(B.x * dc.x - B.y * dc.y, B.y * dc.x + B.x * dc.y);
-        float dist = rRect(q, A.zw), dcell = rRect(qc, A.zw);
+        vec4 A = rA[i]; vec2 R = rR[i], d = p - A.xy;
+        float d2 = dot(d, d);
+        if (d2 > R.x || d2 < R.y) continue;                       // (outside this machine's annulus: nothing to add)
+        vec4 B = rB[i], S = rS[i];
+        vec2 q = vec2(B.x * d.x - B.y * d.y, B.y * d.x + B.x * d.y);
+        float dist = rRect(q, A.zw);
         float x0 = (dist - S.x) / rK.y, x1 = (dist - S.z) / rK.y;
         float ring = (S.y * exp(-x0 * x0) + S.w * exp(-x1 * x1)) * smoothstep(-.1, .4, dist);
-        float cell = B.z * (1. - smoothstep(0., rK.w, dcell));   // (per CELL: its centre's distance — the grid's own steps)
+        float cell = 0.;
+        if (B.z > 0.){                                            // (per CELL: its centre's distance — the grid's own steps)
+          vec2 dc = cc - A.xy, qc = vec2(B.x * dc.x - B.y * dc.y, B.y * dc.x + B.x * dc.y);
+          cell = B.z * (1. - smoothstep(0., rK.w, rRect(qc, A.zw)));
+        }
         add += rCol(B.w) * (ring * (lineM * rG.x + rG.y) + cell * (lineM * rG.z + rG.w));
       }
       totalEmissiveRadiance += add;
@@ -150,34 +159,64 @@ export function rippleExtra(){
   return { uniforms, head, body };
 }
 
-/* The live side: slots for the current anchors (place) → uniforms (update). */
+/** PURE. A lit slot's annulus of influence, as squared distances from its rect's centre: [outer², inner²].
+    A ring of radius r (from the rect's edge) reaches no point nearer the centre than r − 3·WIDTH (the rect
+    distance never exceeds the centre distance) nor farther than r + 3·WIDTH + the rect's half-diagonal;
+    the cells reach REACH + a cell's half-diagonal (1.5) past the edge — and they fill the middle (inner 0).
+    `rings` = [radius, light] pairs (light 0 = dark). Null when nothing is lit. */
+export function annulus(hw, hd, rings, glow){
+  const w3 = 3 * RIPPLE.WIDTH, diag = Math.hypot(hw, hd);
+  let out = glow > 0 ? RIPPLE.REACH + 1.5 + diag : -1, inn = glow > 0 ? 0 : Infinity;
+  for (let k = 0; k < rings.length; k += 2){
+    if (!(rings[k + 1] > 0)) continue;
+    out = Math.max(out, rings[k] + w3 + diag); inn = Math.min(inn, Math.max(0, rings[k] - w3));
+  }
+  return out < 0 ? null : [out * out, inn * inn];
+}
+
+/* The live side: slots for the current anchors (place) → uniforms (update). Each frame the LIT slots are
+   written to the front of the pool (rN of them) — a dark machine costs the shader nothing. */
 export function makeRipples(U){
   let slots = [], ages = [], pulses = [];
-  const A = U.rA.value, B = U.rB.value, S = U.rS.value, T = new Float64Array(4);
+  const A = U.rA.value, B = U.rB.value, S = U.rS.value, RR = U.rR.value, T = new Float64Array(4), RG = new Float64Array(4);
+  const LIT = .004;                                                 // (below this a ring / a cell glow is dark: dropped)
+  const w3 = 3 * RIPPLE.WIDTH;
   return {
     get slots(){ return slots; },
     place(anchors, plan){
       slots = rippleSlots(anchors, plan);
       ages = slots.map(s => strikeAges(s.cue, { P: s.P, start: s.start, depth: 2 }));
       pulses = slots.map(s => makePulse(s.cue, { P: s.P, start: s.start }));
-      A.fill(0); B.fill(0); S.fill(0);
-      slots.forEach((s, i) => {
-        A[4 * i] = s.x; A[4 * i + 1] = s.z; A[4 * i + 2] = s.hw; A[4 * i + 3] = s.hd;
-        B[4 * i] = Math.cos(s.yaw); B[4 * i + 1] = Math.sin(s.yaw); B[4 * i + 3] = packColor(s.color);
-        S[4 * i] = S[4 * i + 2] = RIPPLE.AGE_NONE * RIPPLE.SPEED;
-      });
-      U.rN.value = slots.length;
+      slots.forEach(s => { s._cos = Math.cos(s.yaw); s._sin = Math.sin(s.yaw); s._col = packColor(s.color); s._diag = Math.hypot(s.hw, s.hd); });
+      A.fill(0); B.fill(0); S.fill(0); RR.fill(0);
+      U.rN.value = 0;
     },
     /* per frame: a pure fn of songTime (scrub-exact), allocation-free */
     update(songTime){
+      let n = 0;
       for (let i = 0; i < slots.length; i++){
+        const sl = slots[i];
         ages[i](songTime, T, 0);
-        const g = slots[i].gain, o = 4 * i;
-        S[o] = RIPPLE.SPEED * T[0]; S[o + 1] = T[1] * g * Math.exp(-T[0] / RIPPLE.FADE);
-        S[o + 2] = RIPPLE.SPEED * T[2]; S[o + 3] = T[3] * g * Math.exp(-T[2] / RIPPLE.FADE);
-        const v = pulses[i].at(songTime) + slots[i].lead * pulses[i].next(songTime);
-        B[4 * i + 2] = (v > 1 ? 1 : v) * g;                     // (a busy machine answers its accents: dark between them)
+        const g = sl.gain;
+        RG[0] = RIPPLE.SPEED * T[0]; RG[1] = T[1] * g * Math.exp(-T[0] / RIPPLE.FADE);
+        RG[2] = RIPPLE.SPEED * T[2]; RG[3] = T[3] * g * Math.exp(-T[2] / RIPPLE.FADE);
+        if (RG[1] < LIT) RG[1] = 0;
+        if (RG[3] < LIT) RG[3] = 0;
+        const v = pulses[i].at(songTime) + sl.lead * pulses[i].next(songTime);
+        let glow = (v > 1 ? 1 : v) * g;                             // (a busy machine answers its accents: dark between them)
+        if (glow < LIT) glow = 0;
+        if (!RG[1] && !RG[3] && !glow) continue;                    // (dark: not handed to the shader)
+        // its annulus (annulus(), inlined: no allocation)
+        let out = glow > 0 ? RIPPLE.REACH + 1.5 + sl._diag : -1, inn = glow > 0 ? 0 : Infinity;
+        for (let k = 0; k < 4; k += 2) if (RG[k + 1] > 0){ out = Math.max(out, RG[k] + w3 + sl._diag); inn = Math.min(inn, Math.max(0, RG[k] - w3)); }
+        const o = 4 * n;
+        A[o] = sl.x; A[o + 1] = sl.z; A[o + 2] = sl.hw; A[o + 3] = sl.hd;
+        B[o] = sl._cos; B[o + 1] = sl._sin; B[o + 2] = glow; B[o + 3] = sl._col;
+        S[o] = RG[0]; S[o + 1] = RG[1]; S[o + 2] = RG[2]; S[o + 3] = RG[3];
+        RR[2 * n] = out * out; RR[2 * n + 1] = inn * inn;
+        n++;
       }
+      U.rN.value = n;
     },
   };
 }

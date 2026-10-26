@@ -1,4 +1,4 @@
-import { FOOT, footingBoxes, toWorld, sideNormal, accessRect } from './footing.js';
+import { FOOT, toWorld, sideNormal, accessRect } from './footing.js';
 /* ============================================================
    GRAVEYARD PLACE — where the churchyard stands round its machines. PURE (no THREE, no DOM).
 
@@ -23,7 +23,9 @@ import { FOOT, footingBoxes, toWorld, sideNormal, accessRect } from './footing.j
      wispsFor(anchors)            one will-o'-the-wisp per machine, hovering off its corner
 
    Obstacles are every standing machine's footprint (its turned rect), every hung machine that comes
-   down near the floor (the organ loft's posts), and every support's envelope (footingBoxes(plan)).
+   down near the floor (the organ loft's posts), and every SUPPORT as the plan turns it (supportRects:
+   a pad, its stair / ladder, a loft — the rects whose AABBs are footingBoxes(plan); the AABB of a
+   turned pad would push a votive metres off its face).
    1 u ≈ .677 m. Tall graves stay OUTSIDE the stage room's walls but for one back row (z ≈ −30.5): a
    relocated one goes outside them, so a song's room solids never land where another song's
    machines stand (test/fixtures/staging-rooms.json tables one song's graveyard for every song).
@@ -69,9 +71,22 @@ export function obstaclesOf(anchors = [], plan = null, floor = -5.5){
     if (a.kind === 'hung' && Array.isArray(a.box) && a.box[2] > floor + GY.REACH) continue;   // (flies high: the chandelier)
     out.push({ key: a.key, x: a.x, z: a.z, hw: a.w / 2, hd: a.d / 2, yaw: a.kind === 'hung' ? 0 : a.yaw || 0 });
   }
-  if (plan) for (const e of footingBoxes(plan)){
-    const [x0, x1, , , z0, z1] = e.box;
-    out.push({ key: e.unit, x: (x0 + x1) / 2, z: (z0 + z1) / 2, hw: (x1 - x0) / 2, hd: (z1 - z0) / 2, yaw: 0 });
+  if (plan) out.push(...supportRects(plan));
+  return out;
+}
+/** every support of the plan as the plan turns it — { key (its footingBoxes unit), kind, x, z, hw, hd, yaw }:
+    a pad (not a loft's member: the loft holds it), its stair / ladder, a loft, the loft's stair / ladder.
+    footingBoxes(plan) is exactly the AABBs of these; the footing style draws inside them (tested). */
+export function supportRects(plan){
+  const out = [];
+  if (!plan) return out;
+  for (const p of plan.pads){
+    if (!p.loft) out.push({ key: p.key, kind: 'pad', x: p.x, z: p.z, hw: p.hw, hd: p.hd, yaw: p.yaw || 0 });
+    if (p.access) out.push({ key: p.key, kind: 'access', ...accessRect(p, p.access) });
+  }
+  for (const L of plan.lofts){
+    out.push({ key: L.id, kind: 'loft', x: L.x, z: L.z, hw: L.hw, hd: L.hd, yaw: L.yaw || 0 });
+    if (L.access) out.push({ key: L.id, kind: 'access', ...accessRect(L, L.access) });
   }
   return out;
 }

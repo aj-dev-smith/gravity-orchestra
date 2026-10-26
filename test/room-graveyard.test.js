@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { planFooting, footingBoxes, FOOT } from '../src/rooms/footing.js';
+import { planFooting, footingBoxes, rectAabb, FOOT } from '../src/rooms/footing.js';
 import { buildFooting } from '../src/rooms/footing3d.js';
 import { makePulse } from '../src/rooms/pulse.js';
 import { STAGE } from '../src/rooms/common.js';
 import { graveyardStyle } from '../src/rooms/graveyard-footing.js';
-import { GY, graveSlots, placeGraves, obstaclesOf, rectDist, graveCandles, votives, footLights, wispsFor, VOTIVE_R,
+import { GY, graveSlots, placeGraves, obstaclesOf, supportRects, rectDist, graveCandles, votives, footLights, wispsFor, VOTIVE_R,
          doorOf, doorApex, doorLamps, scaffoldOf } from '../src/rooms/graveyard-place.js';
 
 /* THE MIDNIGHT GRAVEYARD, set round its machines: the room's footing STYLE (graveyard-footing.js — ledger
@@ -35,7 +35,7 @@ const build = (plan = PLAN) => buildFooting(plan, STYLE, { boxes: footingBoxes(p
 const meshes = f => { const out = []; f.group.traverse(o => { if (o.isMesh) out.push(o); }); return out; };
 /* a lifted sweep (the kit's pistons, a wide machine, a small one, the open stand) and a song's rear gallery */
 const LIFTS = [0, .5, 1.4, 2.5, 3.5, 5, 8, 10, 12, 16, 20, 24];
-const tt = (u, x = 0) => ({ ...st('turntable', x, 12, 14.22, 14.12, -1.29 - FL + u), y: -.93 + u, ground: -.93, lift: u, low: -5.1 + u,
+const tt = (u, x = 0, z = 12, yaw = 0) => ({ ...st('turntable', x, z, 14.22, 14.12, -1.29 - FL + u, { yaw }), y: -.93 + u, ground: -.93, lift: u, low: -5.1 + u,
   feet: [[-5.5, -4.5, .7], [5.5, -4.5, .7], [-5.5, 4.5, .7], [5.5, 4.5, .7]], hang: [-6.25, 4.35, 4.8, 5.7] });
 const sweep = u => [
   { ...st('drums', -20, 22, 18, 5.5, FOOT.PLINTH + u), kind: 'kit', color: '#ff8a3d', low: FL + FOOT.PLINTH + u - .335 },
@@ -43,7 +43,15 @@ const sweep = u => [
 ];
 const GALLERY = [st('riff', -28, -22, 12, 4.4, 19.33), st('strum', -15, -22, 12, 4.4, 19.33), st('horns', 22, -20, 9, 5, 19.33),
   { ...st('drums', 0, 20, 18, 5.5), kind: 'kit', color: '#ff8a3d', low: FL + FOOT.PLINTH - .335 }];
-const PLANS = [['crowd', PLAN], ...LIFTS.map(u => [`lift ${u}`, planFooting(sweep(u), { floor: FL, room: ROOMB })]), ['gallery', planFooting(GALLERY, { floor: FL, room: ROOMB })]];
+/* the same machines TURNED (a station's yaw turns its pad, its stair, its feet) at one lift per band */
+const turned = u => [
+  { ...st('drums', -24, 27, 18, 5.5, FOOT.PLINTH + u, { yaw: .4 }), kind: 'kit', color: '#ff8a3d', low: FL + FOOT.PLINTH + u - .335 },
+  st('marimba', 20, 25, 14, 6, FOOT.PLINTH + u, { yaw: -.5 }), st('bells', 25, -12, 6.4, 4.2, FOOT.PLINTH + u, { yaw: .7 }), tt(u, 0, 8, .3),
+];
+const TURNS = [0, 2.5, 6, 14];
+const PLANS = [['crowd', PLAN], ...LIFTS.map(u => [`lift ${u}`, planFooting(sweep(u), { floor: FL, room: ROOMB })]), ['gallery', planFooting(GALLERY, { floor: FL, room: ROOMB })],
+  ...TURNS.map(u => [`turned ${u}`, planFooting(turned(u), { floor: FL, room: ROOMB })])];
+const anchorsOf = name => name === 'crowd' ? CROWD : name === 'gallery' ? GALLERY : name.startsWith('turned') ? turned(+name.split(' ')[1]) : sweep(+name.split(' ')[1]);
 
 describe('graveyard footing: the yard\'s own masonry under every machine', () => {
   it('the plans cover every form: each band, open stands low to high, a high + a mid loft, stairs, ladders, a cage', () => {
@@ -76,6 +84,22 @@ describe('graveyard footing: the yard\'s own masonry under every machine', () =>
           let d = Infinity;
           for (const b of B) d = Math.min(d, Math.hypot(Math.max(b[0] - x, 0, x - b[1]), Math.max(b[2] - y, 0, y - b[3]), Math.max(b[4] - z, 0, z - b[5])));
           if (d > worst){ worst = d; at = [x, y, z]; }
+        }
+        expect(worst, `${name} ${m.name}: ${worst.toFixed(3)} u out at ${at && at.map(v => v.toFixed(2))}`).toBeLessThanOrEqual(.035);
+      }
+      f.dispose();
+    }
+  });
+  it('…and inside the supports as the plan TURNS them (a turned pad\'s AABB is far bigger than the pad)', () => {
+    for (const [name, plan] of PLANS){
+      const f = build(plan), R = supportRects(plan);
+      for (const m of meshes(f)){
+        const p = m.geometry.attributes.position.array;
+        let worst = 0, at = null;
+        for (let i = 0; i < p.length; i += 3){
+          let d = Infinity;
+          for (const r of R){ d = Math.min(d, rectDist(r, p[i], p[i + 2])); if (d === 0) break; }
+          if (d > worst){ worst = d; at = [p[i], p[i + 1], p[i + 2]]; }
         }
         expect(worst, `${name} ${m.name}: ${worst.toFixed(3)} u out at ${at && at.map(v => v.toFixed(2))}`).toBeLessThanOrEqual(.035);
       }
@@ -152,7 +176,7 @@ describe('graveyard footing: the yard\'s own masonry under every machine', () =>
 });
 
 describe('graveyard props: the churchyard round its machines (pure)', () => {
-  const sets = PLANS.map(([name, plan]) => [name, plan, name === 'crowd' ? CROWD : name === 'gallery' ? GALLERY : sweep(+name.split(' ')[1])]);
+  const sets = PLANS.map(([name, plan]) => [name, plan, anchorsOf(name)]);
   it('every grave, candle and votive stands clear of every machine, hung post and support by GY.CLEAR', () => {
     for (const [name, plan, anchors] of sets){
       const obs = obstaclesOf(anchors, plan, FL), G = placeGraves(anchors, plan, { floor: FL, obs });
@@ -166,8 +190,23 @@ describe('graveyard props: the churchyard round its machines (pure)', () => {
     const obs = obstaclesOf(CROWD, PLAN, FL), keys = new Set(obs.map(o => o.key));
     for (const a of CROWD) expect(keys.has(a.key), a.key).toBe(true);                       // (the organ's posts reach the floor)
     for (const e of ENV) expect(keys.has(e.unit), e.unit).toBe(true);
+    for (const [name, plan] of PLANS){                                                       // footingBoxes = the AABBs of the turned rects
+      const R = supportRects(plan), E = footingBoxes(plan);
+      expect(R.length, name).toBe(E.length);
+      for (const e of E){
+        const hit = R.filter(r => r.key === e.unit && r.kind === e.kind).map(r => rectAabb(r));
+        expect(hit.some(b => Math.abs(b[0] - e.box[0]) + Math.abs(b[1] - e.box[1]) + Math.abs(b[2] - e.box[4]) + Math.abs(b[3] - e.box[5]) < 1e-9), `${name} ${e.kind} ${e.unit}`).toBe(true);
+      }
+    }
     const high = obstaclesOf([{ key: 'chandelier', kind: 'hung', x: 0, z: 0, w: 6, d: 6, box: [-3, 3, FL + 14, FL + 20, -3, 3] }], null, FL);
     expect(high.length, 'a machine hung high above the floor is no obstacle').toBe(0);
+  });
+  it('two votives before every standing machine, turned or not (not the belt, not a loft\'s members)', () => {
+    for (const [name, plan, anchors] of sets){
+      const obs = obstaclesOf(anchors, plan, FL), V = votives(anchors, plan, obs);
+      for (const p of plan.pads.filter(q => !q.fixed && q.kind !== 'belt' && !q.loft))
+        expect(V.filter(v => v.key === p.key).length, `${name}: ${p.key}`).toBe(2);
+    }
   });
   it('the yard keeps its density: a displaced tall grave moves to a reserve plot further out — none lost', () => {
     const home = graveSlots().home.length;

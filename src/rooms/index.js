@@ -271,8 +271,8 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
   const host = {
     frame: STAGE,                                             // FLOOR etc. — identical across rooms
     get key(){ return key; },
-    get group(){ return cur ? cur.group : null; },
-    get room(){ return cur; },                                 // the live room object itself (dev probes: __dev.room())             // the live room's group (stage edit lifts its ceiling for the plan view; the director's shot solve sees its piers / graves)
+    get group(){ return cur ? cur.group : null; },             // the live room's group (stage edit lifts its ceiling for the plan view; the director's shot solve sees its piers / graves)
+    get room(){ return cur; },                                 // the live room object itself (dev probes: __dev.room())
     get footGroup(){ return foot().group; },                   // the live footing (the shot solve sees its towers: userData.boxes)
     get footing(){ return footPlan(); },                       // the plan (rooms/footing.js)
     get footBoxes(){ footPlan(); return boxes; },              // its envelopes (footingBoxes)

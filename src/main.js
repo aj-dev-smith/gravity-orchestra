@@ -22,7 +22,7 @@ import { makeCameraRig } from './camera.js';
 import { makeRoomHost, ROOMS } from './rooms/index.js';
 import { groundOf, clampLift, FOOT } from './rooms/footing.js';
 import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
-import { stationFor, layoutStations, soloStar, HANG_CLEAR, hangPlace } from './instruments/stations.js';
+import { stationFor, layoutStations, soloStar, loneTurn, HANG_CLEAR, hangPlace } from './instruments/stations.js';
 import { eventTimes, wrapP } from './instruments/clock.js';
 import { splitBucket } from './instruments/sustain.js';
 import { nextVoiceEpoch, voiceEpoch, sweepVoiceCaches } from './instruments/voicecache.js';
@@ -72,7 +72,8 @@ let kitLoc = null;                                      // the kit's solid box o
 const devLift = Object.fromEntries((new URLSearchParams(location.search).get('lift') || '').split(',')
   .map(e => e.split(':')).filter(([k, v]) => k && v !== undefined && Number.isFinite(+v)).map(([k, v]) => [k, clampLift(+v)]));
 let lastAnchors = [];                                   // what the room was last told stands where (placeRoom; __dev.anchors)
-const kitDeck = () => groundOf(KIT_STAND, ROOM.FLOOR) + clampLift(kitSlot.lift);   // the kit's deck: its slab on the floor's plinth, or lifted
+const kitLift = () => clampLift(Number.isFinite(kitSlot.lift) ? kitSlot.lift : kitSlot.rise);   // the kit's height: the user's lift, else the room solve's DRUM RISER (stations.js)
+const kitDeck = () => groundOf(KIT_STAND, ROOM.FLOOR) + kitLift();   // the kit's deck: its slab on the floor's plinth, or lifted
 const FIXED_ZMAX = 30;                                  // FIXED cam: cap the pull-back. Past ~30 the FogExp2 eats
                                                         // the chrome to black; better to let a very wide field
                                                         // overflow the frame edges than fade the whole scene out.
@@ -707,6 +708,11 @@ function buildWorld(keyName){
   const relBox = (o, ox, oz, key) => { const b = visBox(o); if (b.isEmpty()) return null; tops[key] = b.max.y; bots[key] = b.min.y;
     return [b.min.x - ox, b.max.x - ox, b.min.z - oz, b.max.z - oz]; };
   const items = [];
+  // a LONE STAR (the song's signature alone on the floor — Piano Man's grand) turns a three-quarter
+  // (stations.js loneTurn) before it is measured: a rigid spin, render-time only (a user's yaw wins)
+  { const keys = instLive.filter(r => !r.slot.hang).map(r => r.I.key).concat(S.drums && drumGroup ? ['drums'] : []);
+    const lone = keys.length === 1 && instLive.find(r => r.I.key === keys[0]), turn = lone && !lone.slot.pin ? loneTurn(keys, stageStar(S)) : 0;
+    if (turn){ lone.station.rotation.y += turn; lone.station.updateMatrixWorld(true); } }
   instLive.forEach(r => { if (r.slot.hang) return;
     const p = r.station.position, box = relBox(r.station, p.x, p.z, r.I.key);
     if (box) items.push({ key: r.I.key, x: p.x, z: p.z, box, top: tops[r.I.key], deck: p.y, rig: r, pin: r.slot.pin,
@@ -715,7 +721,8 @@ function buildWorld(keyName){
   //  chassis and the chandelier's crown stand where a gallery machine would)
   const hungBoxes = instLive.filter(r => r.slot.hang).map(r => visBox(r.station)).filter(b => !b.isEmpty()).map(b => [b.min.x, b.max.x, b.min.z, b.max.z]);
   const kx0 = stageView.cx + kitSlot.x, kz0 = kitSlot.z;
-  if (S.drums){ const box = relBox(drumGroup, kx0, kz0, 'drums'); if (box) items.push({ key: 'drums', x: kx0, z: kz0, box, top: tops.drums, deck: kitSlot.y, pin: kitSlot.pin }); }
+  if (S.drums){ const box = relBox(drumGroup, kx0, kz0, 'drums'); if (box) items.push({ key: 'drums', x: kx0, z: kz0, box, top: tops.drums, deck: kitSlot.y, pin: kitSlot.pin,
+    ...(Number.isFinite(kitSlot.lift) ? { lift: kitSlot.lift } : {}) }); }   // (the USER's height: it never takes the riser)
   lastLayout = null;                                    // (dev: a song with no floor machine has no solve — never the last song's)
   if (items.length && !wallBox.isEmpty()){
     // THE STAR (the song's signature machine — the one the director will name) stands front and centre
@@ -726,15 +733,18 @@ function buildWorld(keyName){
       { cx: stageView.cx, bandY: STAGE_Y - 1.5, eyeY: 20, wallTop: wallBox.max.y, hung: hungBoxes, star, loftGap: FOOT.LOFT_GAP });   // (band − 1.5: the pads rising INTO the band read too)
     lastLayout = { items: items.map(({ key, x, z, box, top, deck }) => ({ key, x, z, box, top, y0: bots[key], deck })), wall: wallBox.clone(), solved, cx: stageView.cx, bandY: STAGE_Y - 1.5, hung: hungBoxes, star };
     items.forEach(it => {
-      const { x, y, z } = solved[it.key];
+      const { x, y, z, lift } = solved[it.key];
       if (it.rig){
-        // up onto the rear GALLERY: a lift (the gallery deck − its ground) — unless the user set its height
-        if (y !== undefined && !Number.isFinite(it.rig.slot.lift) && Math.abs(y - it.rig.station.position.y) > 1e-6) it.rig.setLift(y - it.rig.ground);
+        // up onto the rear GALLERY (a lift: the gallery deck − its ground) or a tiered RISER (its lift) —
+        // unless the user set its height
+        const to = y !== undefined ? y - it.rig.ground : lift;
+        if (to !== undefined && !Number.isFinite(it.rig.slot.lift) && Math.abs(to - it.rig.lift) > 1e-6) it.rig.setLift(to);
         it.rig.station.position.x = x; it.rig.station.position.z = z; it.rig.station.updateMatrixWorld(true);
       }
-      else if (Math.abs(x - kx0) + Math.abs(z - kz0) > 1e-6){       // the kit moved: rebuild it at its solved slot (same deck)
-        world.remove(drumGroup); disposeTree(drumGroup);
-        kitSlot = { ...kitSlot, x: x - stageView.cx, z };
+      else if (Math.abs(x - kx0) + Math.abs(z - kz0) > 1e-6 || (lift || 0) !== (kitSlot.rise || 0)){   // the kit moved (or up its DRUM RISER):
+        world.remove(drumGroup); disposeTree(drumGroup);                                              //  rebuilt at its solved slot + deck
+        kitSlot = { ...kitSlot, x: x - stageView.cx, z, rise: lift || 0 };
+        kitSlot.y = kitDeck();
         drumGroup = buildKit(); world.add(drumGroup);
       }
     });
@@ -883,7 +893,7 @@ function placeRoom(){
       box: [w.min.x, w.max.x, w.min.y, w.max.y, w.min.z, w.max.z], cue: loopCue(beltHits(), P), ...run, fixed: true });
   }
   if (S.drums && drumGroup){
-    const a = kitAnchor(view.cx, kitSlot), lift = clampLift(kitSlot.lift), K = kitOrigin();
+    const a = kitAnchor(view.cx, kitSlot), lift = kitLift(), K = kitOrigin();
     out.push({ key: 'drums', kind: 'kit', label: 'Drum Machine', color: '#ff8a3d', x: a.x, z: a.z, yaw: 0, w: a.w, d: a.d,
       y: kitSlot.y, ground: kitSlot.y - lift, lift, bottom: kitSlot.y + KIT_STAND, low: kitSlot.y + Math.min(KIT_STAND, kitLoc ? kitLoc.min.y : 0),
       box: kitLoc ? [kitLoc.min.x + K.x, kitLoc.max.x + K.x, kitLoc.min.y + K.y, kitLoc.max.y + K.y, kitLoc.min.z + K.z, kitLoc.max.z + K.z] : null,
@@ -1451,7 +1461,7 @@ let edStale = null;                                     // the build (curBuild) 
 function autoLiftOf(r){
   const s = lastLayout?.solved?.[r.I.key], p = r.station.position;
   if (!s || Math.abs(s.x - p.x) > 1e-3 || Math.abs(s.z - p.z) > 1e-3) return null;
-  return s.y === undefined ? 0 : Math.max(0, s.y - r.ground);
+  return s.y === undefined ? (s.lift || 0) : Math.max(0, s.y - r.ground);   // (s.lift: a tiered riser — stations.js)
 }
 const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: SONGS,
   machines: INSTRUMENTS.map(I => ({ key: I.key, label: I.label, color: I.color })),

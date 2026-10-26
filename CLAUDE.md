@@ -56,7 +56,7 @@ Still not pushed to GitHub.
 deployed.** The floor came up (-22 to -5.5), machines are set IN the rooms with a per-machine lift,
 supports are styled by each room by height band, rooms react to strikes, the layout is floor-first, and
 EDIT STAGE edits height. Its changelog and guide: [`docs/STAGING-WORLD.md`](docs/STAGING-WORLD.md). Rollback
-target when it ships = 6db6c8c. Wave 4 (per-room polish) is pending merge.
+target when it ships = 6db6c8c. Waves 1–4 are merged on it (d172126).
 
 `npm run deploy` builds + ships to production. It does not care which branch you're
 on. Treat it as live, and confirm with the human before running it.
@@ -147,7 +147,7 @@ on. Treat it as live, and confirm with the human before running it.
     src/main.js      scene, rigs, buildWorld, ballPos, animate(), controls — the orchestrator
     test/            Vitest: engine ballistics, song lock-rule, drum validation, MIDI, the
                      juggler's plan audit + bake, share round-trip, every plugin's honesty suite,
-                     staging audit + footing, director, XR (63 files / 2883 tests, 2026-10-25; ~1.5 min)
+                     staging audit + footing, director, XR (63 files / 2891 tests, 2026-10-26; ~1.5 min)
     docs/OVERNIGHT-2026-10-07.md   the night's changelog: what each new machine / room / song
                      is and the URL to try it
     docs/STAGING-WORLD.md   2026-10-25 staging world (branch staging-world): floor, lift, footing, rooms

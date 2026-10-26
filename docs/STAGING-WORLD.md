@@ -1,8 +1,8 @@
 # Staging world, 2026-10-25: changelog and guide
 
 Everything below is on the **`staging-world`** branch (off `main` 6db6c8c; 103 commits, HEAD
-6da306b). It is **not merged to `main`, not deployed, and not pushed**. The suite was 63 files /
-2883 tests on the merged wave-3 tree, and the staging fixture was regenerated on it. Nothing here was
+d172126). It is **not merged to `main`, not deployed, and not pushed**. The suite was 63 files /
+2891 tests on the merged wave-4 tree, and the staging fixture was regenerated on it. Nothing here was
 seen on a real iPhone or worn on a real Quest 2; all of it was checked in headless Chrome (desktop and
 a 390x844 touch emulation) and by IWER draw counts.
 
@@ -75,13 +75,36 @@ machine's footprint, and only the arena reacted to the music.
 - **Per-room perf.** Graveyard arch courses are adaptive (1401 to 1113 boxes), starship towers rail only
   their front, the studio atlas is 2048x1024.
 
-## Wave 4 (per-room polish): pending merge
+## Wave 4 (per-room polish)
 
-*(Placeholder: fill in from the wave-4 tracks when they merge: arena, cathedral, graveyard, grid-studio,
-starship, void, host. Per-room notes, new tests, the fixture regeneration, and which of the open issues
-below they closed.)*
+A critic pass per room on the merged tree (every room shot across several songs, a lifted machine, the
+drum riser), then the worst things fixed, each reviewed. Merged at d172126; 63 files / 2891 tests; the
+fixture now records room solids PER SONG.
 
----
+- **Every room** dropped its wave-2 workarounds now that the host supports them: style hooks return `true`
+  instead of an empty claim Group, `gapOf` / `landings` / `onSide` come from footing3d.js, `kit.slot(name)`
+  replaces `kit._bufs`. The cathedral's own warm-up is gone (the host prewarm covers it: 0 fresh programs
+  per swap, measured). The Void keeps its local forceSinglePass (dropping it compiled on swap).
+- **Cathedral**: candles flank a machine on ITS OWN sides, whatever its yaw (they went to a turned machine's
+  back corners), and never stand in front of it; limestone tops read as flagstones, not boards.
+  `staging-audit.mjs` checks an owned solid (a candlestick, `userData.owners`) against its owner's turned
+  footprint.
+- **Greybox**: the floor stage plot is for walkers only (gone from the director's film); towers and lofts
+  are Warren-braced, one diagonal a panel, no lace on back faces; the ripple pass walks only lit machines.
+- **Metal Arena**: the backline is a wall of 4×12 cabs (grille, piping, logos) that answers the riff and
+  pogo only; a lifted-off flame column's foot burns away instead of cutting flat.
+- **Void**: the keel beam's facing term is capped like beamMat; raised rock and stone walls catch the
+  nebula (cairns no longer navy cut-outs), stopping under the ceiling.
+- **Starship**: rams are turned (16 sides, smooth normals; round scissor rams), the steel is warmed gunmetal,
+  the umbilical bend is a round tube with a coupling.
+- **Graveyard + Studio**: the studio's epoxy mirror blurs with a turned Vogel disc (no pixel mosaic).
+  Graveyard fog measured ≤ .24 ms of the main pass on a laptop GPU.
+- **Host**: an open stand's access goes by its deck HEIGHT, not its lift — the turntable (≈ 4.2 u up at
+  lift 0) gets a ladder in every room's materials. `staging-audit.mjs` records every room's solids per song.
+
+Measured on the merged tree: only Starship Groove sends machines to the gallery (horns + riff at lift
+18.9); Forge, Mars and The Entertainer put the kit on its 3 u drum riser; every other catalog song stands
+everything on the floor.
 
 ## How to try each piece
 
@@ -141,7 +164,7 @@ The gesture moves the machine rigidly and re-plans the footing every frame (2-5 
   eyes see the machine more than `HIDE_MAX` .3 hidden does not count as free. Floor passes (margin 1,
   .7, .45) come before any gallery pass.
 - **The gallery is a loft, the overflow.** When the floor is full the fewest machines climb, beside one
-  already up (one loft, `FOOT.LOFT_GAP`). Today only Starship Groove climbs (horns + riff). A pinned
+  already up (one loft, `FOOT.LOFT_GAP`). Only Starship Groove climbs (horns + riff, measured on the merged tree). A pinned
   gallery-born machine behind the belt goes up.
 - **The star.** main passes the director's signature (imports, or a song's `director.signature`) to
   `layoutStations({star})`. It stands at `STAR` (belt centre, z 10) and never climbs. Nobody taller than

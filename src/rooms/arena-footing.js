@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { FOOT } from './footing.js';
+import { gapOf, landings } from './footing3d.js';
 /* ============================================================
    THE METAL ARENA'S FOOTING — what the machines stand on, in REAL STAGING GEAR.
    A room style for rooms/footing3d.js (its header is the contract): every form below writes into
@@ -77,16 +78,7 @@ function rectDist(m, x, z){
   const u = c * dx - s * dz, v = s * dx + c * dz;
   return Math.hypot(Math.max(Math.abs(u) - m.hw, 0), Math.max(Math.abs(v) - m.hd, 0));
 }
-/* where a support's rails open for its access (the kit's gapOf): [side, a0, a1] along that side */
-function gapOf(acc){
-  if (!acc) return null;
-  if (acc.kind === 'stair') return [acc.side, acc.a1 - acc.out, acc.a1];
-  const mid = (acc.a0 + acc.a1) / 2, off = acc.flights > 1 ? ((acc.flights - 1) % 2 ? .45 : -.45) : 0;
-  return [acc.side, mid + off - .33 - .15, mid + off + .33 + .15];
-}
-/* the landing levels of a support's climb (the kit's: every LAND_DY) */
-function landings(r, F){ const nf = r.access?.flights || Math.max(1, Math.ceil((r.top - F) / FOOT.LAND_DY)), out = [];
-  for (let f = 1; f < nf; f++) out.push(F + (r.top - F) * f / nf); return out; }
+/* (gapOf / landings: the kit's own rail-gap + landing rules, footing3d.js — a deck here meets the kit's ladders) */
 
 /* ---- textures (drawn once per room; none under node: the tests) ---- */
 function canvas(w, h, draw){
@@ -219,7 +211,6 @@ export function vuCue(cue, P){
 /* ============================================================ the style ============================ */
 export function arenaFooting({ envMap = null, alu = null } = {}){
   const edge = vuEdgeMat();
-  const NONE = new THREE.Group(); NONE.name = 'footing:arena';     // (a form drawn into the merged slots: nothing of its own)
   /* the materials are made with the ROOM (its textures painted once, at its build — never inside a footing
      build, which runs again on every lift); the footing only borrows them */
   let made = null;
@@ -502,7 +493,7 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
         if (!hits([A1[0], A1[2]], [B1[0], B1[2]], HG, .06) || y < clearY) k.bar('steel', A1, B1, .09, .09, ALL);
       }
     }
-    return NONE;
+    return true;
   }
   /* does the segment p → q (local u, v) cross the rect R = [u0, u1, v0, v1] grown by g? */
   function hits(p, q, R, g){
@@ -523,7 +514,7 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
     mats,
     edgeMat: edge,                                                       // (the room's update writes uVU / uGhost)
     /* a loft member's light is its loft's (spikes on the shared deck, its stretch of the fascia) */
-    edge(p){ return p.loft ? NONE : null; },
+    edge(p){ return p.loft ? true : null; },
     flush(p, k){
       if (p.open) return openStand(p, k);
       const F = k.floor;
@@ -531,14 +522,14 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
         const T = F + FOOT.KERB, fr = deckTop(k, p, T, F);
         k.box('skirt', -p.hw + A.LIP, p.hw - A.LIP, F - .01, T - fr, -p.hd + A.LIP, p.hd - A.LIP, SIDES);
         ledLine(k, p, F + .012, Math.max(F + .03, T - fr - .006), p.color, p.pulse);
-        return NONE;
+        return true;
       }
       const T = p.top, fr = deckTop(k, p, T, F);
       k.box('skirt', -p.hw + A.LIP, p.hw - A.LIP, F - .01, T - fr, -p.hd + A.LIP, p.hd - A.LIP, SIDES);
       if (p.kind === 'kit') vuRing(k, p, Math.max(F + .04, T - fr - .05 - A.FASCIA), T - fr - .05, [p], null);   // (the drum riser, even at its own height)
       else ledLine(k, p, T - fr - .05, T - fr - .012, p.color, p.pulse);
       spikes(k, p, T, p.color);
-      return NONE;
+      return true;
     },
     low(p, k){
       if (p.open) return openStand(p, k);
@@ -548,7 +539,7 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
       vuRing(k, p, T - fr - .07 - fh, T - fr - .07, [p], p.access);
       spikes(k, p, T, p.color);
       access(k, p, T, F, 'stage');
-      return NONE;
+      return true;
     },
     mid(p, k){
       if (p.open) return openStand(p, k);
@@ -557,7 +548,7 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
       vuRing(k, p, s.y0 + .1, T - s.fr - .08, [p], p.access);
       spikes(k, p, T, p.color);
       access(k, p, T, F, 'scaffold');
-      return NONE;
+      return true;
     },
     high(p, k){
       if (p.open) return openStand(p, k);
@@ -567,7 +558,7 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
       vuRing(k, p, s.y0 + .1, T - s.fr - .08, [p], p.access);
       spikes(k, p, T, p.color);
       access(k, p, T, F, 'scaffold');
-      return NONE;
+      return true;
     },
     loft(L, k){
       const F = k.floor, T = L.top, members = k.plan.pads.filter(p => p.loft === L.id);
@@ -590,7 +581,7 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
       const yBot = L.band === 'low' ? Math.max(y0, yTop - Math.max(.14, Math.min(A.FASCIA, (T - F - fr) * .42))) : y0;
       vuRing(k, L, yBot, yTop, members, L.access);
       for (const m of members){ k.frame(m); spikes(k, m, Math.max(T, m.top), m.color); k.frame(L); }
-      return NONE;
+      return true;
     },
     dispose(){
       if (made) for (const s of made._own){ made[s].map?.dispose(); made[s].normalMap?.dispose(); made[s].dispose(); }

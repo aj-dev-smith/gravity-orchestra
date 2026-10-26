@@ -37,9 +37,8 @@ describe('arena footing: real staging gear, drawn into the kit', () => {
     const f = build(), M = meshes(f);
     expect(M.map(m => m.name).sort()).toEqual(['footing:deck', 'footing:edge', 'footing:galv', 'footing:skirt', 'footing:steel', 'footing:wood']);
     for (const m of M) expect(m.userData.footing, m.name).toBe(true);
-    // (the forms draw into the merged slots: at most one empty marker group beside the meshes)
-    expect(f.group.children.filter(c => !c.isMesh).length).toBeLessThanOrEqual(1);
-    for (const c of f.group.children) if (!c.isMesh) expect(c.children.length).toBe(0);
+    // (the forms draw into the merged slots and return true: nothing but the meshes — no marker group)
+    expect(f.group.children.filter(c => !c.isMesh).length).toBe(0);
     f.dispose();
   });
   it('the style\'s aluminium IS the room\'s rig material when it hands one over (the towers are the rig\'s kit)', () => {

@@ -99,3 +99,21 @@ describe('arena playback: a pure fn of songTime', () => {
     expect(rev).toEqual(fwd);
   });
 });
+
+/* the room's par beams (arena.js nearFadeBeam over common.js beamMat): the facing term is capped at 1 (MSAA
+   extrapolation on the thin cone triangles blew it up → a bloom-smeared white blob) and a cone the eye
+   stands in fades out — the patch must take on the shared shader as it is, keeping its uniforms (the
+   room's update drives uGain) */
+import { nearFadeBeam } from '../src/rooms/arena.js';
+import { beamMat } from '../src/rooms/common.js';
+describe('arena beams: the eye can stand in one', () => {
+  it('the near fade patches the shared beam shader, uniforms untouched', () => {
+    const m = nearFadeBeam(beamMat({ gain: .2, falloff: 1.5, edge: 2.4 }));
+    expect(m.userData.nearFade).toBe(true);
+    expect(m.vertexShader).toContain('vP = mv.xyz');
+    expect(m.fragmentShader).toContain('pow(min(abs(dot(vN, vV)), 1.), uEdge)');
+    expect(m.fragmentShader).toMatch(/a \*= smoothstep\(2\., 14\., length\(vP\)\);\s*gl_FragColor/);
+    expect(Object.keys(m.uniforms).sort()).toEqual(['uColor', 'uEdge', 'uFall', 'uGain']);
+    m.dispose();
+  });
+});

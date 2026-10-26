@@ -3,7 +3,8 @@
      node scripts/staging-audit.mjs --base http://localhost:5191 [--rooms grid,cathedral,…]
        [--songs k1,k2] [--midi /midi/room-tour.mid,/midi/canon-in-d.mid] [--rate 4]
        [--shots <dir>] [--json out.json] [--detail 1] [--live 1] [--norun 1]
-       [--fixture test/fixtures/staging-rooms.json]   (the measured rooms test/staging-audit.test.js replays) [--size 1200x800]
+       [--fixture test/fixtures/staging-rooms.json]   (the measured rooms test/staging-audit.test.js replays: every song's
+                                                       layout from the first room + every room's solids PER SONG) [--size 1200x800]
    Per song: footprint overlaps (station ↔ station ↔ drums ↔ belt bays, + the room's own
    standing geometry: graves, piers, gate piers; + every OTHER machine's footing — its pad column,
    loft, stair / ladder: `k×foot:<unit>`), every director shot's occlusion (5×3 rays from the eye
@@ -266,7 +267,27 @@ function probeLive(key, selfKey){
   return { blocked: +(blocked / n).toFixed(2), by, near, eye: p.toArray().map(v => +v.toFixed(1)) };
 }
 
-const results = [], fixture = [], roomTable = {};
+const results = [], fixture = [], roomRaw = {};
+/* the fixture's `rooms` table: per room, the solids EVERY song shares (`all`) + each song's own (`by[song]`:
+   what its layout moved or added) — a song's room = all ∪ by[song] (test/staging-audit.test.js solidsIn) */
+function roomTableOf(raw){
+  const out = {};
+  for (const [room, bySong] of Object.entries(raw)){
+    const lists = Object.values(bySong), keyOf = b => b.join(',');
+    const count = L => L.reduce((m, b) => m.set(keyOf(b), (m.get(keyOf(b)) || 0) + 1), new Map());
+    const counts = lists.map(count), common = new Map();
+    for (const [k, n] of counts[0] || []) common.set(k, Math.min(n, ...counts.map(c => c.get(k) || 0)));
+    const all = [], left = new Map(common);
+    for (const b of lists[0] || []){ const k = keyOf(b); if (left.get(k) > 0){ all.push(b); left.set(k, left.get(k) - 1); } }
+    const by = {};
+    for (const [song, L] of Object.entries(bySong)){
+      const skip = new Map(common);
+      by[song] = L.filter(b => { const k = keyOf(b); if (skip.get(k) > 0){ skip.set(k, skip.get(k) - 1); return false; } return true; });
+    }
+    out[room] = { all, by };
+  }
+  return out;
+}
 const shotDir = A.shots;
 if (shotDir) fs.mkdirSync(shotDir, { recursive: true });
 for (const [ri, room] of ROOMS.entries()){
@@ -323,9 +344,10 @@ for (const [ri, room] of ROOMS.entries()){
       }
     }
     results.push({ room, song: name, ...st, run });
-    // the room's standing geometry as the shot solve sees it (song-independent — except the Void's
-    // islands, grown under each song's machines by place(): not tabled)
-    if (A.fixture && !(room in roomTable) && room !== 'void') roomTable[room] = await pg.evaluate(() => window.__dev.roomSolids().map(b => b.map(v => +v.toFixed(2))));
+    // the room's standing geometry as the shot solve sees it, PER SONG: place(anchors) moves the props
+    // that answer a layout (the cathedral's candlesticks, the studio's mic stands, the graves round the
+    // machines) — so each song's own set is recorded (the Void's islands ARE the machines' ground: not tabled)
+    if (A.fixture && room !== 'void') (roomRaw[room] ||= {})[name] = await pg.evaluate(() => window.__dev.roomSolids().map(b => b.map(v => +v.toFixed(2))));
     if (A.fixture && ri === 0) fixture.push(await pg.evaluate(name => {
       const D = window.__dev, L = D.layout, r = v => +v.toFixed(2), r3 = a => a.map(r);
       if (!L) return { song: name, wall: null, items: [], fixed: [], shots: [] };
@@ -355,5 +377,5 @@ for (const [ri, room] of ROOMS.entries()){
   await page.close();
 }
 if (A.json) fs.writeFileSync(A.json, JSON.stringify(results, null, 1));
-if (A.fixture) fs.writeFileSync(A.fixture, '{"rooms":' + JSON.stringify(roomTable) + ',\n"songs":[\n' + fixture.map(f => JSON.stringify(f)).join(',\n') + '\n]}\n');
+if (A.fixture) fs.writeFileSync(A.fixture, '{"rooms":' + JSON.stringify(roomTableOf(roomRaw)) + ',\n"songs":[\n' + fixture.map(f => JSON.stringify(f)).join(',\n') + '\n]}\n');
 await browser.close();

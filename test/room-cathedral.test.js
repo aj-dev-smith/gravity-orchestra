@@ -59,7 +59,8 @@ describe('cathedral footing: stone and oak, drawn inside the plan', () => {
     const f = build(), M = meshes(f);
     expect(M.length).toBeLessThanOrEqual(8);
     expect(f.group.children.length, 'no empty node per pad (footStats counts children as draws)').toBe(M.length);
-    expect(M.map(m => m.name).sort()).toEqual(['footing:base', 'footing:brass', 'footing:deck', 'footing:edge', 'footing:glow'].sort());
+    // (+ iron: the open stand's oak ladder hangs on iron brackets — its deck stands > FOOT.CLIMB over the floor)
+    expect(M.map(m => m.name).sort()).toEqual(['footing:base', 'footing:brass', 'footing:deck', 'footing:edge', 'footing:glow', 'footing:steel'].sort());
     for (const m of M) expect(m.userData.footing, m.name).toBe(true);
     f.dispose();
   });

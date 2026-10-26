@@ -65,8 +65,8 @@ export const FOOT = {
   TREAD: .42,                                   // a stair's going (≈ 28 cm)
   STAIR_W: 1.1,                                 // a stair's width (≈ 75 cm): it hugs the pad's side, landing at the top
   STAIR_MAX: 6.5,                               // a platform higher than this is climbed by ladder (its stair would run ≈ 10 u)
-  CLIMB: 1,                                     // an OPEN stand lifted more than this gets a ladder (at its own height its
-                                                // posts are the machine's legs: nobody climbs them)
+  CLIMB: 1,                                     // an OPEN stand whose deck stands more than this over the floor gets a
+                                                // ladder (its HEIGHT, not its lift: the turntable's own stand is ≈ 4.2 u)
   LADDER_W: 1.4,                                // a ladder's envelope along the face it climbs (stiles + cage)…
   LADDER_D: 1.2,                                // …and out from it
   CAGE: 5,                                      // a ladder climbing more than this gets a safety cage (≈ 3.4 m)…
@@ -189,10 +189,10 @@ export function planFooting(anchors = [], { floor = -5.5, room = null } = {}){
   lofts.sort((A, B) => A.id < B.id ? -1 : 1);
 
   // 3. ACCESS: every raised support gets a stair or a ladder on a free side (an open stand: a ladder,
-  //    once the user has lifted it off its own legs)
+  //    once its deck stands more than CLIMB over the floor — by its own stand's height OR a lift)
   const beltX = list.find(a => a.kind === 'belt')?.x ?? 0;
   const placed = [];
-  const units = [...pads.filter(p => !p.loft && !p.fixed && p.band !== 'flush' && (!p.open || p.lift > FOOT.CLIMB)), ...lofts];
+  const units = [...pads.filter(p => !p.loft && !p.fixed && p.band !== 'flush' && (!p.open || p.h > FOOT.CLIMB)), ...lofts];
   for (const P of units){
     const own = P.keys ? pads.filter(p => p.loft === P.id) : [P];
     const clear = R => {

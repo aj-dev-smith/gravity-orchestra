@@ -235,13 +235,18 @@ describe('footing: the planner (planFooting)', () => {
     expect(q.band).toBe(bandOf(-1.29 - FL));
     expect(q.feet.length).toBe(4);
     expect(q.hang).toEqual([-6.25, 4.35, 4.8, 5.7]);
-    expect(q.access).toBe(null);                         // (a stand, not a platform: nobody climbs it)
+    expect(q.access).toMatchObject({ kind: 'ladder' });  // (its deck stands 4.2 u over the floor, unlifted: a service ladder)
     expect(q.hangY).toBe(-5.1);                          // (what hangs reaches down to here)
   });
-  it('an open stand LIFTED off its own legs gets a service ladder (never a stair); unlifted, none', () => {
+  it('an open stand gets a service ladder (never a stair) once its DECK stands over CLIMB above the floor — by its own height or a lift', () => {
     const tt = FINALE.find(a => a.key === 'turntable'), up = u => ({ ...tt, y: tt.y + u, bottom: tt.bottom + u, low: tt.low + u, lift: u,
       box: [tt.box[0], tt.box[1], tt.box[2] + u, tt.box[3] + u, tt.box[4], tt.box[5]] });
-    expect(padOf(plan([beltA, up(FOOT.CLIMB)]), 'turntable').access).toBe(null);
+    // a SHORT open stand (its deck ≤ CLIMB over the floor, hanging parts a hair above it): its posts are its legs, nobody climbs them
+    const shortStand = h => ({ ...tt, y: FL + h + .36, bottom: FL + h, low: FL + .1, lift: 0, box: [tt.box[0], tt.box[1], FL + .1, FL + 9, tt.box[4], tt.box[5]] });
+    expect(padOf(plan([beltA, shortStand(FOOT.CLIMB)]), 'turntable')).toMatchObject({ open: true, access: null });
+    expect(padOf(plan([beltA, shortStand(FOOT.CLIMB + .2)]), 'turntable')).toMatchObject({ open: true, access: { kind: 'ladder' } });
+    // the turntable's own stand at lift 0 (deck ≈ 4.2 u up — the bug: the check read the LIFT, so it had none)
+    expect(padOf(plan([beltA, up(0)]), 'turntable').access, 'lift 0').toMatchObject({ kind: 'ladder', cage: false });
     for (const u of [2, 6, 14]){
       const q = padOf(plan([beltA, up(u)]), 'turntable');
       expect(q.open, `${u}`).toBe(true);

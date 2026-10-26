@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { STAGE, disposeTree } from './common.js';
 import { planFooting, footingBoxes } from './footing.js';
 import { buildFooting, makeFootingMats, DEFAULT_STYLE } from './footing3d.js';
+import { singlePassFlats } from '../perftune.js';
 import grid from './grid.js';
 import cathedral from './cathedral.js';
 import studio from './studio.js';
@@ -53,6 +54,14 @@ import starship from './starship.js';
    A room's OWN reaction to a machine (a candle row, a grave's glow) reads the anchor's cue the same
    way: makePulse(a.cue, a) (rooms/pulse.js) in place(), then .at(songTime) / .next(songTime) in
    update() — a pure envelope of songTime, silent in the count-in, allocation-free.
+   PREWARM (idle, after the first frames): every room not yet visited is built, PLACED on the current
+   anchors, given its footing, single-passed (perftune.js) and rendered once offscreen — so its first
+   visible frame compiles no program. What that needs from a room: everything that changes a program
+   must exist by the end of place() — an InstancedMesh coloured in place() must carry instanceColor
+   from build() (setColorAt creates it lazily, and it is a program define); a material's defines /
+   onBeforeCompile / map presence must not flip on the first update(). A merged mesh that spans the
+   floor AND the ceiling sets userData.boxes (shotrig roomSolids reads them; without them a mesh under
+   40 u falls back to its world AABB — a solid slab from floor to sky).
    Choosing: ?room=<key>  >  a pick made THIS session (R / ROOM)  >  the song's own
    `room` field (features-as-data; suggest())  >  the viewer's remembered pick
    (localStorage — it still opens the page and dresses songs that name no room)  >
@@ -90,23 +99,30 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
   let plan = null, boxes = [], planGen = -1, footMats = null;
   const FOOT_ROOM = { x0: -STAGE.HW, x1: STAGE.HW, z0: STAGE.BACK, z1: STAGE.FRONT };   // (the smallest room's walls: one plan for every room)
   function footPlan(){
-    if (planGen !== anchorGen){ plan = planFooting(anchors, { floor: STAGE.FLOOR, room: FOOT_ROOM }); boxes = footingBoxes(plan); planGen = anchorGen; }
+    if (planGen !== anchorGen){
+      plan = planFooting(anchors, { floor: STAGE.FLOOR, room: FOOT_ROOM }); boxes = footingBoxes(plan); planGen = anchorGen;
+      // each pad keeps its machine's own footprint (a style sizing a riser tier to the machine, not the pad)
+      const byKey = new Map(anchors.map(a => [a.key, a]));
+      for (const p of plan.pads){ const a = byKey.get(p.key); if (a && p.foot == null && Number.isFinite(a.w) && Number.isFinite(a.d)) p.foot = [a.w, a.d]; }
+    }
     return plan;
   }
-  /* the live room's footing, built if it isn't (lazily: a set() during a song build sees stale anchors) */
-  function foot(){
-    let e = foots[key];
+  /* a room's footing on the current anchors (built if it isn't: lazily — a set() during a song build sees
+     stale anchors); the live room's by default, any built room's for the prewarm */
+  function footFor(k, b){
+    let e = foots[k];
     if (!e || e.gen !== anchorGen){
       e?.f.dispose();
       const p = footPlan();
       footMats ||= makeFootingMats({ envMap });
-      const f = buildFooting(p, cur?.footing || DEFAULT_STYLE, { mats: footMats, envMap, renderer, boxes, room: key });
+      const f = buildFooting(p, b?.footing || DEFAULT_STYLE, { mats: footMats, envMap, renderer, boxes, room: k });
       footRoot.add(f.group);
-      e = foots[key] = { gen: anchorGen, f };
+      e = foots[k] = { gen: anchorGen, f };
       showFoot();
     }
     return e.f;
   }
+  const foot = () => footFor(key, cur);
   const showFoot = () => { for (const k in foots) foots[k].f.group.visible = k === key && foots[k].gen === anchorGen; };
 
   // a small fading label when the room changes (R) — self-contained, no CSS file
@@ -209,6 +225,15 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
       const R = todo.shift(); if (!R) return;
       if (!built[R.key]){
         const b = buildRoom(R);
+        // placed + footed on the current anchors (a swap then has nothing left to build or compile —
+        // a later place() re-places the live room and drops the other footings, as before)
+        let wf = null;
+        if (anchors.length){
+          try {
+            if (b.place){ b.place(anchors, footPlan()); b.anchorGen = anchorGen; }
+            wf = footFor(R.key, b);
+          } catch(e){ console.warn(`room ${R.key}: prewarm place / footing failed`, e); }
+        }
         /* a REAL render into a tiny offscreen target, room visible: compiles programs with the
            exact keys the composer's RenderPass will use (render-target → no tone-map/sRGB
            variant — renderer.compile() to the canvas would key them differently and the first
@@ -216,6 +241,10 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
         const prevBg = scene.background, vis = cur ? cur.group.visible : false;
         if (cur) cur.group.visible = false;
         b.group.visible = true; scene.background = b.background;
+        if (wf) wf.group.visible = true;
+        // the one-pass flats FIRST: main's perftune pass would flip them after this compile (a 2-pass
+        // pair compiled here, the 1-pass program on the room's first visible frame)
+        singlePassFlats(b.group); if (wf) singlePassFlats(wf.group);
         try {
           warmRT ||= new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType });
           const prevRT = renderer.getRenderTarget();
@@ -224,13 +253,15 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
           renderer.render(scene, camera);                        // + buffer uploads for what is in view
           const seen = new Set(), up = t => { if (t && t.isTexture && !seen.has(t)){ seen.add(t); renderer.initTexture(t); } };
           up(b.background);                                      // + every texture, in view or not (the void sky is 2048²)
-          b.group.traverse(o => { for (const m of [].concat(o.material || [])){
+          const upMats = o => { for (const m of [].concat(o.material || [])){
             for (const v of Object.values(m)) up(v);
-            if (m.uniforms) for (const u of Object.values(m.uniforms)) up(u.value); } });
+            if (m.uniforms) for (const u of Object.values(m.uniforms)) up(u.value); } };
+          b.group.traverse(upMats); if (wf) wf.group.traverse(upMats);
           renderer.setRenderTarget(prevRT);
         } catch(e){}
         scene.background = prevBg; if (cur) cur.group.visible = vis;
         b.group.visible = false;
+        showFoot();
       }
       idle(step);
     };
@@ -241,6 +272,7 @@ export function makeRoomHost({ scene, envMap, renderer, lights = {}, initial }){
     frame: STAGE,                                             // FLOOR etc. — identical across rooms
     get key(){ return key; },
     get group(){ return cur ? cur.group : null; },             // the live room's group (stage edit lifts its ceiling for the plan view; the director's shot solve sees its piers / graves)
+    get room(){ return cur; },                                 // the live room object itself (dev probes: __dev.room())
     get footGroup(){ return foot().group; },                   // the live footing (the shot solve sees its towers: userData.boxes)
     get footing(){ return footPlan(); },                       // the plan (rooms/footing.js)
     get footBoxes(){ footPlan(); return boxes; },              // its envelopes (footingBoxes)

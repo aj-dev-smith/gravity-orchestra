@@ -28,10 +28,19 @@ import { makePulse } from './pulse.js';
 
    A room STYLE: { mats?(kit, ctx) → { slot: Material }, flush?, low?, mid?, high?, loft?, edge? }
    — mats: materials for the kit's slots (or new slots) — the ROOM's: it may cache them, the footing
-   never disposes them; each form hook (spec, kit) → Object3D | null (null: the kit's own form;
-   spec.open: keep it open; edge: a pad's light — anything non-null and the form draws no strip).
+   never disposes them; each form hook (spec, kit) → Object3D | true | null:
+     · null / undefined / false — not handled: the kit draws its own form;
+     · true — HANDLED, nothing to add (the hook drew into the merged slots itself, or wants nothing);
+     · an Object3D — handled, and that object joins the footing group (its meshes are tagged footing).
+   (An empty Group still works as "handled" — the older idiom — it simply adds an empty node; footStats
+   counts only what the GPU draws, so it costs nothing.) edge: a pad's light — handled (true or an
+   object) and the form draws no strip. There is NO `open` hook: an OPEN stand (spec.open, spec.feet,
+   spec.hang / hangY — footing.js) reaches the style through its BAND's hook (style[spec.band]) with
+   spec.open set; return null there and the kit draws kit.forms.open. Every pad the room host plans
+   (rooms/index.js) also carries spec.foot = [w, d]: its machine's own footprint (the pad is that + margin).
    A hook may write into the merged slots itself (kit.frame is set to its spec; kit.box / bar / edge;
-   kit.forms.* are the defaults, kit.DIM their sizes) and return an empty Group. Whatever a style
+   kit.forms.* are the defaults, kit.DIM their sizes; kit.slot(name) a slot's own buffer; gapOf / landings below are the kit's own rail-gap
+   and landing rules, exported so a style's decks meet the kit's ladders) and return true. Whatever a style
    draws stays inside footingBoxes(plan): the envelope the shot solve keeps an eye out of.
    DEFAULT_STYLE (every form the kit's own) is what room 'off' and every unstyled room shows. Every
    footing mesh carries userData.footing = true; each merged one carries userData.boxes — the
@@ -224,6 +233,13 @@ function makeKit({ floor, mats, plan }){
       const [cx, cz] = W((u0 + u1) / 2, (v0 + v1) / 2), hu = (u1 - u0) / 2, hv = (v1 - v0) / 2;
       obox(edgeBuf, cx, (y0 + y1) / 2, cz, [FC * hu, 0, -FS * hu], [0, (y1 - y0) / 2, 0], [FS * hv, 0, FC * hv], faces, _c, pulse);
     },
+    /** the merged buffer of a SLOT (made on first use — a style's own slot too: its material from
+        style.mats), registered to the current frame's support (its mesh's envelopes). The public way
+        to write it with your own writer: quad(b, …) (exported), or fill b.p / n / uv / i yourself,
+        growing them as newBuf's are and keeping b.nv / b.ni right. The host makes ONE mesh of it. */
+    slot(name){ return buf(name); },
+    /** the support the current frame's parts belong to (a loft member's: its loft) */
+    get unit(){ return unit; },
     forms: null, ownEdge: new Set(),                 // (pads whose light the style drew itself)
     _bufs: bufs, _edge: edgeBuf,
   };
@@ -267,6 +283,16 @@ function segHits(p, q, R, g){
   }
   return true;
 }
+
+/** where a support's rails open for its access: [side, a0, a1] — the along-range on that side
+    ([null, 0, 0] with no access). A stair opens its top flight; a ladder its width (+ a little), offset
+    for a multi-flight cage. Exported for styles that draw their own decks / rails. */
+export const gapOf = acc => !acc ? [null, 0, 0] : acc.kind === 'stair' ? [acc.side, acc.a1 - acc.out, acc.a1] : (() => {
+  const mid = (acc.a0 + acc.a1) / 2, off = acc.flights > 1 ? ((acc.flights - 1) % 2 ? .45 : -.45) : 0;
+  return [acc.side, mid + off - DIM.LAD_HALF - .15, mid + off + DIM.LAD_HALF + .15]; })();
+/** the landing levels of a support's ladder (ties + braces meet them): every LAND_DY of its climb from floor F */
+export function landings(r, F){ const nf = r.access?.flights || Math.max(1, Math.ceil((r.top - F) / FOOT.LAND_DY)), out = [];
+  for (let f = 1; f < nf; f++) out.push(F + (r.top - F) * f / nf); return out; }
 
 /* ---- the default FORMS (all in the pad's / loft's frame — the caller sets it) ---- */
 function makeForms(k){
@@ -473,10 +499,6 @@ function makeForms(k){
       }
     }
   }
-  /* where the deck's rails open for the access: the along-range on its side */
-  const gapOf = acc => !acc ? [null, 0, 0] : acc.kind === 'stair' ? [acc.side, acc.a1 - acc.out, acc.a1] : (() => {
-    const mid = (acc.a0 + acc.a1) / 2, off = acc.flights > 1 ? ((acc.flights - 1) % 2 ? .45 : -.45) : 0;
-    return [acc.side, mid + off - DIM.LAD_HALF - .15, mid + off + DIM.LAD_HALF + .15]; })();
   function access(r, T, acc, solid){ if (!acc) return; acc.kind === 'stair' ? stair(r, T, acc, solid) : ladder(r, T, acc); }
 
   return {
@@ -494,7 +516,7 @@ function makeForms(k){
     high(p){
       const D = deckDepth(p);
       deck(p, p.top, D, p.color, p.pulse);
-      trussFrame(p, p.top - D, landings(p));
+      trussFrame(p, p.top - D, landings(p, F));
       const [s, g0, g1] = gapOf(p.access); rails(p, p.top, s, g0, g1);
       access(p, p.top, p.access, false);
     },
@@ -550,7 +572,7 @@ function makeForms(k){
       deck(L, T, D, null, 0, false);
       if (L.band === 'low') k.box('base', -L.hw + .03, L.hw - .03, F - .04, yB, -L.hd + .03, L.hd - .03, NOBOT);
       else if (L.band === 'mid') legs(L, yB);
-      else trussFrame(L, yB, landings(L));
+      else trussFrame(L, yB, landings(L, F));
       if (railed(L.band)){ const [s, g0, g1] = gapOf(L.access); rails(L, T, s, g0, g1); }
       access(L, T, L.access, L.band === 'low');
       // each member's light: its stretch of the deck's fascia (front + back) and tape round its spot
@@ -571,9 +593,27 @@ function makeForms(k){
     shim(m, T){ k.box('deck', -m.hw + .15, m.hw - .15, T - .01, m.top, -m.hd + .15, m.hd - .15, NOBOT); },
     memberTape(m, T){ tape(-m.hw + .12, m.hw - .12, -m.hd + .12, m.hd - .12, Math.max(T, m.top), m.color, m.pulse); },
   };
-  /* the landing levels of a support's ladder (ties + braces meet them): every LAND_DY of its climb */
-  function landings(r){ const nf = r.access?.flights || Math.max(1, Math.ceil((r.top - F) / FOOT.LAND_DY)), out = [];
-    for (let f = 1; f < nf; f++) out.push(F + (r.top - F) * f / nf); return out; }
+}
+
+/** what a footing group really costs the GPU: { draws, tris } over every VISIBLE mesh with geometry
+    (Groups and other empty nodes — a style's "handled" marker — are never draws; a multi-material mesh is
+    one draw per group it draws; an InstancedMesh counts its triangles × instances). */
+export function footingDraws(root){
+  let draws = 0, tris = 0;
+  const walk = o => {
+    if (!o.visible) return;
+    if ((o.isMesh || o.isInstancedMesh) && o.geometry?.attributes?.position){
+      const g = o.geometry, n = g.index ? g.index.count : g.attributes.position.count;
+      const inst = o.isInstancedMesh ? o.count : 1;
+      if (n && inst){
+        const groups = Array.isArray(o.material) && g.groups.length ? g.groups.length : 1;
+        draws += groups; tris += Math.round(n / 3) * inst;
+      }
+    }
+    for (const c of o.children) walk(c);
+  };
+  walk(root);
+  return { draws, tris };
 }
 
 /** build a plan's footing in a style: { group, update(songTime), dispose(), ms } */
@@ -589,6 +629,7 @@ export function buildFooting(plan, style = DEFAULT_STYLE, ctx = {}){
     if (typeof fn !== 'function') return false;
     const o = fn(spec, kit);
     if (!o) return false;
+    if (o === true || !o.isObject3D) return true;             // (handled, nothing to add)
     o.traverse(m => { if (m.isMesh || m.isInstancedMesh) m.userData.footing = true; });
     group.add(o);
     return true;
@@ -635,7 +676,7 @@ export function buildFooting(plan, style = DEFAULT_STYLE, ctx = {}){
   const ms = (typeof performance !== 'undefined' ? performance.now() : 0) - t0;
   group.userData.ms = +ms.toFixed(2);                        // (dev: what the build cost — __dev.footStats)
   return {
-    group, plan, ms, tris: group.children.reduce((s, m) => s + (m.geometry?.index ? m.geometry.index.count / 3 : 0), 0),
+    group, plan, ms, tris: footingDraws(group).tris,
     update(songTime){
       for (let i = 0; i < pulses.length; i++){ const v = pulses[i].at(songTime) + .35 * pulses[i].next(songTime); U[i] = v > 1 ? 1 : v; }
     },

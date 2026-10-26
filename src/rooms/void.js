@@ -185,8 +185,13 @@ export default {
       makeKeelBeamMat({ gain: .42, falloff: 2.2, edge: 1.4, fadeIn: .08 }), MAX_PLINTHS);
     const halo = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ map: radialTex(), transparent: true, opacity: .3, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }), MAX_PLINTHS);
-    for (const im of [pillar, halo]){ im.count = 0; im.frustumCulled = false; group.add(im); }
     const _c = new THREE.Color(), SHARED = new THREE.Color(0x5fd8ff);
+    /* everything this room will ever draw is in the group from the start, as it will be drawn — so the
+       host's idle prewarm compiles the very programs the first frame here uses (a swap never stalls on a
+       compile): the instance colours exist before place() fills them (they change the program), and
+       the footing's own materials stand in on two empty meshes */
+    for (const im of [pillar, halo]){ im.setColorAt(0, _c.set(0xffffff)); im.count = 0; im.frustumCulled = false; group.add(im); }
+    mesh(M.glow, 'void:warm-glow'); mesh(M.haze, 'void:warm-haze'); mesh(M.rune, 'void:warm-rune', 2);
     let pulses = [];
 
     /* place(anchors, plan): the islands (voidIslands), their bodies, runes and crystals — a pure fn of

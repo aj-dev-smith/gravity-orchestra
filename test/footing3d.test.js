@@ -296,6 +296,21 @@ describe('footing kit: the style contract (hooks, what counts as a draw, the sha
   });
 });
 
+describe('footing kit: a style\'s own slot (kit.slot)', () => {
+  it('a hook writes its own slot through kit.slot: one more merged mesh in the style\'s material, its envelopes the supports it wrote for', () => {
+    const mat = new THREE.MeshStandardMaterial(), hit = new Set();
+    const style = { key: 'own', mats: () => ({ mine: mat }), flush(spec, kit){
+      const b = kit.slot('mine'); hit.add(kit.unit);
+      kit.box('mine', -spec.hw, spec.hw, spec.top - .2, spec.top, -spec.hd, spec.hd);
+      return b === kit.slot('mine') ? true : null; } };
+    const f = build(style), m = f.group.children.find(o => o.name === 'footing:mine');
+    expect(m).toBeTruthy(); expect(m.material).toBe(mat);
+    expect(hit.size).toBeGreaterThan(0);
+    expect(m.userData.boxes.length).toBe(hit.size);
+    f.dispose(); expect(mat.userData.disposed).toBeUndefined();
+  });
+});
+
 describe('room beams (common.js beamMat)', () => {
   it('the facing term is capped at 1 — MSAA-extrapolated edge samples of a thin cone can\'t blow up into a bloom blob', () => {
     const m = beamMat();

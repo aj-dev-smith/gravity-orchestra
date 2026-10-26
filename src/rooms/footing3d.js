@@ -39,7 +39,7 @@ import { makePulse } from './pulse.js';
    spec.open set; return null there and the kit draws kit.forms.open. Every pad the room host plans
    (rooms/index.js) also carries spec.foot = [w, d]: its machine's own footprint (the pad is that + margin).
    A hook may write into the merged slots itself (kit.frame is set to its spec; kit.box / bar / edge;
-   kit.forms.* are the defaults, kit.DIM their sizes; gapOf / landings below are the kit's own rail-gap
+   kit.forms.* are the defaults, kit.DIM their sizes; kit.slot(name) a slot's own buffer; gapOf / landings below are the kit's own rail-gap
    and landing rules, exported so a style's decks meet the kit's ladders) and return true. Whatever a style
    draws stays inside footingBoxes(plan): the envelope the shot solve keeps an eye out of.
    DEFAULT_STYLE (every form the kit's own) is what room 'off' and every unstyled room shows. Every
@@ -233,6 +233,13 @@ function makeKit({ floor, mats, plan }){
       const [cx, cz] = W((u0 + u1) / 2, (v0 + v1) / 2), hu = (u1 - u0) / 2, hv = (v1 - v0) / 2;
       obox(edgeBuf, cx, (y0 + y1) / 2, cz, [FC * hu, 0, -FS * hu], [0, (y1 - y0) / 2, 0], [FS * hv, 0, FC * hv], faces, _c, pulse);
     },
+    /** the merged buffer of a SLOT (made on first use — a style's own slot too: its material from
+        style.mats), registered to the current frame's support (its mesh's envelopes). The public way
+        to write it with your own writer: quad(b, …) (exported), or fill b.p / n / uv / i yourself,
+        growing them as newBuf's are and keeping b.nv / b.ni right. The host makes ONE mesh of it. */
+    slot(name){ return buf(name); },
+    /** the support the current frame's parts belong to (a loft member's: its loft) */
+    get unit(){ return unit; },
     forms: null, ownEdge: new Set(),                 // (pads whose light the style drew itself)
     _bufs: bufs, _edge: edgeBuf,
   };

@@ -702,7 +702,7 @@ export function makeRuneMat({ slots = FOOT.MAX_PULSE, base = .22, gain = 1.7 } =
   });
 }
 export const GLOW_I = 1.15;                                           // the crystals' resting glow (the room breathes it)
-export function makeVoidMats({ envMap = null, floor = -5.5 } = {}){
+export function makeVoidMats({ envMap = null, floor = -5.5, ceil = 36 } = {}){
   const rt = rockTex(), st = stoneTex();
   const M = {
     rock: new THREE.MeshStandardMaterial({ color: 0xc4b6bc, map: rt, roughness: .88, metalness: .04, emissive: 0x2c2444, emissiveMap: rt, emissiveIntensity: 1 }),
@@ -717,29 +717,30 @@ export function makeVoidMats({ envMap = null, floor = -5.5 } = {}){
   const under = { uUnder: { value: new THREE.Color(0x3a3a9a) }, uY0: { value: floor - 1.5 }, uY1: { value: floor - 13 },
     /* …and what is RAISED over the island (a cairn, a pillar, a ridge, a terrace's wall) catches the nebula:
        a soft fill + a violet rim on its silhouette, so a stack of stones reads as stone against the bright
-       sky instead of a navy cut-out (a pure fn of height + view: the islands below the floor are untouched) */
-    uRaise: { value: new THREE.Color(0x231e46) }, uRim: { value: new THREE.Color(0x7a62c4) }, uF: { value: floor } };
+       sky instead of a navy cut-out (a pure fn of height + view: the islands below the floor are untouched, and so
+       are the SKY ROCKS — the gate closes again under the ceiling, uC, where they hang: void-isles skyRocks) */
+    uRaise: { value: new THREE.Color(0x231e46) }, uRim: { value: new THREE.Color(0x7a62c4) }, uF: { value: floor }, uC: { value: ceil } };
   M.rock.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, under);
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vWy;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWy = (modelMatrix * vec4(transformed, 1.)).y;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vWy; uniform vec3 uUnder, uRaise, uRim; uniform float uY0, uY1, uF;')
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vWy; uniform vec3 uUnder, uRaise, uRim; uniform float uY0, uY1, uF, uC;')
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
 totalEmissiveRadiance += uUnder * smoothstep(uY0, uY1, vWy) * (.55 + .45 * diffuseColor.g);
-{ float up = smoothstep(uF + .15, uF + 1.6, vWy), fr = pow(1. - min(abs(dot(normal, normalize(vViewPosition))), 1.), 2.5);
+{ float up = smoothstep(uF + .15, uF + 1.6, vWy) * (1. - smoothstep(uC - 3., uC - .5, vWy)), fr = pow(1. - min(abs(dot(normal, normalize(vViewPosition))), 1.), 2.5);
   totalEmissiveRadiance += up * (uRaise + uRim * fr) * (.6 + .4 * diffuseColor.g); }`);
   };
   M.rock.customProgramCacheKey = () => 'void-rock-under-rim';
   /* the dressed stone's WALLS over the island (a terrace's face, a carved step's riser, a deck's fascia) take
      the same fill + rim, so a low riser's front reads as stone, not a black panel; its walkable tops stay dark */
-  const wall = { uRaise: { value: new THREE.Color(0x1d1a3c) }, uRim: under.uRim, uF: under.uF };
+  const wall = { uRaise: { value: new THREE.Color(0x1d1a3c) }, uRim: under.uRim, uF: under.uF, uC: under.uC };
   M.stone.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, wall);
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vWy;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWy = (modelMatrix * vec4(transformed, 1.)).y;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vWy; uniform vec3 uRaise, uRim; uniform float uF;')
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vWy; uniform vec3 uRaise, uRim; uniform float uF, uC;')
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-{ float up = smoothstep(uF + .3, uF + 1.6, vWy) * (1. - abs(inverseTransformDirection(normal, viewMatrix).y)),
+{ float up = smoothstep(uF + .3, uF + 1.6, vWy) * (1. - smoothstep(uC - 3., uC - .5, vWy)) * (1. - abs(inverseTransformDirection(normal, viewMatrix).y)),
     fr = pow(1. - min(abs(dot(normal, normalize(vViewPosition))), 1.), 2.5);
   totalEmissiveRadiance += up * (uRaise + .6 * uRim * fr) * (.6 + .4 * diffuseColor.g); }`);
   };

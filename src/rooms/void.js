@@ -183,7 +183,7 @@ export default {
     group.add(motes);
 
     // ---- the GROUND: the room's materials, worn by the islands AND by what stands on them ----
-    const M = makeVoidMats({ envMap, floor: F });
+    const M = makeVoidMats({ envMap, floor: F, ceil: STAGE.CEIL });
     const footing = voidFootingStyle(M);                                 // (rooms/footing3d.js builds it from the plan)
     const U = new Float32Array(FOOT.MAX_PULSE);                          // the room's own answer: one slot per lit machine
     const runeMat = makeRuneMat({ base: .18, gain: 1.75 }); runeMat.uniforms.uPulse.value = U;   // (dim at rest, so a strike's step reads from the wide)

@@ -355,4 +355,13 @@ describe('the Void ground materials (wave 4: raised rock / stone walls catch the
     expect(M.rock.customProgramCacheKey()).not.toBe(M.stone.customProgramCacheKey());
     M.dispose();
   });
+  it('the SKY ROCKS keep their old look: the raised gate closes under the ceiling, where every sky rock hangs', () => {
+    const M = makeVoidMats({ floor: STAGE.FLOOR, ceil: STAGE.CEIL });
+    for (const sh of [compile(M.rock), compile(M.stone)]){
+      expect(sh.uniforms.uC.value).toBe(STAGE.CEIL);
+      expect(sh.fragmentShader).toContain('(1. - smoothstep(uC - 3., uC - .5, vWy))');
+    }
+    // (a sky rock's built body lies at or above the ceiling — the 'built: … nothing below its soffit' test — past the close)
+    M.dispose();
+  });
 });

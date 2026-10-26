@@ -123,7 +123,7 @@ describe('the studio footing: every band in the room\'s idiom', () => {
     }
     f.dispose();
   });
-  it('the decks\' rail gaps meet the kit\'s ladders + stairs (its gapOf, restated, still agrees)', () => {
+  it('the decks\' rail gaps meet the kit\'s ladders + stairs (it draws them with the kit\'s own gapOf)', () => {
     const top = (f, P) => { const m = meshes(f).find(m => m.name === 'footing:steel'), p = m.geometry.attributes.position.array, out = [];
       const ys = [...P.pads.filter(q => !q.loft && q.access).map(q => q.top), ...P.lofts.filter(L => L.access).map(L => L.top)].map(t => t + FOOT.RAIL);
       for (let i = 0; i < p.length; i += 3) if (ys.some(y => Math.abs(p[i + 1] - y) < 1e-4)) out.push(`${p[i].toFixed(3)},${p[i + 1].toFixed(3)},${p[i + 2].toFixed(3)}`);

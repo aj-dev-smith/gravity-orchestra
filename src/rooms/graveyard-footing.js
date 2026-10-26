@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { FOOT } from './footing.js';
+import { gapOf } from './footing3d.js';
 import { GY, rng, seedOf, onSide, doorOf, doorApex, doorLamps, towerOf, stairLamp,
          terraceLanterns, arcadeOf, PIER, TERR } from './graveyard-place.js';
 /* ============================================================
@@ -43,8 +44,6 @@ import { GY, rng, seedOf, onSide, doorOf, doorApex, doorLamps, towerOf, stairLam
 
 const PY = 1, NY = 2, PX = 4, NX = 8, PZ = 16, NZ = 32, ALL = 63, NOBOT = ALL & ~NY, SIDES = PX | NX | PZ | NZ;
 const HAND = 1.3;                                          // a stair's handrail over its nosing line
-const _noop = new WeakMap();                               // (a hook's "drawn it myself": one empty group per build)
-const NOOP = k => { let g = _noop.get(k); if (!g){ g = new THREE.Group(); g.name = 'footing:hooks'; _noop.set(k, g); } return g; };
 
 /* ---- textures (canvas: none in a headless test — the materials keep their colour) ---- */
 function tex(size, draw, { repeat = .5 } = {}){
@@ -159,10 +158,6 @@ function segHits(p, q, R, g){
   }
   return true;
 }
-/* where a deck's railing opens for its access: [side, along0, along1] (footing3d gapOf) */
-const gapOf = acc => !acc ? [null, 0, 0] : acc.kind === 'stair' ? [acc.side, acc.a1 - acc.out, acc.a1] : (() => {
-  const mid = (acc.a0 + acc.a1) / 2, off = acc.flights > 1 ? ((acc.flights - 1) % 2 ? .45 : -.45) : 0;
-  return [acc.side, mid + off - .33 - .15, mid + off + .33 + .15]; })();
 /* one side's writers, by (along a, out o past the face): points, boxes, light */
 function sideKit(k, r, side){
   const S = onSide(r, side);
@@ -660,12 +655,13 @@ export function graveyardStyle(){
     },
     /** make the materials now (the room's build), so no footing build pays for a texture */
     warm(envMap){ style.mats(null, { envMap }); return style; },
-    flush(p, k){ p.open ? piers(k, p) : ledger(k, p); return NOOP(k); },
-    low(p, k){ p.open ? piers(k, p) : chestTomb(k, p); return NOOP(k); },
-    mid(p, k){ p.open ? piers(k, p) : mausoleum(k, p); return NOOP(k); },
-    high(p, k){ p.open ? piers(k, p) : tower(k, p); return NOOP(k); },
-    loft(L, k){ terrace(k, L, k.plan.pads.filter(p => p.loft === L.id)); return NOOP(k); },
-    edge(p, k){ return NOOP(k); },                               // (every form lights its machine itself)
+    // (each hook draws into the kit's merged slots itself: `true` = handled, nothing to add — footing3d.js)
+    flush(p, k){ p.open ? piers(k, p) : ledger(k, p); return true; },
+    low(p, k){ p.open ? piers(k, p) : chestTomb(k, p); return true; },
+    mid(p, k){ p.open ? piers(k, p) : mausoleum(k, p); return true; },
+    high(p, k){ p.open ? piers(k, p) : tower(k, p); return true; },
+    loft(L, k){ terrace(k, L, k.plan.pads.filter(p => p.loft === L.id)); return true; },
+    edge(){ return true; },                               // (every form lights its machine itself)
     get materials(){ return made; },
     dispose(){
       if (made) for (const m of Object.values(made)){ m.map?.dispose(); m.dispose(); }

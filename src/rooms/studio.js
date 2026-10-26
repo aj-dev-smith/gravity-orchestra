@@ -51,9 +51,15 @@ const FLOOR_SHADER = {
       float rough = vn(w * .08 + 3.);                      // patchy gloss
       vec4 uv = vUv; uv.xy += wob * .01 * uv.w;
       vec2 r = uTexel * (1.5 + 3.5 * rough) * uv.w;
-      vec3 refl = texture2DProj(tDiffuse, uv).rgb * .36
-        + (texture2DProj(tDiffuse, uv + vec4( r.x, r.y, 0., 0.)).rgb + texture2DProj(tDiffuse, uv + vec4(-r.x, r.y, 0., 0.)).rgb
-         + texture2DProj(tDiffuse, uv + vec4( r.x,-r.y, 0., 0.)).rgb + texture2DProj(tDiffuse, uv + vec4(-r.x,-r.y, 0., 0.)).rgb) * .16;
+      // the blur: a golden-angle (Vogel) disc of 8 taps, turned per pixel by interleaved-gradient noise —
+      // a bright point smears into a soft round glint (four fixed diagonal taps copied it into a 2×2
+      // "four-leaf" cluster and stair-stepped every edge into a pixel mosaic)
+      float spin = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(.06711056, .00583715))));
+      vec3 refl = texture2DProj(tDiffuse, uv).rgb * .2;
+      for (int i = 0; i < 8; i++){
+        float fi = float(i) + .5, th = spin + fi * 2.3999632;
+        refl += texture2DProj(tDiffuse, uv + vec4(vec2(cos(th), sin(th)) * sqrt(fi * .125) * r * 1.25, 0., 0.)).rgb * .1;
+      }
       // large poured tiles: hairline seams kill the reflection
       vec2 g = abs(fract(w / 8. + .5) - .5) * 8.;
       float seam = smoothstep(.0, .06, min(g.x, g.y));

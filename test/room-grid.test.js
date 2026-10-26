@@ -4,8 +4,9 @@ import { planFooting, footingBoxes, FOOT } from '../src/rooms/footing.js';
 import { buildFooting, makeFootingMats } from '../src/rooms/footing3d.js';
 import { STAGE } from '../src/rooms/common.js';
 import { gridFootStyle } from '../src/rooms/grid-footing.js';
+import { RIPPLE, strikeAges, rippleSlots, packColor, rippleExtra, makeRipples } from '../src/rooms/grid-floor.js';
 
-/* GREYBOX (src/rooms/grid.js + grid-footing.js): ROOM ZERO's footing drawn in the room's
+/* GREYBOX (src/rooms/grid.js + grid-footing.js + grid-floor.js): ROOM ZERO's footing drawn in the room's
    own language — graphite volumes carrying the floor's world grid, light lines — always inside the
    plan's envelopes, merged into a handful of draws. */
 
@@ -111,3 +112,95 @@ describe('Greybox footing: the plan, drawn in the room\'s own language', () => {
   });
 });
 
+/* THE FLOOR ANSWERS (grid-floor.js): rings + cells, a pure fn of songTime */
+describe('Greybox floor: a strike rings out across the grid', () => {
+  const P = 20, CUE = [{ t: 2, w: 1 }, { t: 2.5, w: .4 }, { t: 9, w: .8 }, { t: 19.5, w: .6 }];
+  /* the reference: every strike of every loop at or after start, newest first */
+  const brute = (cue, t, start, depth = 2) => {
+    const all = [];
+    for (let k = -3; k <= 3; k++) for (const c of cue){ const s = c.t + k * P; if (s <= t && s >= start) all.push([t - s, c.w]); }
+    all.sort((a, b) => a[0] - b[0]);
+    const out = [];
+    for (let k = 0; k < depth; k++) out.push(...(all[k] || [RIPPLE.AGE_NONE, 0]));
+    return out;
+  };
+  it('strikeAges: the last two strikes, newest first — across the loop seam, nothing before start', () => {
+    const f = strikeAges(CUE, { P, start: -.6 }), out = new Float64Array(4);
+    for (const t of [-2.4, -.7, -.1, 0, 1.99, 2, 2.2, 2.6, 8, 9.3, 19.4, 19.6, 20.1, 21.9, 22.3, 39.7, 55.5]){
+      f(t, out);
+      const ref = brute(CUE, t, -.6);
+      for (let k = 0; k < 4; k++) expect(out[k], `t ${t} [${k}]`).toBeCloseTo(ref[k], 9);
+    }
+    f(20.1, out);                                       // just past the seam: the loop's last strike, then the one before it
+    expect(out[0]).toBeCloseTo(.6, 9); expect(out[1]).toBe(.6); expect(out[2]).toBeCloseTo(11.1, 9); expect(out[3]).toBe(.8);
+  });
+  it('strikeAges: the count-in is dark, a lone strike rings once a loop, the result lands at an offset', () => {
+    const f = strikeAges(CUE, { P, start: -.6 }), out = new Float64Array(8).fill(-1);
+    f(-1, out, 2);
+    expect(Array.from(out)).toEqual([-1, -1, RIPPLE.AGE_NONE, 0, RIPPLE.AGE_NONE, 0, -1, -1]);
+    f(2.1, out, 2);                                    // the loop's last strike wrapped to −.5: after start (−.6), so it rang
+    expect(out[2]).toBeCloseTo(.1, 9); expect(out[4]).toBeCloseTo(2.6, 9);
+    strikeAges(CUE, { P, start: 0 })(2.1, out, 2);     // with start 0 it never happened: no "previous"
+    expect(out[2]).toBeCloseTo(.1, 9); expect(out[4]).toBe(RIPPLE.AGE_NONE); expect(out[5]).toBe(0);
+    const one = strikeAges([{ t: 5, w: .7 }], { P }), o2 = new Float64Array(4);
+    one(47, o2);
+    expect(o2[0]).toBeCloseTo(2, 9); expect(o2[2]).toBeCloseTo(22, 9); expect(o2[1]).toBe(.7);
+    const none = strikeAges([], { P }), o3 = new Float64Array(4).fill(7);
+    none(3, o3); expect(Array.from(o3)).toEqual([RIPPLE.AGE_NONE, 0, RIPPLE.AGE_NONE, 0]);
+  });
+  it('strikeAges is scrub-exact: any order of times gives the same answers', () => {
+    const f = strikeAges(CUE, { P, start: -.6 }), g = strikeAges(CUE, { P, start: -.6 });
+    const ts = Array.from({ length: 200 }, (_, i) => -2.4 + i * .37), a = new Float64Array(4), b = new Float64Array(4);
+    const fwd = ts.map(t => Array.from(f(t, a)));
+    const rev = [...ts].reverse().map(t => Array.from(g(t, b))).reverse();
+    expect(rev).toEqual(fwd);
+  });
+
+  const anchor = (key, x, z, w, d, extra = {}) => ({ key, kind: 'station', label: key, color: '#3fd0ff', x, z, yaw: 0, w, d, cue: CUE, P, start: -.6, ...extra });
+  it('rippleSlots: rings leave what a machine stands on; a hung machine over another\'s stand stays quiet', () => {
+    const plan = { pads: [{ key: 'a', x: 1, z: 2, hw: 4, hd: 3, yaw: .3 }], lofts: [] };
+    const S = rippleSlots([
+      anchor('belt', 0, 0, 20, 6, { kind: 'belt' }),
+      anchor('ric', 0, 0, 8, 8, { kind: 'hung' }),                 // over the belt: the belt's floor
+      anchor('organ', 0, -14, 13, 4.6, { kind: 'hung' }),          // behind it: its own floor
+      anchor('a', 1.2, 2.1, 7, 5),
+      anchor('mute', 9, 9, 3, 3, { cue: [] }),
+    ], plan);
+    expect(S.map(s => s.key)).toEqual(['belt', 'a', 'organ']);
+    expect(S[1]).toMatchObject({ x: 1, z: 2, hw: 4, hd: 3, yaw: .3 });         // the pad, not the footprint
+    expect(S[2]).toMatchObject({ x: 0, z: -14, hw: 6.5, hd: 2.3 });
+    for (const s of S) expect(s.gain).toBeGreaterThan(0), expect(s.gain).toBeLessThanOrEqual(1);
+  });
+  it('rippleSlots: a constant pool (≤ RIPPLE.N ≤ FOOT.MAX_PULSE), a busy machine rings softer', () => {
+    expect(RIPPLE.N).toBeLessThanOrEqual(FOOT.MAX_PULSE);
+    const many = Array.from({ length: 40 }, (_, i) => anchor('m' + i, i * 3, 0, 2, 2));
+    expect(rippleSlots(many).length).toBe(RIPPLE.N);
+    const busy = Array.from({ length: 200 }, (_, i) => ({ t: i * .1, w: 1 }));
+    const [calm, dense] = rippleSlots([anchor('calm', 0, 0, 2, 2), anchor('dense', 9, 0, 2, 2, { cue: busy })]);
+    expect(calm.gain).toBe(1); expect(dense.gain).toBeLessThan(.6);
+  });
+  it('packColor: three bytes in one float, decoded as the shader does', () => {
+    for (const hex of ['#ff8a3d', '#2fe6c0', '#000000', '#ffffff', '#3fd0ff']){
+      const c = packColor(hex), r = Math.floor(c / 65536), g = Math.floor((c - r * 65536) / 256), b = c - r * 65536 - g * 256;
+      expect(Math.fround(c)).toBe(c);
+      const lin = new THREE.Color(hex);
+      expect(Math.abs(r / 255 - lin.r)).toBeLessThan(.003); expect(Math.abs(g / 255 - lin.g)).toBeLessThan(.003); expect(Math.abs(b / 255 - lin.b)).toBeLessThan(.003);
+    }
+  });
+  it('the live side: place writes the pool once, update is a pure fn of songTime (silent in the count-in)', () => {
+    const X = rippleExtra(), R = makeRipples(X.uniforms), U = X.uniforms;
+    R.place([anchor('a', 3, 4, 6, 4), anchor('b', -9, 2, 4, 4, { cue: [{ t: 7, w: 1 }] })], null);
+    expect(U.rN.value).toBe(2);
+    expect(Array.from(U.rA.value.slice(0, 8))).toEqual([3, 4, 3, 2, -9, 2, 2, 2]);
+    const snap = () => [Array.from(U.rS.value.slice(0, 8)), Array.from(U.rB.value.slice(0, 8))];
+    R.update(-1.5);
+    expect(U.rS.value[1]).toBe(0); expect(U.rS.value[5]).toBe(0); expect(U.rB.value[2]).toBe(0); expect(U.rB.value[6]).toBe(0);
+    R.update(9.1); const at = snap();
+    R.update(33.3); R.update(-2); R.update(9.1);
+    expect(snap()).toEqual(at);
+    expect(U.rS.value[0]).toBeCloseTo(.1, 5); expect(U.rB.value[2]).toBeGreaterThan(.5);   // a just struck: its ring + its cells
+    expect(U.rS.value[4]).toBeCloseTo(2.1, 5);
+    const GL = X.head + X.body;
+    for (const u of Object.keys(U)) expect(GL.includes(u), u).toBe(true);                    // every uniform is declared + read
+  });
+});

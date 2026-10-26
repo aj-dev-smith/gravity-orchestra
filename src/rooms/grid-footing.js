@@ -446,7 +446,7 @@ export function gridFootStyle(){
       made = {
         deck: body, gglass: glass,
         gline: new THREE.MeshBasicMaterial({ color: new THREE.Color(LINE).multiplyScalar(1.9) }),
-        glace: new THREE.MeshBasicMaterial({ color: new THREE.Color(0x6e9cff).multiplyScalar(.75) }),
+        glace: new THREE.MeshBasicMaterial({ color: new THREE.Color(0x6e9cff).multiplyScalar(.58) }),
       };
       return made;
     },

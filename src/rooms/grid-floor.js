@@ -151,7 +151,7 @@ export function makeRipples(U){
         const g = slots[i].gain;
         S[4 * i + 1] *= g; S[4 * i + 3] *= g;
         const v = pulses[i].at(songTime) + .35 * pulses[i].next(songTime);
-        B[4 * i + 2] = (v > 1 ? 1 : v) * g;
+        B[4 * i + 2] = (v > 1 ? 1 : v) * g * g;                 // (a busy machine's cells barely ever go dark: they hold softer)
       }
     },
   };

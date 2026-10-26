@@ -461,13 +461,14 @@ export default {
       hP.push(lp.x, lp.y, lp.z); const c = new THREE.Color(p.col); hC.push(c.r * .5, c.g * .5, c.b * .5); hS.push(4.2); hPh.push(R());
     });
     beams.frustumCulled = false; beams.instanceColor.setUsage(THREE.DynamicDrawUsage); group.add(beams);
-    // where each beam lands on the deck: a soft elliptical pool (stretched by the rake), tracking its can
+    // where each beam lands on the deck: an elliptical pool (stretched by the rake), tracking its can — a lit
+    // footprint with an edge (an even disc, a soft rim), not a cloud: the deck between the pools stays black
     const pools = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
-      glowMat(radialTex(128, [[0, .9], [.3, .55], [.7, .12], [1, 0]]), 0xffffff, .17, { side: THREE.FrontSide }), PARS.length);
+      glowMat(radialTex(128, [[0, .62], [.5, .54], [.78, .34], [.92, .1], [1, 0]]), 0xffffff, .14, { side: THREE.FrontSide }), PARS.length);
     PARS.forEach((p, i) => {
       const d = p.tgt.clone().sub(p.src).normalize(), k = (F - p.src.y) / d.y;
       const hit = p.src.clone().addScaledVector(d, k), along = Math.hypot(d.x, d.z);
-      const r = 2 * (.5 + 4.7 * k / (p.src.distanceTo(p.tgt) * 1.12)), stretch = 1 / Math.max(.35, -d.y);
+      const r = 1.7 * (.5 + 4.7 * k / (p.src.distanceTo(p.tgt) * 1.12)), stretch = 1 / Math.max(.45, -d.y);
       pools.setMatrixAt(i, trs(hit.x, F + .04 + i * .002, hit.z, 0, along > 1e-3 ? Math.atan2(d.x, d.z) : 0, 0, r, 1, r * stretch));
       pools.setColorAt(i, p.kind === 'mid' ? new THREE.Color(0) : p.base);     // (the mid specials light the machines, not the deck)
     });
@@ -503,9 +504,22 @@ export default {
 
     // ---- haze: ice-blue backlight haze hanging upstage + a thinner layer mid-stage ----
     const hazes = [];
+    // (a haze curtain thins out as you walk into it: within ~40 u of the eye it fades, so a shot taken near it
+    //  — the gallery from behind, the backline — isn't washed flat; from the house it hangs at full)
+    const hazeMat = (t, col, op) => {
+      const m = glowMat(t, col, op, { fog: true });
+      m.onBeforeCompile = sh => {
+        sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vNear;')
+          .replace('#include <project_vertex>', '#include <project_vertex>\nvNear = mvPosition.xyz;');
+        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vNear;')
+          .replace('#include <opaque_fragment>', 'diffuseColor.a *= smoothstep(6., 40., length(vNear));\n#include <opaque_fragment>');
+      };
+      m.customProgramCacheKey = () => 'arena-haze';
+      return m;
+    };
     [[BACKA + 10, 6, .34, ICE, 11, 1.3], [-30, 2, .2, 0x7fa8ff, 23, 1.1]].forEach(([z, y, op, col, seed, sc]) => {
       const t = hazeTex(seed); t.wrapS = THREE.RepeatWrapping;
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(2 * HWA * sc, 60), glowMat(t, col, op, { fog: true }));
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(2 * HWA * sc, 60), hazeMat(t, col, op));
       m.position.set(0, y, z); group.add(m);
       hazes.push({ t, m });
     });
@@ -514,17 +528,23 @@ export default {
     const lowMat = (k, a) => new THREE.ShaderMaterial({
       uniforms: { uMap: { value: fogNoise }, uTime: { value: 0 }, uA: { value: a }, uK: { value: k },
                   uColor: { value: new THREE.Color(0x6f86a8) }, uWarm: { value: 0 } },
-      vertexShader: /* glsl */`varying vec2 vW; void main(){ vec4 w = modelMatrix * vec4(position, 1.); vW = w.xz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+      vertexShader: /* glsl */`varying vec3 vP; void main(){ vec4 w = modelMatrix * vec4(position, 1.); vP = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
       fragmentShader: /* glsl */`
-        uniform sampler2D uMap; uniform float uTime, uA, uK, uWarm; uniform vec3 uColor; varying vec2 vW;
+        uniform sampler2D uMap; uniform float uTime, uA, uK, uWarm; uniform vec3 uColor; varying vec3 vP;
         void main(){
+          vec2 vW = vP.xz;
           float n1 = texture2D(uMap, vW * .012 * uK + vec2(uTime * .008, uTime * .003)).a;
           float n2 = texture2D(uMap, vW * .027 * uK + vec2(-uTime * .011, uTime * .006)).a;
-          float n = smoothstep(.2, .75, n1 + .8 * n2);
+          float n = smoothstep(.02, 1.05, n1 + .8 * n2);                   // (soft: a rolling bank, not blotches)
           float back = .55 + .45 * smoothstep(30., -40., vW.y);            // pooled thicker upstage
           float fade = 1. - smoothstep(70., 110., length(vW - vec2(0., -8.)));
+          // a layer a metre deep: thick along the eye, thin looking straight down through it — and it parts
+          // round the eye that stands in it
+          vec3 v = vP - cameraPosition; float d = length(v);
+          float graze = .3 + .7 * pow(1. - abs(v.y) / max(d, 1e-3), 3.);
+          float near = smoothstep(1.5, 9., d);
           vec3 c = mix(uColor, vec3(1., .5, .18), uWarm);                   // the flames light the fog
-          gl_FragColor = vec4(c * (1. + 1.5 * uWarm), n * back * fade * uA);
+          gl_FragColor = vec4(c * (1. + 1.5 * uWarm), n * back * fade * graze * near * uA);
         }`,
       transparent: true, depthWrite: false,
     });
@@ -712,7 +732,7 @@ export default {
           k *= 1 + .9 * B * (p.kind === 'back' ? 1 : .4);
           beams.setColorAt(i, _c.copy(p.base).multiplyScalar(k * BEAM_K[p.kind]));
           lenses.setColorAt(i, _c.copy(p.base).multiplyScalar(1.4 + 2.6 * k));
-          pools.setColorAt(i, _c.copy(p.base).multiplyScalar(p.kind === 'mid' ? 0 : k * (p.kind === 'back' ? .45 : 1)));
+          pools.setColorAt(i, _c.copy(p.base).multiplyScalar(p.kind === 'mid' ? 0 : k * (p.kind === 'back' ? .32 : 1)));
         }
         beams.instanceColor.needsUpdate = true; lenses.instanceColor.needsUpdate = true; pools.instanceColor.needsUpdate = true;
         beams.material.uniforms.uGain.value = beamBase * (1 + .45 * energy);

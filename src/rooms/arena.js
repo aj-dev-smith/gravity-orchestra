@@ -520,15 +520,15 @@ export default {
 
     // ---- haze: ice-blue backlight haze hanging upstage + a thinner layer mid-stage ----
     const hazes = [];
-    // (a haze curtain thins out as you walk into it: within ~40 u of the eye it fades, so a shot taken near it
-    //  — the gallery from behind, the backline — isn't washed flat; from the house it hangs at full)
+    // (a haze curtain thins out as you walk up to it — from ~64 u in, gone by 18 — so a shot taken near it, the
+    //  gallery from behind or the backline, isn't washed flat teal; from the house it hangs at full)
     const hazeMat = (t, col, op) => {
       const m = glowMat(t, col, op, { fog: true });
       m.onBeforeCompile = sh => {
         sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vNear;')
           .replace('#include <project_vertex>', '#include <project_vertex>\nvNear = mvPosition.xyz;');
         sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vNear;')
-          .replace('#include <opaque_fragment>', 'diffuseColor.a *= smoothstep(6., 40., length(vNear));\n#include <opaque_fragment>');
+          .replace('#include <opaque_fragment>', 'diffuseColor.a *= smoothstep(18., 64., length(vNear));\n#include <opaque_fragment>');
       };
       m.customProgramCacheKey = () => 'arena-haze';
       return m;

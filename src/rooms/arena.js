@@ -311,7 +311,11 @@ function flameMat(){
         float heat = clamp((1. - vUv.y) * 1.25 * cut + .25 * n, 0., 1.);
         vec3 col = mix(vec3(.5, .05, .0), vec3(1., .36, .04), smoothstep(.15, .6, heat));
         col = mix(col, vec3(1., .78, .4), smoothstep(.75, 1., heat) * .8);
-        float alpha = tongues * edge * smoothstep(0., .08, vUv.y) * (1. - smoothstep(.75, 1., vUv.y))
+        // the FOOT: a soft .08 fade on the nozzle while it burns; once the column lifts off its foot BURNS
+        // AWAY — a wider fade torn by the same turbulence (it was a flat, bright cut line in the air)
+        float lk = clamp((a - vC) / .3, 0., 1.), fw = .08 + .5 * lk;
+        float foot = smoothstep(0., fw, vUv.y - fw * .35 * lk + (n - .5) * fw * .9 * lk);
+        float alpha = tongues * edge * foot * (1. - smoothstep(.75, 1., vUv.y))
                     * clamp(a / .05, 0., 1.) * clamp(1. - max(0., a - vC) / (1.1 - vC), 0., 1.);
         gl_FragColor = vec4(col * .95, alpha * .75);
       }`,

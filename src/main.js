@@ -714,14 +714,16 @@ function buildWorld(keyName){
   //  chassis and the chandelier's crown stand where a gallery machine would)
   const hungBoxes = instLive.filter(r => r.slot.hang).map(r => visBox(r.station)).filter(b => !b.isEmpty()).map(b => [b.min.x, b.max.x, b.min.z, b.max.z]);
   const kx0 = stageView.cx + kitSlot.x, kz0 = kitSlot.z;
-  if (S.drums){ const box = relBox(drumGroup, kx0, kz0, 'drums'); if (box) items.push({ key: 'drums', x: kx0, z: kz0, box, top: tops.drums, pin: kitSlot.pin }); }
+  if (S.drums){ const box = relBox(drumGroup, kx0, kz0, 'drums'); if (box) items.push({ key: 'drums', x: kx0, z: kz0, box, top: tops.drums, deck: kitSlot.y, pin: kitSlot.pin }); }
   lastLayout = null;                                    // (dev: a song with no floor machine has no solve — never the last song's)
   if (items.length && !wallBox.isEmpty()){
+    // THE STAR (the song's signature machine — the one the director will name) stands front and centre
+    const star = stageStar(S);
     const solved = layoutStations(items,
       [wallBox.min.x, wallBox.max.x, wallBox.min.z, wallBox.max.z],
       { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 },
-      { cx: stageView.cx, bandY: STAGE_Y - 1.5, eyeY: 20, wallTop: wallBox.max.y, hung: hungBoxes });   // (band − 1.5: the pads rising INTO the band read too)
-    lastLayout = { items: items.map(({ key, x, z, box, top, deck }) => ({ key, x, z, box, top, y0: bots[key], deck })), wall: wallBox.clone(), solved, cx: stageView.cx, bandY: STAGE_Y - 1.5, hung: hungBoxes };
+      { cx: stageView.cx, bandY: STAGE_Y - 1.5, eyeY: 20, wallTop: wallBox.max.y, hung: hungBoxes, star });   // (band − 1.5: the pads rising INTO the band read too)
+    lastLayout = { items: items.map(({ key, x, z, box, top, deck }) => ({ key, x, z, box, top, y0: bots[key], deck })), wall: wallBox.clone(), solved, cx: stageView.cx, bandY: STAGE_Y - 1.5, hung: hungBoxes, star };
     items.forEach(it => {
       const { x, y, z } = solved[it.key];
       if (it.rig){
@@ -810,6 +812,33 @@ function buildWorld(keyName){
   setPlaying(true);
   if (started) clock.start();
   editor.built();
+}
+/* THE STAR of the stage (stations.js STAR — front and centre): the song's SIGNATURE machine, exactly
+   as the director will name it (syncDirector: song.director.signature — a station or its shot key,
+   false for none — else, for an import, directorplan signatureOf over every station's cue, a chord
+   one moment). A floor station or the kit; a hung one keeps hanging (null). Pure song data. */
+function stageStar(S){
+  const cfg = S.director?.signature;
+  const owner = k => k === 'drums' ? (S.drums ? 'drums' : null) : instLive.find(r => r.I.key === k || (r.I.cameraKey ?? r.I.key) === k)?.I.key ?? null;
+  let key = null;
+  if (typeof cfg === 'string') key = owner(cfg);
+  else if (cfg !== false && S.staging === 'auto' && tracks.length){
+    const lead = tracks[0];
+    key = signatureOf(instLive.map(r => ({ key: r.I.key, hits: chordMoments(r.cue) })),
+      { t0: ROLL_T, beat: BEAT, end: lead.rollT + lead.total - .7, loop: ROLL_T + LOOP_T,
+        bar: Number.isInteger(S.barBeats) && S.barBeats >= 2 && S.barBeats <= 16 ? S.barBeats : 4 });
+  }
+  return key && !instLive.find(r => r.I.key === key)?.slot.hang ? key : null;
+}
+/* a station's cue as the DIRECTOR reads it (syncDirector): simultaneous hits are ONE moment — the
+   loudest + a little for the rest, its id the chord's pitch heads, sorted */
+function chordMoments(cue){
+  const byT = new Map();
+  for (const e of cue){ const k = Math.round(e.t * 500); const g = byT.get(k); if (g) g.push(e); else byT.set(k, [e]); }
+  return [...byT.entries()].sort((a, b) => a[0] - b[0]).map(([k, es]) => {
+    const ws = es.map(e => e.w), mx = Math.max(...ws), sum = ws.reduce((a, b) => a + b, 0);
+    return { t: k / 500, w: mx + .3 * (sum - mx), id: [...new Set(es.map(e => String(e.id ?? '').replace(/[:|].*$/, '')))].sort().join('+') };
+  });
 }
 /* THE ROOM'S ANCHORS (rooms/index.js): what stands where this song, in world space — the belt
    (fixed: its own posts to the floor), the kit and every floor station: its footprint (x, z, yaw,
@@ -1089,7 +1118,7 @@ function syncDirector(S, view){
   // ITS side — it is the farthest machine in the hall, the one a fitted wide shrinks the most
   const star = full ? galleryStar(S, sig) : null;
   const wide = full
-    ? { ...searchWide(stageFrame(), star ? starDirs(star).concat(WIDE_DIRS) : galleryUp() ? GALLERY_DIRS.concat(WIDE_DIRS) : WIDE_DIRS, 1.6, .94, WIDE_UI, star, WIDE_LENSES), fitMax: 1,
+    ? { ...searchWide(stageFrame(), star ? starDirs(star).concat(WIDE_DIRS) : galleryUp() || bandOn() ? GALLERY_DIRS.concat(WIDE_DIRS) : WIDE_DIRS, 1.6, .94, WIDE_UI, star, WIDE_LENSES), fitMax: 1,
         // a phone held upright can't fit the room's width — so it frames the PROTAGONISTS (the
         // belt band → top housing, the chandelier, the turntable's record) down a diagonal, with
         // the title/song-select block's height kept clear at the top (PORTRAIT_INSET); the wings
@@ -1185,6 +1214,9 @@ const FRONT_KEEP = .25;
 /* the song raised a floor machine well off the floor: onto the rear GALLERY (stations.js
    layoutStations), or the user lifted it (a layout entry's lift — rooms/footing.js) */
 const galleryUp = () => instLive.some(r => !r.slot.hang && r.lift > 2);
+/* …or the BAND plays (a gallery-born station — riff / strum / horns / pogo, stations.js — wherever it
+   stands: floor first, so mostly on the floor now): its wide is the same low one from the stalls */
+const bandOn = () => instLive.some(r => !r.slot.hang && r.slot.gallery);
 function stageFrame(core = false){
   const pts = [], add = (x0, x1, y0, y1, z0, z1) => { for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) pts.push(new THREE.Vector3(x, y, z)); };
   if (!stageWall.isEmpty()) add(stageWall.min.x, stageWall.max.x, STAGE_Y - 3, stageWall.max.y, stageWall.min.z, stageWall.max.z);
@@ -1224,8 +1256,9 @@ const dirOf = (x, y, z) => new THREE.Vector3(x, y, z).normalize();
 /* the wide's candidate directions (unit aim → eye), preferred first: a LOW front-left three-
    quarter (the hall reads as a machine-hall, not a floor plan), then steeper / squarer */
 const WIDE_DIRS = [[-.15, .43, .89], [-.08, .5, .89], [-.22, .5, .86], [0, .55, .85], [-.15, .62, .8], [.1, .55, .85], [-.3, .58, .8]].map(d => dirOf(...d));
-/* …and when the song raised machines onto the rear GALLERY: a LOWER eye first (a concert-film wide —
-   from the stalls, the riser reads as a riser, not a floor plan seen from the lighting rig) */
+/* …and when the song raised machines onto the rear GALLERY (or the band plays, bandOn): a LOWER eye
+   first (a concert-film wide — from the stalls, the riser reads as a riser, not a floor plan seen
+   from the lighting rig) */
 const GALLERY_DIRS = [[-.15, .26, .95], [-.08, .3, .95], [-.22, .3, .93], [-.15, .35, .92]].map(d => dirOf(...d));
 /* the gallery star's candidates: the low wide swung round toward its side (mirrored for a star
    right of the belt), the wider swings first-to-last; STAR_PULL: how much the star's size in

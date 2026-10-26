@@ -413,7 +413,8 @@ function lattice(k, r, yB, levels = null, acc = r.access){
     k.box('steel', cu - .38, cu + .38, F, F + .55, cv - .3, cv + .22, NOBOT);                  // the connector box
     k.box('hazard', cu - .39, cu + .39, F + .4, F + .55, cv - .31, cv + .23, SIDES | PY);
     prism(k, r, 'chrome', cu, cv, R, F + .55, yT, 12);
-    k.bar('chrome', [cu, yT - .05, cv], [cu + .85, yB - .12, cv - .3], .3, .3, ALL);
+    tube(k, 'chrome', [cu, yT - .12, cv], [cu + .85, yB - .12, cv - .3], R);                    // (round, like the hose it bends from)
+    k.box('steel', cu - .24, cu + .24, yT - .2, yT + .02, cv - .24, cv + .24, ALL);               // the elbow's coupling
     const arms = [yB - 1.3, yB - 1.3 - Math.min(3.2, (H - 3) * .3)];
     if (H > 12) arms.push(arms[1] - Math.min(3.2, (H - 3) * .3));
     for (const y of arms){

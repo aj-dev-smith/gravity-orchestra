@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { FOOT, railed } from './footing.js';
+import { gapOf, landings, onSide } from './footing3d.js';
 import { gridPatch, LINE } from './grid-shade.js';
 /* ============================================================
    GREYBOX FOOTING — what the machines stand on in ROOM ZERO (a rooms/footing3d.js STYLE: grid.js
@@ -58,9 +59,6 @@ function ring(hu, hv, span){
   for (let i = 0; i < nv; i++) out.push([-hu, hv - 2 * hv * i / nv]);
   return out;
 }
-/* (along a, out o) on one side of a rect → local [u, v] */
-const onSide = (r, side) => { const k = side[0] === '+' ? 1 : -1;
-  return side[1] === 'u' ? (a, o) => [k * (r.hw + o), a] : (a, o) => [a, k * (r.hd + o)]; };
 /* does the segment p → q (local u, v) cross the rect [u0, u1, v0, v1] grown by g? */
 function segHits(p, q, R, g){
   if (!R) return false;
@@ -73,13 +71,8 @@ function segHits(p, q, R, g){
   }
   return true;
 }
-/* where a deck's rails open for its access: the along-range on its side */
-const gapOf = acc => !acc ? [null, 0, 0] : acc.kind === 'stair' ? [acc.side, acc.a1 - acc.out, acc.a1] : (() => {
-  const mid = (acc.a0 + acc.a1) / 2, off = acc.flights > 1 ? ((acc.flights - 1) % 2 ? .45 : -.45) : 0;
-  return [acc.side, mid + off - GDIM.LAD_HALF - .15, mid + off + GDIM.LAD_HALF + .15]; })();
-/* the landing levels of a support's ladder (ties + braces meet them): every LAND_DY of its climb */
-function landings(r, F){ const nf = r.access?.flights || Math.max(1, Math.ceil((r.top - F) / FOOT.LAND_DY)), out = [];
-  for (let f = 1; f < nf; f++) out.push(F + (r.top - F) * f / nf); return out; }
+/* (gapOf — where a deck's rails open for its access — and landings — a ladder's landing levels — are the kit's
+   own rules, imported from rooms/footing3d.js so the Greybox's decks meet the kit's ladders exactly) */
 
 /* a lit rim: light bars along the top edges of a slab u0..u1 × v0..v1 whose top is y (a hair proud) —
    `skip`: a side left dark (where a stair lands, or a tier above stands flush) */
@@ -421,7 +414,6 @@ function makeForms(k, marginOf){
    footing) — a riser's tiers step in only as far as the pad's MARGIN round its machine; unknown → 0. */
 export function gridFootStyle(){
   let made = null, anchors = new Map();
-  const shared = new THREE.Group(); shared.name = 'footing:grid';          // (what every hook returns: one empty child)
   const marginOf = p => {
     const a = p._a || anchors.get(p.key);                                // (the planner keeps each pad's anchor: no ordering)
     if (!a || !(a.w > 0) || !(a.d > 0)) return 0;
@@ -431,10 +423,10 @@ export function gridFootStyle(){
   const forms = k => { let f = cache.get(k); if (!f){ f = makeForms(k, marginOf); cache.set(k, f); } return f; };
   const hook = name => (spec, k) => {
     const f = forms(k);
-    if (name !== 'loft' && spec.open){ f.open(spec); return shared; }   // (an open stand arrives under its band's hook)
+    if (name !== 'loft' && spec.open){ f.open(spec); return true; }     // (an open stand arrives under its band's hook)
     if (name === 'loft') f.loft(spec, k.plan.pads.filter(p => p.loft === spec.id));
     else f[name](spec);
-    return shared;
+    return true;                                                         // (handled: everything went into the kit's merged slots)
   };
   return {
     key: 'grid',

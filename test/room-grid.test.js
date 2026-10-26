@@ -86,7 +86,7 @@ describe('Greybox footing: the plan, drawn in the room\'s own language', () => {
     const f = build(), M = meshes(f);
     expect(M.map(m => m.name).sort()).toEqual(['footing:deck', 'footing:edge', 'footing:gglass', 'footing:gline', 'footing:glace'].sort());
     for (const m of M) expect(m.userData.footing, m.name).toBe(true);
-    expect(f.group.children.filter(c => !c.isMesh).length).toBeLessThanOrEqual(1);       // (the hooks' one shared empty group)
+    expect(f.group.children.filter(c => !c.isMesh).length).toBe(0);       // (the hooks return true: no empty claim groups)
     f.dispose();
   });
   it('everything it draws stays inside the plan\'s envelopes (a nosing\'s hair; feet buried in the floor)', () => {
@@ -97,12 +97,12 @@ describe('Greybox footing: the plan, drawn in the room\'s own language', () => {
     }
     f.dispose();
   });
-  it('the catalog (every staged song, re-planned): everything drawn inside its envelopes, ≤ 6 children', () => {
+  it('the catalog (every staged song, re-planned): everything drawn inside its envelopes, ≤ 5 draws', () => {
     const s = gridFootStyle(), mats = makeFootingMats();
     for (const { song, anchors, plan } of catalog()){
       s.known(anchors);
       const env = footingBoxes(plan), f = buildFooting(plan, s, { boxes: env, mats }), B = env.map(e => e.box);
-      expect(f.group.children.length, song).toBeLessThanOrEqual(6);
+      expect(f.group.children.length, song).toBeLessThanOrEqual(5);
       for (const m of meshes(f)){
         const { worst, at } = worstOut(m, B);
         expect(worst, `${song} ${m.name}: ${worst.toFixed(3)} u out at ${at && at.map(v => v.toFixed(2))}`).toBeLessThanOrEqual(.035);

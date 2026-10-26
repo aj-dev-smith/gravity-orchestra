@@ -77,6 +77,16 @@ describe('the studio footing: every band in the room\'s idiom', () => {
       f.dispose();
     }
   });
+  it('every vertex is finite and every atlas uv lands in the atlas (a cable once sampled NaN)', () => {
+    const f = build();
+    for (const m of meshes(f)) for (const name of ['position', 'normal', 'uv']){
+      const at = m.geometry.attributes[name]; if (!at) continue;
+      const atlas = name === 'uv' && m.name === 'footing:studio';                       // (the kit's slots: world uvs, repeating)
+      let bad = 0; for (const v of at.array) if (!Number.isFinite(v) || (atlas && (v < 0 || v > 1))) bad++;
+      expect(bad, `${m.name} ${name}`).toBe(0);
+    }
+    f.dispose();
+  });
   it('every face looks out: its winding agrees with its normal', () => {
     const f = build();
     for (const m of meshes(f)){

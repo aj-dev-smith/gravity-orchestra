@@ -78,56 +78,73 @@ function writer(kit){
   if (kit.__studio) return kit.__studio;
   const b = kit._bufs[SLOT] || (kit._bufs[SLOT] = { edge: false, p: new Float32Array(3 * 4096), n: new Float32Array(3 * 4096), uv: new Float32Array(2 * 4096),
     c: null, k: null, i: new Uint32Array(6 * 4096), nv: 0, ni: 0, units: new Set() });
-  let FX = 0, FZ = 0, C = 1, Sn = 0, unit = null;
+  let FX = 0, FZ = 0, C = 1, Sn = 0, unit = null, seen = null;
   const grow = (nv, ni) => {
     if ((b.nv + nv) * 3 > b.p.length){ const cap = Math.max(b.p.length * 2, (b.nv + nv) * 3);
       const up = (a, per) => { const q = new Float32Array(cap / 3 * per); q.set(a); return q; }; b.p = up(b.p, 3); b.n = up(b.n, 3); b.uv = up(b.uv, 2); }
     if (b.ni + ni > b.i.length){ const q = new Uint32Array(Math.max(b.i.length * 2, b.ni + ni)); q.set(b.i); b.i = q; }
   };
+  /* (scratch: the writer runs a few thousand faces a build — no arrays per face) */
+  const BC = [0, 0, 0], RX = [0, 0, 0], RY = [0, 0, 0], RZ = [0, 0, 0], NXv = [0, 0, 0], NZv = [0, 0, 0], RC = [0, 0, 0];
   const W = {
     frame(r){ FX = r.x; FZ = r.z; C = Math.cos(r.yaw || 0); Sn = Math.sin(r.yaw || 0); unit = r.loft || r.id || r.key; return W; },
     /* one quad: 4 local points [u, y, v] counter-clockwise seen from its local normal N, uvs [s, t] */
     quad(P, N, UV){
-      grow(4, 6); b.units.add(unit);
+      grow(4, 6); if (unit !== seen){ b.units.add(unit); seen = unit; }
       const v = b.nv, nx = C * N[0] + Sn * N[2], nz = -Sn * N[0] + C * N[2];
       for (let j = 0; j < 4; j++){
-        const [u, y, w] = P[j], o = (v + j) * 3, q = (v + j) * 2;
-        b.p[o] = FX + C * u + Sn * w; b.p[o + 1] = y; b.p[o + 2] = FZ - Sn * u + C * w;
+        const Pj = P[j], u = Pj[0], w = Pj[2], o = (v + j) * 3, q = (v + j) * 2;
+        b.p[o] = FX + C * u + Sn * w; b.p[o + 1] = Pj[1]; b.p[o + 2] = FZ - Sn * u + C * w;
         b.n[o] = nx; b.n[o + 1] = N[1]; b.n[o + 2] = nz;
         b.uv[q] = UV[j][0]; b.uv[q + 1] = UV[j][1];
       }
       const i = b.ni; b.i[i] = v; b.i[i + 1] = v + 1; b.i[i + 2] = v + 2; b.i[i + 3] = v; b.i[i + 4] = v + 2; b.i[i + 5] = v + 3;
       b.nv += 4; b.ni += 6;
     },
-    /* a face: centre Cc, in-plane unit axes A (half ha) × B (half hb) — A × B is its normal; uv(pa, pb, ha, hb) per corner */
+    /* a face: centre Cc, in-plane unit axes A (half ha) × B (half hb) — A × B is its normal; uv(pa, pb, ha, hb) → [s, t] per corner */
     face(Cc, A, ha, B, hb, uv){
-      const N = [A[1] * B[2] - A[2] * B[1], A[2] * B[0] - A[0] * B[2], A[0] * B[1] - A[1] * B[0]];
-      const at = (sa, sb) => [Cc[0] + A[0] * sa * ha + B[0] * sb * hb, Cc[1] + A[1] * sa * ha + B[1] * sb * hb, Cc[2] + A[2] * sa * ha + B[2] * sb * hb];
-      W.quad([at(-1, -1), at(1, -1), at(1, 1), at(-1, 1)], N, [uv(-ha, -hb, ha, hb), uv(ha, -hb, ha, hb), uv(ha, hb, ha, hb), uv(-ha, hb, ha, hb)]);
+      grow(4, 6); if (unit !== seen){ b.units.add(unit); seen = unit; }
+      const Nx = A[1] * B[2] - A[2] * B[1], Ny = A[2] * B[0] - A[0] * B[2], Nz = A[0] * B[1] - A[1] * B[0];
+      const v = b.nv, nx = C * Nx + Sn * Nz, nz = -Sn * Nx + C * Nz;
+      for (let j = 0; j < 4; j++){
+        const sa = j === 1 || j === 2 ? ha : -ha, sb = j >= 2 ? hb : -hb;          // (−,−) (+,−) (+,+) (−,+)
+        const u = Cc[0] + A[0] * sa + B[0] * sb, w = Cc[2] + A[2] * sa + B[2] * sb, o = (v + j) * 3, q = (v + j) * 2;
+        b.p[o] = FX + C * u + Sn * w; b.p[o + 1] = Cc[1] + A[1] * sa + B[1] * sb; b.p[o + 2] = FZ - Sn * u + C * w;
+        b.n[o] = nx; b.n[o + 1] = Ny; b.n[o + 2] = nz;
+        const t = uv(sa, sb, ha, hb); b.uv[q] = t[0]; b.uv[q + 1] = t[1];
+      }
+      const i = b.ni; b.i[i] = v; b.i[i + 1] = v + 1; b.i[i + 2] = v + 2; b.i[i + 3] = v; b.i[i + 4] = v + 2; b.i[i + 5] = v + 3;
+      b.nv += 4; b.ni += 6;
     },
     /* an axis-aligned local box, each face's uvs from uvOf(face) */
     box(u0, u1, y0, y1, v0, v1, faces, uvOf){
       if (!(u1 > u0 && y1 > y0 && v1 > v0)) return;
-      const uc = (u0 + u1) / 2, yc = (y0 + y1) / 2, vc = (v0 + v1) / 2, hu = (u1 - u0) / 2, hy = (y1 - y0) / 2, hv = (v1 - v0) / 2;
-      const spec = { [PZ]: [[uc, yc, v1], hu, hy], [NZ]: [[uc, yc, v0], hu, hy], [PX]: [[u1, yc, vc], hv, hy], [NX]: [[u0, yc, vc], hv, hy],
-        [PY]: [[uc, y1, vc], hu, hv], [NY]: [[uc, y0, vc], hu, hv] };
-      for (const f of [PZ, NZ, PX, NX, PY, NY]) if (faces & f){ const [Cc, ha, hb] = spec[f], Fd = FACE[f]; W.face(Cc, Fd.A, ha, Fd.B, hb, uvOf(f)); }
+      const uc = (u0 + u1) / 2, yc = (y0 + y1) / 2, vc = (v0 + v1) / 2, hu = (u1 - u0) / 2, hy = (y1 - y0) / 2, hv = (v1 - v0) / 2, c = BC;
+      if (faces & PZ){ c[0] = uc; c[1] = yc; c[2] = v1; W.face(c, FACE[PZ].A, hu, FACE[PZ].B, hy, uvOf(PZ)); }
+      if (faces & NZ){ c[0] = uc; c[1] = yc; c[2] = v0; W.face(c, FACE[NZ].A, hu, FACE[NZ].B, hy, uvOf(NZ)); }
+      if (faces & PX){ c[0] = u1; c[1] = yc; c[2] = vc; W.face(c, FACE[PX].A, hv, FACE[PX].B, hy, uvOf(PX)); }
+      if (faces & NX){ c[0] = u0; c[1] = yc; c[2] = vc; W.face(c, FACE[NX].A, hv, FACE[NX].B, hy, uvOf(NX)); }
+      if (faces & PY){ c[0] = uc; c[1] = y1; c[2] = vc; W.face(c, FACE[PY].A, hu, FACE[PY].B, hv, uvOf(PY)); }
+      if (faces & NY){ c[0] = uc; c[1] = y0; c[2] = vc; W.face(c, FACE[NY].A, hu, FACE[NY].B, hv, uvOf(NY)); }
     },
-    /* a square-section bar a → b ([u, y, v]), level across, w × d, one swatch */
+    /* a square-section bar a → b ([u, y, v]), level across, w × d, one swatch (a uv fn, or an [s, t]) */
     bar(a, c, w, d, uv, faces = SIDES){
       let ex = c[0] - a[0], ey = c[1] - a[1], ez = c[2] - a[2];
       const L = Math.hypot(ex, ey, ez); if (L < 1e-6) return;
       ex /= L; ey /= L; ez /= L;
       let px = -ez, pz = ex, pl = Math.hypot(px, pz); if (pl < 1e-4){ px = 1; pz = 0; pl = 1; } px /= pl; pz /= pl;
-      const X = [px, 0, pz], Y = [ex, ey, ez], Z = [-pz * ey, pz * ex - px * ez, px * ey];
-      const M = [(a[0] + c[0]) / 2, (a[1] + c[1]) / 2, (a[2] + c[2]) / 2], hx = w / 2, hy = L / 2, hz = d / 2, sw = () => uv;
-      const neg = v => [-v[0], -v[1], -v[2]], off = (V, k) => [M[0] + V[0] * k, M[1] + V[1] * k, M[2] + V[2] * k];
-      if (faces & PX) W.face(off(X, hx), neg(Z), hz, Y, hy, sw);
-      if (faces & NX) W.face(off(X, -hx), Z, hz, Y, hy, sw);
-      if (faces & PZ) W.face(off(Z, hz), X, hx, Y, hy, sw);
-      if (faces & NZ) W.face(off(Z, -hz), neg(X), hx, Y, hy, sw);
-      if (faces & PY) W.face(off(Y, hy), X, hx, neg(Z), hz, sw);
-      if (faces & NY) W.face(off(Y, -hy), X, hx, Z, hz, sw);
+      const X = RX, Y = RY, Z = RZ, nX = NXv, nZ = NZv, o = RC;
+      X[0] = px; X[1] = 0; X[2] = pz; Y[0] = ex; Y[1] = ey; Y[2] = ez; Z[0] = -pz * ey; Z[1] = pz * ex - px * ez; Z[2] = px * ey;
+      nX[0] = -px; nX[1] = 0; nX[2] = -pz; nZ[0] = -Z[0]; nZ[1] = -Z[1]; nZ[2] = -Z[2];
+      const mx = (a[0] + c[0]) / 2, my = (a[1] + c[1]) / 2, mz = (a[2] + c[2]) / 2, hx = w / 2, hy = L / 2, hz = d / 2;
+      const sw = typeof uv === 'function' ? uv : () => uv;
+      const at = (V, k) => { o[0] = mx + V[0] * k; o[1] = my + V[1] * k; o[2] = mz + V[2] * k; return o; };
+      if (faces & PX) W.face(at(X, hx), nZ, hz, Y, hy, sw);
+      if (faces & NX) W.face(at(X, -hx), Z, hz, Y, hy, sw);
+      if (faces & PZ) W.face(at(Z, hz), X, hx, Y, hy, sw);
+      if (faces & NZ) W.face(at(Z, -hz), nX, hx, Y, hy, sw);
+      if (faces & PY) W.face(at(Y, hy), X, hx, nZ, hz, sw);
+      if (faces & NY) W.face(at(Y, -hy), X, hx, Z, hz, sw);
     },
   };
   kit.__studio = W;

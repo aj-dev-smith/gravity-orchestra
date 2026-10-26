@@ -4,7 +4,7 @@ import { STAGE, rng, canvasTex, radialTex, glowMat, instanced, trs } from './com
 import { FOOT } from './footing.js';
 import { makePulse } from './pulse.js';
 import { graveyardStyle } from './graveyard-footing.js';
-import { graveSlots, placeGraves, obstaclesOf, graveCandles, votives, footLights, wispsFor, rectDist } from './graveyard-place.js';
+import { GY, graveSlots, placeGraves, obstaclesOf, graveCandles, votives, footLights, wispsFor, rectDist, answerCue, answerTiming } from './graveyard-place.js';
 /* ============================================================
    THE GRAVEYARD — a ruined churchyard at midnight, for October.
 
@@ -307,6 +307,13 @@ function wispPoints(cap, { map, pulse }){
   pts.frustumCulled = false;
   return pts;
 }
+/* a vertex colour over a whole geometry (the graves' stone multiplies it: the plots' mossy fill) */
+function paint(g, [r, gg, b]){
+  const n = g.attributes.position.count, c = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++){ c[3 * i] = r; c[3 * i + 1] = gg; c[3 * i + 2] = b; }
+  g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+  return g;
+}
 /* a tiny stable hash of a position (a candle's height, its flame's phase) */
 const hash2 = (x, z) => { const s = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453; return s - Math.floor(s); };
 
@@ -372,28 +379,41 @@ export default {
       ledger: mergeGeometries([                                       // (low: under 1 u, so no shot solve ever sees it)
         new THREE.BoxGeometry(1.6, .2, 2.9).translate(0, .1, 0), new THREE.BoxGeometry(1.36, .2, 2.66).translate(0, .3, 0),
       ].map(NI)),
-      plot: mergeGeometries([                                         // a kerbed plot, a low tablet at its head
-        new THREE.BoxGeometry(.14, .26, 3).translate(-.78, .13, 0), new THREE.BoxGeometry(.14, .26, 3).translate(.78, .13, 0),
+      plot: mergeGeometries([                                         // a kerbed plot filled with moss, a low tablet at its head
+        ...[new THREE.BoxGeometry(.14, .26, 3).translate(-.78, .13, 0), new THREE.BoxGeometry(.14, .26, 3).translate(.78, .13, 0),
         new THREE.BoxGeometry(1.42, .26, .14).translate(0, .13, 1.43), new THREE.BoxGeometry(1.42, .26, .14).translate(0, .13, -1.43),
-        new THREE.BoxGeometry(.86, .5, .16).translate(0, .25, -1.22),
+        new THREE.BoxGeometry(.86, .5, .16).translate(0, .25, -1.22)].map(g => paint(g, [1, 1, 1])),
+        paint(new THREE.BoxGeometry(1.42, .13, 2.72).translate(0, .065, .06), [.3, .4, .26]),   // (the grave's mossy fill)
+      ].map(NI)),
+      stub: mergeGeometries([                                         // a headstone sunk to its shoulders, its top broken away
+        new THREE.BoxGeometry(1, .18, .5).translate(0, .09, 0),
+        new THREE.BoxGeometry(.52, .6, .2).translate(-.21, .48, 0), new THREE.BoxGeometry(.44, .42, .2).translate(.27, .39, 0),
+        new THREE.BoxGeometry(.18, .12, .2).translate(.05, .84 - .12, 0).rotateZ(.2),
+      ].map(NI)),
+      tcross: mergeGeometries([                                       // a small cross on a low step
+        new THREE.BoxGeometry(.5, .16, .4).translate(0, .08, 0),
+        new THREE.BoxGeometry(.13, .62, .11).translate(0, .47, 0), new THREE.BoxGeometry(.46, .11, .11).translate(0, .6, 0),
       ].map(NI)),
     };
+    for (const k in GEO) if (!GEO[k].attributes.color) paint(GEO[k], [1, 1, 1]);
     const SL = graveSlots(), ALL_PLOTS = SL.home.concat(SL.reserve, SL.low);
-    const POOLS = {};
+    const POOLS = {}, graveStone = stone.clone(); graveStone.vertexColors = true;          // (+ each stone's own weathering: instance colour)
     for (const kind of Object.keys(GEO)){
-      const im = new THREE.InstancedMesh(GEO[kind], stone, Math.max(1, ALL_PLOTS.filter(g => g.kind === kind).length));
+      const im = new THREE.InstancedMesh(GEO[kind], graveStone, Math.max(1, ALL_PLOTS.filter(g => g.kind === kind).length));
       im.count = 0; group.add(im); POOLS[kind] = im;
     }
-    const _gm = new THREE.Matrix4(), _gp = new THREE.Vector3(), _gq = new THREE.Quaternion(), _gs = new THREE.Vector3(), _ge = new THREE.Euler();
+    const _gm = new THREE.Matrix4(), _gp = new THREE.Vector3(), _gq = new THREE.Quaternion(), _gs = new THREE.Vector3(), _ge = new THREE.Euler(), _gc = new THREE.Color();
     function poseGraves(list){
       const n = {};
       for (const k in POOLS) n[k] = 0;
       for (const g of list){
-        const low = g.kind === 'ledger' || g.kind === 'plot';
+        const low = g.kind === 'ledger' || g.kind === 'plot' || g.kind === 'stub' || g.kind === 'tcross';
         _ge.set(g.lean, g.yaw, g.roll); _gq.setFromEuler(_ge); _gp.set(g.x, F - (low ? .05 : .12), g.z); _gs.setScalar(g.s);
-        POOLS[g.kind].setMatrixAt(n[g.kind]++, _gm.compose(_gp, _gq, _gs));
+        const i = n[g.kind]++, h = hash2(g.z, g.x), w = .8 + .3 * h;
+        POOLS[g.kind].setMatrixAt(i, _gm.compose(_gp, _gq, _gs));
+        POOLS[g.kind].setColorAt(i, _gc.setRGB(w * (.97 + .06 * hash2(g.x, 3.1)), w, w * (.95 + .05 * h)));
       }
-      for (const k in POOLS){ const im = POOLS[k]; im.count = n[k]; im.instanceMatrix.needsUpdate = true; if (n[k]) im.computeBoundingSphere(); }
+      for (const k in POOLS){ const im = POOLS[k]; im.count = n[k]; im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; if (n[k]) im.computeBoundingSphere(); }
     }
 
     // ---- the iron fence: railings with spear finials round three sides of the yard, crooked ----
@@ -448,8 +468,8 @@ export default {
     waxIM.count = 0; waxIM.frustumCulled = false; group.add(waxIM);
     const PULSE = { value: new Float32Array(FOOT.MAX_PULSE) }, SLOW = { value: new Float32Array(FOOT.MAX_PULSE) };
     const flame = radialTex(64, [[0, 1], [.12, .7], [.4, .12], [1, 0]]);
-    const flames = ownedPoints(FL_CAP, { map: flame, flicker: .45, rate: 11, pulse: PULSE, gain: 1.6, grow: .45 });
-    const halos = ownedPoints(FL_CAP, { map: radialTex(64, [[0, .55], [.25, .22], [.6, .05], [1, 0]]), flicker: .3, rate: 6, pulse: PULSE, gain: 1.1, grow: .3 });
+    const flames = ownedPoints(FL_CAP, { map: flame, flicker: .45, rate: 11, pulse: PULSE, gain: 1.6, grow: .6 });
+    const halos = ownedPoints(FL_CAP, { map: radialTex(64, [[0, .55], [.25, .22], [.6, .05], [1, 0]]), flicker: .3, rate: 6, pulse: PULSE, gain: 2.2, grow: .8 });   // (the halo carries the flare: a flame's core is already white)
     group.add(flames, halos);
     const pools = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
       glowMat(radialTex(), 0xff8a3a, .13, { side: THREE.FrontSide }), CAND_CAP);
@@ -475,7 +495,7 @@ export default {
     const FOG_N = 16;
     const FOG_M = {                                                   // shared by every layer (place() + update() write them)
       uMp: { value: Array.from({ length: FOG_N }, () => new THREE.Vector4()) },   // x, z, cos yaw, sin yaw
-      uMe: { value: Array.from({ length: FOG_N }, () => new THREE.Vector4()) },   // half w, half d, envelope
+      uMe: { value: Array.from({ length: FOG_N }, () => new THREE.Vector4()) },   // half w, half d, envelope, reach (beyond it: no glow)
       uMc: { value: Array.from({ length: FOG_N }, () => new THREE.Color()) },
       uN: { value: 0 },
     };
@@ -498,6 +518,7 @@ export default {
             if (i >= uN) break;
             if (uMe[i].z < .003) continue;
             vec2 d = vW - uMp[i].xy;
+            if (dot(d, d) > uMe[i].w * uMe[i].w) continue;         // (far from this machine: its glow is gone)
             vec2 q = vec2(uMp[i].z * d.x - uMp[i].w * d.y, uMp[i].w * d.x + uMp[i].z * d.y);
             vec2 e = abs(q) - uMe[i].xy;
             float sd = length(max(e, 0.)) + min(max(e.x, e.y), 0.);
@@ -594,35 +615,52 @@ export default {
     /* ---- PLACE: where the machines stand (rooms/index.js anchors + the footing plan) → the yard round
        them. Pure layout (graveyard-place.js) written into the pools; per machine its strike envelopes. ---- */
     const pF = [], pM = [], pS = [];                                  // per pulse slot: flame / fog / wisp envelopes
-    let nSlot = 0, props = null;
+    const fogSrc = new Int32Array(FOG_N);                             // fog stir j ← the slot that drives it
+    const DARK = { at: () => 0, next: () => 0 };
+    let nSlot = 0, nFog = 0, props = null;
     const _c = new THREE.Color();
+    /* a hung machine's floor rect (its box seen from above) — or null when it flies too high to touch the yard */
+    const hungRect = a => Array.isArray(a.box) && a.box[2] < F + GY.REACH
+      ? { x: (a.box[0] + a.box[1]) / 2, z: (a.box[4] + a.box[5]) / 2, yaw: 0, hw: (a.box[1] - a.box[0]) / 2, hd: (a.box[5] - a.box[4]) / 2 } : null;
     function place(anchors = [], plan = null){
-      const list = (anchors || []).filter(a => a && a.kind !== 'hung' && Number.isFinite(a.x) && Number.isFinite(a.z) && a.w > 0 && a.d > 0)
-        .slice(0, FOOT.MAX_PULSE);
+      const ok = a => a && Number.isFinite(a.x) && Number.isFinite(a.z) && a.w > 0 && a.d > 0;
+      const all = (anchors || []).filter(ok);
+      const list = all.filter(a => a.kind !== 'hung').concat(all.filter(a => a.kind === 'hung')).slice(0, FOOT.MAX_PULSE);
       const slot = new Map();
+      // each machine's answer: its cue over its own loudest strike, timed to its own tempo (graveyard-place)
       list.forEach((a, i) => {
         slot.set(a.key, i);
-        const o = { P: a.P, start: a.start };
-        pF[i] = makePulse(a.cue, o); pM[i] = makePulse(a.cue, { ...o, decay: 1.1, lead: .4 }); pS[i] = makePulse(a.cue, { ...o, decay: 2.6, lead: .9 });
+        const A = answerCue(a.cue), T = answerTiming(A.gap), o = { P: a.P, start: a.start };
+        pF[i] = makePulse(A.cue, { ...o, ...T.flame });
+        pM[i] = a.kind === 'belt' ? DARK : makePulse(A.cue, { ...o, ...T.fog });   // (the belt never rests: its fog would only glow)
+        pS[i] = makePulse(A.cue, { ...o, decay: 2.6, lead: .9 });
       });
       nSlot = list.length; PULSE.value.fill(0); SLOW.value.fill(0);
-      // the fog at each machine's foot: its pad (footprint + margin) if the plan has one
+      // the ghost light on the footing: each pad's strikes over its machine's loudest (graveyard-footing ghostEdge)
+      const NORM = FOOT_STYLE.materials?.edge?.uniforms?.uNorm?.value;
+      if (NORM){
+        NORM.fill(1);
+        const byKey = new Map(all.map(a => [a.key, a]));
+        for (const p of plan?.pads || []){ const m = answerCue(byKey.get(p.key)?.cue).max; if (m > 0 && p.pulse < NORM.length) NORM[p.pulse] = 1 / m; }
+      }
+      // the fog at each machine's foot: its pad (footprint + margin) if the plan has one; a hung machine's floor rect
       const padOf = new Map((plan?.pads || []).map(p => [p.key, p]));
       let nf = 0;
-      for (const a of list){
-        if (nf >= FOG_N) break;
-        const p = padOf.get(a.key) || { x: a.x, z: a.z, yaw: a.yaw || 0, hw: a.w / 2, hd: a.d / 2 };
+      list.forEach((a, i) => {
+        if (nf >= FOG_N || pM[i] === DARK) return;
+        const p = a.kind === 'hung' ? hungRect(a) : padOf.get(a.key) || { x: a.x, z: a.z, yaw: a.yaw || 0, hw: a.w / 2, hd: a.d / 2 };
+        if (!p) return;
         FOG_M.uMp.value[nf].set(p.x, p.z, Math.cos(p.yaw || 0), Math.sin(p.yaw || 0));
-        FOG_M.uMe.value[nf].set(p.hw, p.hd, 0, 0);
+        FOG_M.uMe.value[nf].set(p.hw, p.hd, 0, Math.max(p.hw, p.hd) + 7);
         FOG_M.uMc.value[nf].set(a.color ?? 0x8fb4a2);
-        nf++;
-      }
-      FOG_M.uN.value = nf;
+        fogSrc[nf++] = i;
+      });
+      FOG_M.uN.value = nFog = nf;
       // the graves: kept clear of every machine and support; the displaced moved further out
       const obs = obstaclesOf(anchors, plan, F), G = placeGraves(anchors, plan, { floor: F, obs }), graves = G.tall.concat(G.low);
       poseGraves(graves);
       // the flames: candles on the graves (the nearest machine within 6 u owns one), votives, lanterns, the gate
-      const rects = list.map(a => ({ x: a.x, z: a.z, hw: a.w / 2, hd: a.d / 2, yaw: a.yaw || 0 }));
+      const rects = list.map(a => (a.kind === 'hung' ? hungRect(a) : null) || { x: a.x, z: a.z, hw: a.w / 2, hd: a.d / 2, yaw: a.kind === 'hung' ? 0 : a.yaw || 0 });
       const ownerAt = (x, z) => { let best = 6, who = -1; rects.forEach((r, i) => { const d = rectDist(r, x, z); if (d < best){ best = d; who = i; } }); return who; };
       const FA = flames.geometry.attributes, HA = halos.geometry.attributes;
       let nF = 0, nW = 0;
@@ -689,8 +727,8 @@ export default {
           const f = pF[i].at(t) + .35 * pF[i].next(t);
           PULSE.value[i] = f > 1 ? 1 : f;
           SLOW.value[i] = Math.max(pS[i].at(t), pS[i].next(t));
-          if (i < FOG_N) FOG_M.uMe.value[i].z = Math.max(pM[i].at(t), .5 * pM[i].next(t));
         }
+        for (let j = 0; j < nFog; j++){ const q = pM[fogSrc[j]]; FOG_M.uMe.value[j].z = Math.max(q.at(t), .5 * q.next(t)); }
         flames.material.uniforms.uTime.value = t; halos.material.uniforms.uTime.value = t;
         wisps.material.uniforms.uTime.value = t;
         flames.material.uniforms.uBoost.value = (1 + .3 * energy) * (1 - .75 * Dn);   // the candles gutter at dawn

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { FOOT } from './footing.js';
-import { GY, rng, seedOf, onSide, ring, doorOf, doorApex, doorLamps, scaffoldOf, SCAF, stairLamp,
+import { GY, rng, seedOf, onSide, ring, doorOf, doorApex, doorLamps, towerOf, stairLamp,
          terraceLanterns, arcadeOf, PIER, TERR } from './graveyard-place.js';
 /* ============================================================
    GRAVEYARD FOOTING — what the machines stand on in the Midnight Graveyard: a room STYLE for
@@ -39,8 +39,8 @@ import { GY, rng, seedOf, onSide, ring, doorOf, doorApex, doorLamps, scaffoldOf,
 
 const PY = 1, NY = 2, PX = 4, NX = 8, PZ = 16, NZ = 32, ALL = 63, NOBOT = ALL & ~NY, SIDES = PX | NX | PZ | NZ;
 const HAND = 1.3;                                          // a stair's handrail over its nosing line
-let _noop = null;                                          // (a hook's "drawn it myself": ONE shared empty group)
-const NOOP = () => _noop || (_noop = new THREE.Group());
+const _noop = new WeakMap();                               // (a hook's "drawn it myself": one empty group per build)
+const NOOP = k => { let g = _noop.get(k); if (!g){ g = new THREE.Group(); g.name = 'footing:hooks'; _noop.set(k, g); } return g; };
 
 /* ---- textures (canvas: none in a headless test — the materials keep their colour) ---- */
 function tex(size, draw, { repeat = .5 } = {}){
@@ -103,7 +103,7 @@ function ashlarTex(){
 function woodTex(){
   return tex(256, (x, S) => {
     const R = rng(73);
-    x.fillStyle = '#a49683'; x.fillRect(0, 0, S, S);
+    x.fillStyle = '#b9b0a2'; x.fillRect(0, 0, S, S);
     for (let i = 0; i < 260; i++){ const px = R() * S, v = R() < .5 ? 50 : 170;
       x.strokeStyle = `rgba(${v},${v - 8},${v - 20},${.08 + R() * .14})`; x.lineWidth = .6 + R() * 1.8;
       x.beginPath(); x.moveTo(px, 0); x.bezierCurveTo(px + (R() - .5) * 8, S * .33, px + (R() - .5) * 8, S * .66, px, S); x.stroke(); }
@@ -113,18 +113,22 @@ function woodTex(){
 }
 
 /* the GHOST LIGHT: the kit's edge (aColor × (uBase + uGain · uPulse[slot]), additive) in the yard's own
-   key — each machine's colour drawn a third of the way toward the marsh light, so it belongs to the night */
+   key — each machine's colour drawn a third of the way toward the marsh light, so it belongs to the night.
+   uNorm[slot] (the room writes it: 1 / the machine's loudest strike) lets a quiet machine's strikes — the
+   kit's brushed hats, a music box — reach the same flare as a loud one's; ^.6 lifts the soft ones further */
 function ghostEdge(){
   return new THREE.ShaderMaterial({
-    uniforms: { uPulse: { value: new Float32Array(FOOT.MAX_PULSE) }, uBase: { value: .2 }, uGain: { value: 1.5 } },
+    uniforms: { uPulse: { value: new Float32Array(FOOT.MAX_PULSE) }, uNorm: { value: new Float32Array(FOOT.MAX_PULSE).fill(1) },
+                uBase: { value: .26 }, uGain: { value: 1.6 } },
     vertexShader: /* glsl */`
       attribute vec3 aColor; attribute float aPulse;
-      uniform float uPulse[${FOOT.MAX_PULSE}]; uniform float uBase, uGain;
+      uniform float uPulse[${FOOT.MAX_PULSE}]; uniform float uNorm[${FOOT.MAX_PULSE}]; uniform float uBase, uGain;
       varying vec3 vC;
       void main(){
         float l = dot(aColor, vec3(.3, .55, .15));
         vec3 c = mix(aColor, vec3(.45, .95, .78) * max(l, .3) * 1.3, .33);
-        vC = c * (uBase + uGain * uPulse[int(aPulse + .5)]);
+        int i = int(aPulse + .5);
+        vC = c * (uBase + uGain * pow(clamp(uPulse[i] * uNorm[i], 0., 1.), .6));
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.);
       }`,
     fragmentShader: /* glsl */`
@@ -171,19 +175,12 @@ function sideKit(k, r, side){
    slabs with moss in the joints (settled a hair, one cracked now and then). It occupies T − G … T; the
    stone under it must have its top face at T − G (the groove's floor). ---- */
 const G = .05;
-function carvedTop(k, u0, u1, v0, v1, T, color, pulse, R, lit = true){
+function carvedTop(k, u0, u1, v0, v1, T, R){
   const W = u1 - u0, D = v1 - v0, b = Math.min(.34, .14 * Math.min(W, D)), gw = .1;
   k.box('base', u0, u1, T - G, T, v1 - b, v1, PY | PZ | NZ | PX | NX);
   k.box('base', u0, u1, T - G, T, v0, v0 + b, PY | PZ | NZ | PX | NX);
   k.box('base', u0, u0 + b, T - G, T, v0 + b, v1 - b, PY | NX | PX);
   k.box('base', u1 - b, u1, T - G, T, v0 + b, v1 - b, PY | NX | PX);
-  if (lit){                                                // the light in the groove
-    const c = b + gw / 2, w = .026, y0 = T - G, y1 = T - G + .016;
-    k.edge(u0 + c - w, u1 - c + w, y0, y1, v1 - c - w, v1 - c + w, color, pulse);
-    k.edge(u0 + c - w, u1 - c + w, y0, y1, v0 + c - w, v0 + c + w, color, pulse);
-    k.edge(u0 + c - w, u0 + c + w, y0, y1, v0 + c + w, v1 - c - w, color, pulse);
-    k.edge(u1 - c - w, u1 - c + w, y0, y1, v0 + c + w, v1 - c - w, color, pulse);
-  }
   const c = b + gw, f0 = [u0 + c, v0 + c], f1 = [u1 - c, v1 - c];
   if (f1[0] - f0[0] < .2 || f1[1] - f0[1] < .2) return;
   const ax = f1[0] - f0[0] >= f1[1] - f0[1] ? 0 : 1, len = f1[ax] - f0[ax], n = Math.max(1, Math.round(len / 3.3)), jw = .06;
@@ -201,6 +198,18 @@ function carvedTop(k, u0, u1, v0, v1, T, color, pulse, R, lit = true){
       for (let j = 0; j < 3; j++) k.bar('moss', P(pts[j], top - .002), P(pts[j + 1], top - .002), .035, .008, ALL);
     }
   }
+}
+
+/* ---- the GHOST LIGHT round a stone: a lit joint on the faces of the course under its overhanging lid (the
+   body's faces stand `ins` in from the rect's edge; the strip stands LIP proud of them, so it stays inside the
+   rect and OUTSIDE the machine's footprint — the pad's margin — where the audience sees it) ---- */
+const LIP = .02, LIP_H = .085;
+function lipLight(k, hw, hd, ins, y1, color, pulse, y0 = y1 - LIP_H){
+  const a = ins - LIP, b = ins;
+  k.edge(-hw + a, hw - a, y0, y1, hd - b, hd - a, color, pulse, PZ | PX | NX);
+  k.edge(-hw + a, hw - a, y0, y1, -hd + a, -hd + b, color, pulse, NZ | PX | NX);
+  k.edge(hw - b, hw - a, y0, y1, -hd + b, hd - b, color, pulse, PX);
+  k.edge(-hw + a, -hw + b, y0, y1, -hd + b, hd - b, color, pulse, NX);
 }
 
 /* ---- an iron LANTERN round a flame at (u, y, v): a base, four corner rods, its glass (the light), a cap ---- */
@@ -261,23 +270,27 @@ function ironLadder(k, r, T, acc, oM, yTop){
       for (let y = y0 + 1.6; y < m1 - .3; y += 3) k.bar('steel', W2(ac + d, O, y), W2(ac + d, oM, y), .055, .055);
       k.bar('steel', W2(ac + d, O, m1 - .25), W2(ac + d, oM, m1 - .25), .055, .055);
     }
-    if (acc.cage){
-      const c0 = y0 + (f ? 1.3 : 3.2), c1 = y1 + (top ? 1.1 : .9), R0 = O - .02, R1 = O + .78, hw = hh + .2;
+    if (acc.cage){                                         // wrought-iron HOOPS (a half ring each), three straps
+      const c0 = y0 + (f ? 1.3 : 3.2), c1 = y1 + (top ? 1.1 : .9), R0 = O - .02, R1 = O + .78, hw = hh + .2, NS = 5;
+      const at = phi => [ac + hw * Math.sin(phi), R0 + (R1 - R0) * Math.cos(phi)];
       if (c1 > c0 + .3){
         for (let y = c0; y <= c1 + 1e-6; y += Math.max(.9, (c1 - c0) / Math.max(1, Math.round((c1 - c0) / 1.35)))){
-          k.bar('steel', W2(ac - hw, R0, y), W2(ac - hw, R1, y), .045, .055, ALL);
-          k.bar('steel', W2(ac - hw, R1, y), W2(ac + hw, R1, y), .045, .055, ALL);
-          k.bar('steel', W2(ac + hw, R1, y), W2(ac + hw, R0, y), .045, .055, ALL);
+          for (let j = 0; j < NS; j++){
+            const [a1, o1] = at(-Math.PI / 2 + Math.PI * j / NS), [a2, o2] = at(-Math.PI / 2 + Math.PI * (j + 1) / NS);
+            k.bar('steel', W2(a1, o1, y), W2(a2, o2, y), .045, .05);
+          }
         }
-        for (const [a, o] of [[-hw, R1 - .3], [-hw, R1], [0, R1], [hw, R1], [hw, R1 - .3]]) k.bar('steel', W2(ac + a, o, c0), W2(ac + a, o, c1), .04, .04);
+        for (const phi of [-Math.PI / 3, 0, Math.PI / 3]){ const [a, o] = at(phi); k.bar('steel', W2(a, o, c0), W2(a, o, c1), .04, .04); }
       }
     }
-    if (!top){                                             // the rest landing: old planks on an iron frame
+    if (!top){                                             // the rest landing: a stone slab on two iron knee brackets
       const a0 = acc.a0, a1 = acc.a1, yl = y1, o1 = acc.out;
-      s.box('deck', a0, a1, oM, o1, yl - .12, yl, ALL);
-      for (const a of [a0 + .05, a1 - .05]) k.bar('steel', W2(a, o1 - .05, yl), W2(a, o1 - .05, yl + FOOT.RAIL - .02), .07, .07, PY | SIDES);
-      k.bar('steel', W2(a0 + .05, o1 - .05, yl + FOOT.RAIL - .05), W2(a1 - .05, o1 - .05, yl + FOOT.RAIL - .05), .06, .06, ALL);
-      k.bar('steel', W2(a0 + .05, o1 - .05, yl + FOOT.RAIL / 2), W2(a1 - .05, o1 - .05, yl + FOOT.RAIL / 2), .05, .05);
+      s.box('base', a0, a1, oM, o1, yl - .16, yl, ALL);
+      for (const a of [a0 + .12, a1 - .12]) k.bar('steel', W2(a, oM + .05, yl - 1.05), W2(a, o1 - .12, yl - .17), .07, .07, ALL);
+      const oR = o1 - .11;                                 // (the rail line: its finials stay inside the ladder's rect)
+      for (const a of [a0 + .1, a1 - .1]){ k.bar('steel', W2(a, oR, yl), W2(a, oR, yl + FOOT.RAIL - .1), .07, .07, PY | SIDES); const [u, , v] = W2(a, oR, 0); spear(k, u, yl + FOOT.RAIL - .1, v); }
+      k.bar('steel', W2(a0 + .1, oR, yl + FOOT.RAIL - .3), W2(a1 - .1, oR, yl + FOOT.RAIL - .3), .06, .06, ALL);
+      k.bar('steel', W2(a0 + .1, oR, yl + FOOT.RAIL / 2 - .1), W2(a1 - .1, oR, yl + FOOT.RAIL / 2 - .1), .05, .05);
     }
   }
 }
@@ -300,9 +313,8 @@ function ironFence(k, r, T, gapSide, g0, g1, lampPosts = []){
       k.bar('steel', P(a, T + 1.08), P(b, T + 1.08), .05, .07, ALL);
       k.bar('steel', P(a, T + .16), P(b, T + .16), .05, .07, ALL);
       const m = Math.max(1, Math.round(L / .33));
-      for (let i = 1; i < m; i++){ const [u, , v] = P(a + L * i / m, 0);
-        k.box('steel', u - .016, u + .016, T + .1, T + 1.18, v - .016, v + .016, SIDES);
-        k.box('steel', u - .034, u + .034, T + 1.18, T + 1.24, v - .034, v + .034, PY | SIDES); }
+      for (let i = 1; i < m; i++){ const [u, , v] = P(a + L * i / m, 0);                // (a picket: its tip is the post's finials' job)
+        k.box('steel', u - .018, u + .018, T + .1, T + 1.2, v - .018, v + .018, SIDES); }
     }
   }
   for (const [u, v] of lampPosts) k.box('steel', u - .055, u + .055, T, T + 1.0, v - .055, v + .055, SIDES | PY);
@@ -311,9 +323,11 @@ function ironFence(k, r, T, gapSide, g0, g1, lampPosts = []){
 /* ---- the FORMS (each in its pad's / loft's frame, set by the caller) ---- */
 /** flush: a LEDGER STONE (the belt's kerb is one too) */
 function ledger(k, p){
-  const F = k.floor, T = p.fixed ? F + FOOT.KERB : p.top, R = rng(seedOf(p.key));
-  k.box('base', -p.hw, p.hw, F - .04, T - G, -p.hd, p.hd, NOBOT);
-  carvedTop(k, -p.hw, p.hw, -p.hd, p.hd, T, p.color, p.pulse, R);
+  const F = k.floor, T = p.fixed ? F + FOOT.KERB : p.top, R = rng(seedOf(p.key)), I = .06;
+  k.box('base', -p.hw + I, p.hw - I, F - .04, T - G, -p.hd + I, p.hd - I, NOBOT);       // the slab, under its carved top's lip
+  carvedTop(k, -p.hw, p.hw, -p.hd, p.hd, T, R);
+  k.box('base', -p.hw, p.hw, T - G - .025, T - G, -p.hd, p.hd, NY | SIDES);            // (the lip's underside)
+  lipLight(k, p.hw, p.hd, I, T - G - .03, p.color, p.pulse, Math.max(F + .005, T - G - .03 - LIP_H));
 }
 
 /** low: a CHEST TOMB (panelled sides between pilasters, a frieze, a moulded lid) up CRYPT STEPS */
@@ -332,7 +346,8 @@ function chestTomb(k, p){
   }
   k.box('base', -hw + .07, hw - .07, yt, T - lid, -hd + .07, hd - .07, SIDES);          // the frieze
   k.box('base', -hw, hw, T - lid, T - G, -hd, hd, ALL);                                 // the lid
-  carvedTop(k, -hw, hw, -hd, hd, T, p.color, p.pulse, R);
+  carvedTop(k, -hw, hw, -hd, hd, T, R);
+  lipLight(k, hw, hd, .07, T - lid - .015, p.color, p.pulse);                          // (on the frieze, under the lid)
   if (p.access) p.access.kind === 'stair' ? cryptStair(k, p, T, p.access, R, -.15) : ironLadder(k, p, T, p.access, -.16, T - lid);
 }
 
@@ -353,7 +368,8 @@ function mausoleum(k, p){
   k.box('base', -hw + .3, hw - .3, yW, yW + corn * .45, -hd + .3, hd - .3, SIDES | NY);  // the cornice, two steps
   k.box('base', -hw + .08, hw - .08, yW + corn * .45, T - Dr, -hd + .08, hd - .08, SIDES | NY);
   k.box('base', -hw, hw, T - Dr, T - G, -hd, hd, ALL);                                  // the roof slab: the deck
-  carvedTop(k, -hw, hw, -hd, hd, T, p.color, p.pulse, R);
+  carvedTop(k, -hw, hw, -hd, hd, T, R);
+  lipLight(k, hw, hd, .08, T - Dr - .015, p.color, p.pulse);                           // (on the cornice, under the roof)
   // the DOOR: a pointed surround, two iron-strapped timber leaves, light at its seam and its threshold
   if (d){
     const s = sideKit(k, p, d.side), w = d.w, h = d.h, o = -I;
@@ -378,90 +394,41 @@ function mausoleum(k, p){
   if (p.access) p.access.kind === 'stair' ? cryptStair(k, p, T, p.access, R, -I + .01) : ironLadder(k, p, T, p.access, -I, yW);
 }
 
-/** high: a TIMBER SCAFFOLD — posts on stone footings, ledgers lashed outboard, rickety braces, iron bands,
-    a plank deck, timber rails, a GALLOWS bay at its front with a lantern hanging in it */
-function scaffold(k, p){
-  const F = k.floor, T = p.top, R = rng(seedOf(p.key) ^ 0x3c), hw = p.hw, hd = p.hd;
-  const S = scaffoldOf(p, F), { hu, hv, yB, yBear, posts: P, levels: lv } = S, PS = SCAF.POST, LG = SCAF.LEDGER;
-  // the deck: a timber floor, planks across its short way (a hair apart, now and then one sunk)
-  k.box('deck', -hw, hw, yB, T - .07, -hd, hd, ALL);
-  const across = hw >= hd, L = across ? 2 * hw : 2 * hd;
-  for (let a = -L / 2; a < L / 2 - .05; a += .56){
-    const a1 = Math.min(L / 2, a + .54), top = T - (R() < .2 ? .008 : 0);
-    across ? k.box('deck', a + .015, a1, T - .07, top, -hd, hd, NOBOT) : k.box('deck', -hw, hw, T - .07, top, a + .015, a1, NOBOT);
+/** high: a RUINED BELL TOWER — the crypt terrace's own arcade round every storey (one stone language for
+    everything at gallery height), a timber headstock under its deck with the BELL hung from it in the
+    belfry, a lantern hung in the front arch of the belfry, broken pinnacles at its corners, an iron fence */
+function tower(k, p){
+  const F = k.floor, T = p.top, R = rng(seedOf(p.key) ^ 0x3c), Tw = towerOf(p, F), hw = p.hw, hd = p.hd;
+  cloister(k, p, Tw.Dd, R, Tw.nT);
+  lipLight(k, hw, hd, .04, T - Tw.Dd - .015, p.color, p.pulse);                         // (on the cornice, under the deck)
+  // the belfry: a headstock across the tower's short way, the bell hung under it
+  const yH = Tw.yC, along = hw >= hd, sp = (along ? hd : hw) - TERR.INP;
+  along ? k.box('deck', -.17, .17, yH - .32, yH, -sp, sp, ALL) : k.box('deck', -sp, sp, yH - .32, yH, -.17, .17, ALL);
+  const { r, y: yb } = Tw.bell;
+  const prof = [[.2, .12], [.36, .14], [.48, .16], [.54, .24], [.6, .26], [.72, .2], [.9, .14], [1, .08]];   // crown → lip (radius × r, height × r)
+  let y = yb;
+  for (const [w, h] of prof){                              // each course an octagon: two boxes + two diagonal bars
+    const y0 = y - h * r * 1.25, a = w * r, c = a * .414, ym = (y + y0) / 2, d = a * .7071;
+    k.box('steel', -a, a, y0, y, -c, c, ALL); k.box('steel', -c, c, y0, y, -a, a, ALL);
+    k.bar('steel', [-d, ym, -d], [d, ym, d], 2 * c, y - y0, ALL); k.bar('steel', [-d, ym, d], [d, ym, -d], 2 * c, y - y0, ALL);
+    y = y0;
   }
-  // the posts on their stone footings + iron shoes; the bearers round their heads; joists across
-  for (const [u, v] of P){
-    k.box('base', u - .44, u + .44, F - .04, F + .3, v - .44, v + .44, NOBOT);
-    k.box('steel', u - .3, u + .3, F + .3, F + .52, v - .3, v + .3, SIDES | PY);
-    k.box('deck', u - PS, u + PS, F + .3, yBear, v - PS, v + PS, SIDES);
+  k.box('steel', -.05, .05, y - .05, yb - .2, -.05, .05, SIDES);                       // the clapper
+  k.box('steel', -.11, .11, y - .26, y - .05, -.11, .11, ALL);
+  // the lantern, hung from the crown of its arch
+  if (Tw.lamp){ const [u, ly, v] = Tw.lamp; k.bar('steel', [u, ly + .34, v], [u, Tw.yC - .45, v], .03, .03, SIDES); lantern(k, Tw.lamp, p.color, p.pulse, true); }
+  // broken pinnacles at the corners (in the pad's margin, where the fence's corner posts stand; the fence's
+  // corner post rises inside each)
+  const q = .22;
+  for (const [su, sv] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]){
+    const u = su * (hw - .02 - q / 2), v = sv * (hd - .02 - q / 2), h = .45 + R() * .85;
+    k.box('ashlar', u - q / 2, u + q / 2, T - .02, T + h, v - q / 2, v + q / 2, PY | SIDES);
+    if (h > .9) k.box('base', u - q / 2 - .03, u + q / 2 + .03, T + .38, T + .48, v - q / 2 - .03, v + q / 2 + .03, ALL);
   }
-  k.box('deck', -hu - PS, hu + PS, yBear, yB, -hv - PS, -hv + PS, ALL);
-  k.box('deck', -hu - PS, hu + PS, yBear, yB, hv - PS, hv + PS, ALL);
-  k.box('deck', -hu - PS, -hu + PS, yBear, yB, -hv + PS, hv - PS, ALL & ~(PZ | NZ));
-  k.box('deck', hu - PS, hu + PS, yBear, yB, -hv + PS, hv - PS, ALL & ~(PZ | NZ));
-  const nj = Math.max(1, Math.round(2 * (across ? hu : hv) / 1.8));
-  for (let j = 1; j < nj; j++){ const t = -1 + 2 * j / nj;
-    across ? k.box('deck', t * hu - .11, t * hu + .11, yB - .32, yB, -hv + PS, hv - PS, SIDES | NY)
-           : k.box('deck', -hu + PS, hu - PS, yB - .32, yB, t * hv - .11, t * hv + .11, SIDES | NY); }
-  // the ledgers, lashed to the posts' outer faces at every tier (the long faces run past the corners)
-  const o0 = PS, o1 = PS + LG;
-  for (const y of lv){
-    const y0 = y - LG / 2, y1 = y + LG / 2;
-    k.box('deck', -hu - o1, hu + o1, y0, y1, -hv - o1, -hv - o0, ALL);
-    k.box('deck', -hu - o1, hu + o1, y0, y1, hv + o0, hv + o1, ALL);
-    k.box('deck', -hu - o1, -hu - o0, y0, y1, -hv - o0, hv + o0, ALL & ~(PZ | NZ));
-    k.box('deck', hu + o0, hu + o1, y0, y1, -hv - o0, hv + o0, ALL & ~(PZ | NZ));
-    for (const [u, v] of P) k.box('steel', u - PS - .03, u + PS + .03, y1, y1 + .1, v - PS - .03, v + PS + .03, SIDES | PY);   // an iron band
-  }
-  // the braces: across every bay of every face, over the ledgers (rickety: an X here, one diagonal there)
-  const ob = o1 + .045, G1 = S.gallows;
-  for (let i = 0; i < P.length; i++){
-    const a = P[i], b = P[(i + 1) % P.length], d = [b[0] - a[0], b[1] - a[1]], Ld = Math.hypot(d[0], d[1]);
-    if (Ld < .3) continue;
-    const n = [d[1] / Ld, -d[0] / Ld];                    // (the ring runs counter-clockwise seen from above: out is to its right)
-    const A = (s, y) => [a[0] + d[0] * s / Ld + n[0] * ob, y, a[1] + d[1] * s / Ld + n[1] * ob];
-    for (let t = 0; t < lv.length - 1; t++){
-      if (G1 && G1.i === i && t === lv.length - 2) continue;  // (the gallows bay: open)
-      const ya = lv[t] + LG / 2, yb2 = lv[t + 1] - LG / 2, j = () => (R() - .5) * .16;
-      const one = R() < .35, flip = R() < .5;
-      if (!one || flip) k.bar('deck', A(.3, ya + j()), A(Ld - .3, yb2 + j()), .08, .19);
-      if (!one || !flip) k.bar('deck', A(Ld - .3, ya + j()), A(.3, yb2 + j()), .08, .19);
-    }
-    // the GALLOWS: knee braces in its top corners, a chain from the top ledger, the lantern in it
-    if (G1 && G1.i === i){
-      const yT = lv[lv.length - 1] - LG / 2;
-      k.bar('deck', A(.25, yT - 1.05), A(1.2, yT - .02), .08, .2);
-      k.bar('deck', A(Ld - .25, yT - 1.05), A(Ld - 1.2, yT - .02), .08, .2);
-      const [lu, ly, lv2] = G1.lamp;
-      k.bar('steel', [lu, ly + .34, lv2], [lu, yT, lv2], .03, .03, SIDES);
-      lantern(k, G1.lamp, p.color, p.pulse, true);
-    }
-  }
-  // timber rails round the deck, open at the access
   const [gs, g0, g1] = gapOf(p.access);
-  timberRails(k, p, T, gs, g0, g1);
-  if (p.access) ironLadder(k, p, T, p.access, -SCAF.IN, yBear);
+  ironFence(k, p, T, gs, g0, g1);
+  if (p.access) ironLadder(k, p, T, p.access, -.2, Tw.yC);
 }
-function timberRails(k, r, T, gapSide, g0, g1){
-  const hu = r.hw - .14, hv = r.hd - .14;
-  const runs = [['-v', [-hu, -hv], [hu, -hv]], ['+u', [hu, -hv], [hu, hv]], ['+v', [hu, hv], [-hu, hv]], ['-u', [-hu, hv], [-hu, -hv]]];
-  for (const [side, p, q] of runs){
-    const isU = side[1] === 'u', al = pt => isU ? pt[1] : pt[0], P = (a, y) => isU ? [p[0], y, a] : [a, y, p[1]];
-    const lo = Math.min(al(p), al(q)), hi = Math.max(al(p), al(q)), segs = [];
-    if (side === gapSide){ if (g0 - .05 > lo + .3) segs.push([lo, g0 - .05]); if (g1 + .05 < hi - .3) segs.push([g1 + .05, hi]); }
-    else segs.push([lo, hi]);
-    for (const [a, b] of segs){
-      const L = b - a; if (L < .2) continue;
-      const n = Math.max(1, Math.ceil(L / 2.4));
-      for (let i = 0; i <= n; i++){ const [u, , v] = P(a + L * i / n, 0); k.box('deck', u - .1, u + .1, T, T + 1.44, v - .1, v + .1, SIDES | PY); }
-      k.bar('deck', P(a, T + 1.34), P(b, T + 1.34), .13, .15, ALL);
-      k.bar('deck', P(a, T + .74), P(b, T + .74), .09, .12, ALL);
-      k.bar('deck', P(a, T + .1), P(b, T + .1), .04, .18, ALL);
-    }
-  }
-}
-
 /** open: PIERS under its feet (timber posts when high), ties kept out of what hangs, a carved kerb round it */
 function piers(k, p){
   const F = k.floor, T = p.top, H = T - F, high = p.band === 'high', R = rng(seedOf(p.key) ^ 0x2d);
@@ -517,10 +484,9 @@ function piers(k, p){
       }
     }
   }
-  // the carved kerb on the ground round the feet, the light in its channel
-  let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
-  for (const [u, v] of feet){ u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); }
-  u0 = Math.max(-p.hw, u0 - .8); u1 = Math.min(p.hw, u1 + .8); v0 = Math.max(-p.hd, v0 - .8); v1 = Math.min(p.hd, v1 + .8);
+  // the carved kerb on the ground round its pad's edge (outside the machine, where it is seen), its light
+  // on the kerb's outer face
+  const KI = .04, u0 = -p.hw + KI, u1 = p.hw - KI, v0 = -p.hd + KI, v1 = p.hd - KI;
   const kw = .17, kh = F + .14;
   for (const o of [0, kw + .05]){                         // two courses, the channel between
     const i0 = o, i1 = o + kw;
@@ -529,50 +495,99 @@ function piers(k, p){
     k.box('base', u0 + i0, u0 + i1, F - .04, kh, v0 + i1, v1 - i1, PY | PX | NX);
     k.box('base', u1 - i1, u1 - i0, F - .04, kh, v0 + i1, v1 - i1, PY | PX | NX);
   }
-  const c = kw + .025, w = .022;
-  k.edge(u0 + c - w, u1 - c + w, F + .02, F + .05, v1 - c - w, v1 - c + w, p.color, p.pulse);
-  k.edge(u0 + c - w, u1 - c + w, F + .02, F + .05, v0 + c - w, v0 + c + w, p.color, p.pulse);
-  k.edge(u0 + c - w, u0 + c + w, F + .02, F + .05, v0 + c + w, v1 - c - w, p.color, p.pulse);
-  k.edge(u1 - c - w, u1 - c + w, F + .02, F + .05, v0 + c + w, v1 - c - w, p.color, p.pulse);
+  lipLight(k, p.hw, p.hd, KI, kh - .035, p.color, p.pulse, F + .015);
   if (p.access) ironLadder(k, p, T, p.access, -.6, T - .3);
 }
 
 /** loft: a CRYPT TERRACE on an arcade of corbelled arches round every face (tiers when tall), an iron
     fence + lanterns above the low band, each member's light on the cornice */
-function terrace(k, L, members){
-  const F = k.floor, T = L.top, H = T - F, R = rng(seedOf(L.id));
-  const Dd = Math.max(.5, (L.well || 0) + .06), corn = .36, yC = T - Dd - corn, INP = TERR.INP, hp = PIER / 2;
-  k.box('base', -L.hw, L.hw, T - Dd, T - G, -L.hd, L.hd, ALL);                            // the deck slab
-  carvedTop(k, -L.hw, L.hw, -L.hd, L.hd, T, null, 0, R, false);
-  k.box('base', -L.hw + .12, L.hw - .12, yC, yC + corn * .5, -L.hd + .12, L.hd - .12, SIDES | NY);   // the cornice
-  k.box('base', -L.hw + .04, L.hw - .04, yC + corn * .5, T - Dd, -L.hd + .04, L.hd - .04, SIDES | NY);
+/* the CLOISTER both a terrace and a tower stand on: a carved stone deck Dd deep, a two-step cornice under it,
+   and under that an ARCADE round every face — piers on footings, a pointed arch between each pair, a
+   string course between storeys (nT of them; squat arches when low) — or, too low for one, a crypt wall.
+   Returns yC, the cornice's underside. */
+function cloister(k, r, Dd, R, nT0){
+  const F = k.floor, T = r.top, H = T - F, corn = .36, yC = T - Dd - corn, INP = TERR.INP, hp = PIER / 2;
+  k.box('base', -r.hw, r.hw, T - Dd, T - G, -r.hd, r.hd, ALL);                            // the deck slab
+  carvedTop(k, -r.hw, r.hw, -r.hd, r.hd, T, R);
+  k.box('base', -r.hw + .12, r.hw - .12, yC, yC + corn * .5, -r.hd + .12, r.hd - .12, SIDES | NY);   // the cornice
+  k.box('base', -r.hw + .04, r.hw - .04, yC + corn * .5, T - Dd, -r.hd + .04, r.hd - .04, SIDES | NY);
   if (yC - F < 1.7){                                       // too low for an arcade: a crypt wall under the cornice
-    k.box('base', -L.hw + .08, L.hw - .08, F - .04, F + .28, -L.hd + .08, L.hd - .08, NOBOT);
-    k.box('ashlar', -L.hw + .16, L.hw - .16, F + .28, yC, -L.hd + .16, L.hd - .16, SIDES);
-  } else {
-    const nT = Math.max(1, Math.round((yC - F) / 8)), tierTop = t => F + (yC - F) * (t + 1) / nT;
-    for (const side of ['-v', '+v', '-u', '+u']){
-      const s = sideKit(k, L, side), half = side[1] === 'u' ? L.hd : L.hw, A = arcadeOf(2 * half), ends = side[1] === 'u';
-      A.forEach((a, i) => {                               // the piers (the ±u faces leave their corners to the ±v ones)
+    k.box('base', -r.hw + .08, r.hw - .08, F - .04, F + .28, -r.hd + .08, r.hd - .08, NOBOT);
+    k.box('ashlar', -r.hw + .16, r.hw - .16, F + .28, yC, -r.hd + .16, r.hd - .16, SIDES);
+    return yC;
+  }
+  const nT = nT0 || Math.max(1, Math.round((yC - F) / 8)), tierTop = t => F + (yC - F) * (t + 1) / nT;
+  for (const side of ['-v', '+v', '-u', '+u']){
+    const s = sideKit(k, r, side), half = side[1] === 'u' ? r.hd : r.hw, A = arcadeOf(2 * half), ends = side[1] === 'u';
+    const DF = ends ? PX | NX : PZ | NZ;                   // (the face's own front + back, in the frame)
+    A.forEach((a, i) => {                                 // the piers (the ±u faces leave their corners to the ±v ones)
+      if (ends && (i === 0 || i === A.length - 1)) return;
+      s.box('base', a - hp - .12, a + hp + .12, -INP - hp - .12, -INP + hp + .12, F - .04, F + .32, NOBOT);
+      s.box('ashlar', a - hp, a + hp, -INP - hp, -INP + hp, F + .32, yC, SIDES);
+    });
+    for (let t = 0; t < nT; t++){
+      const y1 = tierTop(t), y0 = t ? tierTop(t - 1) : F + .32, band = t < nT - 1 ? .5 : 0, th = y1 - y0;
+      let spring = null;
+      for (let i = 0; i < A.length - 1; i++){
+        const a0 = A[i] + hp, a1 = A[i + 1] - hp;
+        if (a1 - a0 < .3) continue;
+        const rise = Math.min((a1 - a0) * .62, Math.max(.4, (th - band) * (H < 4 ? .5 : .42)));
+        spring = y1 - band - .45 - rise;
+        arch(k, s, a0, a1, rise, y1 - band, -INP, 2 * hp, DF);
+      }
+      if (spring !== null && spring - y0 > .5) A.forEach((a, i) => {                   // the imposts the arches spring from
         if (ends && (i === 0 || i === A.length - 1)) return;
-        s.box('base', a - hp - .12, a + hp + .12, -INP - hp - .12, -INP + hp + .12, F - .04, F + .32, NOBOT);
-        s.box('ashlar', a - hp, a + hp, -INP - hp, -INP + hp, F + .32, yC, SIDES);
+        s.box('base', a - hp - .06, a + hp + .06, -INP - hp - .05, -INP + hp + .05, spring - .16, spring, ALL);
       });
-      for (let t = 0; t < nT; t++){
-        const y1 = tierTop(t), y0 = t ? tierTop(t - 1) : F + .32, band = t < nT - 1 ? .5 : 0, th = y1 - y0;
-        for (let i = 0; i < A.length - 1; i++){
-          const a0 = A[i] + hp, a1 = A[i + 1] - hp;
-          if (a1 - a0 < .3) continue;
-          const rise = Math.min((a1 - a0) * .62, Math.max(.4, (th - band) * (H < 4 ? .5 : .42)));
-          corbel((slot, s0, s1, ya, yb, f) => s.box(slot, s0, s1, -INP - hp + .04, -INP + hp - .04, ya, yb, f), a0, a1, rise, y1 - band);
-        }
-        if (band){                                         // a string course round the tier
-          const e = ends ? -hp - .07 : hp + .06;
-          s.box('base', A[0] - e, A[A.length - 1] + e, -INP - hp - .06, -INP + hp + .06, y1 - band, y1, ALL);
-        }
+      if (band){                                           // a string course round the tier
+        const e = ends ? -hp - .07 : hp + .06;
+        s.box('base', A[0] - e, A[A.length - 1] + e, -INP - hp - .06, -INP + hp + .06, y1 - band, y1, ALL);
       }
     }
   }
+  return yC;
+}
+/* a POINTED ARCH over a0..a1 (along its face) whose crown is .45 under `top`: a ring of voussoirs standing a
+   hair proud (two-centred when it rises at least half its span, else a segment), its keystone, the masonry
+   behind it in courses that hide under the ring, the spandrel wall up to `top`. In the face's frame (s):
+   its wall is `dep` deep round the line o = oc; DF = the wall's front + back faces in the frame. */
+function arch(k, s, a0, a1, rise, top, oc, dep, DF){
+  const span = a1 - a0, mid = (a0 + a1) / 2, yS = top - .45 - rise, ring = Math.min(.34, .16 + .06 * span);
+  // the intrados of the LEFT half: x(y) for y in yS..yS + rise, and its centre
+  let cx, cy, Rr;
+  if (rise >= span / 2 - 1e-6){ Rr = (rise * rise + span * span / 4) / span; cx = a0 + Rr; cy = yS; }
+  else { Rr = (span * span / 4 + rise * rise) / (2 * rise); cx = mid; cy = yS + rise - Rr; }
+  const xAt = y => cx - Math.sqrt(Math.max(0, Rr * Rr - (y - cy) * (y - cy)));
+  const yA = yS + rise, w0 = dep - .04, wR = dep + .03;
+  // the masonry behind the ring: courses whose inner edge sits on the intrados at their foot (the ring hides the steps)
+  const n = Math.max(2, Math.ceil(rise / .26));
+  for (let j = 0; j < n; j++){
+    const ya = yS + rise * j / n, yb = yS + rise * (j + 1) / n, e = Math.min(mid, xAt(ya));
+    if (e - a0 < .02) continue;
+    if (e >= mid - .01){ s.box('ashlar', a0, a1, oc - w0 / 2, oc + w0 / 2, ya, yb, DF); continue; }
+    s.box('ashlar', a0, e, oc - w0 / 2, oc + w0 / 2, ya, yb, DF);
+    s.box('ashlar', a1 - (e - a0), a1, oc - w0 / 2, oc + w0 / 2, ya, yb, DF);
+  }
+  s.box('ashlar', a0, a1, oc - w0 / 2, oc + w0 / 2, yA, top, DF | NY);                  // the spandrel
+  // the ring: 4 voussoirs a side along the intrados, each standing out from it by `ring`
+  const th0 = Math.atan2(yS - cy, a0 - cx), th1 = Math.atan2(yA - cy, mid - cx), NV = 4;
+  for (const sgn of [-1, 1]){
+    const X = x => sgn < 0 ? x : a1 - (x - a0);
+    for (let i = 0; i < NV; i++){
+      const ta = th0 + (th1 - th0) * i / NV, tb = th0 + (th1 - th0) * (i + 1) / NV, tm = (ta + tb) / 2;
+      const nx = Math.cos(tm), ny = Math.sin(tm), o = ring / 2, ext = ring * .28;
+      let ax = cx + Rr * Math.cos(ta) + nx * o, ay = cy + Rr * Math.sin(ta) + ny * o, bx = cx + Rr * Math.cos(tb) + nx * o, by = cy + Rr * Math.sin(tb) + ny * o;
+      const dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy) || 1, ea = i ? ext : 0, eb = i < NV - 1 ? ext : 0;
+      ax -= dx / L * ea; ay -= dy / L * ea; bx += dx / L * eb; by += dy / L * eb;
+      k.bar('base', s.W(X(ax), oc, ay), s.W(X(bx), oc, by), wR, ring, ALL);
+    }
+  }
+  s.box('base', mid - .15, mid + .15, oc - wR / 2 - .02, oc + wR / 2 + .02, yA - .06, yA + ring + .1, ALL);   // the keystone
+}
+
+function terrace(k, L, members){
+  const F = k.floor, T = L.top, R = rng(seedOf(L.id));
+  const Dd = Math.max(.5, (L.well || 0) + .06), yC = cloister(k, L, Dd, R);
   // each member's light: its stretch of the cornice (front and back; an end it reaches)
   for (const m of members){
     let m0 = Infinity, m1 = -Infinity, n0 = Infinity, n1 = -Infinity;
@@ -606,19 +621,6 @@ function terrace(k, L, members){
     L.access.kind === 'stair' ? cryptStair(k, lit, T, L.access, R, -.14) : ironLadder(k, L, T, L.access, -.2, yC);
   }
 }
-/* a CORBELLED arch over a0..a1 (along its face): courses stepping in from both sides over its rise,
-   closing at the crown, then the spandrel up to `top` — put(slot, s0, s1, y0, y1, faces) writes it */
-function corbel(put, a0, a1, rise, top){
-  const r = (a1 - a0) / 2, n = Math.max(4, Math.round(rise / .28)), yS = top - .45 - rise;
-  for (let i = 0; i < n; i++){
-    const ya = yS + rise * i / n, yb = yS + rise * (i + 1) / n, t = (i + 1) / n, w = r * Math.sqrt(Math.max(0, 1 - t * t));
-    if (w < .06){ put('base', a0, a1, ya, yb, SIDES | NY); continue; }
-    put('base', a0, a0 + r - w, ya, yb, SIDES | NY);
-    put('base', a1 - (r - w), a1, ya, yb, SIDES | NY);
-  }
-  put('ashlar', a0, a1, yS + rise, top, SIDES);
-}
-
 /* ---- the STYLE ---- */
 export function graveyardStyle(){
   let made = null;
@@ -632,19 +634,19 @@ export function graveyardStyle(){
         ashlar: new THREE.MeshStandardMaterial({ color: 0xc0c6b8, map: ashlarTex(), roughness: .95, metalness: 0, envMap: env, envMapIntensity: .2 }),
         moss: new THREE.MeshStandardMaterial({ color: 0x6a8550, roughness: 1, metalness: 0 }),
         steel: new THREE.MeshStandardMaterial({ color: 0x6c737c, metalness: .5, roughness: .5, envMap: env, envMapIntensity: .7 }),
-        deck: new THREE.MeshStandardMaterial({ color: 0xe2d5c0, map: woodTex(), roughness: .9, metalness: 0, envMap: env, envMapIntensity: .2 }),
+        deck: new THREE.MeshStandardMaterial({ color: 0xd9d4ca, map: woodTex(), roughness: .9, metalness: 0, envMap: env, envMapIntensity: .35 }),   // (silvered old timber)
         edge: ghostEdge(),
       };
       return made;
     },
     /** make the materials now (the room's build), so no footing build pays for a texture */
     warm(envMap){ style.mats(null, { envMap }); return style; },
-    flush(p, k){ p.open ? piers(k, p) : ledger(k, p); return NOOP(); },
-    low(p, k){ p.open ? piers(k, p) : chestTomb(k, p); return NOOP(); },
-    mid(p, k){ p.open ? piers(k, p) : mausoleum(k, p); return NOOP(); },
-    high(p, k){ p.open ? piers(k, p) : scaffold(k, p); return NOOP(); },
-    loft(L, k){ terrace(k, L, k.plan.pads.filter(p => p.loft === L.id)); return NOOP(); },
-    edge(){ return NOOP(); },                               // (every form lights its machine itself)
+    flush(p, k){ p.open ? piers(k, p) : ledger(k, p); return NOOP(k); },
+    low(p, k){ p.open ? piers(k, p) : chestTomb(k, p); return NOOP(k); },
+    mid(p, k){ p.open ? piers(k, p) : mausoleum(k, p); return NOOP(k); },
+    high(p, k){ p.open ? piers(k, p) : tower(k, p); return NOOP(k); },
+    loft(L, k){ terrace(k, L, k.plan.pads.filter(p => p.loft === L.id)); return NOOP(k); },
+    edge(p, k){ return NOOP(k); },                               // (every form lights its machine itself)
     get materials(){ return made; },
     dispose(){
       if (made) for (const m of Object.values(made)){ m.map?.dispose(); m.dispose(); }

@@ -5,10 +5,10 @@ import { makePulse } from '../src/rooms/pulse.js';
 import { STAGE } from '../src/rooms/common.js';
 import { graveyardStyle } from '../src/rooms/graveyard-footing.js';
 import { GY, graveSlots, placeGraves, obstaclesOf, supportRects, rectDist, graveCandles, votives, footLights, wispsFor, VOTIVE_R,
-         doorOf, doorApex, doorLamps, scaffoldOf } from '../src/rooms/graveyard-place.js';
+         doorOf, doorApex, doorLamps, towerOf, answerCue, answerTiming } from '../src/rooms/graveyard-place.js';
 
 /* THE MIDNIGHT GRAVEYARD, set round its machines: the room's footing STYLE (graveyard-footing.js — ledger
-   stones, chest tombs, mausolea, timber scaffolds, crypt terraces, piers for an open stand) drawn for
+   stones, chest tombs, mausolea, ruined bell towers, crypt terraces, piers for an open stand) drawn for
    every band and loft, inside the plan's envelopes, one ghost light per machine; and the yard's PROPS
    (graveyard-place.js — graves, candles, votives, lanterns, wisps), a pure fn of the anchors + the plan
    that keeps every one of them clear of every machine and support. */
@@ -124,7 +124,26 @@ describe('graveyard footing: the yard\'s own masonry under every machine', () =>
       f.dispose();
     }
   });
-  it('every machine has its own ghost light (a groove, a door seam, a lantern, a kerb, its stretch of a terrace) — a pure fn of songTime', () => {
+  it('every machine\'s ghost light is where the audience sees it: at its support\'s edge or out past its own footprint', () => {
+    /* how far in from a turned rect's edge a point lies (negative: outside it) */
+    const inset = (r, x, z) => { const c = Math.cos(r.yaw || 0), s = Math.sin(r.yaw || 0), dx = x - r.x, dz = z - r.z;
+      const u = c * dx - s * dz, v = s * dx + c * dz; return Math.min(r.hw - Math.abs(u), r.hd - Math.abs(v)); };
+    for (const [name, plan] of PLANS){
+      const f = build(plan), g = meshes(f).find(m => m.name === 'footing:edge').geometry, P = g.attributes.position.array, S = g.attributes.aPulse.array;
+      const AN = new Map(anchorsOf(name).map(a => [a.key, a]));
+      for (const p of plan.pads){
+        const a = AN.get(p.key), foot = { x: a.x, z: a.z, yaw: a.yaw || 0, hw: a.w / 2, hd: a.d / 2 }, sup = p.loft ? plan.lofts.find(L => L.id === p.loft) : p;
+        let seen = 0, all = 0;                                                     // (≥ 12 vertices: a run of strip)
+        for (let i = 0; i < S.length; i++) if (Math.round(S[i]) === p.pulse){
+          all++;
+          if (rectDist(foot, P[3 * i], P[3 * i + 2]) > .005 || inset(sup, P[3 * i], P[3 * i + 2]) <= .12) seen++;
+        }
+        expect(seen, `${name}: ${p.key} (${p.open ? 'open ' : ''}${p.band}${p.loft ? ' on ' + p.loft : ''}) lit only deep under itself (${seen}/${all})`).toBeGreaterThanOrEqual(12);
+      }
+      f.dispose();
+    }
+  });
+  it('every machine has its own ghost light (a lit joint under its stone\'s lip, a door seam, a lantern, a kerb, its stretch of a terrace) — a pure fn of songTime', () => {
     for (const [name, plan] of PLANS){
       const f = build(plan), edge = meshes(f).find(m => m.name === 'footing:edge');
       const slots = new Set(edge.geometry.attributes.aPulse.array);
@@ -219,13 +238,20 @@ describe('graveyard props: the churchyard round its machines (pure)', () => {
     const back = [...CROWD, st('crypt', 8, -30.5, 12, 3.2)], G = placeGraves(back, planFooting(back, { floor: FL, room: ROOMB }), { floor: FL });
     expect(G.moved).toBeGreaterThan(0); expect(G.hidden).toBe(0); expect(G.tall.length).toBe(home);
   });
-  it('tall graves stand outside the stage room\'s walls (but for one back row); low ones are slabs and kerbed plots', () => {
+  it('the stage keeps a churchyard outline: broken stubs and small crosses among the slabs', () => {
+    const L = graveSlots().low, n = k => L.filter(g => g.kind === k).length;
+    expect((n('stub') + n('tcross')) / L.length).toBeGreaterThan(.25);
+    expect((n('stub') + n('tcross')) / L.length).toBeLessThan(.45);
+    expect(n('ledger') + n('plot')).toBeGreaterThan(L.length / 2);
+  });
+  it('tall graves stand outside the stage room\'s walls (but for one back row); low ones are slabs, kerbed plots, stubs', () => {
     const inStage = g => Math.abs(g.x) - g.r < STAGE.HW && g.z + g.r > STAGE.BACK && g.z - g.r < STAGE.FRONT;
     for (const [name, plan, anchors] of sets){
       const G = placeGraves(anchors, plan, { floor: FL });
       for (const g of G.tall) if (inStage(g)) expect(Math.abs(g.z + 30.5), `${name}: a ${g.kind} at ${g.x.toFixed(1)},${g.z.toFixed(1)} inside the stage`).toBeLessThanOrEqual(.8);
       for (const g of G.tall) expect(['head', 'cross', 'obelisk']).toContain(g.kind);
-      for (const g of G.low) expect(['ledger', 'plot']).toContain(g.kind);
+      for (const g of G.low) expect(['ledger', 'plot', 'stub', 'tcross']).toContain(g.kind);
+      for (const g of G.low) if (g.kind === 'stub' || g.kind === 'tcross') expect(g.s, 'a low stone stays under 1 u').toBeLessThanOrEqual(1.1);
       for (const g of G.tall) if (inStage(g)) expect(g.kind, 'no obelisk in the back row').not.toBe('obelisk');
     }
   });
@@ -262,22 +288,39 @@ describe('graveyard props: the churchyard round its machines (pure)', () => {
       }
     }
   });
-  it('a scaffold\'s gallows bay is on its front, its lantern hung clear of the ladder', () => {
-    for (const u of [10, 14, 20, 24]){
-      const plan = planFooting([st('m', 0, 0, 14, 6, FOOT.PLINTH + u)], { floor: FL, room: ROOMB }), p = plan.pads[0], S = scaffoldOf(p, FL);
-      expect(p.band).toBe('high'); expect(S.gallows, `lift ${u}`).toBeTruthy();
-      expect(S.gallows.side).toBe('+v');                                      // (yaw 0: +v faces the audience)
-      const [lu, ly] = S.gallows.lamp;
-      expect(ly).toBeGreaterThan(S.levels[S.levels.length - 2] + .5); expect(ly).toBeLessThan(S.levels[S.levels.length - 1]);
+  it('a bell tower: its bell hangs clear of its arcade\'s piers; its lantern in a front arch of the belfry, clear of the ladder', () => {
+    for (const u of [10, 14, 20, 24]) for (const [w, d] of [[14, 6], [9, 5], [12, 4.4]]){
+      const plan = planFooting([st('m', 0, 0, w, d, FOOT.PLINTH + u)], { floor: FL, room: ROOMB }), p = plan.pads[0], T = towerOf(p, FL);
+      expect(p.band).toBe('high'); expect(T, `lift ${u}`).toBeTruthy();
+      expect(T.side).toBe('+v');                                              // (yaw 0: +v faces the audience)
+      expect(T.bell.r).toBeLessThanOrEqual(Math.min(p.hw, p.hd) - .475 - .63 - .2);
+      expect(T.lamp, `lift ${u} ${w}×${d}`).toBeTruthy();
+      const [lu, ly] = T.lamp;
+      expect(ly, 'in the belfry').toBeGreaterThan(T.tierTop(T.nT - 2 < 0 ? 0 : T.nT - 2) - (T.nT > 1 ? 0 : 99));
+      expect(ly + .34).toBeLessThan(T.yC - .45);
       if (p.access?.side === '+v'){ const c = (p.access.a0 + p.access.a1) / 2; expect(Math.abs(lu - c), `lift ${u}`).toBeGreaterThan(1); }
     }
   });
-  it('each standing machine gets its wisp: home off its front corner, drawn in to just off its edge', () => {
+  it('the yard answers each machine in its own measure: weights over its loudest, light decaying within its own tempo', () => {
+    const A = answerCue([{ t: 0, w: .3 }, { t: .25, w: .3 }, { t: .5, w: .6 }, { t: .75, w: .3 }, { t: .75, w: .2 }]);
+    expect(A.max).toBe(.6); expect(A.gap).toBeCloseTo(.25, 6);
+    expect(Math.max(...A.cue.map(c => c.w))).toBe(1); expect(A.cue[0].w).toBeCloseTo(Math.sqrt(.5), 6);
+    expect(answerCue([]).cue).toEqual([]);
+    for (const gap of [.08, .16, .25, .5, 1, 3]){
+      const T = answerTiming(gap);
+      for (const e of [T.flame, T.fog]){ expect(e.decay).toBeGreaterThan(0); expect(e.lead).toBeGreaterThan(0); }
+      if (gap >= .25){ expect(T.fog.decay).toBeLessThanOrEqual(1.3 * gap + 1e-9); expect(T.flame.decay).toBeLessThanOrEqual(1.1 * gap + 1e-9); }
+      // a strike's fog has faded to under half by the next one (it pulses, it doesn't hold)
+      if (gap >= .2) expect(Math.exp(-gap / T.fog.decay)).toBeLessThan(.5);
+    }
+  });
+  it('each machine gets its wisp: home off its front corner, drawn in to just off its edge (a hung one: under it)', () => {
     for (const [name, plan, anchors] of sets){
-      const W = wispsFor(anchors, plan, FL);
-      expect(W.map(w => w.key).sort(), name).toEqual(plan.pads.map(p => p.key).sort());
+      const W = wispsFor(anchors, plan, FL), hung = anchors.filter(a => a.kind === 'hung');
+      expect(W.map(w => w.key).sort(), name).toEqual([...plan.pads.map(p => p.key), ...hung.map(a => a.key)].sort());
       for (const w of W){
         const p = plan.pads.find(q => q.key === w.key);
+        if (!p){ const a = hung.find(q => q.key === w.key); expect(w.to[1]).toBeLessThan(a.box[2] + 9); expect(w.to[1]).toBeGreaterThan(FL + 1); continue; }
         expect(rectDist(p, w.to[0], w.to[2]), `${name} ${w.key}`).toBeLessThan(1);
         expect(w.home[1]).toBeGreaterThan(FL + 2); expect(w.to[1]).toBeGreaterThan(FL + 1);
       }

@@ -99,10 +99,12 @@ export function clearOf(obs, x, z, r = 0, gap = GY.CLEAR){
 /* ---- the GRAVES ---- */
 /* a grave plot: { x, z, kind, yaw, lean, roll, s, r (its footprint radius), candle: [dx, dz] | null }
    kinds: tall — 'head' (a round-topped headstone ≈ 1.5 × 2.1 u), 'cross' (a Celtic cross ≈ 3.9 u),
-   'obelisk' (≈ 6.8 u); low — 'ledger' (a flat slab), 'plot' (a kerbed plot + a low tablet) */
-const R_OF = { head: .95, cross: .85, obelisk: 1.25, ledger: 1.5, plot: 1.7 };
+   'obelisk' (≈ 6.8 u); low (under 1 u, leaning included) — 'ledger' (a flat slab), 'plot' (a kerbed plot
+   filled with moss + a low tablet), 'stub' (a headstone sunk to its shoulders, its top broken off),
+   'tcross' (a small iron-age cross, leaning) — the stubs give the stage its jagged churchyard outline */
+const R_OF = { head: .95, cross: .85, obelisk: 1.25, ledger: 1.66, plot: 1.72, stub: .62, tcross: .5 };   // (≥ each one's half-diagonal)
 function plotAt(R, x, z, kind, yaw, candleP){
-  const s = .88 + R() * .34;
+  const s = Math.min(.88 + R() * .34, kind === 'stub' || kind === 'tcross' ? 1.1 : 9);   // (a low stone stays under 1 u, leaning too)
   const g = { x, z, kind, yaw: yaw + (R() - .5) * .3, lean: (R() - .5) * (kind === 'obelisk' ? .06 : .24), roll: (R() - .5) * (kind === 'obelisk' ? .04 : .16),
     s, r: R_OF[kind] * s, candle: null };
   if (kind === 'ledger' || kind === 'plot'){ g.lean = (R() - .5) * .03; g.roll = (R() - .5) * .03; }
@@ -151,7 +153,8 @@ export function graveSlots(){
   for (let i = 0; i < 14; i++) for (let j = 0; j < 13; j++){
     const x = -34 + i * 5.2 + (R() - .5) * 1.8, z = -30 + j * 5.2 + (R() - .5) * 1.8;
     if (R() < .3) continue;
-    low.push(plotAt(R, x, z, R() < .55 ? 'ledger' : 'plot', (R() - .5) * .5 + (R() < .5 ? 0 : Math.PI), .13));
+    const v = R(), kind = v < .2 ? 'stub' : v < .34 ? 'tcross' : v < .7 ? 'ledger' : 'plot';
+    low.push(plotAt(R, x, z, kind, (R() - .5) * .5 + (R() < .5 ? 0 : Math.PI), .13));
   }
   return (SLOTS = { home, reserve, low });
 }
@@ -180,6 +183,29 @@ export function graveCandles(graves, obs){
     if (clearOf(obs, x, z, VOTIVE_R)) out.push({ x, z, grave: g });
   }
   return out;
+}
+
+/* ---- how the yard ANSWERS a machine ---- */
+/** a machine's strike cue made into the yard's: every weight over its loudest, ^.5 (a quiet machine — the
+    kit's brushed hats, a music box — answers as fully as a loud one; velocity still shapes it), and its
+    TEMPO: the median gap between its strikes, so a dense machine's light can decay inside it and pulse
+    instead of holding a steady glow → { cue, gap, max } */
+export function answerCue(cue = []){
+  if (!Array.isArray(cue) || !cue.length) return { cue: [], gap: Infinity, max: 0 };
+  let max = 0;
+  for (const c of cue) max = Math.max(max, c.w ?? 1);
+  const out = cue.map(c => ({ t: c.t, w: max > 0 ? Math.sqrt(Math.max(0, c.w ?? 1) / max) : 0 }));
+  const ts = [...new Set(cue.map(c => Math.round(c.t * 1000)))].sort((a, b) => a - b), g = [];
+  for (let i = 1; i < ts.length; i++) g.push((ts[i] - ts[i - 1]) / 1000);
+  g.sort((a, b) => a - b);
+  return { cue: out, gap: g.length ? g[g.length >> 1] : Infinity, max };
+}
+/** the envelopes' timing from that tempo: the flame's afterglow, the fog's (it lingers more), how early each
+    leans in — every decay at most ~1.3 of the machine's own gap, so a fast run reads as pulses, never a glow */
+export function answerTiming(gap){
+  const c = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+  return { flame: { decay: c(1.1 * gap, .18, .45), lead: c(.8 * gap, .12, .3) },
+           fog: { decay: c(1.3 * gap, .25, 1.1), lead: c(.9 * gap, .12, .4) } };
 }
 
 /* ---- the machines' own lights ---- */
@@ -263,37 +289,33 @@ export const segSide = (a, b, hu, hv) => { const mu = (a[0] + b[0]) / 2, mv = (a
 /** a ladder's top flight: its along-centre on its side (footing3d's ladder steps sideways each landing) */
 export const ladderTop = acc => (acc.a0 + acc.a1) / 2 + (acc.flights > 1 ? ((acc.flights - 1) % 2 ? .45 : -.45) : 0);
 
-/** a TIMBER SCAFFOLD (high band, solid): its post ring (local, SCAF.IN in from the pad's edge, ≤ SPAN
-    apart), the deck's underside yB, the bearers' underside yBear, the ledger tiers (floor → under the
-    bearers, ≤ TIER apart) and its GALLOWS bay — the top bay of the front face farthest from the ladder:
-    { i (the post pair P[i] → P[i+1]), side, lamp (local u, y, v: hanging from the top ledger) } */
-export const SCAF = { IN: .6, SPAN: 4.4, TIER: 4.2, LEDGER: .26, OUT: .38, POST: .25 };
-export function scaffoldOf(p, floor){
+/** a RUINED BELL TOWER (high band, solid — the gallery's other machines stand on the crypt terrace, so
+    the tower is built in its language: an arcade of piers and pointed arches round every storey, a belfry
+    in the top one): its storeys, the bell hung in the belfry, and the LANTERN hung in the front arch of the
+    belfry nearest the middle that its ladder doesn't climb past — { yC (under its cornice), nT, tierTop(t),
+    bell: { u, v, r, y (its crown) }, lamp: (local u, y, v) | null, bay: [a0, a1] (the lamp's arch, along
+    the front), side } */
+export const TOWER = { DECK: .5, CORN: .36, STOREY: 8 };
+export function towerOf(p, floor){
   if (!p || p.open || p.band !== 'high') return null;
-  const hu = Math.max(.3, p.hw - SCAF.IN), hv = Math.max(.3, p.hd - SCAF.IN);
-  const yB = p.top - Math.max(GY.DECK_HI, (p.well || 0) + .06), yBear = yB - GY.BEARER;
-  const posts = ring(hu, hv, SCAF.SPAN);
-  const y0 = floor + .9, y1 = yBear - SCAF.LEDGER / 2, n = Math.max(1, Math.ceil((y1 - y0) / SCAF.TIER - 1e-9)), levels = [];
-  for (let i = 0; i <= n; i++) levels.push(y0 + (y1 - y0) * i / n);
-  const front = frontSide(p), acc = p.access, lad = acc && acc.kind === 'ladder' && acc.side === front ? ladderTop(acc) : null;
-  const along = (q, side) => side[1] === 'u' ? q[1] : q[0];
-  let gi = -1, best = -Infinity;
-  for (let i = 0; i < posts.length; i++){
-    const a = posts[i], b = posts[(i + 1) % posts.length];
-    if (segSide(a, b, hu, hv) !== front) continue;
-    const m = (along(a, front) + along(b, front)) / 2, d = lad === null ? -Math.abs(m) : Math.abs(m - lad);
-    if (d > best + 1e-9){ best = d; gi = i; }
+  const Dd = Math.max(TOWER.DECK, (p.well || 0) + .06), yC = p.top - Dd - TOWER.CORN;
+  const nT = Math.max(1, Math.round((yC - floor) / TOWER.STOREY)), tierTop = t => floor + (yC - floor) * (t + 1) / nT;
+  const side = frontSide(p, ['+v', '-v', '+u', '-u']), A = arcadeOf(faceLen(p, side)), hp = PIER / 2;
+  const acc = p.access, lad = acc && acc.kind === 'ladder' && acc.side === side ? [acc.a0 - .6, acc.a1 + .6] : null;
+  let bay = null, best = Infinity;
+  for (let i = 0; i < A.length - 1; i++){
+    const a0 = A[i] + hp, a1 = A[i + 1] - hp, m = (a0 + a1) / 2;
+    if (a1 - a0 < 1.2) continue;
+    if (lad && m + .3 > lad[0] && m - .3 < lad[1]) continue;                // (not where the climber passes)
+    if (Math.abs(m) < best - 1e-9){ best = Math.abs(m); bay = [a0, a1]; }
   }
-  let gallows = null;
-  if (gi >= 0){
-    const a = posts[gi], b = posts[(gi + 1) % posts.length], lo = Math.min(along(a, front), along(b, front)) + .5, hi = Math.max(along(a, front), along(b, front)) - .5;
-    let s = (lo + hi) / 2;
-    if (lad !== null && Math.abs(s - lad) < 1.15) s = lad + (Math.sign(s - lad) || 1) * 1.15;
-    s = Math.max(lo, Math.min(hi, s));
-    const k = front[0] === '+' ? 1 : -1, out = (front[1] === 'u' ? hu : hv) + SCAF.OUT, y = levels[n] - 1.35;
-    gallows = { i: gi, side: front, lamp: front[1] === 'u' ? [k * out, y, s] : [s, y, k * out] };
-  }
-  return { hu, hv, yB, yBear, posts, levels, gallows, IN: SCAF.IN };
+  const crown = yC - .45, S = onSide(p, side);
+  let lamp = null;
+  if (bay){ const [u, v] = S((bay[0] + bay[1]) / 2, -TERR.INP); lamp = [u, crown - 1.1, v]; }
+  // the bell: in the middle of the belfry, clear of the pier lines (each TERR.INP + PIER/2 in from an edge)
+  const room = Math.min(p.hw, p.hd) - TERR.INP - hp - .25;
+  const r = Math.max(.35, Math.min(1.05, room));
+  return { yC, nT, tierTop, side, bay, lamp, bell: { u: 0, v: 0, r, y: yC - .32 }, Dd };
 }
 /** a crypt stair's lamp post at its foot (a stair access): local (u, y, v) of the lamp */
 export function stairLamp(r, floor){
@@ -327,7 +349,7 @@ export function footLights(plan){
   for (const p of plan.pads){
     if (p.loft || p.fixed) continue;
     for (const pt of doorLamps(p, F)) put(p, pt, p.key);
-    put(p, scaffoldOf(p, F)?.gallows?.lamp, p.key);
+    put(p, towerOf(p, F)?.lamp, p.key);
     if (!p.open) put(p, stairLamp(p, F), p.key);
   }
   for (const L of plan.lofts){
@@ -341,7 +363,7 @@ export function footLights(plan){
   return out;
 }
 
-/** one wisp per standing machine: its home off the pad's outer front corner (a little above the low fog)
+/** one wisp per machine (standing: below; hung: after the pads): its home off the pad's outer front corner (a little above the low fog)
     and the point it drifts to as the machine plays (just off its pad's edge, at its deck) */
 export function wispsFor(anchors = [], plan = null, floor = -5.5){
   const out = [];
@@ -353,6 +375,13 @@ export function wispsFor(anchors = [], plan = null, floor = -5.5){
     const [hx, hz] = toWorld(p, hu, hv), [tx, tz] = toWorld(p, tu, tv);
     const y0 = Math.max(floor + 2.2, Math.min(p.top + 1.2, floor + 9)) + (i % 3) * .5;
     out.push({ key: p.key, home: [hx, y0, hz], to: [tx, Math.max(floor + 1.2, p.top + .8), tz] });
+  });
+  // a HUNG machine (the organ loft, the chandelier, the court): its wisp waits off its front, drifts in under it
+  (anchors || []).forEach((a, i) => {
+    if (!a || a.kind !== 'hung' || !Array.isArray(a.box)) return;
+    const [x0, x1, y0, , , z1] = a.box, cx = (x0 + x1) / 2, k = i % 2 ? 1 : -1;
+    const yTo = Math.max(floor + 1.2, Math.min(y0 - .6, floor + 9));
+    out.push({ key: a.key, home: [cx + k * ((x1 - x0) / 2 + 1.4), Math.max(floor + 2.2, Math.min(yTo + .8, floor + 9)), z1 + 1.6], to: [cx + k * (x1 - x0) / 4, yTo, z1 + .5] });
   });
   return out;
 }

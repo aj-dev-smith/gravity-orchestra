@@ -272,9 +272,9 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
   /* the stage to layout `to` (an undo's or a redo's): a HEIGHT-only step comes back live (the machines move, the
      room re-anchors — no rebuild, the music runs on); anything else, or a height only a fresh solve can give,
      rebuilds holding songTime. (To the empty layout: the SOLVED stage — an AUTO there is the build's own solve,
-     not a pinned one.) */
+     not a pinned one; live only while every machine still stands where that solve put it — host.solvedLayout.) */
   function goToLayout(to){
-    const cur = layout(), lifts = liftOnlyUndo(to, cur), fresh = !Object.keys(to).length;
+    const fresh = !Object.keys(to).length, cur = layout(), lifts = liftOnlyUndo(to, cur, 2e-3, fresh ? host.solvedLayout?.() : null);
     if (fresh) ignoreSongStage.add(curId); else ignoreSongStage.delete(curId);
     saveLayout(store, curId, to);
     if (lifts && lifts.every(l => host.liftLive?.(l.key, l.lift, { fresh }))){ if (lifts.length) host.liftSettle(); stage.refresh(); syncButtons(); }

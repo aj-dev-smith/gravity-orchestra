@@ -1559,6 +1559,17 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
       }),
     ],
     kitPivot: kitPivotNow,
+    /* where the build's SOLVED stage stands, in the layout's frame ({ key: { x (− cx), z, yaw } }) — only for a
+       FREE build (nothing pinned, no user height: what the empty layout rebuilds to); else null. Stage edit's
+       undo back to the empty layout is live only when every machine still stands there (placement.js liftOnlyUndo) */
+    solvedLayout(){
+      const L = lastLayout; if (!L?.free || !L.solved) return null;
+      const out = {};
+      for (const it of L.items){ const s = L.solved[it.key]; if (!s) return null;
+        const r = it.key === 'drums' ? null : instLive.find(q => q.I.key === it.key && !q.slot.hang);
+        out[it.key] = { x: s.x - L.cx, z: s.z, yaw: r ? (r.slot.yaw ?? 0) : 0 }; }
+      return out;
+    },
     visBox: o => visBox(o),
     room: { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 },
     roomBox: { y1: ROOM.CEIL - 2, z1: ROOM.FRONT - 2, x1: ROOM.HW - 2 },

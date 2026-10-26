@@ -155,17 +155,22 @@ export function placeEntry(L0, key, entry, all = [], { cx = 0, liftOf = () => un
 /** An undo that changes only HEIGHTS (prev → cur: the layout it restores → the layout now) → the lifts to
     set live, [{ key, lift }] (lift undefined = AUTO: the layout decides) — or null when anything else
     differs (a move, a turn, a machine pinned or unpinned): the stage must be rebuilt. prev = {} (the
-    solved stage, before the first edit pinned it as it stood): every machine goes back to AUTO where it
-    stands. Pure. */
-export function liftOnlyUndo(prev, cur, eps = 2e-3){
+    solved stage, before the first edit pinned it as it stood): `base` says where that solved stage stands
+    (same frame as a layout: { key: { x, z, yaw } }) — every machine still there goes back to AUTO; one
+    moved or turned since (the first edit was a MOVE), or no base to compare with → null (only a rebuild
+    puts it back — a live undo would leave it where it was dragged, and the next edit would pin it there).
+    Pure. */
+export function liftOnlyUndo(prev, cur, eps = 2e-3, base = null){
   const P = Object.keys(prev || {}), C = Object.keys(cur || {});
   if (P.length && (P.length !== C.length || P.some(k => !cur[k]))) return null;
+  const ref = P.length ? prev : base;
+  if (!P.length && C.length && (!ref || C.some(k => !ref[k]))) return null;
   const turn = (a, b) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
   const out = [];
   for (const k of C){
-    const a = P.length ? prev[k] : null, b = cur[k];
-    if (a && (Math.abs(a.x - b.x) > eps || Math.abs(a.z - b.z) > eps || turn(a.yaw ?? 0, b.yaw ?? 0) > eps)) return null;
-    const la = Number.isFinite(a?.lift) ? a.lift : undefined, lb = Number.isFinite(b.lift) ? b.lift : undefined;
+    const a = ref[k], b = cur[k];
+    if (Math.abs(a.x - b.x) > eps || Math.abs(a.z - b.z) > eps || turn(a.yaw ?? 0, b.yaw ?? 0) > eps) return null;
+    const la = P.length && Number.isFinite(a.lift) ? a.lift : undefined, lb = Number.isFinite(b.lift) ? b.lift : undefined;
     if (la !== lb) out.push({ key: k, lift: la });
   }
   return out;

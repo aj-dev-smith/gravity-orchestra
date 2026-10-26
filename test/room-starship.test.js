@@ -6,7 +6,7 @@ import { planFooting, footingBoxes, FOOT } from '../src/rooms/footing.js';
 import { buildFooting, makeFootingMats } from '../src/rooms/footing3d.js';
 import { STAGE } from '../src/rooms/common.js';
 import { shipFooting, lampMaterial } from '../src/rooms/starship-footing.js';
-import { SHIP, makeStrikeClock, makeDeckLights, cueLight, CUE, lampLayout, deckProps, rectsWithin } from '../src/rooms/starship-deck.js';
+import { SHIP, makeStrikeClock, makeDeckLights, cueLight, CUE, lampLayout, deckProps, rectsWithin, deckSpots, DECK_PROPS } from '../src/rooms/starship-deck.js';
 
 /* The Starship deck's moving sky is a pure fn of songTime: the banking turns land on bar lines,
    are level through the loop's breath (seamless at the loop seam), and the star field is exactly
@@ -325,6 +325,25 @@ describe('starship deck furniture: clear of every machine and what it stands on'
       agree++;
     }
     expect(agree).toBe(600);
+  });
+  it('the deck\'s own spots: hatches on the plate grid inside the stage, apart; cargo outboard of it (never in a shot)', () => {
+    const { hatches, cargo } = deckSpots();
+    expect(deckSpots()).toEqual({ hatches, cargo });                                  // (fixed: a pure fn)
+    expect(hatches.length).toBeGreaterThan(12);
+    for (const h of hatches){
+      expect(((h.x % 4) + 4) % 4, `${h.x}`).toBe(2); expect(((h.z % 4) + 4) % 4, `${h.z}`).toBe(2);   // (a plate's centre: between the seams)
+      expect(Math.abs(h.x) + h.hw).toBeLessThanOrEqual(STAGE.HW); expect(h.z - h.hd).toBeGreaterThanOrEqual(STAGE.BACK); expect(h.z + h.hd).toBeLessThanOrEqual(STAGE.FRONT);
+      for (const g of hatches) if (g !== h) expect(Math.hypot(g.x - h.x, g.z - h.z)).toBeGreaterThanOrEqual(DECK_PROPS.HATCH_GAP);
+    }
+    for (const c of cargo){
+      expect(Math.abs(c.x) - Math.max(c.hw, c.hd), `crate at ${c.x}`).toBeGreaterThan(STAGE.HW + SHIP.CLEAR);     // (outboard of every machine + its footing)
+      expect(Math.abs(c.x) + Math.max(c.hw, c.hd)).toBeLessThan(46.4 - .5);          // (inside the ship's rails)
+      if (c.y > 0){ const under = cargo[cargo.indexOf(c) - 1]; expect(under.y).toBe(0); expect(Math.hypot(under.x - c.x, under.z - c.z)).toBeLessThan(.5); }
+    }
+    // with the crowd: every hatch that stands keeps clear; the cargo always stands
+    const hv = deckProps(CROWD, PLAN, hatches), cv = deckProps(CROWD, PLAN, cargo);
+    expect(hv.some(Boolean)).toBe(true); expect(hv.some(v => !v)).toBe(true);
+    expect(cv.every(Boolean)).toBe(true);
   });
   it('a prop stands only where it keeps clear of every footprint (hung too) and every support', () => {
     const spots = [];

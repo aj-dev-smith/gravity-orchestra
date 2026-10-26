@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { STAGE, rng, canvasTex, radialTex, beamMat, instanced, trs } from './common.js';
 import { shipFooting, lampMaterial } from './starship-footing.js';
-import { makeDeckLights } from './starship-deck.js';
+import { makeDeckLights, deckSpots, deckProps } from './starship-deck.js';
 /* ============================================================
    STARSHIP DECK — the stage is the open deck of a ship cruising through
    deep space (animusic.md §4 R2). A plated hull deck with railings, a
@@ -168,6 +168,39 @@ function deckTex(R){
     for (let i = 0; i < 8; i++) x.fillRect(w / 2 - 2, i * w / 8 + 10, 4, w / 16);
   };
   return { map: canvasTex(512, 512, draw(false)), emi: canvasTex(512, 512, draw(true)) };
+}
+
+/* a deck HATCH (one plate of the deck grid): a lighter lid in a dark seam, a raised rim, two recessed
+   lift handles, a hazard flash along one edge and a stencilled number */
+function hatchTex(){
+  return canvasTex(256, 256, (x, w) => {
+    x.fillStyle = '#0a0c11'; x.fillRect(0, 0, w, w);
+    x.fillStyle = '#4a5262'; x.fillRect(7, 7, w - 14, w - 14);
+    x.fillStyle = 'rgba(255,255,255,.05)'; for (let k = 0; k < 40; k++) x.fillRect(12, 12 + k * 6, w - 24, 1);
+    x.strokeStyle = '#6c7586'; x.lineWidth = 3; x.strokeRect(20, 20, w - 40, w - 40);
+    x.strokeStyle = '#2a303b'; x.lineWidth = 2; x.strokeRect(24, 24, w - 48, w - 48);
+    for (const y of [40, w - 54]){ x.fillStyle = '#111419'; x.fillRect(w / 2 - 34, y, 68, 14); x.fillStyle = '#7d8696'; x.fillRect(w / 2 - 34, y + 12, 68, 2); }
+    x.save(); x.beginPath(); x.rect(7, 7, 18, w - 14); x.clip();
+    x.fillStyle = '#1a1c21'; x.fillRect(7, 7, 18, w - 14); x.fillStyle = '#d6a224';
+    for (let k = -2; k < 24; k++){ x.beginPath(); x.moveTo(7, k * 14); x.lineTo(25, k * 14 - 18); x.lineTo(25, k * 14 - 11); x.lineTo(7, k * 14 + 7); x.fill(); }
+    x.restore();
+    x.fillStyle = 'rgba(200,210,225,.55)'; x.font = 'bold 22px monospace'; x.fillText('07', w - 66, w - 30);
+  });
+}
+/* a CARGO crate: corrugated sides in a dark frame, amber corner caps, a stencilled label + a cyan status strip */
+function crateTex(){
+  const draw = emissive => (x, w) => {
+    x.fillStyle = emissive ? '#000' : '#36404f'; x.fillRect(0, 0, w, w);
+    if (!emissive){
+      for (let i = 14; i < w - 14; i += 10){ x.fillStyle = (i / 10) % 2 ? '#2b3340' : '#46516a'; x.fillRect(i, 14, 5, w - 28); }
+      x.strokeStyle = '#161a22'; x.lineWidth = 14; x.strokeRect(7, 7, w - 14, w - 14);
+      x.fillStyle = '#c8962a'; for (const [a, b] of [[0, 0], [w - 30, 0], [0, w - 30], [w - 30, w - 30]]) x.fillRect(a, b, 30, 30);
+      x.fillStyle = '#c9ced8'; x.fillRect(w / 2 - 50, w / 2 - 18, 100, 30);
+      x.fillStyle = '#1b2029'; x.font = 'bold 18px monospace'; x.fillText('GO-7 / 4t', w / 2 - 44, w / 2 + 3);
+    }
+    x.fillStyle = emissive ? '#ffffff' : '#4fc8ff'; x.fillRect(w / 2 - 40, w - 44, 80, 6);
+  };
+  return { map: canvasTex(256, 256, draw(false)), emi: canvasTex(256, 256, draw(true)) };
 }
 
 function puffTex(){                                       // a soft lumpy nebula bank (alpha only)
@@ -462,12 +495,37 @@ export default {
     const puff = puffTex();
     const nebula = new THREE.Mesh(ng, nebulaMat(puff)); nebula.frustumCulled = false; nebula.renderOrder = -2; rig.add(nebula);
 
+    /* ================= DECK FURNITURE (place(): only where it keeps clear of the machines) ================= */
+    // hatches let into the deck plates + cargo lashed in the side bays (starship-deck.js deckSpots: fixed
+    // spots; deckProps: which stand, clear of every footprint and everything the machines stand on)
+    const SPOTS = deckSpots();
+    // (a hidden instance: a point far under the deck — never a solid for the shot solve, never at the origin)
+    const HIDE = new THREE.Matrix4().compose(new THREE.Vector3(0, F - 100, 0), new THREE.Quaternion(), new THREE.Vector3(0, 0, 0));
+    const hatchT = hatchTex(), crate = crateTex();
+    const hatches = new THREE.InstancedMesh(new THREE.BoxGeometry(1, .03, 1).translate(0, .015, 0),
+      new THREE.MeshStandardMaterial({ map: hatchT, metalness: .55, roughness: .42, envMap, envMapIntensity: .8 }), SPOTS.hatches.length);
+    const cargo = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1).translate(0, .5, 0),
+      new THREE.MeshStandardMaterial({ map: crate.map, emissive: 0x4fc8ff, emissiveMap: crate.emi, emissiveIntensity: .9,
+        metalness: .45, roughness: .5, envMap, envMapIntensity: .6 }), SPOTS.cargo.length);
+    hatches.name = 'starship:hatches'; cargo.name = 'starship:cargo';
+    const setSpots = (im, spots, vis) => {
+      spots.forEach((p, i) => im.setMatrixAt(i, vis[i] ? trs(p.x, F + p.y, p.z, 0, p.yaw, 0, 2 * p.hw, p.h, 2 * p.hd) : HIDE));
+      im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere();
+    };
+    setSpots(hatches, SPOTS.hatches, SPOTS.hatches.map(() => false)); setSpots(cargo, SPOTS.cargo, SPOTS.cargo.map(() => true));
+    group.add(hatches, cargo);
+
     /* ================= THE MACHINES' LIGHTS (place(): per set of anchors) ================= */
     const US = LAMPS.uniforms.uS.value, UB = LAMPS.uniforms.uB.value;
     let lights = makeDeckLights(null);
     function place(anchors, plan){
       lights = makeDeckLights(plan);
       US.fill(1e4); UB.fill(0);
+      setSpots(hatches, SPOTS.hatches, deckProps(anchors, plan, SPOTS.hatches));
+      // (a crate on a crate stands only with the one under it)
+      const cv = deckProps(anchors, plan, SPOTS.cargo);
+      SPOTS.cargo.forEach((c, i) => { if (c.y > 0 && !cv[i - 1]) cv[i] = false; });
+      setSpots(cargo, SPOTS.cargo, cv);
     }
 
     /* ================= per frame ================= */
@@ -525,7 +583,8 @@ export default {
         glass.uniforms.uGain.value = 1 + .4 * energy;
       },
       xr(on){ bankK = on ? .5 : 1; },
-      dispose(){ sky.dispose(); tex.map.dispose(); tex.emi.dispose(); puff.dispose(); glowT.dispose(); FOOT_STYLE.dispose(); LAMPS.dispose(); },
+      dispose(){ sky.dispose(); tex.map.dispose(); tex.emi.dispose(); puff.dispose(); glowT.dispose(); FOOT_STYLE.dispose(); LAMPS.dispose();
+        hatchT.dispose(); crate.map.dispose(); crate.emi.dispose(); },
     };
   },
 };

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { FOOT, railed } from './footing.js';
-import { SHIP, lampLayout } from './starship-deck.js';
+import { SHIP, lampLayout, beaconPocket } from './starship-deck.js';
 /* ============================================================
    STARSHIP FOOTING — what the machines stand on, as SHIP HARDWARE (a room style for
    rooms/footing3d.js: its header is the contract). Every form writes into the kit's merged slots —
@@ -77,11 +77,11 @@ function grateTex(){
 export function shipMats(envMap = null){
   const hz = hazardTex(), dm = diamondTex(), gr = grateTex();
   const m = {
-    steel: new THREE.MeshStandardMaterial({ color: 0xaab3c2, metalness: .45, roughness: .42, envMap, envMapIntensity: .7 }),
-    deck: new THREE.MeshStandardMaterial({ color: 0x9ba3b0, map: dm, bumpMap: dm, bumpScale: 1.2, metalness: .5, roughness: .46, envMap, envMapIntensity: .6 }),
+    steel: new THREE.MeshStandardMaterial({ color: 0xa4a7ac, metalness: .45, roughness: .42, envMap, envMapIntensity: .5 }),
+    deck: new THREE.MeshStandardMaterial({ color: 0x9c9fa5, map: dm, bumpMap: dm, bumpScale: 1.2, metalness: .5, roughness: .46, envMap, envMapIntensity: .5 }),
     hazard: new THREE.MeshStandardMaterial({ color: 0xffffff, map: hz, metalness: .2, roughness: .62, envMap, envMapIntensity: .35 }),
     chrome: new THREE.MeshStandardMaterial({ color: 0xe2e7ef, metalness: .92, roughness: .14, envMap, envMapIntensity: 1.3 }),
-    grate: new THREE.MeshStandardMaterial({ color: 0x8f98a6, alphaMap: gr, alphaTest: .5, side: THREE.DoubleSide, metalness: .5, roughness: .45, envMap, envMapIntensity: .6 }),
+    grate: new THREE.MeshStandardMaterial({ color: 0x969aa1, alphaMap: gr, alphaTest: .5, side: THREE.DoubleSide, metalness: .5, roughness: .45, envMap, envMapIntensity: .5 }),
   };
   if (hz) hz.colorSpace = THREE.SRGBColorSpace;
   if (dm) dm.colorSpace = THREE.SRGBColorSpace;
@@ -115,15 +115,26 @@ function ram(k, spec, u, v, y0, y1, r = .3, plate = true){
 }
 /* the deck slab of a raised support: a steel lip round its top edge, a diamond-plate (or grated) top, the
    dark light channel under the lip (the room's running lights sit in it), hazard paint below, a steel underside */
-function slab(k, r, T, D, top = 'deck'){
+function slab(k, r, T, D, top = 'deck', pocket = null){
   const hw = r.hw, hd = r.hd, L = SHIP.LIP, I = SHIP.INSET;
   k.box('steel', -hw, hw, T - L, T, -hd, hd, SIDES);
   k.box('steel', -hw, hw, T - .004, T, hd - .05, hd, PY); k.box('steel', -hw, hw, T - .004, T, -hd, -hd + .05, PY);
   k.box('steel', -hw, -hw + .05, T - .004, T, -hd + .05, hd - .05, PY); k.box('steel', hw - .05, hw, T - .004, T, -hd + .05, hd - .05, PY);
-  k.box(top, -hw + .05, hw - .05, T - .03, T, -hd + .05, hd - .05, PY);
+  if (pocket){                                                    // (the top round the beacon's pocket, then the pocket)
+    const s = 2 * pocket.half;
+    k.box(top, -hw + .05, hw - .05, T - .03, T, -hd + .05, hd - .05 - s, PY);
+    k.box(top, -hw + .05 + s, hw - .05, T - .03, T, hd - .05 - s, hd - .05, PY);
+    pit(k, pocket.u, pocket.v, pocket.half, T, pocket.depth);
+  } else k.box(top, -hw + .05, hw - .05, T - .03, T, -hd + .05, hd - .05, PY);
   k.box('deck', -hw + I, hw - I, T - SHIP.CH0, T - L, -hd + I, hd - I, SIDES);          // the light channel
   k.box('hazard', -hw + .004, hw - .004, T - D, T - SHIP.CH0, -hd + .004, hd - .004, SIDES);
   k.box('steel', -hw + .004, hw - .004, T - D, T - D + .02, -hd + .004, hd - .004, NY);
+}
+/* a square pocket let into a deck's top at (cu, cv): its floor `depth` down, its four walls */
+function pit(k, cu, cv, h, T, depth){
+  k.box('steel', cu - h, cu + h, T - depth, T - depth + .02, cv - h, cv + h, PY);
+  k.box('steel', cu + h, cu + h + .01, T - depth + .02, T, cv - h, cv + h, NX); k.box('steel', cu - h - .01, cu - h, T - depth + .02, T, cv - h, cv + h, PX);
+  k.box('steel', cu - h, cu + h, T - depth + .02, T, cv + h, cv + h + .01, NZ); k.box('steel', cu - h, cu + h, T - depth + .02, T, cv - h - .01, cv - h, PZ);
 }
 /* points round a rect's perimeter (±hu, ±hv), corners included, at most `span` apart — in order */
 function ring(hu, hv, span){
@@ -208,7 +219,7 @@ function plate(k, p){
   if (kerb){ k.box('steel', -hw, hw, T - .01, T, -hd, hd, PY); return; }
   // on top: a hazard border round the machine (a steel edge strip outside it), the plate inside — and a
   // recessed tie-down ring in each corner
-  const b = Math.min(SHIP.BORDER, Math.min(hw, hd) * .3), e = .045, R = b * .42;
+  const b = Math.min(SHIP.BORDER, Math.min(hw, hd) * .3), e = SHIP.EDGE, R = b * .42, bp = beaconPocket(p);
   k.box('steel', -hw, hw, T - .01, T, hd - e, hd, PY); k.box('steel', -hw, hw, T - .01, T, -hd, -hd + e, PY);
   k.box('steel', -hw, -hw + e, T - .01, T, -hd + e, hd - e, PY); k.box('steel', hw - e, hw, T - .01, T, -hd + e, hd - e, PY);
   const i0 = e, i1 = e + b;                                                                // the border band, in from the edge
@@ -219,9 +230,8 @@ function plate(k, p){
   k.box('deck', -hw + i1, hw - i1, T - .01, T, -hd + i1, hd - i1, PY);
   for (const su of [-1, 1]) for (const sv of [-1, 1]){
     const cu = su * (hw - i0 - b / 2), cv = sv * (hd - i0 - b / 2);
-    k.box('steel', cu - b / 2, cu + b / 2, T - .05, T - .03, cv - b / 2, cv + b / 2, PY);  // the pocket: its floor, its walls
-    k.box('steel', cu + b / 2, cu + b / 2 + .01, T - .03, T, cv - b / 2, cv + b / 2, NX); k.box('steel', cu - b / 2 - .01, cu - b / 2, T - .03, T, cv - b / 2, cv + b / 2, PX);
-    k.box('steel', cu - b / 2, cu + b / 2, T - .03, T, cv + b / 2, cv + b / 2 + .01, NZ); k.box('steel', cu - b / 2, cu + b / 2, T - .03, T, cv - b / 2 - .01, cv - b / 2, PZ);
+    pit(k, cu, cv, b / 2, T, .05);                                                         // a corner pocket
+    if (bp && Math.abs(bp.u - cu) < 1e-9 && Math.abs(bp.v - cv) < 1e-9) continue;         // (the front-left one: the beacon's lens)
     for (const [a0, a1, o] of [[-1, 1, -1], [-1, 1, 1]]){                                // the ring: a square loop lying in it
       k.bar('chrome', [cu + a0 * R, T - .02, cv + o * R], [cu + a1 * R, T - .02, cv + o * R], .028, .028, ALL);
       k.bar('chrome', [cu + o * R, T - .02, cv + a0 * R], [cu + o * R, T - .02, cv + a1 * R], .028, .028, ALL);
@@ -232,7 +242,7 @@ function plate(k, p){
    hardly rises, on squat rams; climbed by grip-plate steps */
 function lift(k, p){
   const T = p.top, D = deckDepth(p);
-  slab(k, p, T, D);
+  slab(k, p, T, D, 'deck', beaconPocket(p));
   under(k, p, T - D, 'low');
   access(k, p, T, p.access);
 }
@@ -250,7 +260,7 @@ function scissors(k, r, yB){
   k.box('hazard', -r.hw + .3, r.hw - .3, F - .02, F + sill, -r.hd + .3, r.hd - .3, SIDES);
   k.box('steel', -r.hw + .3, r.hw - .3, F + sill - .02, F + sill, -r.hd + .3, r.hd - .3, PY);
   for (const s of [-1, 1]) k.bar('steel', at(-A, yHi + .02, s * O), at(A, yHi + .02, s * O), .14, .12, ALL);
-  const n = Math.max(1, Math.min(9, Math.round(2 * A / Math.max(1.1, rise * 1.35)))), seg = 2 * A / n;
+  const n = Math.max(1, Math.min(4, Math.round(2 * A / Math.max(3.2, rise * 1.6)))), seg = 2 * A / n;      // (tandem units: long, shallow arms)
   for (let i = 0; i < n; i++){
     const a0 = -A + i * seg, a1 = a0 + seg, am = (a0 + a1) / 2, ym = (yLo + yHi) / 2;
     for (const s of [-1, 1]){

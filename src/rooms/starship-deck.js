@@ -36,8 +36,10 @@ export const SHIP = {
   INSET: .015,              // the channel's face, in from the pad's edge (the lamps sit .005 proud of it)
   BORDER: .24,              // a deck plate's hazard border (on top, round the machine)
   LAMP: .17, GAP: .4,       // a running light's length · the pitch between lamps
-  BEACON: .26,              // a lens beacon's length (in the plate's front); a post beacon's size is .16
+  BEACON: .26,              // a lens beacon's length (in a kerb's / a fascia's front); a post beacon's size is .16
   POST: .16,
+  EDGE: .045,               // a deck plate's steel edge strip (on top, outside its hazard border)
+  POCKET: .3,               // a low dais's beacon pocket (a plate's is its border's corner square)
   FLOOR_IN: .75,            // an open stand's deck lights: this far round its feet
   CLEAR: 1,                 // props keep this clear of machines + their footing
 };
@@ -115,6 +117,19 @@ export function channelOf(p, floor){
   if (p.band === 'flush') return [p.top - SHIP.FCH0, p.top - SHIP.FCH1];
   return [p.top - SHIP.CH0, p.top - SHIP.CH1];
 }
+/* the STATUS BEACON's pocket in a deck's top (a flush plate's front-left corner square, inside its hazard
+   border — where the other corners carry tie-down rings; a low dais's front-left corner): local centre
+   (u, v), half size, how deep. null: the pad's beacon stands elsewhere (a rail post, the kerb's face, the
+   floor round an open stand). The form cuts the pocket (starship-footing.js), the lamp lies in it. */
+export function beaconPocket(p){
+  if (!p || p.fixed || p.open || p.loft) return null;
+  if (p.band === 'flush'){
+    const b = Math.min(SHIP.BORDER, Math.min(p.hw, p.hd) * .3), e = SHIP.EDGE;
+    return { u: -(p.hw - e - b / 2), v: p.hd - e - b / 2, half: b / 2, depth: .05 };
+  }
+  if (p.band === 'low') return { u: -(p.hw - .05 - SHIP.POCKET / 2), v: p.hd - .05 - SHIP.POCKET / 2, half: SHIP.POCKET / 2, depth: .05 };
+  return null;
+}
 /* every lamp: { kind: 0 run | 1 beacon | 2 strip, slot, c: [x, y, z] centre, n: [x, y, z] facing,
    t: [x, z] along (level), hl, hh (half length / height), d, half (the chase: path distance from the
    front-centre · half the path), color, cube (a beacon on a post: a small lamp, all round) } */
@@ -127,9 +142,12 @@ export function lampLayout(plan){
     if (p.open){ openLamps(out, p, F, col, slot); continue; }
     const [y0, y1] = channelOf(p, F);
     ringLamps(out, p, y0, y1, col, slot);
-    // the status beacon: a lens in the front of a plate / a dais; a lamp on the front-left rail post of a
-    // railed deck (inside its envelope: the rails' height)
-    if (railed(p.band) && !p.fixed) postBeacon(out, p, p.hw - .1, p.hd - .1, p.top + FOOT.RAIL, col, slot);
+    // the status beacon: a lens lying in its pocket in the deck's top (a plate, a dais: seen from every
+    // shot that sees the deck); a lamp on the front-left rail post of a railed deck (inside its envelope:
+    // the rails' height); a lens in the belt kerb's face
+    const bp = beaconPocket(p);
+    if (bp) push(out, 1, slot, p, bp.u, bp.v, p.top - bp.depth + .028, null, [1, 0], bp.half - .03, bp.half - .03, 0, 1, col);
+    else if (railed(p.band) && !p.fixed) postBeacon(out, p, p.hw - .1, p.hd - .1, p.top + FOOT.RAIL, col, slot);
     else lensBeacon(out, p, (y0 + y1) / 2, (y1 - y0) / 2, col, slot);
   }
   for (const L of plan.lofts || []){
@@ -251,6 +269,34 @@ function push(out, kind, slot, R, u, v, y, n, t, hl, hh, d, half, color, cube = 
   const [tx, tz] = W(t[0], t[1]);
   const nn = n ? W(n[0], n[1]) : null;
   out.push({ kind, slot, c: [x, y, z], n: nn ? [nn[0], 0, nn[1]] : [0, 1, 0], t: [tx, tz], hl, hh, d, half, color, cube });
+}
+
+/* ---------------- the deck furniture ---------------- */
+/* where it may stand (fixed, pure): HATCHES let into the deck plates across the stage — on the 4 u plate
+   grid's centres (x, z ≡ 2 mod 4: between the deck's seams and its inlaid light strips), a seeded scatter
+   kept ≥ 8 u apart — and CARGO lashed in the side bays, outboard of the stage (|x| > STAGE.HW = 38: never
+   in a machine's way, never in a shot's: the eyes stay inside ±36.5), stacked one or two high. Each spot is a
+   turned rect { x, z, yaw, hw, hd } + its height h and (cargo) the y it stands on. */
+export const DECK_PROPS = { HATCH: 1.7, HATCH_GAP: 8, BAY_X: 42.2, CRATE: [1.2, 1.8, 2.4] };
+export function deckSpots(){
+  let s = 4242 >>> 0;
+  const R = () => { s += 0x6D2B79F5; let t = s; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  const hatches = [], H = DECK_PROPS.HATCH;
+  for (let x = -34; x <= 34; x += 4) for (let z = -30; z <= 38; z += 4){
+    const r = R(), turn = R();
+    if (r > .15) continue;
+    if (hatches.some(h => Math.hypot(h.x - x, h.z - z) < DECK_PROPS.HATCH_GAP)) continue;
+    hatches.push({ kind: 'hatch', x, z, yaw: (turn * 4 | 0) * Math.PI / 2, hw: H, hd: H, h: .03, y: 0 });
+  }
+  const [cw, cd, ch] = DECK_PROPS.CRATE, cargo = [];
+  // (z, how many in the row, which of them carry a second crate) — starboard and port, not mirror images
+  const rows = { 1: [[-27, 2, [0]], [-6, 3, [1]], [17, 2, []]], [-1]: [[-20, 2, [1]], [3, 2, []], [21, 3, [0, 2]]] };
+  for (const sx of [1, -1]) for (const [z0, n, up] of rows[sx]) for (let i = 0; i < n; i++){
+    const z = z0 + (i - (n - 1) / 2) * (2 * cd + .25), x = sx * (DECK_PROPS.BAY_X + (i % 2 ? .18 : -.1)), yaw = (i % 2 ? .04 : -.03) * sx;
+    cargo.push({ kind: 'crate', x, z, yaw, hw: cw, hd: cd, h: ch, y: 0 });
+    if (up.includes(i)) cargo.push({ kind: 'crate', x: x - sx * .1, z: z + .15, yaw: yaw + Math.PI / 2 + .05 * sx, hw: cw, hd: cd, h: ch, y: ch });
+  }
+  return { hatches, cargo };
 }
 
 /* ---------------- the deck furniture's clearance ---------------- */

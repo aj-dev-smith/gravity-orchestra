@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { STATIONS, layoutStations, soloStar, loneTurn, MARGIN, AUDIENCE, hangPlace, WING_REF, GALLERY_DROP, SEATS, SEAT_R, STAR, STAR_GRAZE, STAR_LEAD, KIT_RISER, SEAT_RISE } from '../src/instruments/stations.js';
+import { STATIONS, layoutStations, soloStar, loneTurn, MARGIN, AUDIENCE, hangPlace, WING_REF, GALLERY_DROP, SEATS, SEAT_R, STAR, STAR_GRAZE, STAR_LEAD, KIT_RISER, SEAT_RISE, riserAt, kitRiseAt } from '../src/instruments/stations.js';
 import { FOOT } from '../src/rooms/footing.js';
 import { KIT_ROOM } from '../src/marbledrums.js';
 import { STAGE } from '../src/rooms/common.js';
@@ -296,10 +296,11 @@ describe('floor first: the band on the floor, the star front and centre (station
   it('Forge: no lone towers, and BALANCED — the riff front and centre, the brass front-right, the bass and the kit (on its riser) the two wings', () => {
     // (balance 2026-10-25: the horns used to take the front-left corner — bass, brass and riff all left of a
     //  front-right kit whose arch hid the right wing. The kit is the right wing now; the brass, picking with
-    //  the left already holding the bass + the riff, takes the lighter side)
+    //  the left already holding the bass + the riff, takes the lighter side — its front-right CORNER: the
+    //  'right' seat stood the bells right across the riser's front, its lit edge + VU strip, from the wide)
     const solved = solve(R.forge);
     expect(seatOf('riff', solved.riff)).toBe('centre');
-    expect(seatOf('horns', solved.horns)).toBe('right');
+    expect(seatOf('horns', solved.horns)).toBe('cornerR');
     expect(solved.drums).toEqual({ x: KIT_RISER.x, z: KIT_RISER.z, lift: KIT_RISER.lift });
     expect(rows(R.forge, solved)).toEqual({ L: ['back', 'front'], R: ['back', 'front'] });
   });
@@ -318,6 +319,20 @@ describe('floor first: the band on the floor, the star front and centre (station
     expect(lift0.drums.z).toBeGreaterThan(10);
     const pinned = solve({ ...mop, items: mop.items.map(it => it.key === 'drums' ? { ...it, x: 23, z: 6, pin: true } : it) });
     expect(pinned.drums).toEqual({ x: 23, z: 6, lift: KIT_RISER.lift });
+    // …on a WIDE belt the riser rides out with the wing (as the unpinned home does): a kit pinned THERE stands
+    //  on it, one pinned at the narrow belt's riser spot (now ~5 u inside it) does not
+    const wide = { ...mop, wall: [mop.wall[0] - 5, mop.wall[1] + 5, mop.wall[2], mop.wall[3]] };
+    const rx = riserAt(wide.wall, { cx: 0 }).x;
+    expect(rx).toBeCloseTo(KIT_RISER.x + Math.max(0, wide.wall[1] - WING_REF), 9);
+    const onWide = solve({ ...wide, items: wide.items.map(it => it.key === 'drums' ? { ...it, x: rx, z: KIT_RISER.z, pin: true } : it) });
+    expect(onWide.drums.lift).toBe(KIT_RISER.lift);
+    if (rx - KIT_RISER.x > SEAT_R) expect(solve({ ...wide, items: wide.items.map(it => it.key === 'drums' ? { ...it, x: KIT_RISER.x, z: KIT_RISER.z, pin: true } : it) }).drums.lift).toBeUndefined();
+    // kitRiseAt — what main's stage edit asks when the kit is DRAGGED (so a live move matches the reload):
+    //  the riser's rise on the wing while the band plays, none off it or without the band
+    const keys = mop.items.map(it => it.key);
+    expect(kitRiseAt(KIT_RISER.x, KIT_RISER.z, keys, mop.wall, { cx: 0 })).toBe(KIT_RISER.lift);
+    expect(kitRiseAt(-13, 16.5, keys, mop.wall, { cx: 0 })).toBe(0);
+    expect(kitRiseAt(KIT_RISER.x, KIT_RISER.z, keys.filter(k => !STATIONS[k]?.gallery), mop.wall, { cx: 0 })).toBe(0);
     // (a nicer stage never costs the floor a machine: the gallery tests above — 2 bays, the big cast — keep
     //  nobody up; there the riser alone would have sent the brass up, so that floor stands without it)
   });

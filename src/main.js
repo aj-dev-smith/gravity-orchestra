@@ -22,7 +22,7 @@ import { makeCameraRig } from './camera.js';
 import { makeRoomHost, ROOMS } from './rooms/index.js';
 import { groundOf, clampLift, FOOT } from './rooms/footing.js';
 import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
-import { stationFor, layoutStations, soloStar, loneTurn, HANG_CLEAR, hangPlace } from './instruments/stations.js';
+import { stationFor, layoutStations, soloStar, loneTurn, kitRiseAt, HANG_CLEAR, hangPlace } from './instruments/stations.js';
 import { eventTimes, wrapP } from './instruments/clock.js';
 import { splitBucket } from './instruments/sustain.js';
 import { nextVoiceEpoch, voiceEpoch, sweepVoiceCaches } from './instruments/voicecache.js';
@@ -957,7 +957,12 @@ const kitHits = S => Object.values(S.drums || {}).flatMap(hits => hits.map(norma
 function restage({ director = true } = {}){            // (director: false — stage edit re-solves it once, on the way out)
   if (!curBuild) return;
   const { S, view, P0, buildKit, kitMerge } = curBuild;
-  const dx = drumGroup?.position.x || 0, dz = drumGroup?.position.z || 0, deck = kitDeck();
+  const dx = drumGroup?.position.x || 0, dz = drumGroup?.position.z || 0;
+  // (a kit DRAGGED takes the DRUM RISER's rise where it now stands — on the right wing while the band plays,
+  //  else none — exactly as the room solve will give its pinned spot on a reload: stations.js kitRiseAt)
+  if (drumGroup && (dx || dz) && lastLayout) kitSlot = { ...kitSlot, rise: kitRiseAt(view.cx + kitSlot.x + dx, kitSlot.z + dz,
+    instLive.filter(r => !r.slot.hang).map(r => r.I.key), [lastLayout.wall.min.x, lastLayout.wall.max.x, lastLayout.wall.min.z, lastLayout.wall.max.z], { cx: lastLayout.cx }) };
+  const deck = kitDeck();
   if (drumGroup && (dx || dz || Math.abs(deck - kitSlot.y) > 1e-6)){
     kitSlot = dx || dz ? { ...kitSlot, x: kitSlot.x + dx, z: kitSlot.z + dz, pin: true, y: deck } : { ...kitSlot, y: deck };
     world.remove(drumGroup); disposeTree(drumGroup);

@@ -239,6 +239,18 @@ const LOFT_SPACE = .3;              // two machines on ONE gallery loft stand th
    silhouette); else the kit keeps its front-row slot (KIT_ROOM). Never the star, never a kit the user put
    on the floor (lift 0); a kit the user PINNED there (stage edit) stands on it too. */
 export const KIT_RISER = { x: 22.5, z: 5, lift: 3 };
+/* the riser's spot this room (world x, z — riding out with the right wing on a wide belt, as the solve's own
+   home does) and the rise a kit standing at (x, z) takes from it: KIT_RISER.lift when the band plays (`keys`:
+   the floor stations' keys) and the kit stands within SEAT_R of it, else 0. The solve's PINNED kit and main's
+   stage edit (a kit dragged on or off the wing) both ask this, so a live move matches the reload. */
+export const bandPlays = keys => keys.some(k => STATIONS[k]?.gallery && !FLOOR_ONLY.has(k));
+export function riserAt(wall, { cx = (wall[0] + wall[1]) / 2, ref = WING_REF } = {}){
+  return { x: cx + KIT_RISER.x + Math.max(0, (wall[1] - cx) - ref), z: KIT_RISER.z };
+}
+export function kitRiseAt(x, z, keys, wall, opts){
+  const r = riserAt(wall, opts);
+  return bandPlays(keys) && Math.hypot(x - r.x, z - r.z) <= SEAT_R ? KIT_RISER.lift : 0;
+}
 /* BALANCE — a band machine reads the floor before it picks a seat: a placed machine whose centre stands more
    than BAL_DEAD off the belt's centre counts for its side; a seat more than BAL_SEAT off it is on that side.
    When one side holds more, the heavier side's seats go last (order kept otherwise; centre seats stay put). */
@@ -310,7 +322,7 @@ export function layoutStations(items, wall, room, { margin = MARGIN, ref = WING_
   return last.out;
 }
 function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, hung, up: open, star, loftGap, side = 0, craft = false }){
-  const bandOn = craft && items.some(it => STATIONS[it.key]?.gallery && !FLOOR_ONLY.has(it.key));   // (the band plays: the kit's riser)
+  const bandOn = craft && bandPlays(items.map(it => it.key));   // (the band plays: the kit's riser)
   // each station's FLOOR origins — the star's front-and-centre spot; a gallery-born slot's SEATS
   // (ranked: the first free one wins); else its slot — and its GALLERY spot (gx, gz: where it was built)
   const S = items.map(it => {
@@ -378,7 +390,7 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
     let worst = 0;
     for (const [ex, ey] of OCC_EYES){
       const y = ey - (ey - F.top) * k;                   // (where the sightline over F's top meets B's front)
-      const h = Math.min(1, Math.max(0, (y - B.base - HIDE_FOOT * H) / ((1 - HIDE_FOOT) * H)));
+      const f = B.foot ?? HIDE_FOOT, h = Math.min(1, Math.max(0, (y - B.base - f * H) / ((1 - f) * H)));
       if (h <= 0) continue;
       const e = cx + ex, p0 = e + (F.b[0] - e) * k, p1 = e + (F.b[1] - e) * k;
       worst = Math.max(worst, h * Math.max(0, Math.min(p1, B.b[1]) - Math.max(p0, B.b[0])) / (B.b[1] - B.b[0]));
@@ -430,7 +442,7 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
       if (!FLOOR_ONLY.has(s.key) && !s.grounded && (b[2] + b[3]) / 2 < wall[2] && (STATIONS[s.key]?.gallery || !seen(b))){ s.y = galleryY; gal.push(b); galBy.set(b, s); }
       else {
         // (a kit the user pinned on the right wing — near its RISER — stands on it, unless the user set its height)
-        if (s.key === 'drums' && !Number.isFinite(s.lift) && bandOn && Math.hypot(s.x - (cx + KIT_RISER.x), s.z - KIT_RISER.z) <= SEAT_R){
+        if (s.key === 'drums' && !Number.isFinite(s.lift) && craft && kitRiseAt(s.x, s.z, items.map(it => it.key), wall, { cx, ref })){
           s.rise = KIT_RISER.lift; if (s.top !== undefined) s.top += s.rise; if (s.base !== undefined) s.base += s.rise;
         }
         machines.push({ b, top: s.top, base: s.base });
@@ -536,7 +548,10 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
     const B = bx(s);                                    // (one box: a loft partner is found by identity)
     if (mode !== 'floor'){ s.y = galleryY; gal.push(B); galBy.set(B, s); up++; }
     placed.push(B);
-    if (mode === 'floor') machines.push({ b: B, top: s.top, base: s.base });
+    // (a machine on a RISER: the dais is part of what the audience must see — its lit edge answers the
+    //  machine's strikes, rooms/pulse.js — so a machine placed after it in front counts the dais as hidden:
+    //  its silhouette runs from the floor, with no foot allowance)
+    if (mode === 'floor') machines.push(s.rise && s.base !== undefined ? { b: B, top: s.top, base: s.base - s.rise, foot: 0 } : { b: B, top: s.top, base: s.base });
     if (s.star){ SB = bx(s); sbase = s.base ?? 0; }
   }
   // (how many separate structures the gallery needs: machines within loftGap — main: FOOT.LOFT_GAP — share one loft, rooms/footing.js)

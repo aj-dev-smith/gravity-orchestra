@@ -114,6 +114,22 @@ function drapeTex(){                     // black velour: soft vertical folds
     }
   }, { repeat: [6, 1] });
 }
+/* the room's par beams over the shared beamMat, two fixes: (1) the facing term is capped at 1 — on the long,
+   thin cone triangles MSAA extrapolates vN / vV at edge samples, the dot runs past 1, pow(…, 2.4) blows up
+   and the bloom smears those few pixels into a white blob (seen where the raked side beams end over the
+   deck, under a lifted kit); (2) within ~14 u of the eye a cone fades out (a close-up or an XR pad that
+   stands in a beam). Same uniforms, same look from the house. */
+export function nearFadeBeam(m){
+  const v = m.vertexShader.replace('varying vec3 vC;', 'varying vec3 vC; varying vec3 vP;')
+    .replace('vec4 mv = modelViewMatrix * p;', 'vec4 mv = modelViewMatrix * p; vP = mv.xyz;');
+  const f = m.fragmentShader.replace('varying vec3 vC;', 'varying vec3 vC; varying vec3 vP;')
+    .replace('pow(abs(dot(vN, vV)), uEdge)', 'pow(min(abs(dot(vN, vV)), 1.), uEdge)')
+    .replace('gl_FragColor = vec4(uColor * vC, a);', 'a *= smoothstep(2., 14., length(vP));\n        gl_FragColor = vec4(uColor * vC, a);');
+  if (v.includes('vP = mv.xyz') && f.includes('length(vP)') && f.includes('min(abs(dot(vN, vV)), 1.)')){
+    m.vertexShader = v; m.fragmentShader = f; m.userData.nearFade = true;
+  }
+  return m;
+}
 function hazeTex(seed){
   return canvasTex(512, 256, (x, w, h) => {
     const R = rng(seed);
@@ -445,7 +461,7 @@ export default {
       aim(s * TOWER_X, z, s * 12, F + 6, z + 4, i % 2 ? ICE : WHITE, 'side');
     }
     const beamGeo = new THREE.CylinderGeometry(.5, 5.2, 1, 24, 1, true).translate(0, -.5, 0);
-    const beams = new THREE.InstancedMesh(beamGeo, beamMat({ gain: .2, falloff: 1.5, edge: 2.4 }), PARS.length);
+    const beams = new THREE.InstancedMesh(beamGeo, nearFadeBeam(beamMat({ gain: .2, falloff: 1.5, edge: 2.4 })), PARS.length);
     const parM = [], lensM = [], lensCol = [], hP = [], hC = [], hS = [], hPh = [];
     const down = V(0, -1, 0), q = new THREE.Quaternion(), e = new THREE.Euler();
     PARS.forEach((p, i) => {

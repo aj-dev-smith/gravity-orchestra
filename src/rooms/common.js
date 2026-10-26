@@ -160,7 +160,8 @@ export function beamMat({ color = 0xffffff, gain = .35, falloff = 1.6, edge = 2 
       uniform vec3 uColor; uniform float uGain, uFall, uEdge;
       varying vec3 vN; varying vec3 vV; varying float vY; varying vec3 vC;
       void main(){
-        float face = pow(abs(dot(vN, vV)), uEdge);
+        float face = pow(min(abs(dot(vN, vV)), 1.), uEdge);   // (capped: MSAA extrapolates vN / vV at the edge samples of a long thin cone
+                                                            //  triangle, the dot runs past 1, pow blows it up and bloom smears a white blob)
         float a = face * pow(clamp(vY, 0., 1.), uFall) * uGain;   // (clamped: MSAA samples edge pixels at the centre, extrapolating vY < 0 → pow = NaN → bloom smears it over the frame)
         gl_FragColor = vec4(uColor * vC, a);              // additive (SrcAlpha·One) → × a once
       }`,

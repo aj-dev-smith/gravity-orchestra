@@ -217,12 +217,13 @@ export default {
     ground.rotation.x = -Math.PI / 2; ground.position.set(0, F + .1, BACK + COVE * .7);
     group.add(ground);
 
-    // ---- drifting haze in front of the cyc (layered, scrolled by texture offset) ----
-    const hazes = [];
-    [[BACK + 8, 4, .5, 0xa070ff, 11], [BACK + 18, 0, .3, 0xff6ab8, 23], [-10, 8, .12, 0x6a8cff, 37]].forEach(([z, y, op, col, seed]) => {
+    // ---- drifting haze in front of the cyc (layered, scrolled by texture offset): sized from the floor,
+    //      and kept BEHIND every machine (place() sets their depth — an additive sheet never slices one) ----
+    const hazes = [], hazeM = [], HAZE = [[8, 12, .5, 0xa070ff, 11], [18, 10, .3, 0xff6ab8, 23], [26, 14, .12, 0x6a8cff, 37]];   // [z past BACK, y over F, …]
+    HAZE.forEach(([dz, dy, op, col, seed]) => {
       const t = hazeTex(seed); t.wrapS = THREE.RepeatWrapping;
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(cycW * 1.1, 46), glowMat(t, col, op, { fog: true }));
-      m.position.set(0, y, z); group.add(m); hazes.push(t);
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(cycW * 1.1, 30), glowMat(t, col, op, { fog: true }));
+      m.position.set(0, F + dy, BACK + dz); group.add(m); hazes.push(t); hazeM.push(m);
     });
 
     // ---- walls: dark fabric, acoustic panels in a grid, wooden diffusers ----
@@ -260,8 +261,10 @@ export default {
     //      support ever stands there): LED tube pillars on stands, Edison pendant clusters, a neon sign.
     //      (Sized for the −5.5 floor: a pillar ≈ 9 m, a pendant ≈ 6–8 m up — they frame the wide, never
     //      tower over it or flare at its edges)
-    const tubeCol = [0xffb36a, 0x7fc8ff, 0xff7ab8, 0xffb36a, 0x7fc8ff, 0xff7ab8, 0xffb36a, 0x7fc8ff];
-    const tubeSpots = [[-44, -30], [-47, 2], [-46, 24], [44, -30], [47, 2], [46, 24], [-22, -38], [22, -38]];
+    // (no front pair: at z 24 — or 12 — they streaked bright across the wide's edges; the mid pair stands
+    //  just past the neon sign's end, never in front of it)
+    const tubeCol = [0xffb36a, 0x7fc8ff, 0xffb36a, 0x7fc8ff, 0xff7ab8, 0xff7ab8];
+    const tubeSpots = [[-44, -30], [-47, 4], [44, -30], [47, 4], [-22, -38], [22, -38]];
     const TH = 13, TB = 1.6;
     const tubeM = [], standM = [], tubeGlowM = [], tubeGlowC = [], gP = [], gC = [], gS = [], gPh = [];
     tubeSpots.forEach(([x, z], i) => {
@@ -339,6 +342,12 @@ export default {
       footing: FOOT_STYLE,
       /* each machine's panel answers its strikes (studio-vu.js: pure envelopes of songTime) */
       place(anchors, plan){
+        FOOT_STYLE.anchor(plan, anchors);                    // (the rugs show round each machine's own footprint)
+        // the haze stays behind the rearmost machine (hung ones too), never behind the cyc's cove
+        let zMin = Infinity;
+        for (const a of anchors || []) zMin = Math.min(zMin, Array.isArray(a.box) ? a.box[4] : a.z - (a.d || 0) / 2);
+        for (const L of plan?.lofts || []) zMin = Math.min(zMin, L.z0);
+        HAZE.forEach(([dz], i) => { hazeM[i].position.z = Math.max(BACK + 2 + i, Math.min(BACK + dz, zMin - 1.5 - (2 - i))); });
         meters = (plan?.pulses || []).map(s => makeMeter(s.cue, { P: s.P, start: s.start }));
         VUS.level.fill(0); VUS.peak.fill(0); VUS.tally.fill(0);
         const mics = micStands(anchors, plan, { x0: -HW + 1, x1: HW - 1, z0: BACK + 13, z1: FRONT - 2 }, PROP_OBS).slice(0, MAX_STANDS);

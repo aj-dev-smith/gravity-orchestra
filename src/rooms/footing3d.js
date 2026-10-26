@@ -57,7 +57,7 @@ const DIM = {
 };
 /* a raised support's deck depth: its band's slab, or deeper where its machine dips into it (the kit's
    pistons stroke under its deck slab — footing.js pad.well) — what dips stays inside the deck plate */
-const deckDepth = r => Math.max(r.keys || r.band === 'high' ? DIM.DECK_HI : DIM.DECK, (r.well || 0) + DIM.WELL);
+export const deckDepth = r => Math.max(r.keys || r.band === 'high' ? DIM.DECK_HI : DIM.DECK, (r.well || 0) + DIM.WELL);
 const RAIL_H = FOOT.RAIL, HAND = 1.3;          // guard rail · stair handrail (over the nosing line)
 
 /* ---- the default materials (one set per room host: shared by every footing it builds) ---- */
@@ -244,7 +244,7 @@ function barW(b, ax, ay, az, bx, by, bz, w, d, faces){
 }
 
 /* points round a rect's perimeter (±hu, ±hv), corners included, at most `span` apart — in order */
-function ring(hu, hv, span){
+export function ring(hu, hv, span){
   const nu = Math.max(1, Math.ceil(2 * hu / span - 1e-9)), nv = Math.max(1, Math.ceil(2 * hv / span - 1e-9)), out = [];
   for (let i = 0; i < nu; i++) out.push([-hu + 2 * hu * i / nu, -hv]);
   for (let i = 0; i < nv; i++) out.push([hu, -hv + 2 * hv * i / nv]);
@@ -253,7 +253,7 @@ function ring(hu, hv, span){
   return out;
 }
 /* (along a, out o) on one side of a rect → local [u, v] */
-const onSide = (r, side) => { const k = side[0] === '+' ? 1 : -1;
+export const onSide = (r, side) => { const k = side[0] === '+' ? 1 : -1;
   return side[1] === 'u' ? (a, o) => [k * (r.hw + o), a] : (a, o) => [a, k * (r.hd + o)]; };
 /* does the segment p → q (local u, v) cross the rect [u0, u1, v0, v1] grown by g? (slab clip) */
 function segHits(p, q, R, g){

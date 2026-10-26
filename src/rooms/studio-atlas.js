@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 /* ============================================================
    MIDNIGHT STUDIO — the ATLAS: every painted surface of the studio's footing and props in ONE
-   texture (so all of it is one draw): worn Persian rugs (field tiles, borders, corners, medallions,
-   fringe), charcoal riser carpet, catwalk grating, flight-case laminate + aluminium valance + ball
+   texture (so all of it is one draw): worn Persian rugs (the borders, corners and fringe that show
+   round a riser), charcoal riser carpet, catwalk grating, flight-case laminate + aluminium valance + ball
    corners + butterfly latches + handles, orange ratchet-strap webbing, spray-stencilled case labels
    and every machine's NAME. A parallel ORM map (G roughness, B metalness) makes the aluminium shine
    and the wool stay matte under the same material.
@@ -13,8 +13,7 @@ import * as THREE from 'three';
 const S = 2048;                                          // the atlas (px, square)
 /* regions: [x, y, w, h] in canvas px (y down) */
 export const LAYOUT = {
-  fieldA: [0, 0, 512, 512], fieldB: [512, 0, 512, 512],
-  medA: [1024, 0, 512, 512], medB: [1536, 0, 512, 512],
+  // (rows 0–511: free — the rug's field + medallion lie under its riser now, never seen)
   borderA: [0, 512, 512, 128], borderB: [512, 512, 512, 128],
   cornerA: [1024, 512, 128, 128], cornerB: [1152, 512, 128, 128],
   fringe: [1280, 512, 512, 64], alu: [1280, 576, 512, 64],
@@ -99,26 +98,11 @@ function stepped(x, cx, cy, rx, ry, n, c){
 }
 
 const RUGS = {
-  A: { field: [122, 30, 32], ground2: [96, 22, 26], border: [30, 42, 88], ivory: [226, 208, 172], gold: [200, 146, 54], teal: [46, 104, 98], ink: [24, 22, 40] },
-  B: { field: [32, 46, 92], ground2: [24, 34, 72], border: [128, 34, 34], ivory: [228, 212, 178], gold: [206, 152, 60], teal: [52, 112, 104], ink: [30, 18, 20] },
+  // (the border is what shows round a riser: a warm madder / rust ground with ivory + indigo guards —
+  //  bright enough to read as wool in a dim room)
+  A: { field: [52, 62, 124], ground2: [40, 48, 100], border: [160, 44, 36], ivory: [236, 220, 184], gold: [214, 160, 64], teal: [52, 118, 110], ink: [44, 46, 98] },
+  B: { field: [44, 62, 112], ground2: [34, 48, 92], border: [184, 86, 40], ivory: [238, 224, 190], gold: [220, 168, 72], teal: [58, 124, 114], ink: [52, 36, 86] },
 };
-function paintField(x, reg, P, seed){
-  inRegion(x, reg, (w, h, R) => {
-    x.fillStyle = rgba(P.field, 1); x.fillRect(0, 0, w, h);
-    // abrash: slow horizontal colour bands (hand-dyed wool batches)
-    for (let i = 0; i < 6; i++){ x.fillStyle = rgba(P.ground2, .25 + R() * .25); x.fillRect(0, R() * h, w, 8 + R() * 30); }
-    // the lattice: rosettes on a 128 px grid, small diamonds on the half grid (seamless)
-    for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++){
-      const cx = 64 + i * 128, cy = 64 + j * 128, alt = (i + j) % 2;
-      rosette(x, cx, cy, 30, alt ? [rgba(P.border, 1), rgba(P.ivory, 1), rgba(P.field, 1), rgba(P.gold, 1)] : [rgba(P.ivory, 1), rgba(P.teal, 1), rgba(P.gold, 1), rgba(P.border, 1)]);
-      diamond(x, i * 128, j * 128, 16, 22, rgba(P.gold, 1)); diamond(x, i * 128, j * 128, 8, 12, rgba(P.border, 1));
-      // tendrils between
-      x.fillStyle = rgba(P.ivory, .8);
-      for (const [dx, dy] of [[32, 0], [-32, 0], [0, 32], [0, -32]]) x.fillRect(i * 128 + 64 + dx * 1.45 - 3, j * 128 + 64 + dy * 1.45 - 3, 6, 6);
-    }
-  }, true, seed);
-  pile(x, reg, seed + 1, { wear: .1, grime: .14 });
-}
 function paintBorder(x, reg, P, seed){
   inRegion(x, reg, (w, h) => {
     // outer guard (canvas top = the rug's EDGE), main band, inner guard (canvas bottom = toward the field)
@@ -155,21 +139,6 @@ function paintCorner(x, reg, P, seed){
     rosette(x, 64, 64, 28, [rgba(P.gold, 1), rgba(P.field, 1), rgba(P.ivory, 1), rgba(P.border, 1)]);
   });
   inRegion(x, reg, (w, h, R) => { wear(x, w, h, R, { wear: .06, grime: .1, n: 4 }); fibres(x, w, h, R); }, false, seed + 1);
-}
-function paintMedallion(x, reg, P){
-  inRegion(x, reg, (w, h) => {
-    x.clearRect(0, 0, w, h);
-    const cx = w / 2, cy = h / 2;
-    // pendants (top + bottom), then the stepped lozenge in rings
-    for (const sy of [-1, 1]){ stepped(x, cx, cy + sy * 205, 40, 46, 3, rgba(P.ivory, 1)); stepped(x, cx, cy + sy * 205, 26, 30, 2, rgba(P.border, 1)); }
-    stepped(x, cx, cy, 236, 188, 7, rgba(P.ink, 1));
-    stepped(x, cx, cy, 226, 178, 7, rgba(P.ivory, 1));
-    stepped(x, cx, cy, 208, 162, 7, rgba(P.border, 1));
-    for (let k = 0; k < 10; k++){ const a = k / 10 * Math.PI * 2; diamond(x, cx + Math.cos(a) * 150, cy + Math.sin(a) * 110, 9, 12, rgba(P.gold, 1)); }
-    stepped(x, cx, cy, 128, 100, 5, rgba(P.field, 1));
-    stepped(x, cx, cy, 92, 72, 4, rgba(P.gold, 1));
-    rosette(x, cx, cy, 52, [rgba(P.ivory, 1), rgba(P.teal, 1), rgba(P.field, 1), rgba(P.gold, 1)]);
-  });
 }
 function paintFringe(x, reg, seed){
   inRegion(x, reg, (w, h, R) => {
@@ -315,6 +284,8 @@ function paintORM(o){
 }
 
 let painted = null;
+/* the room is gone: free the textures (the next build paints them again) */
+export function releaseStudioAtlas(){ if (painted){ painted.map?.dispose(); painted.orm?.dispose(); painted = null; } }
 /* the studio's atlas (painted once per page): { map, orm, uv } — map / orm null without a DOM */
 export function studioAtlas(){
   if (painted) return painted;
@@ -323,8 +294,7 @@ export function studioAtlas(){
   const x = c.getContext('2d');
   const R = rng(4242), aspects = {};
   x.clearRect(0, 0, S, S);
-  paintField(x, LAYOUT.fieldA, RUGS.A, 11); paintField(x, LAYOUT.fieldB, RUGS.B, 12);
-  paintMedallion(x, LAYOUT.medA, RUGS.A); paintMedallion(x, LAYOUT.medB, RUGS.B);
+  // (the field + medallion lie under the riser: only the border, its corners and the fringe are painted)
   paintBorder(x, LAYOUT.borderA, RUGS.A, 21); paintBorder(x, LAYOUT.borderB, RUGS.B, 22);
   paintCorner(x, LAYOUT.cornerA, RUGS.A, 31); paintCorner(x, LAYOUT.cornerB, RUGS.B, 32);
   paintFringe(x, LAYOUT.fringe, 41); paintAlu(x, LAYOUT.alu); paintBall(x, LAYOUT.ball);

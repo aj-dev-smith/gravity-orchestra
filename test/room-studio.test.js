@@ -4,7 +4,7 @@ import { planFooting, footingBoxes, FOOT } from '../src/rooms/footing.js';
 import { buildFooting } from '../src/rooms/footing3d.js';
 import { makePulse } from '../src/rooms/pulse.js';
 import { STAGE } from '../src/rooms/common.js';
-import { studioFooting, openSpot, segCode, TALLY_CODE } from '../src/rooms/studio-footing.js';
+import { studioFooting, openSpot, segCode, TALLY_CODE, STRIP_CODE } from '../src/rooms/studio-footing.js';
 import { makeMeter, VU } from '../src/rooms/studio-vu.js';
 import { micStands, obstacles, boxGap, clearOf, micBox, PROP_CLEAR, MIC } from '../src/rooms/studio-props.js';
 
@@ -30,6 +30,7 @@ const CROWD = [
 ];
 const PLAN = planFooting(CROWD, { floor: FL, room: ROOMB }), ENV = footingBoxes(PLAN);
 const STYLE = studioFooting();
+STYLE.anchor(PLAN, CROWD);                                       // (the room's place() tells the style where the machines stand)
 const build = (plan = PLAN) => buildFooting(plan, STYLE, { boxes: footingBoxes(plan) });
 const meshes = f => { const out = []; f.group.traverse(o => { if (o.isMesh) out.push(o); }); return out; };
 const inEnv = (B, x, y, z) => { let d = Infinity;
@@ -67,7 +68,8 @@ describe('the studio footing: every band in the room\'s idiom', () => {
       const lift = a => ({ ...a, y: a.y + u, bottom: a.bottom + u, low: a.low + u, box: [a.box[0], a.box[1], a.box[2] + u, a.box[3] + u, a.box[4], a.box[5]], lift: u });
       const crowd = [CROWD[0], lift(st('bells', 26, -10, 10.9, 6.85)), lift(st('marimba', -18, 8, 16, 5.2)), lift({ ...st('drums', 19, 19, 18, 5.5), kind: 'kit', low: FL + FOOT.PLINTH - .335 }),
         lift(CROWD.find(a => a.key === 'tt'))];
-      const plan = planFooting(crowd, { floor: FL, room: ROOMB }), B = footingBoxes(plan).map(e => e.box), f = build(plan);
+      const plan = planFooting(crowd, { floor: FL, room: ROOMB }), B = footingBoxes(plan).map(e => e.box);
+      STYLE.anchor(plan, crowd); const f = build(plan);
       for (const m of meshes(f)){
         const p = m.geometry.attributes.position.array;
         let worst = 0;
@@ -104,9 +106,9 @@ describe('the studio footing: every band in the room\'s idiom', () => {
     }
     f.dispose();
   });
-  it('THE PANEL: every machine gets one (a tally + 12 meter segments), each vertex reading its own slot', () => {
+  it('THE PANEL + THE LINE: every machine gets a tally, 12 meter segments and its coloured line, each vertex reading its own slot', () => {
     const f = build(), a = meshes(f).find(m => m.name === 'footing:edge').geometry.attributes.aPulse.array;
-    const codes = [...Array.from({ length: 12 }, (_, k) => segCode(k)), TALLY_CODE];
+    const codes = [...Array.from({ length: 12 }, (_, k) => segCode(k)), TALLY_CODE, STRIP_CODE];
     const slots = new Map(PLAN.pads.map(p => [p.pulse, new Set()]));
     for (const v of a){
       const s = Math.floor(v + 1e-3), c = codes.findIndex(c => Math.abs(v - s - c) < 1e-4);   // (a Float32 attribute)
@@ -116,8 +118,55 @@ describe('the studio footing: every band in the room\'s idiom', () => {
     }
     for (const p of PLAN.pads){
       if (p.open && !openSpot(p)) continue;
-      expect(slots.get(p.pulse).size, `${p.key}: ${slots.get(p.pulse).size} codes`).toBe(13);
+      expect(slots.get(p.pulse).size, `${p.key}: ${slots.get(p.pulse).size} codes`).toBe(14);
     }
+    f.dispose();
+  });
+  it('the decks\' rail gaps meet the kit\'s ladders + stairs (its gapOf, restated, still agrees)', () => {
+    const top = (f, P) => { const m = meshes(f).find(m => m.name === 'footing:steel'), p = m.geometry.attributes.position.array, out = [];
+      const ys = [...P.pads.filter(q => !q.loft && q.access).map(q => q.top), ...P.lofts.filter(L => L.access).map(L => L.top)].map(t => t + FOOT.RAIL);
+      for (let i = 0; i < p.length; i += 3) if (ys.some(y => Math.abs(p[i + 1] - y) < 1e-4)) out.push(`${p[i].toFixed(3)},${p[i + 1].toFixed(3)},${p[i + 2].toFixed(3)}`);
+      return out.sort(); };
+    const a = buildFooting(PLAN, {}, { boxes: ENV }), b = build();
+    const A = top(a, PLAN), B = top(b, PLAN);
+    expect(B.length).toBeGreaterThan(50);
+    expect(B).toEqual(A);
+    a.dispose(); b.dispose();
+  });
+  it('FLUSH: a Persian rug on the floor shows all round each riser (inside its pad), its fringe out at the ends', () => {
+    const f = build(), p = meshes(f).find(m => m.name === 'footing:studio').geometry.attributes.position.array;
+    for (const pad of PLAN.pads.filter(q => q.band === 'flush' && !q.fixed && !q.open)){
+      let rug = 0, out = 0;
+      for (let i = 0; i < p.length; i += 3){
+        if (Math.abs(p[i + 1] - (FL + .035)) > 1e-5) continue;
+        const dx = Math.abs(p[i] - pad.x), dz = Math.abs(p[i + 2] - pad.z);
+        if (dx > pad.hw + .01 || dz > pad.hd + .01) continue;
+        const a = CROWD.find(q => q.key === pad.key);
+        rug++; if (dx > a.w / 2 + .1 || dz > a.d / 2 + .1) out++;
+      }
+      expect(rug, pad.key).toBeGreaterThan(16); expect(out, pad.key).toBeGreaterThan(8);
+    }
+    f.dispose();
+  });
+  it('THE LINE wears its machine\'s colour; a high support\'s meter is drawn big enough to read from the wide', () => {
+    const f = build(), g = meshes(f).find(m => m.name === 'footing:edge').geometry, k = g.attributes.aPulse.array, c = g.attributes.aColor.array, P = g.attributes.position.array;
+    const col = new THREE.Color(), segH = new Map();
+    for (let i = 0; i < k.length; i++){
+      const s = Math.floor(k[i] + 1e-3), code = k[i] - s, pad = PLAN.pads.find(q => q.pulse === s);
+      if (Math.abs(code - STRIP_CODE) < 1e-4){ col.set(pad.color); expect([c[3 * i], c[3 * i + 1], c[3 * i + 2]].map(v => +v.toFixed(4)), pad.key).toEqual([col.r, col.g, col.b].map(v => +v.toFixed(4))); }
+      if (Math.abs(code - segCode(0)) < 1e-4){ const h = segH.get(pad.key) || [Infinity, -Infinity]; h[0] = Math.min(h[0], P[3 * i + 1]); h[1] = Math.max(h[1], P[3 * i + 1]); segH.set(pad.key, h); }
+    }
+    const H = key => segH.get(key)[1] - segH.get(key)[0];
+    expect(H('tower')).toBeGreaterThan(2 * H('bells'));                                 // (14 u up: ≈ 2.3× a flush riser's)
+    f.dispose();
+  });
+  it('HIGH = ground support, not a scaffold: no brace crosses the house\'s face between its towers', () => {
+    const f = build(), p = meshes(f).find(m => m.name === 'footing:steel').geometry.attributes.position.array;
+    const T = PLAN.pads.find(q => q.key === 'tower'), yH = T.top - .38 - .62, zf = T.z + T.hd - .6, x0 = T.x - T.hw + .6 + 2.2, x1 = T.x + T.hw - .6 - 2.2;
+    expect(T.band).toBe('high'); expect(T.access?.side).not.toBe('+v');
+    let hits = 0;
+    for (let i = 0; i < p.length; i += 3) if (p[i] > x0 && p[i] < x1 && Math.abs(p[i + 2] - zf) < .45 && p[i + 1] > FL + 1.5 && p[i + 1] < yH - 3) hits++;
+    expect(hits).toBe(0);
     f.dispose();
   });
   it('the style owns its materials: a build never disposes them, the room does', () => {

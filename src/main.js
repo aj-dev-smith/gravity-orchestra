@@ -950,13 +950,15 @@ function juggleDock(d){
 /* A drum ball reaching its head: sparks + the percussion voice (the head ripple,
    flash, piston and strike light are the machine's own). The KICK hits the room:
    the cannonball landing shakes the camera and punches the exposure. */
+const _kc = new THREE.Vector3();
 function drumStrike(hit){
   // a CHOKE (the cymbal's magnet clamp grabbed it — marbledrums' timeline edge): cut its sound
   if (hit.choke){ if (audio.isReady()) try { audio.chokeDrum(hit.lane); } catch(e){} return; }
   // a closed hat strike is the pedal CHICKING the pair shut: an open hat still ringing stops
   if (hit.lane === 'hat' && audio.isReady()) try { audio.chokeDrum('hatOpen'); } catch(e){}
   if (devStrikes){ const d = devStrikes.drums ||= { n: 0, ids: {}, unbaked: [], at: [] }; d.n++; d.ids[hit.lane] = (d.ids[hit.lane] || 0) + 1; if (d.at.length < 64) d.at.push(+songTime.toFixed(3)); }
-  const c = hit.drum.contact, v = hit.vel ?? 1;
+  // (+ the kit group's offset: a kit moved live in stage edit rides it until it is rebuilt at its new slot)
+  const c = drumGroup ? _kc.copy(hit.drum.contact).add(drumGroup.position) : hit.drum.contact, v = hit.vel ?? 1;
   spawnBurst(c.clone().add(UP), new THREE.Color(hit.drum.style.ball),
              Math.round(5 + 7 * v), 3.0);
   if (hit.lane === 'kick'){
@@ -1417,10 +1419,65 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
       const u = key === 'drums' ? kitSlot.lift : instLive.find(r => r.I.key === key && !r.slot.hang)?.slot.lift;
       return Number.isFinite(u) ? clampLift(u) : undefined;
     },
+    /* RCT HEIGHT — stage edit's height handle (src/editor/height.js). A floor machine's height NOW, as the
+       room was last told it (the anchors: live while a lift runs): its lift (the user's, or the gallery
+       raise), the user's own (undefined: the layout decides), its deck, the world y it stands on (bottom),
+       its top, the floor + ceiling, an open stand. null: the belt / a hung station — nothing to give.
+       (Read every frame while editing: written into `out`, found by a plain loop — no garbage.) */
+    height(key, out = {}){
+      let a = null;
+      for (const q of lastAnchors) if (q.key === key){ a = q; break; }
+      if (!a || a.kind === 'belt' || a.kind === 'hung') return null;
+      let u = kitSlot.lift;
+      if (key !== 'drums'){ u = undefined; for (const r of instLive) if (r.I.key === key && !r.slot.hang){ u = r.slot.lift; break; } }
+      out.lift = a.lift; out.user = Number.isFinite(u) ? clampLift(u) : undefined; out.deck = a.y; out.bottom = a.bottom;
+      out.top = a.box ? a.box[3] : a.y + 3; out.floor = ROOM.FLOOR; out.ceil = ROOM.CEIL; out.open = Array.isArray(a.feet) || Array.isArray(a.hang);
+      return out;
+    },
+    /* …set LIVE, mid-gesture (u undefined: the user's height is forgotten — AUTO). A floor station moves
+       rigidly (no legs to regrow). The kit's GROUP moves rigidly too — no rebuild per frame: its strikes
+       report their contact plus the group's offset (drumStrike), so they stay where the drums are — and
+       liftSettle rebuilds it at its deck. The room re-anchors + re-plans its footing now; the director
+       re-solves once, when the gesture settles. */
+    liftLive(key, u){
+      const set = Number.isFinite(u) ? clampLift(u) : undefined;
+      if (set === undefined) delete devLift[key];       // (AUTO: a page-wide ?lift= / __dev.lift for it goes too)
+      if (key === 'drums'){
+        if (!drumGroup || !curBuild?.S.drums) return false;
+        const built = kitSlot.y - drumGroup.position.y; // (the deck it was BUILT at: its group rides the difference)
+        kitSlot = { ...kitSlot, lift: set };
+        const deck = kitDeck();
+        drumGroup.position.y = deck - built; drumGroup.updateMatrixWorld(true);
+        kitSlot.y = deck;
+      } else {
+        const r = instLive.find(q => q.I.key === key && !q.slot.hang);
+        if (!r) return false;
+        r.slot.lift = set;
+        if (set !== undefined) r.setLift(set);
+      }
+      placeRoom();
+      return true;
+    },
+    /* …the gesture is over: a kit moved live is rebuilt at its deck (restage sees the deck it was built at
+       differ from its lift's), the room re-anchored, the director re-solved */
+    liftSettle(){
+      if (drumGroup && drumGroup.position.y) kitSlot.y -= drumGroup.position.y;
+      restage();
+    },
+    footing: () => rooms.footing,                         // the live plan: the readout's LOFT mates
+    /* what can't be moved here — and why (stage edit says so when one is clicked) */
+    fixed: () => [
+      ...(stageWall.isEmpty() ? [] : [{ key: 'belt', label: 'Belt', color: '#ffaa55', box: stageWall, why: 'the belt stands on its own posts' }]),
+      ...instLive.filter(r => r.slot.hang).map(r => {          // (its meshes, else its solid box: a loft is mostly air)
+        const a = lastAnchors.find(q => q.key === r.I.key && q.kind === 'hung'), b = a?.box;
+        return { key: r.I.key, label: r.I.label, color: r.I.color, obj: r.station, why: 'hangs from the belt',
+                 box: b ? new THREE.Box3(new THREE.Vector3(b[0], b[2], b[4]), new THREE.Vector3(b[1], b[3], b[5])) : null };
+      }),
+    ],
     kitPivot: () => ({ x: (curBuild?.view.cx ?? 0) + kitSlot.x + (drumGroup?.position.x || 0), z: kitSlot.z + (drumGroup?.position.z || 0) }),
     visBox: o => visBox(o),
     room: { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 },
-    roomBox: { y1: ROOM.CEIL - 2, z1: ROOM.FRONT - 2 },
+    roomBox: { y1: ROOM.CEIL - 2, z1: ROOM.FRONT - 2, x1: ROOM.HW - 2 },
     floorY: ROOM.FLOOR,
     roomGroup: () => rooms.group,                         // (stage edit's plan view may lift the ceiling)
   } });

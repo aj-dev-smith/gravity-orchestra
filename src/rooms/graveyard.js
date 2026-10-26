@@ -1,7 +1,10 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { STAGE, rng, canvasTex, radialTex, glowPoints, glowMat, instanced, trs } from './common.js';
-import { tintStyle } from './footing3d.js';
+import { STAGE, rng, canvasTex, radialTex, glowMat, instanced, trs } from './common.js';
+import { FOOT } from './footing.js';
+import { makePulse } from './pulse.js';
+import { graveyardStyle } from './graveyard-footing.js';
+import { graveSlots, placeGraves, obstaclesOf, graveCandles, votives, footLights, wispsFor, rectDist } from './graveyard-place.js';
 /* ============================================================
    THE GRAVEYARD — a ruined churchyard at midnight, for October.
 
@@ -20,13 +23,24 @@ import { tintStyle } from './footing3d.js';
    gutter out, the ground fog thins — then night falls again across the
    loop's roll-in. Both are pure fns of songTime (no state, no allocation).
 
+   THE MACHINES ARE SET IN THE CHURCHYARD (2026-10-25): each stands on the yard's own masonry
+   (graveyard-footing.js — a ledger stone, a chest tomb, a mausoleum, a timber scaffold, a crypt
+   terrace), the graves crowd round them at human scale (graveyard-place.js: a grave a machine or its
+   support comes within a metre of is MOVED further out — the yard stays as full; low ledgers and
+   kerbed plots fill the gaps between the machines), and the yard ANSWERS them — each a quiet accent
+   by the machine that plays, a pure fn of songTime off its strike cue (rooms/pulse.js):
+     · the ground fog at its foot glows in its colour and is pushed out as it strikes,
+     · its votive candles, its tomb's lanterns and the candles on the graves beside it flare,
+     · its own will-o'-the-wisp drifts in to it while it plays, and back out over the graves when it rests.
+   place() re-poses instance pools and rewrites point buffers (no rebuild); update() writes uniforms.
+
    Layers, near → far: the stage (instruments on the floor contract),
    the side graves (lit, fogged), the fence, the chapel + trees (dark
    SILHOUETTES that ignore the fog, so they read against the sky), the
    moon + clouds, the sky dome (its horizon IS the fog colour, so far
    ground melts into it and the conveyor's off-screen wrap stays hidden).
 
-   ~22 draw calls, everything instanced/merged; animation is uniforms +
+   ~26 draw calls, everything instanced/merged; animation is uniforms +
    a dozen bat matrices recomposed in place — zero per-frame allocation.
    FLOOR = STAGE.FLOOR (the contract). The room owns no lights.
    ============================================================ */
@@ -225,17 +239,85 @@ function treeGeo(R, h0 = 34){
   return mergeGeometries(parts);
 }
 
-/* how its footing looks (rooms/footing3d.js tintStyle) — one per built room: its own materials */
-const footStyle = () => tintStyle({ key: 'graveyard', base: { color: 0xd6dcd2, grain: true, roughness: .96, metalness: 0 },
-  steel: { color: 0x4a5056, metalness: .45, roughness: .6 }, deck: { color: 0x4d4034, metalness: .05, roughness: .85 } });
+/* a pool of guttering FLAMES, each owned by a machine (aOwner: its pulse slot, −1 none): a strike makes
+   it flare brighter and bigger (uPulse — the room writes it each frame). glowPoints (common.js) + owners. */
+function ownedPoints(cap, { map, flicker, rate, pulse, gain = 1.4, grow = .4 }){
+  const g = new THREE.BufferGeometry();
+  for (const [k, n] of [['position', 3], ['aColor', 3], ['aSize', 1], ['aPhase', 1], ['aOwner', 1]])
+    g.setAttribute(k, new THREE.BufferAttribute(new Float32Array(cap * n), n));
+  g.setDrawRange(0, 0);
+  const m = new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 }, uMap: { value: map }, uScale: { value: 1 }, uFlicker: { value: flicker }, uRate: { value: rate },
+                uBoost: { value: 1 }, uPulse: pulse, uGain: { value: gain }, uGrow: { value: grow } },
+    vertexShader: /* glsl */`
+      attribute vec3 aColor; attribute float aSize, aPhase, aOwner;
+      uniform float uTime, uScale, uFlicker, uRate, uBoost, uGain, uGrow;
+      uniform float uPulse[${FOOT.MAX_PULSE}];
+      varying vec3 vColor;
+      void main(){
+        float k = uPulse[int(max(aOwner, 0.) + .5)] * step(-.5, aOwner);
+        float f = 1. - uFlicker * (.5 + .5 * sin(uTime * uRate + aPhase * 6.283) * sin(uTime * uRate * .53 + aPhase * 11.));
+        vColor = aColor * f * uBoost * (1. + uGain * k);
+        vec4 mv = modelViewMatrix * vec4(position, 1.);
+        gl_PointSize = aSize * uScale * (300. / -mv.z) * (.85 + .15 * f) * (1. + uGrow * k);
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: /* glsl */`
+      uniform sampler2D uMap; varying vec3 vColor;
+      void main(){ float a = texture2D(uMap, gl_PointCoord).a; gl_FragColor = vec4(vColor, a); }`,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+  });
+  const pts = new THREE.Points(g, m);
+  pts.frustumCulled = false;
+  return pts;
+}
+/* the WISPS: each drifts from its home (position) toward aTo as its machine's slow envelope rises (the
+   ones with no machine, aOwner −1, just drift) — brighter, and steadier, while it is drawn in */
+function wispPoints(cap, { map, pulse }){
+  const g = new THREE.BufferGeometry();
+  for (const [k, n] of [['position', 3], ['aTo', 3], ['aColor', 3], ['aSize', 1], ['aPhase', 1], ['aOwner', 1]])
+    g.setAttribute(k, new THREE.BufferAttribute(new Float32Array(cap * n), n));
+  g.setDrawRange(0, 0);
+  const m = new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 }, uMap: { value: map }, uBoost: { value: 1 }, uPulse: pulse },
+    vertexShader: /* glsl */`
+      attribute vec3 aTo, aColor; attribute float aSize, aPhase, aOwner;
+      uniform float uTime, uBoost; uniform float uPulse[${FOOT.MAX_PULSE}];
+      varying vec3 vColor;
+      void main(){
+        float k = uPulse[int(max(aOwner, 0.) + .5)] * step(-.5, aOwner);
+        float e = k * k * (3. - 2. * k);
+        vec3 p = mix(position, aTo, .85 * e);
+        float dr = 2.6 * (1. - .7 * e);
+        p.y += dr * sin(uTime * .21 + aPhase * 3.1) * .55;
+        p.x += dr * sin(uTime * .17 + aPhase * 5.3) * .8;
+        p.z += dr * sin(uTime * .13 + aPhase * 2.3) * .5;
+        float f = 1. - .75 * (1. - .6 * e) * (.5 + .5 * sin(uTime * 1.7 + aPhase * 6.283) * sin(uTime * .9 + aPhase * 11.));
+        vColor = aColor * f * uBoost * (.6 + 1.3 * e);
+        vec4 mv = modelViewMatrix * vec4(p, 1.);
+        gl_PointSize = aSize * (300. / -mv.z) * (.85 + .15 * f) * (1. + .35 * e);
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: /* glsl */`
+      uniform sampler2D uMap; varying vec3 vColor;
+      void main(){ float a = texture2D(uMap, gl_PointCoord).a; gl_FragColor = vec4(vColor, a); }`,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+  });
+  const pts = new THREE.Points(g, m);
+  pts.frustumCulled = false;
+  return pts;
+}
+/* a tiny stable hash of a position (a candle's height, its flame's phase) */
+const hash2 = (x, z) => { const s = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453; return s - Math.floor(s); };
 
 export default {
   key: 'graveyard', label: 'Midnight Graveyard',
   build(scene, { envMap }){
-    const FOOT_STYLE = footStyle();
+    const FOOT_STYLE = graveyardStyle().warm(envMap);
     const group = new THREE.Group();
     const R = rng(1031);
     const F = STAGE.FLOOR;
+    const NI = g => g.toNonIndexed();
 
     // ---- the sky dome (fog-free; its horizon band is the fog colour) ----
     const skyMat = new THREE.MeshBasicMaterial({ map: skyTex(), side: THREE.BackSide, fog: false, depthWrite: false });
@@ -265,63 +347,77 @@ export default {
       new THREE.MeshStandardMaterial({ map: gT, roughness: .95, metalness: 0, color: 0xc4d2c4 }));
     ground.rotation.x = -Math.PI / 2; ground.position.set(0, F, -20); group.add(ground);
 
-    // ---- graves: headstones (rounded tops), crosses, obelisks — instanced, leaning ----
-    const stone = new THREE.MeshStandardMaterial({ map: stoneTex(), color: 0x8f968d, roughness: .92, metalness: 0, envMap, envMapIntensity: .15 });
-    const headGeo = mergeGeometries([
-      new THREE.BoxGeometry(2.4, 3.2, .45).translate(0, 1.6, 0),
-      new THREE.CylinderGeometry(1.2, 1.2, .45, 16, 1, false, 0, Math.PI).rotateX(Math.PI / 2).rotateZ(Math.PI / 2).translate(0, 3.2, 0),
-    ].map(g => g.toNonIndexed()));
-    const crossGeo = mergeGeometries([
-      new THREE.BoxGeometry(.6, 6.4, .5).translate(0, 3.2, 0), new THREE.BoxGeometry(3, .6, .5).translate(0, 4.6, 0),
-      new THREE.TorusGeometry(.9, .14, 6, 18).translate(0, 4.6, 0),                // the Celtic ring
-      new THREE.BoxGeometry(1.6, .8, 1.1).translate(0, .4, 0),
-    ].map(g => g.toNonIndexed()));
-    const obeliskGeo = mergeGeometries([
-      new THREE.BoxGeometry(2.6, 1.2, 2.6).translate(0, .6, 0),
-      new THREE.CylinderGeometry(.55, 1.05, 9, 4, 1).rotateY(Math.PI / 4).translate(0, 5.7, 0),
-      new THREE.ConeGeometry(.78, 1.4, 4).rotateY(Math.PI / 4).translate(0, 10.9, 0),
-    ].map(g => g.toNonIndexed()));
-    const heads = [], crosses = [], obelisks = [], candles = [];
-    // rows of graves down both sides of the stage + a scatter behind the machines
-    const plot = (x, z, kind, yaw) => {
-      const lean = (R() - .5) * .28, roll = (R() - .5) * .18, s = .85 + R() * .5;
-      const m = trs(x, F - .15, z, lean, yaw + (R() - .5) * .3, roll, s, s, s);
-      (kind < .62 ? heads : kind < .9 ? crosses : obelisks).push(m);
-      if (R() < .4) candles.push([x + (R() - .5) * 1.4, z + 1.1 + R() * .4]);
-    };
-    for (const side of [-1, 1]){
-      for (let row = 0; row < 3; row++) for (let k = 0; k < 9; k++){
-        const x = side * (44 + row * 6.5 + (R() - .5) * 2), z = -46 + k * 8.5 + (R() - .5) * 3;
-        plot(x, z, R(), side * -Math.PI / 2 * .25);
-      }
-    }
-    for (let k = 0; k < 22; k++){                                     // behind the stage
-      const x = -40 + (k % 11) * 8 + (R() - .5) * 3, z = -24 - Math.floor(k / 11) * 9 - R() * 3;
-      plot(x, z, R(), 0);
-    }
-    group.add(instanced(headGeo, stone, heads), instanced(crossGeo, stone, crosses), instanced(obeliskGeo, stone, obelisks));
 
-    // ---- the iron fence: posts with spear finials + two rails, round three sides, crooked ----
-    const iron = new THREE.MeshStandardMaterial({ color: 0x15171a, metalness: .7, roughness: .55, envMap, envMapIntensity: .4 });
+    // ---- the GRAVES (graveyard-place.js says where — place()): headstones, Celtic crosses, obelisks
+    //      stand round the stage; ledger slabs and kerbed plots lie low among the machines. Human scale
+    //      (1 u ≈ .677 m): a headstone ≈ 1.3 m, a cross ≈ 2.4 m, an obelisk ≈ 4.5 m. One instance pool per
+    //      kind, sized for every plot the yard has; place() re-poses them (no rebuild). ----
+    const stone = new THREE.MeshStandardMaterial({ map: stoneTex(), color: 0xd0d6cc, roughness: .92, metalness: 0, envMap, envMapIntensity: .15 });
+    const GEO = {
+      head: mergeGeometries([
+        new THREE.BoxGeometry(1.7, .26, .62).translate(0, .13, 0),
+        new THREE.BoxGeometry(1.3, .95, .26).translate(0, .26 + .475, 0),
+        new THREE.CylinderGeometry(.65, .65, .26, 16, 1, false, 0, Math.PI).rotateX(Math.PI / 2).rotateZ(Math.PI / 2).translate(0, 1.21, 0),
+      ].map(NI)),
+      cross: mergeGeometries([
+        new THREE.BoxGeometry(1.1, .34, .8).translate(0, .17, 0), new THREE.BoxGeometry(.8, .3, .56).translate(0, .49, 0),
+        new THREE.BoxGeometry(.34, 2.9, .26).translate(0, .64 + 1.45, 0), new THREE.BoxGeometry(1.5, .32, .26).translate(0, 2.95, 0),
+        new THREE.TorusGeometry(.46, .07, 6, 18).translate(0, 2.95, 0),                 // the Celtic ring
+      ].map(NI)),
+      obelisk: mergeGeometries([
+        new THREE.BoxGeometry(1.7, .5, 1.7).translate(0, .25, 0), new THREE.BoxGeometry(1.25, .9, 1.25).translate(0, .95, 0),
+        new THREE.CylinderGeometry(.36, .58, 4.6, 4, 1).rotateY(Math.PI / 4).translate(0, 1.4 + 2.3, 0),
+        new THREE.ConeGeometry(.36, .7, 4).rotateY(Math.PI / 4).translate(0, 6.35, 0),
+      ].map(NI)),
+      ledger: mergeGeometries([                                       // (low: under 1 u, so no shot solve ever sees it)
+        new THREE.BoxGeometry(1.6, .2, 2.9).translate(0, .1, 0), new THREE.BoxGeometry(1.36, .2, 2.66).translate(0, .3, 0),
+      ].map(NI)),
+      plot: mergeGeometries([                                         // a kerbed plot, a low tablet at its head
+        new THREE.BoxGeometry(.14, .26, 3).translate(-.78, .13, 0), new THREE.BoxGeometry(.14, .26, 3).translate(.78, .13, 0),
+        new THREE.BoxGeometry(1.42, .26, .14).translate(0, .13, 1.43), new THREE.BoxGeometry(1.42, .26, .14).translate(0, .13, -1.43),
+        new THREE.BoxGeometry(.86, .5, .16).translate(0, .25, -1.22),
+      ].map(NI)),
+    };
+    const SL = graveSlots(), ALL_PLOTS = SL.home.concat(SL.reserve, SL.low);
+    const POOLS = {};
+    for (const kind of Object.keys(GEO)){
+      const im = new THREE.InstancedMesh(GEO[kind], stone, Math.max(1, ALL_PLOTS.filter(g => g.kind === kind).length));
+      im.count = 0; group.add(im); POOLS[kind] = im;
+    }
+    const _gm = new THREE.Matrix4(), _gp = new THREE.Vector3(), _gq = new THREE.Quaternion(), _gs = new THREE.Vector3(), _ge = new THREE.Euler();
+    function poseGraves(list){
+      const n = {};
+      for (const k in POOLS) n[k] = 0;
+      for (const g of list){
+        const low = g.kind === 'ledger' || g.kind === 'plot';
+        _ge.set(g.lean, g.yaw, g.roll); _gq.setFromEuler(_ge); _gp.set(g.x, F - (low ? .05 : .12), g.z); _gs.setScalar(g.s);
+        POOLS[g.kind].setMatrixAt(n[g.kind]++, _gm.compose(_gp, _gq, _gs));
+      }
+      for (const k in POOLS){ const im = POOLS[k]; im.count = n[k]; im.instanceMatrix.needsUpdate = true; if (n[k]) im.computeBoundingSphere(); }
+    }
+
+    // ---- the iron fence: railings with spear finials round three sides of the yard, crooked ----
+    const iron = new THREE.MeshStandardMaterial({ color: 0x3a3f46, metalness: .55, roughness: .55, envMap, envMapIntensity: .5 });
     const postGeo = mergeGeometries([
-      new THREE.CylinderGeometry(.09, .09, 5.2, 5).translate(0, 2.6, 0),
-      new THREE.ConeGeometry(.22, .7, 4).translate(0, 5.5, 0),
-    ].map(g => g.toNonIndexed()));
+      new THREE.CylinderGeometry(.05, .05, 2.9, 5).translate(0, 1.45, 0),
+      new THREE.ConeGeometry(.12, .36, 4).translate(0, 3.08, 0),
+    ].map(NI));
     const posts = [], rails = [];
-    const fenceRun = (x0, z0, x1, z1, gap = 1.1) => {
+    const fenceRun = (x0, z0, x1, z1, gap = .62) => {
       const L = Math.hypot(x1 - x0, z1 - z0), n = Math.floor(L / gap), yaw = Math.atan2(x1 - x0, z1 - z0);
       for (let i = 0; i <= n; i++){
-        if (R() < .06) continue;                                      // a missing picket
+        if (R() < .05) continue;                                      // a missing picket
         const t = i / n;
-        posts.push(trs(x0 + (x1 - x0) * t, F, z0 + (z1 - z0) * t, (R() - .5) * .16, 0, (R() - .5) * .16));
+        posts.push(trs(x0 + (x1 - x0) * t, F, z0 + (z1 - z0) * t, (R() - .5) * .12, 0, (R() - .5) * .12));
       }
-      for (const y of [1.2, 4.3]) rails.push(trs((x0 + x1) / 2, F + y + (R() - .5) * .3, (z0 + z1) / 2, 0, yaw, (R() - .5) * .02, 1, 1, L));
+      for (const y of [.45, 2.55]) rails.push(trs((x0 + x1) / 2, F + y + (R() - .5) * .16, (z0 + z1) / 2, 0, yaw, (R() - .5) * .015, 1, 1, L));
     };
     fenceRun(-FENCE_X, FENCE_Z, -8, FENCE_Z); fenceRun(8, FENCE_Z, FENCE_X, FENCE_Z);   // a gate gap behind the stage
     fenceRun(-FENCE_X, FENCE_Z, -FENCE_X, 34); fenceRun(FENCE_X, FENCE_Z, FENCE_X, 34);
-    group.add(instanced(postGeo, iron, posts), instanced(new THREE.BoxGeometry(.12, .12, 1), iron, rails));
-    // the gate's stone piers, with a lantern each (lit by the candle points below)
-    group.add(instanced(new THREE.BoxGeometry(2.2, 8, 2.2).translate(0, 4, 0), stone, [trs(-9.5, F, FENCE_Z), trs(9.5, F, FENCE_Z)]));
+    group.add(instanced(postGeo, iron, posts), instanced(new THREE.BoxGeometry(.08, .08, 1), iron, rails));
+    // the gate's stone piers, a lantern on each (lit by the flames below)
+    group.add(instanced(mergeGeometries([new THREE.BoxGeometry(1.6, 4.4, 1.6).translate(0, 2.2, 0), new THREE.BoxGeometry(2, .3, 2).translate(0, 4.55, 0)].map(NI)),
+      stone, [trs(-9.5, F, FENCE_Z), trs(9.5, F, FENCE_Z)]));
 
     // ---- the SILHOUETTES: chapel ruin + dead oaks, fog-free near-black against the sky ----
     const sil = new THREE.MeshBasicMaterial({ color: 0x05080b, fog: false });
@@ -342,67 +438,91 @@ export default {
     const treeParts = trees.map(([x, z, h], i) => treeGeo(rng(200 + i), h).translate(x, F, z));   // (already non-indexed: treeGeo merges flat parts)
     group.add(new THREE.Mesh(mergeGeometries(treeParts), sil));
 
-    // ---- candles on the graves: wax stubs + guttering flames + soft halos + warm pools ----
+
+    // ---- FLAMES: candles on the graves, two votives before every machine, the footing's lanterns (its
+    //      iron: graveyard-footing.js), the gate's — wax stubs + guttering flames + soft halos + warm
+    //      pools. Pools sized for the whole yard; place() writes them. Each flame answers its machine. ----
     const wax = new THREE.MeshStandardMaterial({ color: 0xd8cfb6, roughness: .6, emissive: 0x3a2610 });
-    const cand = candles.map(([x, z]) => trs(x, F + .35, z, 0, 0, 0, 1, .7 + R() * .6, 1));
-    group.add(instanced(new THREE.CylinderGeometry(.16, .18, 1, 6), wax, cand));
-    const fP = [], fC = [], fS = [], fPh = [], hP = [], hC = [], hS = [], hPh = [];
+    const CAND_CAP = ALL_PLOTS.filter(g => g.candle).length + 2 * FOOT.MAX_PULSE, LAMP_CAP = 160, FL_CAP = CAND_CAP + LAMP_CAP + 2;
+    const waxIM = new THREE.InstancedMesh(new THREE.CylinderGeometry(.09, .1, 1, 7).translate(0, .5, 0), wax, CAND_CAP);
+    waxIM.count = 0; waxIM.frustumCulled = false; group.add(waxIM);
+    const PULSE = { value: new Float32Array(FOOT.MAX_PULSE) }, SLOW = { value: new Float32Array(FOOT.MAX_PULSE) };
     const flame = radialTex(64, [[0, 1], [.12, .7], [.4, .12], [1, 0]]);
-    cand.forEach(m => {
-      const p = new THREE.Vector3().setFromMatrixPosition(m), sy = new THREE.Vector3().setFromMatrixScale(m).y;
-      fP.push(p.x, p.y + sy / 2 + .22, p.z); fC.push(1, .62, .26); fS.push(.55 + R() * .2); fPh.push(R());
-      hP.push(p.x, p.y + sy / 2 + .3, p.z); hC.push(.42, .2, .07); hS.push(5 + R() * 2); hPh.push(R());
-    });
-    for (const x of [-9.5, 9.5]){                                     // the gate lanterns
-      fP.push(x, F + 8.6, FENCE_Z); fC.push(1, .7, .35); fS.push(1.1); fPh.push(R());
-      hP.push(x, F + 8.6, FENCE_Z); hC.push(.5, .26, .1); hS.push(11); hPh.push(R());
-    }
-    const flames = glowPoints(fP, { colors: fC, sizes: fS, phases: fPh, map: flame, flicker: .45, rate: 11 });
-    const halos = glowPoints(hP, { colors: hC, sizes: hS, phases: hPh, flicker: .3, rate: 6,
-      map: radialTex(64, [[0, .55], [.25, .22], [.6, .05], [1, 0]]) });
+    const flames = ownedPoints(FL_CAP, { map: flame, flicker: .45, rate: 11, pulse: PULSE, gain: 1.6, grow: .45 });
+    const halos = ownedPoints(FL_CAP, { map: radialTex(64, [[0, .55], [.25, .22], [.6, .05], [1, 0]]), flicker: .3, rate: 6, pulse: PULSE, gain: 1.1, grow: .3 });
     group.add(flames, halos);
     const pools = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
-      glowMat(radialTex(), 0xff8a3a, .16, { side: THREE.FrontSide }), cand.length);
-    cand.forEach((m, i) => { const p = new THREE.Vector3().setFromMatrixPosition(m); pools.setMatrixAt(i, trs(p.x, F + .05, p.z, 0, 0, 0, 7, 1, 7)); });
-    pools.frustumCulled = false; group.add(pools);
+      glowMat(radialTex(), 0xff8a3a, .16, { side: THREE.FrontSide }), CAND_CAP);
+    pools.count = 0; pools.frustumCulled = false; group.add(pools);
 
-    // ---- will-o'-the-wisps: cold green-blue lights drifting low over the graves ----
-    const wP = [], wC = [], wS = [], wPh = [];
-    for (let i = 0; i < 26; i++){
-      const side = i % 2 ? 1 : -1;
-      wP.push(side * (20 + R() * 44), F + 1.5 + R() * 5, -50 + R() * 80);
-      const c = R(); wC.push(.35 + .2 * c, 1, .7 + .3 * c); wS.push(.7 + R() * .6); wPh.push(R());
-    }
-    const wisps = glowPoints(wP, { colors: wC, sizes: wS, phases: wPh, map: flame, flicker: .75, rate: 1.7, drift: 2.6 });
+    // ---- WILL-O'-THE-WISPS: cold green-blue lights drifting low over the far graves — and one for each
+    //      machine, that drifts in to it while it plays (graveyard-place wispsFor) ----
+    const AMB = 14, wisps = wispPoints(AMB + FOOT.MAX_PULSE, { map: flame, pulse: SLOW });
     group.add(wisps);
+    {
+      const A = wisps.geometry.attributes;
+      for (let i = 0; i < AMB; i++){
+        const side = i % 2 ? 1 : -1, x = side * (44 + R() * 14), y = F + 1.4 + R() * 3.4, z = -50 + R() * 80, c = R();
+        A.position.setXYZ(i, x, y, z); A.aTo.setXYZ(i, x, y, z);
+        A.aColor.setXYZ(i, .35 + .2 * c, 1, .7 + .3 * c); A.aSize.setX(i, .7 + R() * .6); A.aPhase.setX(i, R()); A.aOwner.setX(i, -1);
+      }
+      wisps.geometry.setDrawRange(0, AMB);
+    }
 
-    // ---- GROUND FOG: two rolling layers of noise, fading with distance from the stage ----
+    // ---- GROUND FOG: rolling layers of noise, fading with distance from the stage — and STIRRED at each
+    //      machine's foot as it strikes (a glow round its pad in its colour, the noise pushed out) ----
     const fogNoise = noiseTex(4, 34, 52); fogNoise.wrapS = fogNoise.wrapT = THREE.RepeatWrapping;
-    const fogMat = (h, k, a) => new THREE.ShaderMaterial({
+    const FOG_N = 16;
+    const FOG_M = {                                                   // shared by every layer (place() + update() write them)
+      uMp: { value: Array.from({ length: FOG_N }, () => new THREE.Vector4()) },   // x, z, cos yaw, sin yaw
+      uMe: { value: Array.from({ length: FOG_N }, () => new THREE.Vector4()) },   // half w, half d, envelope
+      uMc: { value: Array.from({ length: FOG_N }, () => new THREE.Color()) },
+      uN: { value: 0 },
+    };
+    const fogMat = (h, k, a, stir) => new THREE.ShaderMaterial({
       uniforms: { uMap: { value: fogNoise }, uTime: { value: 0 }, uA: { value: a }, uK: { value: k },
-                  uColor: { value: new THREE.Color(0x8fb4a2) }, uBoost: { value: 1 } },
+                  uColor: { value: new THREE.Color(0x8fb4a2) }, uBoost: { value: 1 }, uStir: { value: stir }, ...FOG_M },
       vertexShader: /* glsl */`
         varying vec2 vW;
         void main(){ vec4 w = modelMatrix * vec4(position, 1.); vW = w.xz;
           gl_Position = projectionMatrix * viewMatrix * w; }`,
       fragmentShader: /* glsl */`
-        uniform sampler2D uMap; uniform float uTime, uA, uK, uBoost; uniform vec3 uColor;
+        uniform sampler2D uMap; uniform float uTime, uA, uK, uBoost, uStir; uniform vec3 uColor;
+        uniform vec4 uMp[${FOG_N}]; uniform vec4 uMe[${FOG_N}]; uniform vec3 uMc[${FOG_N}]; uniform int uN;
         varying vec2 vW;
         void main(){
           float vD = length(vW - vec2(0., -6.));                    // (per fragment: the plane has 4 vertices)
-          float n1 = texture2D(uMap, vW * .011 * uK + vec2(uTime * .006, uTime * .002)).a;
-          float n2 = texture2D(uMap, vW * .023 * uK + vec2(-uTime * .009, uTime * .005)).a;
+          // the machines: a strike lights the fog round its pad and pushes it out
+          float g = 0.; vec3 gc = vec3(0.); vec2 push = vec2(0.);
+          if (uStir > 0.) for (int i = 0; i < ${FOG_N}; i++){
+            if (i >= uN) break;
+            if (uMe[i].z < .003) continue;
+            vec2 d = vW - uMp[i].xy;
+            vec2 q = vec2(uMp[i].z * d.x - uMp[i].w * d.y, uMp[i].w * d.x + uMp[i].z * d.y);
+            vec2 e = abs(q) - uMe[i].xy;
+            float sd = length(max(e, 0.)) + min(max(e.x, e.y), 0.);
+            float w = uMe[i].z * exp(-max(sd, 0.) * .55) * smoothstep(-2.5, 0., sd);
+            g += w; gc += uMc[i] * w; push += d / (length(d) + .5) * w;
+          }
+          vec2 P = vW - push * uStir;
+          float n1 = texture2D(uMap, P * .011 * uK + vec2(uTime * .006, uTime * .002)).a;
+          float n2 = texture2D(uMap, P * .023 * uK + vec2(-uTime * .009, uTime * .005)).a;
           float n = smoothstep(.22, .72, n1 + .8 * n2);
           float fade = 1. - smoothstep(85., 130., vD);              // melts into the haze far out
-          gl_FragColor = vec4(uColor * uBoost, n * fade * uA);
+          float G = min(g, 1.);
+          vec3 tint = g > .001 ? gc / g : uColor;
+          vec3 col = mix(uColor, mix(uColor, tint, .55) * 1.7, G);
+          gl_FragColor = vec4(col * uBoost, (n + .3 * G * (1. - n)) * fade * uA * (1. + .45 * G));
         }`,
       transparent: true, depthWrite: false,
     });
-    const fogs = [[1.1, 1, .34], [2.8, .7, .2], [4.8, .45, .09]].map(([h, k, a]) => {
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(260, 260), fogMat(h, k, a));
+    const fogs = [[1.1, 1, .34, 1.6], [2.8, .7, .2, 1.1], [4.8, .45, .09, 0]].map(([h, k, a, stir]) => {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(260, 260), fogMat(h, k, a, stir));
       m.rotation.x = -Math.PI / 2; m.position.set(0, F + h, -20); m.renderOrder = 2; group.add(m);
       return m;
     });
+    const STIR = fogs.map(f => f.material.uniforms.uStir.value);
+
 
     // ---- bats wheeling across the moon (instanced, matrices recomposed in place) ----
     const batMat = new THREE.MeshBasicMaterial({ color: 0x020304, alphaMap: batTex(), alphaTest: .5, side: THREE.DoubleSide, fog: false });
@@ -471,15 +591,106 @@ export default {
     }
     let fogBase = -1;                                                 // main's density for this song (read at night)
 
+    /* ---- PLACE: where the machines stand (rooms/index.js anchors + the footing plan) → the yard round
+       them. Pure layout (graveyard-place.js) written into the pools; per machine its strike envelopes. ---- */
+    const pF = [], pM = [], pS = [];                                  // per pulse slot: flame / fog / wisp envelopes
+    let nSlot = 0, props = null;
+    const _c = new THREE.Color();
+    function place(anchors = [], plan = null){
+      const list = (anchors || []).filter(a => a && a.kind !== 'hung' && Number.isFinite(a.x) && Number.isFinite(a.z) && a.w > 0 && a.d > 0)
+        .slice(0, FOOT.MAX_PULSE);
+      const slot = new Map();
+      list.forEach((a, i) => {
+        slot.set(a.key, i);
+        const o = { P: a.P, start: a.start };
+        pF[i] = makePulse(a.cue, o); pM[i] = makePulse(a.cue, { ...o, decay: 1.1, lead: .4 }); pS[i] = makePulse(a.cue, { ...o, decay: 2.6, lead: .9 });
+      });
+      nSlot = list.length; PULSE.value.fill(0); SLOW.value.fill(0);
+      // the fog at each machine's foot: its pad (footprint + margin) if the plan has one
+      const padOf = new Map((plan?.pads || []).map(p => [p.key, p]));
+      let nf = 0;
+      for (const a of list){
+        if (nf >= FOG_N) break;
+        const p = padOf.get(a.key) || { x: a.x, z: a.z, yaw: a.yaw || 0, hw: a.w / 2, hd: a.d / 2 };
+        FOG_M.uMp.value[nf].set(p.x, p.z, Math.cos(p.yaw || 0), Math.sin(p.yaw || 0));
+        FOG_M.uMe.value[nf].set(p.hw, p.hd, 0, 0);
+        FOG_M.uMc.value[nf].set(a.color ?? 0x8fb4a2);
+        nf++;
+      }
+      FOG_M.uN.value = nf;
+      // the graves: kept clear of every machine and support; the displaced moved further out
+      const obs = obstaclesOf(anchors, plan, F), G = placeGraves(anchors, plan, { floor: F, obs }), graves = G.tall.concat(G.low);
+      poseGraves(graves);
+      // the flames: candles on the graves (the nearest machine within 6 u owns one), votives, lanterns, the gate
+      const rects = list.map(a => ({ x: a.x, z: a.z, hw: a.w / 2, hd: a.d / 2, yaw: a.yaw || 0 }));
+      const ownerAt = (x, z) => { let best = 6, who = -1; rects.forEach((r, i) => { const d = rectDist(r, x, z); if (d < best){ best = d; who = i; } }); return who; };
+      const FA = flames.geometry.attributes, HA = halos.geometry.attributes;
+      let nF = 0, nW = 0;
+      const lit = (x, y, z, size, col, halo, owner) => {
+        if (nF >= FL_CAP) return;
+        const ph = hash2(x, z);
+        FA.position.setXYZ(nF, x, y, z); FA.aColor.setXYZ(nF, col[0], col[1], col[2]); FA.aSize.setX(nF, size); FA.aPhase.setX(nF, ph); FA.aOwner.setX(nF, owner);
+        HA.position.setXYZ(nF, x, y + .08, z); HA.aColor.setXYZ(nF, col[0] * .42, col[1] * .32, col[2] * .27); HA.aSize.setX(nF, halo); HA.aPhase.setX(nF, (ph * 7.3) % 1); HA.aOwner.setX(nF, owner);
+        nF++;
+      };
+      const candle = (x, z, h, thick, owner) => {
+        if (nW >= CAND_CAP) return;
+        waxIM.setMatrixAt(nW, trs(x, F, z, 0, 0, 0, thick, h, thick));
+        pools.setMatrixAt(nW, trs(x, F + .03, z, 0, 0, 0, 3.4, 1, 3.4));
+        nW++;
+        lit(x, F + h + .1, z, .42, [1, .62, .26], 3.2, owner);
+      };
+      const GC = graveCandles(graves, obs);
+      for (const c of GC) candle(c.x, c.z, .32 + .3 * hash2(c.z, c.x), 1, ownerAt(c.x, c.z));
+      const VO = votives(anchors, plan, obs);
+      for (const v of VO) candle(v.x, v.z, .5 + .25 * hash2(v.z, v.x), 1.45, slot.get(v.key) ?? -1);
+      const FLs = plan ? footLights(plan) : [];
+      for (const l of FLs) lit(l.x, l.y - .02, l.z, .62, [1, .7, .36], 4.2, slot.get(l.key) ?? -1);
+      for (const x of [-9.5, 9.5]) lit(x, F + 5.1, FENCE_Z, 1, [1, .7, .35], 9, -1);
+      waxIM.count = pools.count = nW;
+      waxIM.instanceMatrix.needsUpdate = pools.instanceMatrix.needsUpdate = true;
+      for (const k of ['position', 'aColor', 'aSize', 'aPhase', 'aOwner']){ FA[k].needsUpdate = true; HA[k].needsUpdate = true; }
+      flames.geometry.setDrawRange(0, nF); halos.geometry.setDrawRange(0, nF);
+      // the wisps: one per machine, its home off the machine's front corner
+      const WA = wisps.geometry.attributes, WS = plan ? wispsFor(anchors, plan, F) : [];
+      let nWi = AMB;
+      for (const w of WS){
+        const i = slot.get(w.key); if (i === undefined || nWi >= AMB + FOOT.MAX_PULSE) continue;
+        _c.set(list[i].color ?? 0x8fffd8);
+        const ph = hash2(w.home[0], w.home[2]);
+        WA.position.setXYZ(nWi, w.home[0], w.home[1], w.home[2]); WA.aTo.setXYZ(nWi, w.to[0], w.to[1], w.to[2]);
+        WA.aColor.setXYZ(nWi, .3 + .25 * _c.r, .85 + .15 * _c.g, .65 + .25 * _c.b); WA.aSize.setX(nWi, .75 + .3 * ph); WA.aPhase.setX(nWi, ph); WA.aOwner.setX(nWi, i);
+        nWi++;
+      }
+      for (const k of ['position', 'aTo', 'aColor', 'aSize', 'aPhase', 'aOwner']) WA[k].needsUpdate = true;
+      wisps.geometry.setDrawRange(0, nWi);
+      props = { tall: G.tall.length, low: G.low.length, moved: G.moved, hidden: G.hidden, candles: GC.length, votives: VO.length,
+                lanterns: FLs.length, flames: nF, wisps: nWi - AMB, machines: nSlot };
+    }
+    place();                                                          // (the bare yard, until the song's machines arrive)
+    group.userData.props = () => props;                               // (dev: __dev.roomGroup().userData.props())
+
     return {
       group, ...STAGE, HW: FENCE_X, BACK: FENCE_Z, FRONT: 40,
       fog: new THREE.FogExp2(FOG, .017), background,
       mood: { ambient: [0x26324a, 1.6], hemi: [0x9db4e0, 0x141c16, .95] },   // cold moonlight
-      // the footing (rooms/footing3d.js): weathered granite, wrought iron, old planks
+      // the footing (rooms/footing3d.js): ledger stones, chest tombs, mausolea, timber scaffolds, crypt terraces
       footing: FOOT_STYLE,
+      place,
+      /** (dev) what place() put where: graves kept / moved, candles, lanterns, wisps */
+      props: () => props,
+      /** the headset: the fog's per-machine stir off (a loop per fragment per eye) — the flames still answer */
+      xr(on){ fogs.forEach((f, i) => { f.material.uniforms.uStir.value = on ? 0 : STIR[i]; }); },
       update(dt, songTime, camera, energy = 0, cues = null){
         const t = songTime;
         const L = lightning(t, cues), Dn = dawnAt(t, cues);
+        // the machines' envelopes (pure fns of songTime): flames flare, the fog stirs, the wisps drift in
+        for (let i = 0; i < nSlot; i++){
+          const f = pF[i].at(t) + .35 * pF[i].next(t);
+          PULSE.value[i] = f > 1 ? 1 : f;
+          SLOW.value[i] = Math.max(pS[i].at(t), pS[i].next(t));
+          if (i < FOG_N) FOG_M.uMe.value[i].z = Math.max(pM[i].at(t), .5 * pM[i].next(t));
+        }
         flames.material.uniforms.uTime.value = t; halos.material.uniforms.uTime.value = t;
         wisps.material.uniforms.uTime.value = t;
         flames.material.uniforms.uBoost.value = (1 + .3 * energy) * (1 - .75 * Dn);   // the candles gutter at dawn

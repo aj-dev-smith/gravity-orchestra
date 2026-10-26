@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { FOOT, railed, sideNormal } from './footing.js';
 import { studioAtlas, releaseStudioAtlas } from './studio-atlas.js';
-import { deckDepth, ring, onSide } from './footing3d.js';
+import { deckDepth, ring, onSide, gapOf, landings } from './footing3d.js';
 import { AUDIENCE } from './studio-props.js';
 /* ============================================================
    MIDNIGHT STUDIO — what the machines stand on, in a live room's idiom (a style for
@@ -54,15 +54,6 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 function hash(s){ s = String(s); let h = 2166136261; for (let i = 0; i < s.length; i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
 function rnd(seed){ let s = seed >>> 0; return () => { s += 0x6D2B79F5; let t = s; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 
-/* the kit's own rules (rooms/footing3d.js: deckDepth, ring, onSide are its exports). Two live inside
-   its forms' closure, so they are restated here — test/room-studio.test.js checks the decks' rail gaps
-   still meet the kit's ladders + stairs, and the landings its ladders rest on */
-const landings = (r, F) => { const nf = r.access?.flights || Math.max(1, Math.ceil((r.top - F) / FOOT.LAND_DY)), out = [];
-  for (let f = 1; f < nf; f++) out.push(F + (r.top - F) * f / nf); return out; };
-const gapOf = (acc, DIM) => !acc ? [null, 0, 0] : acc.kind === 'stair' ? [acc.side, acc.a1 - acc.out, acc.a1] : (() => {
-  const mid = (acc.a0 + acc.a1) / 2, off = acc.flights > 1 ? ((acc.flights - 1) % 2 ? .45 : -.45) : 0;
-  return [acc.side, mid + off - DIM.LAD_HALF - .15, mid + off + DIM.LAD_HALF + .15]; })();
-
 /* ---- the WRITER: the studio's own slot in the kit's merged buffers, with uvs into the atlas
    (the kit's writer projects world uvs — a rug's border or a case's corner needs its own) ---- */
 const FACE = {
@@ -73,8 +64,8 @@ const FACE = {
 function writer(kit){
   if (kit.__studio) return kit.__studio;
   const NV = 16384;                                                // (a song's studio slot: ≈ 6–14 k verts — one allocation, no regrowth)
-  const b = kit._bufs[SLOT] || (kit._bufs[SLOT] = { edge: false, p: new Float32Array(3 * NV), n: new Float32Array(3 * NV), uv: new Float32Array(2 * NV),
-    c: null, k: null, i: new Uint32Array(6 * NV / 4), nv: 0, ni: 0, units: new Set() });
+  const b = kit.slot(SLOT);                                        // (the kit's buffer for our slot: we write its uvs ourselves)
+  if (!b.nv && b.p.length < 3 * NV){ b.p = new Float32Array(3 * NV); b.n = new Float32Array(3 * NV); b.uv = new Float32Array(2 * NV); b.i = new Uint32Array(6 * NV / 4); }
   let FX = 0, FZ = 0, C = 1, Sn = 0, unit = null, seen = null;
   const grow = (nv, ni) => {
     if ((b.nv + nv) * 3 > b.p.length){ const cap = Math.max(b.p.length * 2, (b.nv + nv) * 3);
@@ -267,8 +258,8 @@ export function openSpot(p, side = null){
   return null;
 }
 
-/* a claimed form's placeholder: ONE empty group per build (the hooks draw into the merged slots) */
-const claim = K => K.__studioClaim || (K.__studioClaim = Object.assign(new THREE.Group(), { name: 'footing:studio' }));
+/* a claimed form: the hooks draw into the merged slots themselves — `true` = handled, nothing to add (footing3d.js) */
+const claim = () => true;
 
 export function studioFooting(){
   let A = null, U = null, made = null;
@@ -673,7 +664,7 @@ export function studioFooting(){
       const W = writer(K).frame(p), F = K.floor, T = p.top, D = deckDepth(p), yB = T - D;
       stageDeck(K, W, p, T, D);
       casePiers(W, F, p, yB, hash(p.key));
-      if (railed('mid')){ const [s, g0, g1] = gapOf(p.access, K.DIM); K.forms.rails(p, T, s, g0, g1); }
+      if (railed('mid')){ const [s, g0, g1] = gapOf(p.access); K.forms.rails(p, T, s, g0, g1); }
       const fs = frontSide(p), sc = clamp((T - F) / 6, 1, 2.5);
       const pl = panel(K, W, p, fs, .025, yB - Math.min(.55, (yB - F) * .2), T - .1, p.key, p.pulse, null, null, { scale: sc });
       strip(K, p, [fs, ...ADJ[fs]], .025, T - .135, T - .1, p.color, p.pulse, pl);
@@ -688,7 +679,7 @@ export function studioFooting(){
       stageDeck(K, W, p, T, D);
       const P = groundSupport(K, W, F, p, yB, fs);
       footCases(W, F, p, hash(p.key), P, fs, K.DIM);
-      const [s, g0, g1] = gapOf(p.access, K.DIM); K.forms.rails(p, T, s, g0, g1);
+      const [s, g0, g1] = gapOf(p.access); K.forms.rails(p, T, s, g0, g1);
       const pl = panel(K, W, p, fs, .025, yB - K.DIM.BEAM * .85, T - .1, p.key, p.pulse, null, null, { scale: sc });
       strip(K, p, [fs, ...ADJ[fs]], .025, T - .135, T - .1, p.color, p.pulse, pl);
       access(K, W, F, p, T, false);
@@ -718,7 +709,7 @@ export function studioFooting(){
       if (L.band === 'low') K.box('base', -L.hw + .05, L.hw - .05, F - .04, yB, -L.hd + .05, L.hd - .05, NOBOT);
       else if (L.band === 'mid') casePiers(W, F, L, yB, hash(L.id));
       else { const P = groundSupport(K, W, F, L, yB, '+v'); footCases(W, F, L, hash(L.id), P, '+v', K.DIM); }
-      if (railed(L.band)){ const [s, g0, g1] = gapOf(L.access, K.DIM); K.forms.rails(L, T, s, g0, g1); }
+      if (railed(L.band)){ const [s, g0, g1] = gapOf(L.access); K.forms.rails(L, T, s, g0, g1); }
       access(K, W, F, L, T, L.band === 'low');
       // ground support: a cable tray hung under the deck (behind the front columns, below the beam),
       // a few cables sagging out of it

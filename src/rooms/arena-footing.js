@@ -191,8 +191,10 @@ const NOSING = '#e9eef6';
 /* ============================================================ the style ============================ */
 export function arenaFooting({ envMap = null, alu = null } = {}){
   const edge = vuEdgeMat();
-  let made = null;
   const NONE = new THREE.Group(); NONE.name = 'footing:arena';     // (a form drawn into the merged slots: nothing of its own)
+  /* the materials are made with the ROOM (its textures painted once, at its build — never inside a footing
+     build, which runs again on every lift); the footing only borrows them */
+  let made = null;
   const mats = () => {
     if (made) return made;
     const serge = sergeTex();
@@ -209,6 +211,7 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
     made._own = ['deck', 'skirt', 'galv', 'wood'].concat(alu ? [] : ['steel']);
     return made;
   };
+  mats();
 
   /* ---------------- the pieces (all in the current kit frame) ---------------- */
   /* a Litedeck top at T: the aluminium frame band (its top shows as a rim) round a black ply sheet */

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { planFooting, footingBoxes, FOOT } from '../src/rooms/footing.js';
 import { buildFooting, makeFootingMats } from '../src/rooms/footing3d.js';
-import { arenaFooting, ARENA_FOOT, vuCode, frontSide } from '../src/rooms/arena-footing.js';
+import { arenaFooting, ARENA_FOOT, vuCode } from '../src/rooms/arena-footing.js';
 import { STAGE } from '../src/rooms/common.js';
 
 /* THE METAL ARENA'S FOOTING (src/rooms/arena-footing.js): real staging gear — Litedecks, drum risers
@@ -106,10 +106,26 @@ describe('arena footing: real staging gear, drawn into the kit', () => {
     for (let i = 0; i < 4; i++){ expect(thr[i]).toBeGreaterThan(thr[i + 1]); expect(thr[n - 1 - i]).toBeGreaterThan(thr[n - 2 - i]); }
     for (const t of thr){ expect(t).toBeGreaterThan(.02); expect(t).toBeLessThan(.98); }
   });
-  it('the fascia faces the house: the side whose outward normal points most to +z', () => {
-    expect(frontSide({ x: 0, z: 0, hw: 2, hd: 1, yaw: 0 })).toBe('+v');
-    expect(frontSide({ x: 0, z: 0, hw: 2, hd: 1, yaw: Math.PI / 2 })).toBe('-u');        // (local +u → world (cos, −sin): a quarter turn sends it to −z)
-    expect(frontSide({ x: 0, z: 0, hw: 2, hd: 1, yaw: Math.PI })).toBe('-v');
+  it('a loft\'s ring is shared: every member lights the stretch nearest it, and only that', () => {
+    const f = build(), e = named(f, 'edge').geometry, pos = e.attributes.position.array, code = e.attributes.aPulse.array;
+    for (const L of PLAN.lofts){
+      const M = PLAN.pads.filter(p => p.loft === L.id), bySlot = new Map(M.map(m => [m.pulse, m]));
+      let n = 0;
+      for (let i = 0; i < code.length; i++){
+        const v = code[i]; if (v < 0) continue;
+        const s = Math.floor(v + 1e-4); if (v - s < .005 || !bySlot.has(s)) continue;
+        const x = pos[3 * i], z = pos[3 * i + 2];
+        if (x < L.x0 - .2 || x > L.x1 + .2 || z < L.z0 - .2 || z > L.z1 + .2) continue;
+        // (on the loft's face: its owner is the member nearest that point, within a segment's length)
+        const d = m => { const c = Math.cos(m.yaw || 0), sn = Math.sin(m.yaw || 0), dx = x - m.x, dz = z - m.z;
+          return Math.hypot(Math.max(Math.abs(c * dx - sn * dz) - m.hw, 0), Math.max(Math.abs(sn * dx + c * dz) - m.hd, 0)); };
+        expect(d(bySlot.get(s)), `${L.id}: a segment of ${bySlot.get(s).key}`).toBeLessThanOrEqual(Math.min(...M.map(d)) + ARENA_FOOT.SEG + .05);
+        n++;
+      }
+      expect(n, L.id).toBeGreaterThan(0);
+      for (const m of M) expect([...code].some(v => v >= 0 && Math.floor(v + 1e-4) === m.pulse && v - m.pulse > .005), `${m.key} lit`).toBe(true);
+    }
+    f.dispose();
   });
   it('a machine that dips into its base (the kit\'s pistons): solid at least that deep under it, at every height', () => {
     const crossing = (m, x, z) => {

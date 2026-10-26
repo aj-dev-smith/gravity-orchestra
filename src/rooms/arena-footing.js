@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { FOOT, railed, sideNormal } from './footing.js';
+import { FOOT } from './footing.js';
 /* ============================================================
    THE METAL ARENA'S FOOTING — what the machines stand on, in REAL STAGING GEAR.
    A room style for rooms/footing3d.js (its header is the contract): every form below writes into
@@ -69,11 +69,13 @@ const slabDepth = r => Math.max(kitDepth(r), A.FRAME + A.VALANCE);
 const onSide = (r, side) => { const k = side[0] === '+' ? 1 : -1;
   return side[1] === 'u' ? (a, o) => [k * (r.hw + o), a] : (a, o) => [a, k * (r.hd + o)]; };
 const sideHalf = (r, side) => side[1] === 'u' ? r.hd : r.hw;
-/* the side of a rect that faces the house (+z): where its fascia goes */
-export function frontSide(r){
-  let best = '+v', bz = -Infinity;
-  for (const s of ['+v', '+u', '-u', '-v']){ const nz = sideNormal(r, s)[1]; if (nz > bz + 1e-9){ bz = nz; best = s; } }
-  return best;
+/* a rect's local (u, v) → world (x, z) (the kit's frame: local +u runs along world (cos, −sin) of its yaw) */
+const toW = (r, u, v) => { const c = Math.cos(r.yaw || 0), s = Math.sin(r.yaw || 0); return [r.x + c * u + s * v, r.z - s * u + c * v]; };
+/* how far a world point lies from a machine's footprint (its turned rect) */
+function rectDist(m, x, z){
+  const c = Math.cos(m.yaw || 0), s = Math.sin(m.yaw || 0), dx = x - m.x, dz = z - m.z;
+  const u = c * dx - s * dz, v = s * dx + c * dz;
+  return Math.hypot(Math.max(Math.abs(u) - m.hw, 0), Math.max(Math.abs(v) - m.hd, 0));
 }
 /* where a support's rails open for its access (the kit's gapOf): [side, a0, a1] along that side */
 function gapOf(acc){
@@ -232,14 +234,31 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
   function ledLine(k, r, y0, y1, color, slot){
     for (const s of ['+v', '-v', '+u', '-u']){ const h = sideHalf(r, s) - A.LIP; faceEdge(k, r, s, -h, h, y0, y1, -A.LIP - .004, -A.LIP + .014, color, slot); }
   }
-  /* the VU fascia: n LED segments across one side between s0..s1 (skipping `skip` [a0, a1]) */
-  function vuFascia(k, r, side, s0, s1, y0, y1, color, slot, skip = null){
-    if (!(s1 - s0 > .6) || !(y1 - y0 > .04)) return;
-    const n = Math.max(3, Math.round((s1 - s0) / A.SEG)), pitch = (s1 - s0) / n, g = Math.min(.09, pitch * .2);
-    for (let i = 0; i < n; i++){
-      const a0 = s0 + i * pitch + g / 2, a1 = a0 + pitch - g;
-      if (skip && a1 > skip[0] && a0 < skip[1]) continue;
-      faceEdge(k, r, side, a0, a1, y0, y1, -A.LIP - .004, -A.LIP + .016, color, vuCode(slot, i, n));
+  /* the VU RING: LED segments right round a deck's face (y0..y1). Each segment answers the machine
+     nearest it (a loft's members share its ring: a meter each, on the stretch that is theirs) and every
+     run of one machine's segments fills from its own centre out; the span its stair / ladder climbs is
+     left dark */
+  function vuRing(k, r, y0, y1, owners, acc){
+    if (!(y1 - y0 > .04) || !owners.length) return;
+    for (const side of ['+v', '-v', '+u', '-u']){
+      const half = sideHalf(r, side) - .2; if (!(half > .3)) continue;
+      const n = Math.max(2, Math.round(2 * half / A.SEG)), pitch = 2 * half / n, g = Math.min(.09, pitch * .2), at = onSide(r, side);
+      const skip = acc && acc.side === side ? [acc.a0 - .12, acc.a1 + .12] : null;
+      const seg = [];
+      for (let i = 0; i < n; i++){
+        const a0 = -half + i * pitch + g / 2, a1 = a0 + pitch - g;
+        if (skip && a1 > skip[0] && a0 < skip[1]){ seg.push(null); continue; }
+        const [x, z] = toW(r, ...at((a0 + a1) / 2, 0));
+        let o = owners[0], best = Infinity;
+        for (const m of owners){ const d = rectDist(m, x, z); if (d < best - 1e-9){ best = d; o = m; } }
+        seg.push({ a0, a1, o });
+      }
+      for (let i = 0; i < n;){
+        if (!seg[i]){ i++; continue; }
+        let j = i; while (j + 1 < n && seg[j + 1] && seg[j + 1].o === seg[i].o) j++;
+        for (let t = i; t <= j; t++) faceEdge(k, r, side, seg[t].a0, seg[t].a1, y0, y1, -A.LIP - .004, -A.LIP + .016, seg[t].o.color, vuCode(seg[t].o.pulse, t - i, j - i + 1));
+        i = j + 1;
+      }
     }
   }
   /* glow-tape spike Ls at the four corners of a rect (inset), on a deck at T */
@@ -259,12 +278,6 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
     k.box('skirt', -r.hw + A.LIP, r.hw - A.LIP, y0, T - fr, -r.hd + A.LIP, r.hd - A.LIP, SIDES);
     k.box('deck', -r.hw + A.LIP, r.hw - A.LIP, y0, y0 + .02, -r.hd + A.LIP, r.hd - A.LIP, NY);
     return { D, y0, fr };
-  }
-  /* the fascia's span on the front side (clear of its access, if the access climbs that side) */
-  function frontSpan(r, acc){
-    const side = frontSide(r), h = sideHalf(r, side) - .22;
-    const skip = acc && acc.side === side ? [acc.a0 - .12, acc.a1 + .12] : null;
-    return { side, s0: -h, s1: h, skip };
   }
 
   /* STAIRS hugging one side (footing.js access: steps rising along a0 → the landing at a1 − out … a1).
@@ -385,10 +398,8 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
       }
       const T = p.top, fr = deckTop(k, p, T, F);
       k.box('skirt', -p.hw + A.LIP, p.hw - A.LIP, F - .01, T - fr, -p.hd + A.LIP, p.hd - A.LIP, SIDES);
-      if (p.kind === 'kit'){                                            // the drum riser, even at its own height: its VU fascia
-        const f = frontSpan(p, null);
-        vuFascia(k, p, f.side, f.s0, f.s1, Math.max(F + .04, T - fr - .05 - A.FASCIA), T - fr - .05, p.color, p.pulse);
-      } else ledLine(k, p, T - fr - .05, T - fr - .012, p.color, p.pulse);
+      if (p.kind === 'kit') vuRing(k, p, Math.max(F + .04, T - fr - .05 - A.FASCIA), T - fr - .05, [p], null);   // (the drum riser, even at its own height)
+      else ledLine(k, p, T - fr - .05, T - fr - .012, p.color, p.pulse);
       spikes(k, p, T, p.color);
       return NONE;
     },
@@ -396,8 +407,8 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
       if (p.open) return null;
       const F = k.floor, T = p.top, fr = deckTop(k, p, T, F);
       k.box('skirt', -p.hw + A.LIP, p.hw - A.LIP, F - .01, T - fr, -p.hd + A.LIP, p.hd - A.LIP, SIDES);
-      const f = frontSpan(p, p.access), fh = Math.max(.14, Math.min(A.FASCIA, (T - F - fr) * .42));
-      vuFascia(k, p, f.side, f.s0, f.s1, T - fr - .07 - fh, T - fr - .07, p.color, p.pulse, f.skip);
+      const fh = Math.max(.14, Math.min(A.FASCIA, (T - F - fr) * .42));
+      vuRing(k, p, T - fr - .07 - fh, T - fr - .07, [p], p.access);
       spikes(k, p, T, p.color);
       access(k, p, T, F, 'stage');
       return NONE;
@@ -406,8 +417,7 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
       if (p.open) return null;
       const F = k.floor, T = p.top, s = slab(k, p, T, F);
       layher(k, p, T, s.y0, F, gapOf(p.access));
-      const f = frontSpan(p, null);
-      vuFascia(k, p, f.side, f.s0, f.s1, s.y0 + .1, T - s.fr - .08, p.color, p.pulse);
+      vuRing(k, p, s.y0 + .1, T - s.fr - .08, [p], null);
       spikes(k, p, T, p.color);
       access(k, p, T, F, 'scaffold');
       return NONE;
@@ -417,8 +427,7 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
       const F = k.floor, T = p.top, s = slab(k, p, T, F);
       k.forms.trussFrame(p, s.y0, landings(p, F));                       // (the kit's box truss: 'steel' = the rig's aluminium)
       const g = gapOf(p.access); k.forms.rails(p, T, g?.[0] ?? null, g?.[1] ?? 0, g?.[2] ?? 0);
-      const f = frontSpan(p, null);
-      vuFascia(k, p, f.side, f.s0, f.s1, s.y0 + .1, T - s.fr - .08, p.color, p.pulse);
+      vuRing(k, p, s.y0 + .1, T - s.fr - .08, [p], null);
       spikes(k, p, T, p.color);
       access(k, p, T, F, 'scaffold');
       return NONE;
@@ -439,18 +448,11 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
         }
       }
       access(k, L, T, F, L.band === 'low' ? 'stage' : 'scaffold');
-      // each member's light: its stretch of the front fascia (a meter of its own) + spike marks on the deck
-      const side = '+v', yTop = T - fr - (L.band === 'low' ? .07 : .08);
+      // the members share the ring (each its own meter on the stretch nearest it) + spike marks on the deck
+      const yTop = T - fr - (L.band === 'low' ? .07 : .08);
       const yBot = L.band === 'low' ? Math.max(y0, yTop - Math.max(.14, Math.min(A.FASCIA, (T - F - fr) * .42))) : y0;
-      const skip = L.access && L.access.side === side ? [L.access.a0 - .12, L.access.a1 + .12] : null;
-      for (const m of members){
-        let mu0 = Infinity, mu1 = -Infinity;
-        const c = Math.cos(m.yaw || 0), sn = Math.sin(m.yaw || 0);
-        for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]){ const x = m.x + c * a * m.hw + sn * b * m.hd - L.x; mu0 = Math.min(mu0, x); mu1 = Math.max(mu1, x); }
-        mu0 = Math.max(-L.hw + .22, mu0 + .12); mu1 = Math.min(L.hw - .22, mu1 - .12);
-        vuFascia(k, L, side, mu0, mu1, yBot, yTop, m.color, m.pulse, skip);
-        k.frame(m); spikes(k, m, Math.max(T, m.top), m.color); k.frame(L);
-      }
+      vuRing(k, L, yBot, yTop, members, L.band === 'low' ? L.access : null);
+      for (const m of members){ k.frame(m); spikes(k, m, Math.max(T, m.top), m.color); k.frame(L); }
       return NONE;
     },
     dispose(){

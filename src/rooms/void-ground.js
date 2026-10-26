@@ -231,7 +231,7 @@ export function makeKeelBeamMat({ gain = .42, falloff = 2.2, edge = 1.4, fadeIn 
         float a = pow(min(abs(dot(vN, vV)), 1.), uEdge) * pow(y, uFall) * smoothstep(1., 1. - uIn, y) * uGain;
         gl_FragColor = vec4(vC, a);
       }`,
-    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,   // (one pass: the host's singlePassFlats, before its prewarm)
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true,   // (additive: one pass is the same light — perftune.js)
   });
 }
 export function makeCrystalMat(U){

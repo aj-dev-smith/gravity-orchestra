@@ -337,3 +337,31 @@ describe('the Void\'s SKY ROCKS (void-isles.js skyRocks): a chandelier whose rod
     expect(n).toBeGreaterThan(0);
   });
 });
+
+describe('the Void ground materials (wave 4: raised rock / stone walls catch the nebula)', () => {
+  const chunk = THREE.ShaderLib.standard;
+  const compile = m => { const sh = { uniforms: {}, vertexShader: chunk.vertexShader, fragmentShader: chunk.fragmentShader }; m.onBeforeCompile(sh); return sh; };
+  it('rock: the under-glow AND the raised fill + rim, gated by height over the floor; stone: walls only', () => {
+    const M = makeVoidMats({ floor: STAGE.FLOOR });
+    const r = compile(M.rock), s = compile(M.stone);
+    for (const sh of [r, s]){
+      expect(sh.uniforms.uF.value).toBe(STAGE.FLOOR);
+      expect(sh.vertexShader).toContain('vWy =');
+      expect(sh.fragmentShader).toContain('smoothstep(uF +');                  // nothing at / under the island top changes
+      expect(sh.fragmentShader).toMatch(/min\(abs\(dot\(normal, normalize\(vViewPosition\)\)\), 1\.\)/);   // (capped: no bloom blob)
+    }
+    expect(r.fragmentShader).toContain('uUnder');
+    expect(s.fragmentShader).toContain('inverseTransformDirection(normal, viewMatrix).y');   // a stone TOP stays dark
+    expect(M.rock.customProgramCacheKey()).not.toBe(M.stone.customProgramCacheKey());
+    M.dispose();
+  });
+  it('the SKY ROCKS keep their old look: the raised gate closes under the ceiling, where every sky rock hangs', () => {
+    const M = makeVoidMats({ floor: STAGE.FLOOR, ceil: STAGE.CEIL });
+    for (const sh of [compile(M.rock), compile(M.stone)]){
+      expect(sh.uniforms.uC.value).toBe(STAGE.CEIL);
+      expect(sh.fragmentShader).toContain('(1. - smoothstep(uC - 3., uC - .5, vWy))');
+    }
+    // (a sky rock's built body lies at or above the ceiling — the 'built: … nothing below its soffit' test — past the close)
+    M.dispose();
+  });
+});

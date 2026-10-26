@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { FOOT, railed } from './footing.js';
-import { newBuf, quad } from './footing3d.js';
+import { quad } from './footing3d.js';
 import { GLYPHS, hash2, glyphOf } from './void-isles.js';
 /* ============================================================
    THE VOID's FOOTING — what the machines stand on, in the Void's own idiom (a rooms/footing3d.js
@@ -26,7 +26,7 @@ import { GLYPHS, hash2, glyphOf } from './void-isles.js';
    room's `rune` material IS the footing's edge material): runes carved round its deck's fascia /
    its terrace, faint on a stack's stones, a ring round an open stand's feet.
 
-   Cost: everything is written into the kit's merged slot buffers (footing3d newBuf / quad) —
+   Cost: everything is written into the kit's merged slot buffers (footing3d kit.slot / quad) —
    'base' = ROCK, 'deck' = dressed STONE, 'glow' = crystal, 'haze' = soft light, + the kit's edge
    (the runes): ≤ 5 draws for a whole song's footing, whatever it holds. Everything stays inside
    footingBoxes(plan) (test/room-void.test.js): the shot solve, the director's glide test and XR
@@ -203,8 +203,8 @@ function crystal(kit, b, u, y, v, r, L, dir = UP, k = 0){
 
 /* ---- the slots a form writes into (lazy: a slot it never touches never learns about its support) ---- */
 function slotsOf(kit, spec){
-  const unit = spec.loft || spec.id || spec.key, got = {};
-  const get = name => got[name] || (got[name] = (() => { const b = kit._bufs[name] || (kit._bufs[name] = newBuf()); (b.units ||= new Set()).add(unit); return b; })());
+  const got = {};                                                        // (kit.frame(spec) is set: kit.slot registers each to its support)
+  const get = name => got[name] || (got[name] = kit.slot(name));
   return { get rock(){ return get('base'); }, get stone(){ return get('deck'); }, get glow(){ return get('glow'); }, get haze(){ return get('haze'); }, edge: kit._edge };
 }
 const colOf = (spec, k = 1) => _col.set(spec.color ?? '#8fa6c8').multiplyScalar(k).clone();
@@ -547,7 +547,6 @@ function openStand(kit, S, p){
 
 /* ---- the STYLE (rooms/footing3d.js): the room hands over its materials ---- */
 export function voidFootingStyle(M){
-  const NONE = new THREE.Group(); NONE.name = 'void-footing';           // (handled: every form writes into the merged slots)
   const raised = (p, kit, S) => {
     const T = p.top, D = deckDepth(p, false), F = kit.floor, H = T - F;
     if (p.band === 'low'){ terrace(kit, S, p, T); access(kit, S, p, T, p.access, true); return; }
@@ -567,11 +566,11 @@ export function voidFootingStyle(M){
   return {
     key: 'void',
     mats: () => ({ base: M.rock, deck: M.stone, steel: M.rock, glow: M.glow, haze: M.haze, edge: M.rune }),
-    edge: () => NONE,                                                   // (its light is the forms' own runes)
-    flush(p, kit){ dais(kit, slotsOf(kit, p), p, p.fixed ? kit.floor + FOOT.KERB : p.top); return NONE; },
-    low(p, kit){ const S = slotsOf(kit, p); p.open ? openStand(kit, S, p) : raised(p, kit, S); return NONE; },
-    mid(p, kit){ const S = slotsOf(kit, p); p.open ? openStand(kit, S, p) : raised(p, kit, S); return NONE; },
-    high(p, kit){ const S = slotsOf(kit, p); p.open ? openStand(kit, S, p) : raised(p, kit, S); return NONE; },
+    edge: () => true,                                                   // (its light is the forms' own runes)
+    flush(p, kit){ dais(kit, slotsOf(kit, p), p, p.fixed ? kit.floor + FOOT.KERB : p.top); return true; },
+    low(p, kit){ const S = slotsOf(kit, p); p.open ? openStand(kit, S, p) : raised(p, kit, S); return true; },
+    mid(p, kit){ const S = slotsOf(kit, p); p.open ? openStand(kit, S, p) : raised(p, kit, S); return true; },
+    high(p, kit){ const S = slotsOf(kit, p); p.open ? openStand(kit, S, p) : raised(p, kit, S); return true; },
     /* a FLOATING RIDGE: the deck on a rock keel, carried by the band's support spaced along it */
     loft(L, kit){
       const S = slotsOf(kit, L), F = kit.floor, T = L.top, D = deckDepth(L, true), members = kit.plan.pads.filter(p => p.loft === L.id);
@@ -610,7 +609,7 @@ export function voidFootingStyle(M){
         const runs = along ? [[[m0, -e], [m1, -e]], [[m1, e], [m0, e]]] : [[[e, m0], [e, m1]], [[-e, m1], [-e, m0]]];
         for (const run of runs) fasciaRunes(kit, S, run, yR, hR, colOf(m), m.pulse, 0, 0, false);
       }
-      return NONE;
+      return true;
     },
   };
 }
@@ -703,7 +702,7 @@ export function makeRuneMat({ slots = FOOT.MAX_PULSE, base = .22, gain = 1.7 } =
   });
 }
 export const GLOW_I = 1.15;                                           // the crystals' resting glow (the room breathes it)
-export function makeVoidMats({ envMap = null, floor = -5.5 } = {}){
+export function makeVoidMats({ envMap = null, floor = -5.5, ceil = 36 } = {}){
   const rt = rockTex(), st = stoneTex();
   const M = {
     rock: new THREE.MeshStandardMaterial({ color: 0xc4b6bc, map: rt, roughness: .88, metalness: .04, emissive: 0x2c2444, emissiveMap: rt, emissiveIntensity: 1 }),
@@ -715,14 +714,36 @@ export function makeVoidMats({ envMap = null, floor = -5.5 } = {}){
   };
   /* the rock's UNDERSIDE glows: the haze and the pillars of light below light it from beneath (a pure fn
      of height: nothing over the floor changes) — rooms own no lights */
-  const under = { uUnder: { value: new THREE.Color(0x3a3a9a) }, uY0: { value: floor - 1.5 }, uY1: { value: floor - 13 } };
+  const under = { uUnder: { value: new THREE.Color(0x3a3a9a) }, uY0: { value: floor - 1.5 }, uY1: { value: floor - 13 },
+    /* …and what is RAISED over the island (a cairn, a pillar, a ridge, a terrace's wall) catches the nebula:
+       a soft fill + a violet rim on its silhouette, so a stack of stones reads as stone against the bright
+       sky instead of a navy cut-out (a pure fn of height + view: the islands below the floor are untouched, and so
+       are the SKY ROCKS — the gate closes again under the ceiling, uC, where they hang: void-isles skyRocks) */
+    uRaise: { value: new THREE.Color(0x231e46) }, uRim: { value: new THREE.Color(0x7a62c4) }, uF: { value: floor }, uC: { value: ceil } };
   M.rock.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, under);
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vWy;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWy = (modelMatrix * vec4(transformed, 1.)).y;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vWy; uniform vec3 uUnder; uniform float uY0, uY1;')
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += uUnder * smoothstep(uY0, uY1, vWy) * (.55 + .45 * diffuseColor.g);');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vWy; uniform vec3 uUnder, uRaise, uRim; uniform float uY0, uY1, uF, uC;')
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+totalEmissiveRadiance += uUnder * smoothstep(uY0, uY1, vWy) * (.55 + .45 * diffuseColor.g);
+{ float up = smoothstep(uF + .15, uF + 1.6, vWy) * (1. - smoothstep(uC - 3., uC - .5, vWy)), fr = pow(1. - min(abs(dot(normal, normalize(vViewPosition))), 1.), 2.5);
+  totalEmissiveRadiance += up * (uRaise + uRim * fr) * (.6 + .4 * diffuseColor.g); }`);
   };
-  M.rock.customProgramCacheKey = () => 'void-rock-under';
+  M.rock.customProgramCacheKey = () => 'void-rock-under-rim';
+  /* the dressed stone's WALLS over the island (a terrace's face, a carved step's riser, a deck's fascia) take
+     the same fill + rim, so a low riser's front reads as stone, not a black panel; its walkable tops stay dark */
+  const wall = { uRaise: { value: new THREE.Color(0x1d1a3c) }, uRim: under.uRim, uF: under.uF, uC: under.uC };
+  M.stone.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, wall);
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vWy;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWy = (modelMatrix * vec4(transformed, 1.)).y;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vWy; uniform vec3 uRaise, uRim; uniform float uF, uC;')
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+{ float up = smoothstep(uF + .3, uF + 1.6, vWy) * (1. - smoothstep(uC - 3., uC - .5, vWy)) * (1. - abs(inverseTransformDirection(normal, viewMatrix).y)),
+    fr = pow(1. - min(abs(dot(normal, normalize(vViewPosition))), 1.), 2.5);
+  totalEmissiveRadiance += up * (uRaise + .6 * uRim * fr) * (.6 + .4 * diffuseColor.g); }`);
+  };
+  M.stone.customProgramCacheKey = () => 'void-stone-wall';
   return M;
 }

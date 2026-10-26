@@ -228,7 +228,7 @@ export function makeKeelBeamMat({ gain = .42, falloff = 2.2, edge = 1.4, fadeIn 
       varying vec3 vN; varying vec3 vV; varying float vY; varying vec3 vC;
       void main(){
         float y = clamp(vY, 0., 1.);
-        float a = pow(abs(dot(vN, vV)), uEdge) * pow(y, uFall) * smoothstep(1., 1. - uIn, y) * uGain;
+        float a = pow(min(abs(dot(vN, vV)), 1.), uEdge) * pow(y, uFall) * smoothstep(1., 1. - uIn, y) * uGain;
         gl_FragColor = vec4(vC, a);
       }`,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true,   // (additive: one pass is the same light — perftune.js)

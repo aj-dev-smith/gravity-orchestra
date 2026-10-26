@@ -38,7 +38,7 @@ const MAX_BLOCKED = 3;                                          // 3 / 15 = 20 %
 const galleryOpts = R => ({ cx: R.cx, bandY: R.bandY, eyeY: 20, wallTop: R.wall[3],
   hung: R.hung || (R.fixed || []).map(f => [f.box[0], f.box[1], f.box[4], f.box[5]]) });
 /* a station's world box as solved (one the solve raised onto the rear GALLERY stands its whole height higher) */
-const boxSolved = (solved, it) => { const p = solved[it.key], up = p.y === undefined ? 0 : p.y - (it.deck ?? 0);
+const boxSolved = (solved, it) => { const p = solved[it.key], up = p.y === undefined ? (p.lift || 0) : p.y - (it.deck ?? 0);   // (p.lift: a riser — stations.js)
   return [p.x + it.box[0], p.x + it.box[1], it.y0 + up, it.top + up, p.z + it.box[2], p.z + it.box[3]]; };
 /* the FOOTING at the solved spots: each item's footprint + heights as main anchored it (the fixture's
    `foot`, relative to its spot and deck), the belt from its wall, the hung stations as obstacles —

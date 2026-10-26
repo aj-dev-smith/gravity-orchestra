@@ -50,6 +50,15 @@
               own slot — the machine the song is about stands nearest the audience,
               on the centre line, under the sightline to the strike band, and
               nobody else stands in its foreground.
+       THE DRUM RISER (2026-10-25): while the band plays, the KIT leaves the front row for the right
+              wing (KIT_RISER — the music box's spot, free whenever it sits the song out) on a low
+              dais: the drummer behind the band, as on any rock stage. From the wide's eyes (front,
+              left of centre) a kit in the front-right shadows the whole right-back wedge — Forge
+              and Mars piled the band on the left; up on the wing it IS the right side's depth,
+              and its arch reads over the front row. Only where the wing is free and the kit is seen.
+       BALANCE: a band machine picking a seat takes the LIGHTER side first (the side with fewer
+              machines already standing; a centre seat is either) — the band spreads across the
+              belt instead of stacking on its first-choice side.
        left wing, HUNG: the VOLLEY court — two walls trading one marble, flown
               over the marimba / bass tier, its strike plane yawed to face the
               audience's eye (AUDIENCE dx −6, z 40). It rides out with the left
@@ -100,7 +109,7 @@ export const STATIONS = {
   // right of the organ loft — each seen OVER the belt, never in front of its band
   // (on the FLOOR: front-left first, the singing bowls' spot)
   strum:    { x: -28.9, y: 0.0, z: -11, yaw:  .2,  w: 12, d: 6, gallery: true, floor: ['left', 'wingL', 'centre', 'right', 'wingR', 'cornerL', 'cornerR', 'backL', 'backR'] },
-  dulcimer: { x: -27.5, y: -.5, z: 17, yaw: 0, w: 11.6, d: 10 },  // front-left corner, low: an open grand, keyboard to the audience (beside the bowls)
+  dulcimer: { x: -27.5, y: -.5, z: 17, yaw: 0, w: 11.6, d: 10, turn: .55 },  // front-left corner, low: an open grand, keyboard to the audience (beside the bowls) (turn: as a LONE star — loneTurn)
   // a CHANDELIER hung over the belt: x/z follow the belt wall's centre, y its top (see HANG)
   ricochet: { x:   0,  y: 16,  z:  0,  yaw:  0,   w: 16, d: 16, hang: true },
   // a flying COURT hung over the LEFT WING (x is relative to the belt centre and RIDES OUT with
@@ -223,6 +232,42 @@ export const STAR_GRAZE = 1.5;
 export const STAR_LEAD = 2.5;       // …and nobody placed after it stands nearer the audience than it (its centre ≤ the star's + this)
 const BAND_FRONT = 21;              // a band machine that finds no seat may stand anywhere on the floor — its centre short of this z (the lens)
 const LOFT_SPACE = .3;              // two machines on ONE gallery loft stand this far apart (one deck: no air between them needed)
+/* THE DRUM RISER — the kit's spot while the BAND plays (any riff / strum / horns / pogo): the right wing
+   (x relative to the belt's centre — it rides out with the wing like the tier), on a LOW dais (lift, u: the
+   footing's 'low' band, a riser with steps — rooms/footing.js), so the kit's drums read over the band's
+   front row. Taken only when it is free (within SEAT_R) and the kit is SEEN there (HIDE_MAX, its raised
+   silhouette); else the kit keeps its front-row slot (KIT_ROOM). Never the star, never a kit the user put
+   on the floor (lift 0); a kit the user PINNED there (stage edit) stands on it too. */
+export const KIT_RISER = { x: 22.5, z: 5, lift: 3 };
+/* the riser's spot this room (world x, z — riding out with the right wing on a wide belt, as the solve's own
+   home does) and the rise a kit standing at (x, z) takes from it: KIT_RISER.lift when the band plays (`keys`:
+   the floor stations' keys) and the kit stands within SEAT_R of it, else 0. The solve's PINNED kit and main's
+   stage edit (a kit dragged on or off the wing) both ask this, so a live move matches the reload. */
+export const bandPlays = keys => keys.some(k => STATIONS[k]?.gallery && !FLOOR_ONLY.has(k));
+export function riserAt(wall, { cx = (wall[0] + wall[1]) / 2, ref = WING_REF } = {}){
+  return { x: cx + KIT_RISER.x + Math.max(0, (wall[1] - cx) - ref), z: KIT_RISER.z };
+}
+export function kitRiseAt(x, z, keys, wall, opts){
+  const r = riserAt(wall, opts);
+  return bandPlays(keys) && Math.hypot(x - r.x, z - r.z) <= SEAT_R ? KIT_RISER.lift : 0;
+}
+/* BALANCE — a band machine reads the floor before it picks a seat: a placed machine whose centre stands more
+   than BAL_DEAD off the belt's centre counts for its side; a seat more than BAL_SEAT off it is on that side.
+   When one side holds more, the heavier side's seats go last (order kept otherwise; centre seats stay put). */
+const BAL_DEAD = 2, BAL_SEAT = 4;
+/* TIERED RISERS (the spec's tiers): a band machine whose BACK seat (a wing, beside the belt — z < SEAT_BACK)
+   is free but HIDDEN behind the front row from the audience's eye takes the smallest of these lifts (u — the
+   footing's low band: a dais with steps) that lets it be seen; a front seat never rises (it would only hide
+   the belt). Never a machine the user gave a height. */
+export const SEAT_RISE = [1.5, 3];
+const SEAT_BACK = 10;
+/* a LONE STAR — the song's signature standing alone on the floor (Piano Man's grand) — stands on the belt's
+   axis, so the wide (which swings only a little off it, main starDirs) sees it HEAD-ON, covering the belt's
+   base. It TURNS by its slot's `turn` (rad, + = its keyboard toward the house-right) — a three-quarter, the
+   way a concert grand is set. main turns it before it is measured (a rigid spin: the physics never knows). */
+export function loneTurn(keys, star){
+  return star && keys.length === 1 && keys[0] === star ? (STATIONS[star]?.turn || 0) : 0;
+}
 
 /* a SOLO band machine (the song's only floor station, a gallery-born one) is its own STAR: a machine
    playing alone stands front and centre, not off on a wing of an empty floor. → its key, or null */
@@ -241,15 +286,19 @@ export function soloStar(items){
       boxes of this song's HUNG stations (a gallery deck keeps clear of them); opts.star — the
       key of the song's STAR (front and centre; null: none).
     Returns { key: { x, z } } (world) — plus `y` (the deck's world y) for a station raised onto
-    the rear GALLERY. Never touches yaw. */
+    the rear GALLERY, or `lift` (u above its ground) for one on a RISER: the kit's DRUM RISER, a band
+    machine's tiered riser (SEAT_RISE). Never touches
+    yaw (a lone star's turn is main's, before it measures: loneTurn). */
 export function layoutStations(items, wall, room, { margin = MARGIN, ref = WING_REF, cx = (wall[0] + wall[1]) / 2, bandY = 4.2, eyeY = 20, wallTop = 15.7, hung = [], star = null, loftGap = 3 } = {}){
   star ??= soloStar(items);
   const env = { ref, cx, bandY, eyeY, galleryY: wallTop - GALLERY_DROP, hung, star, loftGap };
   // FLOOR FIRST: everyone on the floor — at full air, then giving up air between the footprints'
   // bounding boxes (their corners are mostly empty) — never an overlap while one of those clears
+  //  (the STAGECRAFT — the kit's DRUM RISER, the band's BALANCE — first; then, if a floor with it has no
+  //   room for everyone, the same passes without it: a nicer stage never costs the floor a machine)
   let last = null;
-  for (const m of [1, .7, .45]){
-    last = solveOnce(items, wall, room, margin * m, { ...env, up: false });
+  for (const craft of [true, false]) for (const m of [1, .7, .45]){
+    last = solveOnce(items, wall, room, margin * m, { ...env, up: false, craft });
     if (last.clean) return last.out;
   }
   // the floor is FULL: the GALLERY opens — the pass that raises the fewest machines wins, then the one
@@ -272,7 +321,8 @@ export function layoutStations(items, wall, room, { margin = MARGIN, ref = WING_
   }
   return last.out;
 }
-function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, hung, up: open, star, loftGap, side = 0 }){
+function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, hung, up: open, star, loftGap, side = 0, craft = false }){
+  const bandOn = craft && bandPlays(items.map(it => it.key));   // (the band plays: the kit's riser)
   // each station's FLOOR origins — the star's front-and-centre spot; a gallery-born slot's SEATS
   // (ranked: the first free one wins); else its slot — and its GALLERY spot (gx, gz: where it was built)
   const S = items.map(it => {
@@ -280,8 +330,11 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
     // (the USER's height, a layout entry's lift — rooms/footing.js: 0 = "on the floor" — wins: a station
     //  the user stood on the floor never climbs, nor anchors a loft; main sets every user lift after this)
     const isStar = !it.pin && star != null && it.key === star;
+    // (the KIT, while the band plays: its riser on the right wing first, its own slot after)
+    const riser = it.key === 'drums' && !it.pin && !isStar && !Number.isFinite(it.lift) && bandOn;
     const homes = isStar ? [{ x: cx + STAR.x, z: STAR.z, star: true }]
       : born && slot.floor?.length ? slot.floor.filter(k => SEATS[k]).map(k => ({ x: cx + SEATS[k].x, z: SEATS[k].z, seat: k }))
+      : riser ? [{ x: cx + KIT_RISER.x, z: KIT_RISER.z, riser: true }, { x: it.x, z: it.z }]
       : [{ x: it.x, z: it.z }];
     return { ...it, prio: PRIO[it.key] ?? 50, born, star: isStar, grounded: it.lift === 0, gx: born && side ? cx + side * Math.abs(it.x - cx) : it.x, gz: it.z, homes, x: homes[0].x, z: homes[0].z };
   });
@@ -337,7 +390,7 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
     let worst = 0;
     for (const [ex, ey] of OCC_EYES){
       const y = ey - (ey - F.top) * k;                   // (where the sightline over F's top meets B's front)
-      const h = Math.min(1, Math.max(0, (y - B.base - HIDE_FOOT * H) / ((1 - HIDE_FOOT) * H)));
+      const f = B.foot ?? HIDE_FOOT, h = Math.min(1, Math.max(0, (y - B.base - f * H) / ((1 - f) * H)));
       if (h <= 0) continue;
       const e = cx + ex, p0 = e + (F.b[0] - e) * k, p1 = e + (F.b[1] - e) * k;
       worst = Math.max(worst, h * Math.max(0, Math.min(p1, B.b[1]) - Math.max(p0, B.b[0])) / (B.b[1] - B.b[0]));
@@ -387,7 +440,13 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
     if (s.pin){                                         // (a machine the user parked behind the belt stands on the gallery there —
       const b = bx(s);                                  //  a gallery-born one, or one the belt would hide; a user's own height wins: main)
       if (!FLOOR_ONLY.has(s.key) && !s.grounded && (b[2] + b[3]) / 2 < wall[2] && (STATIONS[s.key]?.gallery || !seen(b))){ s.y = galleryY; gal.push(b); galBy.set(b, s); }
-      else machines.push({ b, top: s.top, base: s.base });
+      else {
+        // (a kit the user pinned on the right wing — near its RISER — stands on it, unless the user set its height)
+        if (s.key === 'drums' && !Number.isFinite(s.lift) && craft && kitRiseAt(s.x, s.z, items.map(it => it.key), wall, { cx, ref })){
+          s.rise = KIT_RISER.lift; if (s.top !== undefined) s.top += s.rise; if (s.base !== undefined) s.base += s.rise;
+        }
+        machines.push({ b, top: s.top, base: s.base });
+      }
       placed.push(b); continue;
     }
     let best = null, bestHits = Infinity;
@@ -415,10 +474,35 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
     // else ANY clean, seen floor spot short of the lens (the nearest to its first seat): the floor is full
     // only when there is none. Anyone else: the nearest clean spot to its home
     if (s.born){
-      for (const h of s.homes){ if ((got = search(h.x, h.z, seenOk, SEAT_R))) break; }
+      // BALANCE: the heavier side's seats last (a stable sort — the seat order holds within each side)
+      let nL = 0, nR = 0;
+      for (const o of machines){ const xc = (o.b[0] + o.b[1]) / 2 - cx; if (xc < -BAL_DEAD) nL++; else if (xc > BAL_DEAD) nR++; }
+      if (craft && nL !== nR && !s.star){
+        const heavy = nL > nR ? -1 : 1, sideOf = h => { const x = SEATS[h.seat]?.x ?? 0; return x < -BAL_SEAT ? -1 : x > BAL_SEAT ? 1 : 0; };
+        s.homes = s.homes.map((h, i) => [h, i]).sort((a, b) => (sideOf(a[0]) === heavy) - (sideOf(b[0]) === heavy) || a[1] - b[1]).map(a => a[0]);
+      }
+      for (const h of s.homes){
+        if ((got = search(h.x, h.z, seenOk, SEAT_R))) break;
+        // (a BACK seat hidden behind the front row: the smallest riser that lets the audience see it)
+        if (!craft || !(SEATS[h.seat]?.z < SEAT_BACK) || Number.isFinite(s.lift) || s.top === undefined) continue;
+        const t0 = s.top, b0 = s.base;
+        for (const R of SEAT_RISE){
+          s.top = t0 + R; s.base = b0 + R;
+          if ((got = search(h.x, h.z, seenOk, SEAT_R))){ s.rise = R; break; }
+        }
+        if (got) break;
+        s.top = t0; s.base = b0;
+      }
       if (!got) got = search(s.homes[0].x, s.homes[0].z, (b, dx, dz) => (b[2] + b[3]) / 2 + dz <= BAND_FRONT && seenOk(b, dx, dz), Infinity, false, undefined, coarse);
       // (one the user stood ON THE FLOOR never climbs: any clean floor spot, seen or not, before an overlap)
       if (!got && s.grounded) got = search(s.homes[0].x, s.homes[0].z, floorOk, Infinity, false, undefined, coarse);
+    }
+    else if (s.homes[0].riser){
+      // THE DRUM RISER: seen there with its raised silhouette (else back to its own slot, on the floor)
+      const t0 = s.top, b0 = s.base, R = KIT_RISER.lift;
+      if (t0 !== undefined){ s.top = t0 + R; s.base = b0 + R; }
+      if ((got = search(s.homes[0].x, s.homes[0].z, seenOk, SEAT_R))) s.rise = R;
+      else { s.top = t0; s.base = b0; got = search(s.homes[1].x, s.homes[1].z, floorOk, Infinity, true); }
     }
     else got = search(s.x, s.z, floorOk, Infinity, true);
     // the floor is full: the rear GALLERY ('row': a row of its own, else 'stack': behind another) —
@@ -464,7 +548,10 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
     const B = bx(s);                                    // (one box: a loft partner is found by identity)
     if (mode !== 'floor'){ s.y = galleryY; gal.push(B); galBy.set(B, s); up++; }
     placed.push(B);
-    if (mode === 'floor') machines.push({ b: B, top: s.top, base: s.base });
+    // (a machine on a RISER: the dais is part of what the audience must see — its lit edge answers the
+    //  machine's strikes, rooms/pulse.js — so a machine placed after it in front counts the dais as hidden:
+    //  its silhouette runs from the floor, with no foot allowance)
+    if (mode === 'floor') machines.push(s.rise && s.base !== undefined ? { b: B, top: s.top, base: s.base - s.rise, foot: 0 } : { b: B, top: s.top, base: s.base });
     if (s.star){ SB = bx(s); sbase = s.base ?? 0; }
   }
   // (how many separate structures the gallery needs: machines within loftGap — main: FOOT.LOFT_GAP — share one loft, rooms/footing.js)
@@ -474,7 +561,7 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
     if (Math.max(a[0] - b[1], b[0] - a[1], a[2] - b[3], b[2] - a[3]) <= loftGap) grp[root(i)] = root(j);
   }
   const towers = gal.filter((_, i) => root(i) === i).length;
-  return { clean, up, towers, out: Object.fromEntries(S.map(s => [s.key, s.y === undefined ? { x: s.x, z: s.z } : { x: s.x, z: s.z, y: s.y }])) };
+  return { clean, up, towers, out: Object.fromEntries(S.map(s => [s.key, s.y !== undefined ? { x: s.x, z: s.z, y: s.y } : s.rise ? { x: s.x, z: s.z, lift: s.rise } : { x: s.x, z: s.z }])) };
 }
 /* every (dx, dz, d) offset on a `st`-unit grid (0.5 by default) out to 60 units, nearest first (built once per step) */
 const _grid = {};

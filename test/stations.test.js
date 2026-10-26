@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { STATIONS, layoutStations, soloStar, MARGIN, AUDIENCE, hangPlace, WING_REF, GALLERY_DROP, SEATS, SEAT_R, STAR, STAR_GRAZE, STAR_LEAD } from '../src/instruments/stations.js';
+import { STATIONS, layoutStations, soloStar, loneTurn, MARGIN, AUDIENCE, hangPlace, WING_REF, GALLERY_DROP, SEATS, SEAT_R, STAR, STAR_GRAZE, STAR_LEAD, KIT_RISER, SEAT_RISE, riserAt, kitRiseAt } from '../src/instruments/stations.js';
 import { FOOT } from '../src/rooms/footing.js';
 import { KIT_ROOM } from '../src/marbledrums.js';
 import { STAGE } from '../src/rooms/common.js';
@@ -92,10 +92,12 @@ describe('room staging (stations.js layoutStations)', () => {
       expect(solved[k].y, `${k} on the floor`).toBeUndefined();
       if (!STATIONS[k].gallery) expect({ x: solved[k].x, z: solved[k].z }, k).toEqual({ x: STATIONS[k].x, z: STATIONS[k].z });
     }
-    // the band's picks, in BAND order (riff, horns, strum, pogo): the riff front and centre (the front row,
-    // beside the kit), the horns find the front row full and take the left wing, the strum the right
-    // wing, the pogo the back-left seat beside the belt (polish 2026-10-25: the brass picks before the harp)
-    expect(['riff', 'strum', 'horns', 'pogo'].map(k => seatOf(k, solved[k]))).toEqual(['centre', 'wingR', 'wingL', 'backL']);
+    // the band's picks, in BAND order (riff, horns, strum, pogo): the riff front and centre, the horns find the
+    // front row full and take the left wing, the strum the front-right seat (the kit is up its DRUM RISER on
+    // the right wing — balance 2026-10-25 — so the front-right is free), the pogo the back-left seat beside
+    // the belt (polish 2026-10-25: the brass picks before the harp)
+    expect(['riff', 'strum', 'horns', 'pogo'].map(k => seatOf(k, solved[k]))).toEqual(['centre', 'right', 'wingL', 'backL']);
+    expect(solved.drums, 'the kit on its riser').toEqual({ x: KIT_RISER.x, z: KIT_RISER.z, lift: KIT_RISER.lift });
   });
   it('the wings ride out with a wider belt (gap to the wall edge kept), the margin is real air', () => {
     const one = layoutStations(itemsFor(floorKeys), walls['1 bay'], ROOM);
@@ -245,6 +247,11 @@ describe('floor first: the band on the floor, the star front and centre (station
   };
   const solve = (r, extra = {}) => layoutStations(r.items, r.wall, ROOM, { ...ENV, wallTop: r.top, hung: r.hung, star: r.star ?? null, ...extra });
   const BAND_KEYS = ['riff', 'strum', 'horns', 'pogo'];
+  // (the rows each SIDE of the belt's centre holds — a machine more than 2 u off it: 'front' past z 13, else 'back')
+  const rows = (r, solved) => { const o = { L: new Set(), R: new Set() };
+    for (const it of r.items){ const b = world(solved, it), xc = (b[0] + b[1]) / 2 - (r.wall[0] + r.wall[1]) / 2;
+      if (Math.abs(xc) > 2) o[xc < 0 ? 'L' : 'R'].add((b[2] + b[3]) / 2 > 13 ? 'front' : 'back'); }
+    return { L: [...o.L].sort(), R: [...o.R].sort() }; };
 
   for (const [name, r] of Object.entries(R)) it(`${name}: clean, deterministic, the band on the floor in its seats${name === 'finale' ? ' — but the floor is FULL' : ''}`, () => {
     const solved = solve(r);
@@ -262,13 +269,14 @@ describe('floor first: the band on the floor, the star front and centre (station
     expect(solve(r)).toEqual(solved);
   });
 
-  it('a SEAT the audience can\'t see the machine in is not free: The Entertainer\'s horns never stand on the right wing behind the kit', () => {
-    // (the left seat would hide the string bass from the wide's low eye; the right wing is clear — but the
-    //  kit's arch covers the brass from there: the horns take the front row, beside the kit; the harp
-    //  finds the front-left taken and takes the front-right corner past the kit)
+  it('THE DRUM RISER + BALANCE: The Entertainer — the kit up on the right wing, the brass centre, the harp front-right (the lighter side)', () => {
+    // (2026-10-25 balance: the kit used to stand front-right, its arch covering the whole right-back wedge from
+    //  the wide's eyes — the harp ended in the far corner past it. Now the drummer is behind the band: the
+    //  right wing on its riser; bass + grand on the left, so the harp takes the right — the lighter side)
     const solved = solve(R.entertainer);
+    expect(solved.drums).toEqual({ x: KIT_RISER.x, z: KIT_RISER.z, lift: KIT_RISER.lift });
     expect(seatOf('horns', solved.horns)).toBe('centre');
-    expect(seatOf('strum', solved.strum)).toBe('cornerR');
+    expect(seatOf('strum', solved.strum)).toBe('right');
   });
   it('…seen from the wide\'s LOW eye (the band\'s concert-film wide, y ≈ 8): Mars\'s riff stands in the front row, never behind the kit\'s arch', () => {
     // (polish 2026-10-25: from the old single eye at y 14 the seat in front of the belt passed — the real
@@ -278,12 +286,72 @@ describe('floor first: the band on the floor, the star front and centre (station
     expect(b[3], 'the riff\'s front edge reaches the kit\'s row').toBeGreaterThan(kit[2]);
     expect(b[1], 'beside the kit, not behind it').toBeLessThanOrEqual(kit[0]);
     expect(seatOf('horns', solved.horns)).toBe('cornerL');
+    // (balance 2026-10-25: the kit up its riser on the right wing answers the harp on the left wing — the
+    //  band no longer piles up left of the kit: either side of the belt, a front machine AND a back one)
+    expect(solved.drums).toEqual({ x: KIT_RISER.x, z: KIT_RISER.z, lift: KIT_RISER.lift });
+    expect(seatOf('strum', solved.strum)).toBe('wingL');
+    expect(rows(R.mars, solved)).toEqual({ L: ['back', 'front'], R: ['back', 'front'] });
   });
 
-  it('Forge: no lone towers — the riff front and centre, the horns at the front-left corner (the left seat would hide the bass, the right wing is behind the kit)', () => {
+  it('Forge: no lone towers, and BALANCED — the riff front and centre, the brass front-right, the bass and the kit (on its riser) the two wings', () => {
+    // (balance 2026-10-25: the horns used to take the front-left corner — bass, brass and riff all left of a
+    //  front-right kit whose arch hid the right wing. The kit is the right wing now; the brass, picking with
+    //  the left already holding the bass + the riff, takes the lighter side — its front-right CORNER: the
+    //  'right' seat stood the bells right across the riser's front, its lit edge + VU strip, from the wide)
     const solved = solve(R.forge);
     expect(seatOf('riff', solved.riff)).toBe('centre');
-    expect(seatOf('horns', solved.horns)).toBe('cornerL');
+    expect(seatOf('horns', solved.horns)).toBe('cornerR');
+    expect(solved.drums).toEqual({ x: KIT_RISER.x, z: KIT_RISER.z, lift: KIT_RISER.lift });
+    expect(rows(R.forge, solved)).toEqual({ L: ['back', 'front'], R: ['back', 'front'] });
+  });
+  it('THE DRUM RISER only while the band plays, only where it is seen and free — and never at the floor\'s cost', () => {
+    const forge = R.forge, kit = forge.items.find(it => it.key === 'drums');
+    // no band: the kit keeps its front-row slot (every approved song's stage is unchanged)
+    const nb = solve({ ...forge, items: forge.items.filter(it => !STATIONS[it.key]?.gallery) });
+    expect(nb.drums).toEqual({ x: kit.x, z: kit.z });
+    // the wing taken (the music box plays): its own slot, on the floor (the star still clears its foreground)
+    const mop = R['mop.mid'], mb = { ...mop, items: [...mop.items, it_('musicbox', 25, 3.2, [-6.6, 6.6, -6.7, 6.7], 4, -5.1)] };
+    expect(solve(mb).drums.lift).toBeUndefined();
+    expect(solve(mb).drums.x).toBeGreaterThan(solve({ ...mb, star: null }).drums.x);
+    // the USER's height wins: a kit stood ON THE FLOOR never climbs its riser; one pinned on the wing stands on it
+    const lift0 = solve({ ...mop, items: mop.items.map(it => it.key === 'drums' ? { ...it, lift: 0 } : it) });
+    expect(lift0.drums.lift).toBeUndefined();
+    expect(lift0.drums.z).toBeGreaterThan(10);
+    const pinned = solve({ ...mop, items: mop.items.map(it => it.key === 'drums' ? { ...it, x: 23, z: 6, pin: true } : it) });
+    expect(pinned.drums).toEqual({ x: 23, z: 6, lift: KIT_RISER.lift });
+    // …on a WIDE belt the riser rides out with the wing (as the unpinned home does): a kit pinned THERE stands
+    //  on it, one pinned at the narrow belt's riser spot (now ~5 u inside it) does not
+    const wide = { ...mop, wall: [mop.wall[0] - 5, mop.wall[1] + 5, mop.wall[2], mop.wall[3]] };
+    const rx = riserAt(wide.wall, { cx: 0 }).x;
+    expect(rx).toBeCloseTo(KIT_RISER.x + Math.max(0, wide.wall[1] - WING_REF), 9);
+    const onWide = solve({ ...wide, items: wide.items.map(it => it.key === 'drums' ? { ...it, x: rx, z: KIT_RISER.z, pin: true } : it) });
+    expect(onWide.drums.lift).toBe(KIT_RISER.lift);
+    if (rx - KIT_RISER.x > SEAT_R) expect(solve({ ...wide, items: wide.items.map(it => it.key === 'drums' ? { ...it, x: KIT_RISER.x, z: KIT_RISER.z, pin: true } : it) }).drums.lift).toBeUndefined();
+    // kitRiseAt — what main's stage edit asks when the kit is DRAGGED (so a live move matches the reload):
+    //  the riser's rise on the wing while the band plays, none off it or without the band
+    const keys = mop.items.map(it => it.key);
+    expect(kitRiseAt(KIT_RISER.x, KIT_RISER.z, keys, mop.wall, { cx: 0 })).toBe(KIT_RISER.lift);
+    expect(kitRiseAt(-13, 16.5, keys, mop.wall, { cx: 0 })).toBe(0);
+    expect(kitRiseAt(KIT_RISER.x, KIT_RISER.z, keys.filter(k => !STATIONS[k]?.gallery), mop.wall, { cx: 0 })).toBe(0);
+    // (a nicer stage never costs the floor a machine: the gallery tests above — 2 bays, the big cast — keep
+    //  nobody up; there the riser alone would have sent the brass up, so that floor stands without it)
+  });
+  it('TIERED RISERS: Sweet Home Alabama gets depth — the pogo on the left wing on the smallest riser that shows it over the riff; a front seat never rises', () => {
+    // (2026-10-25: the front row was a wall of four — riff, grand, kit, pogo. Now two in front, two up behind)
+    const r = R['alabama.mid'], solved = solve(r);
+    expect(seatOf('pogo', solved.pogo)).toBe('wingL');
+    expect(solved.pogo.lift).toBe(SEAT_RISE[0]);
+    expect(solved.drums).toEqual({ x: KIT_RISER.x, z: KIT_RISER.z, lift: KIT_RISER.lift });
+    const front = r.items.filter(it => { const b = world(solved, it); return (b[2] + b[3]) / 2 > 13; }).map(it => it.key).sort();
+    expect(front).toEqual(['dulcimer', 'riff']);
+    for (const it of r.items) if (solved[it.key].lift !== undefined) expect(solved[it.key].z, `${it.key} rises only in a back seat`).toBeLessThan(10);
+  });
+  it('a LONE STAR turns a three-quarter (Piano Man\'s grand — the wide would see it head-on, on the belt\'s axis); anyone else keeps its yaw', () => {
+    expect(loneTurn(['dulcimer'], 'dulcimer')).toBe(STATIONS.dulcimer.turn);
+    expect(Math.abs(STATIONS.dulcimer.turn)).toBeGreaterThan(.3);
+    expect(loneTurn(['dulcimer', 'drums'], 'dulcimer')).toBe(0);   // (not alone)
+    expect(loneTurn(['dulcimer'], null)).toBe(0);                  // (not the star: it stands at its corner, seen three-quarter already)
+    expect(loneTurn(['riff'], 'riff')).toBe(0);                    // (no turn hint: a guitar reads head-on)
   });
 
   it('a floor that is genuinely FULL opens the gallery: the fewest climb, in one row behind the belt (Starship Groove)', () => {
@@ -383,9 +451,12 @@ describe('floor first: the band on the floor, the star front and centre (station
       expect((b[2] + b[3]) / 2, `${it.key} nearer the audience than the star`).toBeLessThanOrEqual(STAR.z + STAR_LEAD + 1e-9); }
     expect(solve({ ...r, star: null })[r.star], 'without a star it keeps its own slot / seat').not.toEqual(solved[r.star]);
   });
-  it('THE STAR: the kit steps aside out of its foreground (Master of Puppets: the riff in front of the belt, the kit to its right)', () => {
-    const r = R['mop.mid'], solved = solve(r), plain = solve({ ...r, star: null });
-    expect(solved.drums.x).toBeGreaterThan(plain.drums.x);
+  it('THE STAR: the kit is out of its foreground (Master of Puppets: the riff in front of the belt; the kit up its riser on the right wing, the pogo the left — a power trio)', () => {
+    // (before the drum riser, 2026-10-25, the kit stepped aside along the front row; it still does when its
+    //  wing is taken — see 'THE DRUM RISER only while…')
+    const r = R['mop.mid'], solved = solve(r);
+    expect(solved.drums).toEqual({ x: KIT_RISER.x, z: KIT_RISER.z, lift: KIT_RISER.lift });
+    expect(foreground(r, solved, r.star)).toEqual([]);
     expect(seatOf('pogo', solved.pogo)).toBe('wingL');
   });
   it('THE STAR: a tall one steps forward until it is under the strike band\'s sightline; it never climbs', () => {

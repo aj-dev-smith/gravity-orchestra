@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { STAGE, rng, canvasTex, radialTex, beamMat, instanced, trs } from './common.js';
-import { tintStyle } from './footing3d.js';
+import { shipFooting, lampMaterial } from './starship-footing.js';
+import { makeDeckLights, deckSpots, deckProps } from './starship-deck.js';
 /* ============================================================
    STARSHIP DECK — the stage is the open deck of a ship cruising through
    deep space (animusic.md §4 R2). A plated hull deck with railings, a
@@ -27,16 +28,27 @@ import { tintStyle } from './footing3d.js';
    STAGE.CEIL and every long rib / rail spans > 40 u (the shot solve reads
    them as the hall's shell, not standing obstacles); the glass is a
    transparent shader (never an occluder). Owns no lights.
-   Perf: ~21 draw calls, all instanced/merged; per frame = a handful of
-   uniforms + 72 instance colours. No allocation.
+
+   WHAT THE MACHINES STAND ON is ship hardware (starship-footing.js, a footing
+   style): deck plates with hazard paint + tie-down rings, scissor lifts,
+   telescoping rams, gantry towers, grated catwalks. In each plate's light
+   channel the machine's RUNNING LIGHTS race round from every strike, and a
+   STATUS BEACON (a lens in the deck top / a lamp on a rail post) glows while
+   it plays and blinks it in after a rest — one additive draw for every machine,
+   a pure fn of songTime (starship-deck.js). DECK FURNITURE: hatches on the
+   deck plates + cargo lashed in the side bays, each only where it keeps 1 u
+   clear of every machine and its footing (place()).
+   Perf: ~23 draw calls, all instanced/merged (+ the footing: 5–6 incl. the
+   lights); per frame = a handful of uniforms + 72 instance colours + the
+   lights' two vec4[32] arrays. No allocation.
    ============================================================ */
 
 const F = STAGE.FLOOR;
 const FOG = 0x05070f;
-const DECK_X = 48;                 // deck half-width (stations live inside |x| ≤ 35.5)
+const DECK_X = 48;                 // deck half-width (stations live inside |x| ≤ STAGE.HW 38; cargo in the bays outboard)
 const DECK_Z0 = -44, DECK_Z1 = 46; // canopy/bow seam … stern
 const BOW = 22;                    // bow dome depth beyond DECK_Z0
-const CAN_B = 70;                  // canopy height (semi-axis): apex at F + 70 = 48, far above STAGE.CEIL
+const CAN_B = 70;                  // canopy height (semi-axis): apex at F + 70 = 64.5, far above STAGE.CEIL (the eye room's top corners, x ±36.5 at y 34.5, stay under the glass only for CAN_B ≳ 62)
 const CAN_Z1 = 26;                 // the canopy's open stern end (the audience camera sits aft of it)
 const AXIS = new THREE.Vector3(0, 5, -4);   // the ship's roll axis (≈ the strike band, mid-deck)
 
@@ -169,6 +181,39 @@ function deckTex(R){
   return { map: canvasTex(512, 512, draw(false)), emi: canvasTex(512, 512, draw(true)) };
 }
 
+/* a deck HATCH (one plate of the deck grid): a lighter lid in a dark seam, a raised rim, two recessed
+   lift handles, a hazard flash along one edge and a stencilled number */
+function hatchTex(){
+  return canvasTex(256, 256, (x, w) => {
+    x.fillStyle = '#0a0c11'; x.fillRect(0, 0, w, w);
+    x.fillStyle = '#4a5262'; x.fillRect(7, 7, w - 14, w - 14);
+    x.fillStyle = 'rgba(255,255,255,.05)'; for (let k = 0; k < 40; k++) x.fillRect(12, 12 + k * 6, w - 24, 1);
+    x.strokeStyle = '#6c7586'; x.lineWidth = 3; x.strokeRect(20, 20, w - 40, w - 40);
+    x.strokeStyle = '#2a303b'; x.lineWidth = 2; x.strokeRect(24, 24, w - 48, w - 48);
+    for (const y of [40, w - 54]){ x.fillStyle = '#111419'; x.fillRect(w / 2 - 34, y, 68, 14); x.fillStyle = '#7d8696'; x.fillRect(w / 2 - 34, y + 12, 68, 2); }
+    x.save(); x.beginPath(); x.rect(7, 7, 18, w - 14); x.clip();
+    x.fillStyle = '#1a1c21'; x.fillRect(7, 7, 18, w - 14); x.fillStyle = '#d6a224';
+    for (let k = -2; k < 24; k++){ x.beginPath(); x.moveTo(7, k * 14); x.lineTo(25, k * 14 - 18); x.lineTo(25, k * 14 - 11); x.lineTo(7, k * 14 + 7); x.fill(); }
+    x.restore();
+    x.fillStyle = 'rgba(200,210,225,.55)'; x.font = 'bold 22px monospace'; x.fillText('07', w - 66, w - 30);
+  });
+}
+/* a CARGO crate: corrugated sides in a dark frame, amber corner caps, a stencilled label + a cyan status strip */
+function crateTex(){
+  const draw = emissive => (x, w) => {
+    x.fillStyle = emissive ? '#000' : '#36404f'; x.fillRect(0, 0, w, w);
+    if (!emissive){
+      for (let i = 14; i < w - 14; i += 10){ x.fillStyle = (i / 10) % 2 ? '#2b3340' : '#46516a'; x.fillRect(i, 14, 5, w - 28); }
+      x.strokeStyle = '#161a22'; x.lineWidth = 14; x.strokeRect(7, 7, w - 14, w - 14);
+      x.fillStyle = '#c8962a'; for (const [a, b] of [[0, 0], [w - 30, 0], [0, w - 30], [w - 30, w - 30]]) x.fillRect(a, b, 30, 30);
+      x.fillStyle = '#c9ced8'; x.fillRect(w / 2 - 50, w / 2 - 18, 100, 30);
+      x.fillStyle = '#1b2029'; x.font = 'bold 18px monospace'; x.fillText('GO-7 / 4t', w / 2 - 44, w / 2 + 3);
+    }
+    x.fillStyle = emissive ? '#ffffff' : '#4fc8ff'; x.fillRect(w / 2 - 40, w - 44, 80, 6);
+  };
+  return { map: canvasTex(256, 256, draw(false)), emi: canvasTex(256, 256, draw(true)) };
+}
+
 function puffTex(){                                       // a soft lumpy nebula bank (alpha only)
   return canvasTex(256, 256, (x, w) => {
     const R = rng(9);
@@ -299,14 +344,14 @@ function outline(){
   return pts;
 }
 
-/* how its footing looks (rooms/footing3d.js tintStyle) — one per built room: its own materials */
-const footStyle = () => tintStyle({ key: 'starship', base: { color: 0x9aa4b4, metalness: .45, roughness: .42 },
-  steel: { color: 0x8a96a8, metalness: .55, roughness: .36 }, deck: { color: 0x56616f, metalness: .5, roughness: .45 } });
 
 export default {
   key: 'starship', label: 'Starship',
   build(scene, { envMap }){
-    const FOOT_STYLE = footStyle();
+    /* what the machines stand on: ship hardware, and in its light channels the running lights + status
+       beacons (one additive draw, built with the footing — starship-footing.js), lit from update() */
+    const LAMPS = lampMaterial(), FOOT_STYLE = shipFooting({ lamps: LAMPS });
+    FOOT_STYLE.mats(null, { envMap });                         // (its materials made with the room, not on a footing build)
     const group = new THREE.Group();
     const R = rng(1977);
 
@@ -462,6 +507,50 @@ export default {
     const puff = puffTex();
     const nebula = new THREE.Mesh(ng, nebulaMat(puff)); nebula.frustumCulled = false; nebula.renderOrder = -2; rig.add(nebula);
 
+    /* ================= DECK FURNITURE (place(): only where it keeps clear of the machines) ================= */
+    // hatches let into the deck plates + cargo lashed in the side bays (starship-deck.js deckSpots: fixed
+    // spots; deckProps: which stand, clear of every footprint and everything the machines stand on)
+    const SPOTS = deckSpots();
+    // (a hidden instance: a point far under the deck — never a solid for the shot solve, never at the origin)
+    const HIDE = new THREE.Matrix4().compose(new THREE.Vector3(0, F - 100, 0), new THREE.Quaternion(), new THREE.Vector3(0, 0, 0));
+    const hatchT = hatchTex(), crate = crateTex();
+    const hatches = new THREE.InstancedMesh(new THREE.BoxGeometry(1, .03, 1).translate(0, .015, 0),
+      new THREE.MeshStandardMaterial({ map: hatchT, metalness: .55, roughness: .42, envMap, envMapIntensity: .8 }), SPOTS.hatches.length);
+    const cargo = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1).translate(0, .5, 0),
+      new THREE.MeshStandardMaterial({ map: crate.map, emissive: 0x4fc8ff, emissiveMap: crate.emi, emissiveIntensity: .9,
+        metalness: .45, roughness: .5, envMap, envMapIntensity: .6 }), SPOTS.cargo.length);
+    hatches.name = 'starship:hatches'; cargo.name = 'starship:cargo';
+    // (the bounds: the STANDING instances only — the parked ones would stretch the sphere 100 u under the
+    // deck and the mesh would never be frustum-culled)
+    const _bb = new THREE.Box3(), _ib = new THREE.Box3(), _sp = new THREE.Sphere();
+    const setSpots = (im, spots, vis) => {
+      _bb.makeEmpty();
+      if (!im.geometry.boundingBox) im.geometry.computeBoundingBox();
+      spots.forEach((p, i) => {
+        const m = vis[i] ? trs(p.x, F + p.y, p.z, 0, p.yaw, 0, 2 * p.hw, p.h, 2 * p.hd) : HIDE;
+        im.setMatrixAt(i, m);
+        if (vis[i]) _bb.union(_ib.copy(im.geometry.boundingBox).applyMatrix4(m));
+      });
+      im.instanceMatrix.needsUpdate = true;
+      if (_bb.isEmpty()) _sp.set(new THREE.Vector3(0, F, 0), 0); else _bb.getBoundingSphere(_sp);
+      (im.boundingSphere ||= new THREE.Sphere()).copy(_sp);
+    };
+    setSpots(hatches, SPOTS.hatches, SPOTS.hatches.map(() => false)); setSpots(cargo, SPOTS.cargo, SPOTS.cargo.map(() => true));
+    group.add(hatches, cargo);
+
+    /* ================= THE MACHINES' LIGHTS (place(): per set of anchors) ================= */
+    const US = LAMPS.uniforms.uS.value, UB = LAMPS.uniforms.uB.value;
+    let lights = makeDeckLights(null);
+    function place(anchors, plan){
+      lights = makeDeckLights(plan);
+      US.fill(1e4); UB.fill(0);
+      setSpots(hatches, SPOTS.hatches, deckProps(anchors, plan, SPOTS.hatches));
+      // (a crate on a crate stands only with the one under it)
+      const cv = deckProps(anchors, plan, SPOTS.cargo);
+      SPOTS.cargo.forEach((c, i) => { if (c.y > 0 && !cv[i - 1]) cv[i] = false; });
+      setSpots(cargo, SPOTS.cargo, cv);
+    }
+
     /* ================= per frame ================= */
     const su = streaks.material.uniforms, nu = nebula.material.uniforms;
     const _c = new THREE.Color(), _e = new THREE.Euler(0, 0, 0, 'ZYX');
@@ -476,8 +565,10 @@ export default {
       mood: { ambient: [0x1c2a48, 1.35], hemi: [0x6f90e0, 0x141018, .6] },
       // the footing (rooms/footing3d.js): hull plating, bulkhead steel
       footing: FOOT_STYLE,
+      place,
       update(dt, songTime, camera, energy = 0, cues = null){
         const t = songTime, tc = skyClock(t);
+        lights.write(t, US, UB);                               // the machines' lights: chase + beacon per slot
         // SKY: bank (roll about the forward axis + a coordinated nose-yaw) — the deck never moves
         const bank = bankAt(t, cues) * bankK;
         _e.set(0, BANK.yaw * bank, bank);
@@ -515,7 +606,8 @@ export default {
         glass.uniforms.uGain.value = 1 + .4 * energy;
       },
       xr(on){ bankK = on ? .5 : 1; },
-      dispose(){ sky.dispose(); tex.map.dispose(); tex.emi.dispose(); puff.dispose(); glowT.dispose(); FOOT_STYLE.dispose(); },
+      dispose(){ sky.dispose(); tex.map.dispose(); tex.emi.dispose(); puff.dispose(); glowT.dispose(); FOOT_STYLE.dispose(); LAMPS.dispose();
+        hatchT.dispose(); crate.map.dispose(); crate.emi.dispose(); },
     };
   },
 };

@@ -84,8 +84,6 @@
    station only for a part with events), so a sparse song keeps every slot.
    Pure + deterministic: one song → one stage, every time.
    ============================================================ */
-import { FOOT } from '../rooms/footing.js';
-
 export const STATIONS = {
   marimba:  { x: -25,  y: 1.5, z: -10.5, yaw:  .75, w: 13, d: 7 },   // back-left wing, on its riser
   bells:    { x:  26,  y: 0.0, z: -10, yaw: -.6,  w: 11, d: 7 },   // back-right wing: the tall gantry
@@ -94,7 +92,7 @@ export const STATIONS = {
   musicbox: { x:  25,  y: -.5, z:  3.2, yaw: -.9,  w: 10, d: 9 },   // mid-right, behind the drums, turned to the middle
   // (a GALLERY slot's `floor`: the floor SEATS it takes, in order, the first free one — FLOOR FIRST: it
   //  climbs to its gallery slot only when every one of them is taken; see SEATS)
-  horns:    { x:  15.5, y: 0.0, z: -11, yaw: -.15, w: 14, d: 6, gallery: true, floor: ['wingL', 'left', 'right', 'wingR', 'centre', 'cornerL', 'cornerR', 'backL', 'backR'] },   // GALLERY, right of centre: the brass rank, bells facing the audience (floor: a wing first)
+  horns:    { x:  15.5, y: 0.0, z: -11, yaw: -.15, w: 14, d: 6, gallery: true, floor: ['left', 'centre', 'cornerL', 'wingL', 'right', 'wingR', 'cornerR', 'backL', 'backR'] },   // GALLERY, right of centre: the brass rank, bells facing the audience (floor: the front row first — a lead, 20 % of Mars's and The Entertainer's edit)
   bowwheel: { x:  28,  y: 0.0, z: 15.5, yaw: 0,    w: 11, d: 10 },   // front-right corner, past the drum kit: the great wheel faces the room (its shot looks in from the side)
   turntable: { x:  0,  y: -1.0, z: 12.5, yaw: 0, w: 14, d: 14 },  // front-centre, low: the stage camera looks down onto the spinning record
   // the REAR GALLERY (see GALLERY_DROP) — the band's RISER behind the paternoster: the leaning
@@ -146,7 +144,7 @@ const FORE_GRAZE = 3;               // a station may overlap the belt's outer ed
    HIDE_MAX of its silhouette). It climbs onto the gallery only when every seat is taken: the floor is
    then genuinely full (the front lip, in the wide's lens, and the kit's shadow never count as floor). */
 export const SEATS = {
-  centre: { x: -2, z: 9.5 },        // front and centre, in front of the belt (the turntable's spot when it plays)
+  centre: { x: -3, z: 17.5 },       // front and centre, the front row beside the kit (the turntable's spot when it plays)
   left:   { x: -13, z: 16.5 },      // front-left (the singing bowls')
   right:  { x: 13, z: 16.5 },       // front-right (the kit's, when the song has none)
   wingL:  { x: -20, z: 3.6 },       // the left wing (the string bass's)
@@ -157,12 +155,15 @@ export const SEATS = {
   cornerR: { x: 28, z: 15.5 },
 };
 export const SEAT_R = 4.5;          // a seat's nudge: how far from it a clean spot still counts as that seat
-const BAND = ['riff', 'strum', 'horns', 'pogo'];   // who picks a seat first (after everyone of their priority with a slot of their own)
-const HIDE_MAX = .3;                // the share of a machine's silhouette another may hide from the audience…
+const BAND = ['riff', 'horns', 'strum', 'pogo'];   // who picks a seat first (after everyone of their priority with a slot of their own): the riff, the brass — the band's usual leads (Forge, Mars, The Entertainer give them 20–35 % of the edit) — then the harp, the bass
+const HIDE_MAX = .2;                // the share of a machine's silhouette another may hide from the audience…
 const HIDE_FOOT = .25;              // …above its FOOT (the lowest quarter of its height: plinth, legs — hiding that is fine)
-/* …from any of the wide's EYES (x offset from the belt centre; the solved wides look from x ≈ −15 … +4,
-   y ≈ 13–27, z ≈ 36–40 — the lowest eye hides the most) */
-const OCC_EYES = [-15, -6, 4], OCC_EYE = 14;
+/* …from any of the wide's EYES ([x offset from the belt centre, y]; z = AUDIENCE.z). While the band plays
+   the wide is the LOW concert-film one (main GALLERY_DIRS: eye y ≈ 7–9 at x ≈ −15 … −1), else a higher
+   three-quarter that may swing right (x ≈ +4, y ≈ 16) — the lowest eye hides the most. (Polish,
+   2026-10-25: the old single eye at y 14 passed seats the real low wide shows half-hidden — Mars's riff
+   behind the kit's arch.) */
+const OCC_EYES = [[-15, 8], [-6, 8], [4, 8], [4, 16]];
 
 /** Where a HUNG station flies this song (world x/z; main measures `box` — its footprint relative
     to its origin, rotated — from the built geometry). A centred one (|slot.x| ≤ 4: the chandelier)
@@ -217,8 +218,17 @@ const FLOOR_ONLY = new Set(['drums', 'turntable']);
    the user's pins, and nobody placed after it may stand in its FOREGROUND — between it and the
    audience — above the audience's sightline to its BASE: the soloist is seen whole (STAR_GRAZE: the
    edges may overlap). */
-export const STAR = { x: 0, z: 10 };
+export const STAR = { x: 0, z: 17 };
 export const STAR_GRAZE = 1.5;
+export const STAR_LEAD = 2.5;       // …and nobody placed after it stands nearer the audience than it (its centre ≤ the star's + this)
+const BAND_FRONT = 21;              // a band machine that finds no seat may stand anywhere on the floor — its centre short of this z (the lens)
+const LOFT_SPACE = .3;              // two machines on ONE gallery loft stand this far apart (one deck: no air between them needed)
+
+/* a SOLO band machine (the song's only floor station, a gallery-born one) is its own STAR: a machine
+   playing alone stands front and centre, not off on a wing of an empty floor. → its key, or null */
+export function soloStar(items){
+  return items.length === 1 && STATIONS[items[0].key]?.gallery && !items[0].pin ? items[0].key : null;
+}
 
 /** SOLVE the room for one song.
     items: [{ key, x, z, box: [x0, x1, z0, z1], top?, deck?, pin? }] — WORLD x/z of each floor
@@ -232,8 +242,9 @@ export const STAR_GRAZE = 1.5;
       key of the song's STAR (front and centre; null: none).
     Returns { key: { x, z } } (world) — plus `y` (the deck's world y) for a station raised onto
     the rear GALLERY. Never touches yaw. */
-export function layoutStations(items, wall, room, { margin = MARGIN, ref = WING_REF, cx = (wall[0] + wall[1]) / 2, bandY = 4.2, eyeY = 20, wallTop = 15.7, hung = [], star = null } = {}){
-  const env = { ref, cx, bandY, eyeY, galleryY: wallTop - GALLERY_DROP, hung, star };
+export function layoutStations(items, wall, room, { margin = MARGIN, ref = WING_REF, cx = (wall[0] + wall[1]) / 2, bandY = 4.2, eyeY = 20, wallTop = 15.7, hung = [], star = null, loftGap = 3 } = {}){
+  star ??= soloStar(items);
+  const env = { ref, cx, bandY, eyeY, galleryY: wallTop - GALLERY_DROP, hung, star, loftGap };
   // FLOOR FIRST: everyone on the floor — at full air, then giving up air between the footprints'
   // bounding boxes (their corners are mostly empty) — never an overlap while one of those clears
   let last = null;
@@ -243,10 +254,15 @@ export function layoutStations(items, wall, room, { margin = MARGIN, ref = WING_
   }
   // the floor is FULL: the GALLERY opens — the pass that raises the fewest machines wins, then the one
   // that needs the fewest separate towers up there (one loft, not two lone towers), then the most air
+  //  (two towers: the climbers try again with every gallery spot on ONE side of the belt — the side with
+  //   more room may hold them all on one loft)
   let pick = null;
-  for (const m of [1, .7, .45]){
-    const r = solveOnce(items, wall, room, margin * m, { ...env, up: true });
-    if (r.clean && (!pick || r.up < pick.up || (r.up === pick.up && r.towers < pick.towers))) pick = r;
+  for (const side of [0, -1, 1]){
+    if (side && (!pick || pick.towers <= 1)) break;
+    for (const m of [1, .7, .45]){
+      const r = solveOnce(items, wall, room, margin * m, { ...env, up: true, side });
+      if (r.clean && (!pick || r.up < pick.up || (r.up === pick.up && r.towers < pick.towers))) pick = r;
+    }
   }
   if (pick) return pick.out;
   // …and last, a little depth toward the audience (which the wide shot pays for)
@@ -256,16 +272,18 @@ export function layoutStations(items, wall, room, { margin = MARGIN, ref = WING_
   }
   return last.out;
 }
-function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, hung, up: open, star }){
+function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, hung, up: open, star, loftGap, side = 0 }){
   // each station's FLOOR origins — the star's front-and-centre spot; a gallery-born slot's SEATS
   // (ranked: the first free one wins); else its slot — and its GALLERY spot (gx, gz: where it was built)
   const S = items.map(it => {
     const slot = STATIONS[it.key], born = !it.pin && !!slot?.gallery && !FLOOR_ONLY.has(it.key);
+    // (the USER's height, a layout entry's lift — rooms/footing.js: 0 = "on the floor" — wins: a station
+    //  the user stood on the floor never climbs, nor anchors a loft; main sets every user lift after this)
     const isStar = !it.pin && star != null && it.key === star;
     const homes = isStar ? [{ x: cx + STAR.x, z: STAR.z, star: true }]
       : born && slot.floor?.length ? slot.floor.filter(k => SEATS[k]).map(k => ({ x: cx + SEATS[k].x, z: SEATS[k].z, seat: k }))
       : [{ x: it.x, z: it.z }];
-    return { ...it, prio: PRIO[it.key] ?? 50, born, star: isStar, gx: it.x, gz: it.z, homes, x: homes[0].x, z: homes[0].z };
+    return { ...it, prio: PRIO[it.key] ?? 50, born, star: isStar, grounded: it.lift === 0, gx: born && side ? cx + side * Math.abs(it.x - cx) : it.x, gz: it.z, homes, x: homes[0].x, z: homes[0].z };
   });
   // 1. the WINGS ride out with the belt: a floor origin beside the wall (not the front row) keeps its
   //    gap to the wall's real edge, so the tiers keep their shape on a wide belt (the star stands on
@@ -303,6 +321,7 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
   let SB = null, sbase = 0;
   const clearStar = (s, b, dx, dz) => {
     if (!SB || s.star) return true;
+    if ((b[2] + b[3]) / 2 + dz > (SB[2] + SB[3]) / 2 + STAR_LEAD) return false;   // (nobody nearer the audience than the star)
     const zb = b[2] + dz;
     if (zb <= SB[3]) return true;                         // (beside or behind it: not its foreground)
     const k = (az - SB[3]) / (az - zb), p0 = ax + (b[0] + dx - ax) * k, p1 = ax + (b[1] + dx - ax) * k;
@@ -314,14 +333,16 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
   const hides = (F, B) => {
     const zf = F.b[2], zb = B.b[3];
     if (zf <= zb || F.top === undefined || B.top === undefined) return 0;   // (F isn't in front of B)
-    const k = (az - zb) / (az - zf), y = OCC_EYE - (OCC_EYE - F.top) * k;   // (where the sightline over F's top meets B's front)
-    const H = Math.max(.5, B.top - B.base), h = Math.min(1, Math.max(0, (y - B.base - HIDE_FOOT * H) / ((1 - HIDE_FOOT) * H)));
+    const k = (az - zb) / (az - zf), H = Math.max(.5, B.top - B.base);
     let worst = 0;
-    if (h > 0) for (const ex of OCC_EYES){
+    for (const [ex, ey] of OCC_EYES){
+      const y = ey - (ey - F.top) * k;                   // (where the sightline over F's top meets B's front)
+      const h = Math.min(1, Math.max(0, (y - B.base - HIDE_FOOT * H) / ((1 - HIDE_FOOT) * H)));
+      if (h <= 0) continue;
       const e = cx + ex, p0 = e + (F.b[0] - e) * k, p1 = e + (F.b[1] - e) * k;
-      worst = Math.max(worst, (Math.min(p1, B.b[1]) - Math.max(p0, B.b[0])) / (B.b[1] - B.b[0]));
+      worst = Math.max(worst, h * Math.max(0, Math.min(p1, B.b[1]) - Math.max(p0, B.b[0])) / (B.b[1] - B.b[0]));
     }
-    return worst * h;
+    return worst;
   };
   const machines = [];                                  // (placed machines: {b, top, base})
   const hidden = (s, b, dx, dz) => {                    // (the worst share: of it, by anyone placed — or of anyone, by it)
@@ -342,7 +363,7 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
   //  (one gallery deck = one ROW: two machines up there never stand one behind the other — the
   //   front one would hide the back one — unless the room has no other clean spot left at all)
   const rowFree = (b, dx) => gal.every(g => b[0] + dx >= g[1] + margin || g[0] >= b[1] + dx + margin);
-  const gal = [];
+  const gal = [], galBy = new Map();                   // (galBy: a gallery box → the station standing on it)
   // keep a footprint inside the room first (slide in along x, then z)
   const clampIn = b => { let dx = 0, dz = 0;
     if (b[1] > room.x1) dx = room.x1 - b[1]; if (b[0] + dx < room.x0) dx = room.x0 - b[0];
@@ -359,49 +380,75 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
   //  (at one priority, a station with a slot of its own before the band, which picks its seats in BAND order)
   const band = s => s.born ? 1 + (BAND.includes(s.key) ? BAND.indexOf(s.key) : BAND.length) : 0;
   const order = [...S].sort((a, b) => !!b.pin - !!a.pin || !!b.star - !!a.star || b.prio - a.prio || band(a) - band(b) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-  const offs = searchGrid();
+  const offs = searchGrid(), coarse = searchGrid(1);   // (coarse: the whole-floor search, a 1-unit grid)
   let clean = true, up = 0;
   for (const s of order){
     s.base = s.deck ?? (s.top === undefined ? undefined : s.top - 6);
     if (s.pin){                                         // (a machine the user parked behind the belt stands on the gallery there —
       const b = bx(s);                                  //  a gallery-born one, or one the belt would hide; a user's own height wins: main)
-      if (!FLOOR_ONLY.has(s.key) && (b[2] + b[3]) / 2 < wall[2] && (STATIONS[s.key]?.gallery || !seen(b))){ s.y = galleryY; gal.push(b); }
+      if (!FLOOR_ONLY.has(s.key) && !s.grounded && (b[2] + b[3]) / 2 < wall[2] && (STATIONS[s.key]?.gallery || !seen(b))){ s.y = galleryY; gal.push(b); galBy.set(b, s); }
       else machines.push({ b, top: s.top, base: s.base });
       placed.push(b); continue;
     }
     let best = null, bestHits = Infinity;
     // one search: outward from (x0, z0) — nearest first, out to `reach` — for a clean spot `ok` allows
-    const search = (x0, z0, ok, reach = Infinity, least = false) => {
+    //  (gap(o): the air it keeps to a placed footprint — MARGIN, or LOFT_SPACE to a partner on its loft)
+    const search = (x0, z0, ok, reach = Infinity, least = false, gap = () => margin, grid = offs) => {
       const [cdx, cdz] = clampIn(bx(s, x0, z0)), ox = x0 + cdx, oz = z0 + cdz, b = bx(s, ox, oz);
-      for (const [dx, dz, d] of offs){
+      for (const [dx, dz, d] of grid){
         if (d > reach) break;
+        let n = 0; for (const o of placed){ const m = gap(o);
+          if (b[0] + dx < o[1] + m && o[0] < b[1] + dx + m && b[2] + dz < o[3] + m && o[2] < b[3] + dz + m){ n++; if (!least) break; } }
+        if (!least && n) continue;                       // (the cheap test first: most spots overlap someone)
         if (!ok(b, dx, dz)) continue;
-        let n = 0; for (const o of placed)
-          if (b[0] + dx < o[1] + margin && o[0] < b[1] + dx + margin && b[2] + dz < o[3] + margin && o[2] < b[3] + dz + margin) n++;
         if (n === 0) return [ox + dx, oz + dz];
         if (least && n < bestHits){ bestHits = n; best = [ox + dx, oz + dz]; }   // (a floor too full to clear: least-bad)
       }
       return null;
     };
     const floorOk = (b, dx, dz) => fits(s, b, dx, dz);
-    // a SEAT: its nearest clean spot within SEAT_R (the nudge only clears the neighbours) — taken unless
-    // the audience can't see it there (or it would hide a neighbour): more than HIDE_MAX hidden
-    const seat = (s, h) => {
-      const got = search(h.x, h.z, floorOk, SEAT_R);
-      return got && hidden(s, bx(s, got[0], got[1]), 0, 0) <= HIDE_MAX ? got : null;
-    };
+    // a SEAT: its nearest clean spot within SEAT_R (the nudge only clears the neighbours) that the
+    // audience SEES — not more than HIDE_MAX hidden behind a neighbour, nor hiding one
+    const seenOk = (b, dx, dz) => floorOk(b, dx, dz) && hidden(s, b, dx, dz) <= HIDE_MAX;
     let got = null, mode = 'floor';
-    // the FLOOR: a gallery-born station takes the first of its seats that is free (seen, within SEAT_R);
-    // anyone else the nearest clean spot to its home
-    if (s.born) for (const h of s.homes){ if ((got = seat(s, h))) break; }
+    // the FLOOR: a gallery-born station takes the first of its seats that is free (seen, within SEAT_R) —
+    // else ANY clean, seen floor spot short of the lens (the nearest to its first seat): the floor is full
+    // only when there is none. Anyone else: the nearest clean spot to its home
+    if (s.born){
+      for (const h of s.homes){ if ((got = search(h.x, h.z, seenOk, SEAT_R))) break; }
+      if (!got) got = search(s.homes[0].x, s.homes[0].z, (b, dx, dz) => (b[2] + b[3]) / 2 + dz <= BAND_FRONT && seenOk(b, dx, dz), Infinity, false, undefined, coarse);
+      // (one the user stood ON THE FLOOR never climbs: any clean floor spot, seen or not, before an overlap)
+      if (!got && s.grounded) got = search(s.homes[0].x, s.homes[0].z, floorOk, Infinity, false, undefined, coarse);
+    }
     else got = search(s.x, s.z, floorOk, Infinity, true);
     // the floor is full: the rear GALLERY ('row': a row of its own, else 'stack': behind another) —
     // BESIDE a machine already up there first (one loft, never two lone towers), else from its own spot
-    if (!got && open && !FLOOR_ONLY.has(s.key) && !s.star){
+    if (!got && open && !FLOOR_ONLY.has(s.key) && !s.star && !s.grounded){
       const gOk = (b, dx, dz) => onGallery(s, b, dx, dz), rOk = (b, dx, dz) => gOk(b, dx, dz) && rowFree(b, dx);
+      // BESIDE one already up: on its loft (LOFT_SPACE apart — one deck), either side, within the loft's reach
+      const lofted = g => o => o === g ? LOFT_SPACE : margin;
+      const bOk = g => (b, dx, dz) => gOk(b, dx, dz) && (b[0] + dx >= g[1] || b[1] + dx <= g[0])   // (beside it: one row, no overlap in x)
+        && gal.every(o => o === g || b[0] + dx >= o[1] + margin || o[0] >= b[1] + dx + margin);
+      const zOn = g => (g[2] + g[3]) / 2 - (s.box[2] + s.box[3]) / 2;
       for (const g of gal){
-        for (const x of [g[1] + margin - s.box[0], g[0] - margin - s.box[1]])
-          if ((got = search(x, (g[2] + g[3]) / 2 - (s.box[2] + s.box[3]) / 2, rOk, 1.5))) break;
+        for (const x of [g[1] + LOFT_SPACE - s.box[0], g[0] - LOFT_SPACE - s.box[1]])
+          if ((got = search(x, zOn(g), bOk(g), loftGap, false, lofted(g)))) break;
+        if (got) break;
+      }
+      // …or, where the room's wall leaves too little beside it, the partner slides along its row (≤ loftGap)
+      // to make room: one loft, not two towers, whatever a footprint's last few centimetres
+      if (!got) for (const g of gal){
+        const P = galBy.get(g); if (!P || P.pin) continue;
+        for (const sd of [1, -1]){
+          const nx = sd > 0 ? room.x1 - s.box[1] : room.x0 - s.box[0];      // (flush against the room's wall on that side)
+          const need = sd > 0 ? nx + s.box[0] - LOFT_SPACE - g[1] : nx + s.box[1] + LOFT_SPACE - g[0];
+          if (sd > 0 ? need >= 0 || need < -loftGap : need <= 0 || need > loftGap) continue;
+          const was = [g[0], g[1]]; g[0] += need; g[1] += need;
+          const okP = onGallery(P, g, 0, 0) && placed.every(o => o === g || g[1] + margin <= o[0] || o[1] + margin <= g[0] || g[3] + margin <= o[2] || o[3] + margin <= g[2])
+            && gal.every(o => o === g || g[0] >= o[1] + margin || o[0] >= g[1] + margin);
+          if (okP && (got = search(nx, zOn(g), bOk(g), 1, false, lofted(g)))){ P.x += need; break; }
+          g[0] = was[0]; g[1] = was[1];
+        }
         if (got) break;
       }
       if (got || (got = search(s.gx, s.gz, rOk))) mode = 'row';
@@ -414,29 +461,30 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
     }
     if (got){ s.x = got[0]; s.z = got[1]; }
     else { const [cdx, cdz] = clampIn(bx(s)); s.x += cdx; s.z += cdz; }
-    if (mode !== 'floor'){ s.y = galleryY; gal.push(bx(s)); up++; }
-    placed.push(bx(s));
-    if (mode === 'floor') machines.push({ b: bx(s), top: s.top, base: s.base });
+    const B = bx(s);                                    // (one box: a loft partner is found by identity)
+    if (mode !== 'floor'){ s.y = galleryY; gal.push(B); galBy.set(B, s); up++; }
+    placed.push(B);
+    if (mode === 'floor') machines.push({ b: B, top: s.top, base: s.base });
     if (s.star){ SB = bx(s); sbase = s.base ?? 0; }
   }
-  // (how many separate structures the gallery needs: machines within FOOT.LOFT_GAP share one loft — rooms/footing.js)
+  // (how many separate structures the gallery needs: machines within loftGap — main: FOOT.LOFT_GAP — share one loft, rooms/footing.js)
   const grp = gal.map((_, i) => i), root = i => grp[i] === i ? i : (grp[i] = root(grp[i]));
   for (let i = 0; i < gal.length; i++) for (let j = i + 1; j < gal.length; j++){
     const a = gal[i], b = gal[j];
-    if (Math.max(a[0] - b[1], b[0] - a[1], a[2] - b[3], b[2] - a[3]) <= FOOT.LOFT_GAP) grp[root(i)] = root(j);
+    if (Math.max(a[0] - b[1], b[0] - a[1], a[2] - b[3], b[2] - a[3]) <= loftGap) grp[root(i)] = root(j);
   }
   const towers = gal.filter((_, i) => root(i) === i).length;
   return { clean, up, towers, out: Object.fromEntries(S.map(s => [s.key, s.y === undefined ? { x: s.x, z: s.z } : { x: s.x, z: s.z, y: s.y }])) };
 }
-/* every (dx, dz, d) offset on a 0.5-unit grid out to 60 units, nearest first (built once) */
-let _grid = null;
-function searchGrid(){
-  if (_grid) return _grid;
-  const g = [], R = 60, st = .5;
+/* every (dx, dz, d) offset on a `st`-unit grid (0.5 by default) out to 60 units, nearest first (built once per step) */
+const _grid = {};
+function searchGrid(st = .5){
+  if (_grid[st]) return _grid[st];
+  const g = [], R = 60;
   for (let i = -R / st; i <= R / st; i++) for (let k = -R / st; k <= R / st; k++){
     const dx = i * st, dz = k * st, d = Math.hypot(dx, dz);
     if (d <= R) g.push([dx, dz, d]);
   }
   g.sort((a, b) => a[2] - b[2] || a[1] - b[1] || a[0] - b[0]);
-  return (_grid = g);
+  return (_grid[st] = g);
 }

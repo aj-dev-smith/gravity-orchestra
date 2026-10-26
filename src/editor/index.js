@@ -205,7 +205,7 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
                    strain: strain.map(w => `${labels[w.key] || w.key} is straining: ${w.msg}`),
                    strained: id => strained.has(machineOf(m[id])) });
   }
-  function openPanel(v = !panel.open){ panel.show(v); status = ''; renderPanel(); syncButtons(); }
+  function openPanel(v = !panel.open){ if (v && stage?.on) stage.toggle(false); panel.show(v); status = ''; renderPanel(); syncButtons(); }
   const veilUp = () => { const o = document.getElementById('overlay'); return !!o && !o.classList.contains('gone'); };
 
   /* ---- stage edit ---- */
@@ -226,6 +226,9 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
       stage.refresh();
     },
     leave(){ host.directorNow?.(); },
+    // one tool at a time: the MAP panel covered a third of the 3/4 view (desktop) and sat on the height dock
+    // (a phone's bottom sheet) — entering stage edit closes it; opening it leaves stage edit (openPanel)
+    enter(){ if (panel.open) openPanel(false); },
     /* HEIGHT (the handle — height.js): a gesture opens ONE undo step (liftBegin: the layout as it was),
        writes as it goes (liftWrite — cheap: the machine already moved live, only the stored layout
        follows) and settles once, at its end (liftSettle: the kit rebuilt at its deck, the room

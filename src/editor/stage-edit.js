@@ -869,6 +869,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       prevMode = cam.mode; prevMax = cam.orbit.maxDistance; prevPolar = cam.orbit.maxPolarAngle;
       cam.mode = 'free';
       cam.orbit.maxDistance = 110; cam.orbit.maxPolarAngle = Math.PI * .47;   // stay above the floor plane
+      host.enter?.();                                   // (the instrument MAP closes: one tool on the screen at a time)
       haze(true); refresh(); setViewBtns('plan'); view = 'plan'; overview({ ease: true });
     } else {
       if (drag) endDrag(true);

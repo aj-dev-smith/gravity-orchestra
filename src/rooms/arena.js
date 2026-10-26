@@ -5,7 +5,7 @@ import { solveArenaCues, lastFire, JETS, CANNONS, JET_BURN } from './arena-cues.
 import { ARM_AT } from '../transport.js';
 import { arenaFooting, vuCue, VU as VUK } from './arena-footing.js';
 import { makePulse } from './pulse.js';
-import { planArenaProps, JET_HOME, CO2_HOME, RIG, AMP, ampColumns, PYRO } from './arena-props.js';
+import { planArenaProps, JET_HOME, CO2_HOME, RIG, AMP, ampColumns, ampSource, PYRO } from './arena-props.js';
 /* ============================================================
    THE METAL ARENA — the machines play the big room.
 
@@ -77,23 +77,71 @@ function deckTex(){                      // 8×4 sheets of black-painted ply, sc
     }
   }, { repeat: [1, 1] });
 }
-/* the BACKLINE's atlas (one material for cabs + heads): a 4×12's front — grille cloth in a tolex frame,
-   gold piping, a logo plate (u 0–.5) · plain black tolex for every other face (.5–.75) · a head's front:
-   a gold control strip, knobs and the power jewel's bezel (.75–1) */
-function ampTex(){
-  return canvasTex(512, 256, x => {
+/* the BACKLINE's atlas (one material for cabs + heads; drawn at 2× on a 512 × 256 grid): a 4×12's front —
+   salt-and-pepper grille cloth (a mid-grey weave that catches the wash: the old near-black cloth read as a
+   black block against the haze), white piping, silver corner caps and a white script logo (u 0–.5) · plain
+   black tolex for every other face (.5–.75) · a head's front (.75–1): a script logo over a gold control
+   panel with its knobs. The head's front is ≈ 5.5× squashed vertically on the box, so its marks are drawn
+   tall. glow = true paints the EMISSIVE mask instead (logos + the head's panel, and the grille's weave dimly — the
+   stage's spill; what lights up when the guitar plays: update writes emissiveIntensity) */
+const HEAD_SQ = 5.47;
+/* the backline's logos at rest and how hard they flare with the guitar (update: emissiveIntensity) */
+const AMP_GLOW = { REST: .35, HIT: 1.5, DECAY: .3 };                                  // (the head's face: 128 px over .97·CAB, 256 px over HEAD)
+function ampTex(glow = false){
+  return canvasTex(1024, 512, x => {
+    x.scale(2, 2);
     const R = rng(12);
-    x.fillStyle = '#18171c'; x.fillRect(0, 0, 256, 256);
-    for (let i = 0; i < 256; i += 3){ x.fillStyle = 'rgba(70,68,78,.38)'; x.fillRect(i, 0, 1, 256); x.fillRect(0, i, 256, 1); }
-    x.strokeStyle = '#26252b'; x.lineWidth = 22; x.strokeRect(11, 11, 234, 234);
-    x.strokeStyle = '#a8946a'; x.lineWidth = 3; x.strokeRect(24, 24, 208, 208);
-    x.fillStyle = '#ddd8cc'; x.fillRect(38, 40, 52, 13);
-    x.fillStyle = '#141418'; x.fillRect(256, 0, 256, 256);
-    for (let i = 0; i < 700; i++){ x.fillStyle = `rgba(${R() < .5 ? '0,0,0' : '60,60,68'},${.1 + R() * .15})`; x.fillRect(256 + R() * 256, R() * 256, 1 + R() * 2, 1 + R() * 2); }
-    x.fillStyle = '#a8946a'; x.fillRect(392, 96, 112, 56);
-    x.fillStyle = '#26221c'; x.fillRect(396, 100, 104, 48);
-    for (let k = 0; k < 6; k++){ x.fillStyle = '#c9c1aa'; x.beginPath(); x.arc(406 + k * 14, 124, 4.5, 0, 6.3); x.fill(); }
-    x.fillStyle = '#3a0805'; x.beginPath(); x.arc(492, 124, 6, 0, 6.3); x.fill();
+    x.fillStyle = glow ? '#000' : '#141317'; x.fillRect(0, 0, 512, 256);
+    const script = (txt, cx, cy, px, sy = 1) => {
+      x.save(); x.translate(cx, cy); x.scale(1, sy); x.rotate(-.06);
+      x.font = `italic 700 ${px}px "Brush Script MT", "Snell Roundhand", "Segoe Script", cursive`;
+      x.textAlign = 'center'; x.textBaseline = 'middle';
+      if (!glow){ x.lineWidth = px * .12; x.strokeStyle = '#0c0c0e'; x.strokeText(txt, 0, 0); }
+      x.fillStyle = glow ? '#fff2dc' : '#f2efe6'; x.fillText(txt, 0, 0);
+      x.restore();
+    };
+    if (!glow){
+      // the cab: tolex frame, then the grille cloth — a basket weave with salt-and-pepper threads
+      x.fillStyle = '#17161a'; x.fillRect(0, 0, 256, 256);
+      x.fillStyle = '#3c3b41'; x.fillRect(26, 26, 204, 204);
+      for (let i = 26; i < 230; i += 2) for (let j = 26; j < 230; j += 2){
+        const w = ((i >> 1) + (j >> 1)) & 1;                 // (the weave: alternate threads over / under)
+        x.fillStyle = w ? 'rgba(98,96,104,.55)' : 'rgba(22,22,26,.45)'; x.fillRect(i, j, 2, 1);
+      }
+      for (let i = 0; i < 2600; i++){
+        const v = R() < .45 ? '210,206,196' : '10,10,12';
+        x.fillStyle = `rgba(${v},${.18 + R() * .3})`; x.fillRect(26 + R() * 203, 26 + R() * 203, 1, 1);
+      }
+      // a soft shade under the frame's lip (depth) + the white piping round the cloth
+      const g = x.createLinearGradient(0, 26, 0, 60); g.addColorStop(0, 'rgba(0,0,0,.45)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+      x.fillStyle = g; x.fillRect(26, 26, 204, 34);
+      x.strokeStyle = '#ece8dc'; x.lineWidth = 3; x.strokeRect(25, 25, 206, 206);
+      // silver corner caps
+      x.fillStyle = '#b9bcc4';
+      for (const [cx, cy] of [[0, 0], [256, 0], [0, 256], [256, 256]]){
+        x.beginPath(); x.moveTo(cx, cy); x.lineTo(cx + (cx ? -22 : 22), cy); x.lineTo(cx, cy + (cy ? -22 : 22)); x.closePath(); x.fill();
+      }
+      // the tolex for every other face: black with a pebble grain
+      x.fillStyle = '#141317'; x.fillRect(256, 0, 128, 256);
+      for (let i = 0; i < 900; i++){ x.fillStyle = `rgba(${R() < .5 ? '0,0,0' : '70,70,78'},${.12 + R() * .18})`; x.fillRect(256 + R() * 128, R() * 256, 1 + R() * 2, 1 + R() * 2); }
+      // the head: black tolex, a gold panel low on its face, knobs (drawn tall: the face squashes them)
+      x.fillStyle = '#17161a'; x.fillRect(384, 0, 128, 256);
+      x.fillStyle = '#b89a5c'; x.fillRect(390, 150, 116, 88);
+      x.fillStyle = '#2a2318'; x.fillRect(393, 154, 110, 80);
+    }
+    if (glow){                                          // the grille's weave takes a little of the stage's spill
+      for (let i = 26; i < 230; i += 2) for (let j = 26; j < 230; j += 2){
+        x.fillStyle = ((i >> 1) + (j >> 1)) & 1 ? '#4a4d57' : '#2a2c33'; x.fillRect(i, j, 2, 1);
+      }
+    }
+    script('Gravity', 128 - 52, 58, 30);
+    if (glow){ x.fillStyle = '#5a4220'; x.fillRect(393, 154, 110, 80); }          // (the panel glows dim gold)
+    for (let k = 0; k < 6; k++){
+      x.fillStyle = glow ? '#a08048' : '#d8d0b8';
+      x.beginPath(); x.ellipse(402 + k * 15, 194, 4.2, 4.2 * HEAD_SQ * .55, 0, 0, 6.3); x.fill();
+    }
+    x.fillStyle = glow ? '#ff2a10' : '#5a0c06'; x.beginPath(); x.ellipse(497, 194, 4.5, 4.5 * HEAD_SQ * .55, 0, 0, 6.3); x.fill();
+    script('Gravity', 448, 72, 26, HEAD_SQ * .62);
   });
 }
 /* a unit box whose FRONT (+z) face shows the atlas over u0..u1 and every other face the tolex */
@@ -402,7 +450,8 @@ export default {
 
     // ---- THE BACKLINE flanking the blinder wall: walls of REAL 4×12 cabs (76 cm cubes) three high, a head
     //      on each column with a red power jewel — a column anything stands in is taken down (place) ----
-    const ampMat = new THREE.MeshStandardMaterial({ map: ampTex(), roughness: .62, metalness: .12, color: 0xe6e6ee, envMap, envMapIntensity: .55 });
+    const ampMat = new THREE.MeshStandardMaterial({ map: ampTex(), emissiveMap: ampTex(true), emissive: 0xffffff, emissiveIntensity: AMP_GLOW.REST,
+      roughness: .58, metalness: .1, color: 0xffffff, envMap, envMapIntensity: .7 });
     const tolex = new THREE.MeshStandardMaterial({ color: 0x0b0b0e, roughness: .7, metalness: .2, envMap, envMapIntensity: .3 });
     const AMPS = ampColumns(), headY = F + AMP.ROWS * AMP.CAB + AMP.HEAD / 2;
     const cabAt = (a, r, k = 1) => trs(a.x, F + AMP.CAB * (r + .5), a.z, 0, 0, 0, AMP.CAB * k, AMP.CAB * k, AMP.DEEP * k);
@@ -669,8 +718,13 @@ export default {
     const ePos = embers.geometry.attributes.position, gPos = fgGeo.attributes.position, PER = ePos.count / JETS;
     const jewelSize = jewels.geometry.attributes.aSize, UPV = V(0, 1, 0), _dir = new THREE.Vector3();
     let rig = null;
+    // the BACKLINE answers the guitar: the first of riff / pogo / bass that plays (a pulse of its own cue,
+    // scaled to its own norm); no guitar → the logos glow at rest with the room's energy
+    let ampPulse = null;
     function place(anchors = [], plan = null){
       VU.length = 0; GHOST.length = 0;
+      const amp = ampSource(anchors);
+      ampPulse = amp ? makePulse(vuCue(amp.cue, amp.P), { P: amp.P, start: amp.start, decay: AMP_GLOW.DECAY }) : null;
       for (const s of plan?.pulses || []){
         const c = vuCue(s.cue, s.P);                            // (scaled to the machine's own norm: accents reach the top)
         VU.push(makePulse(c, { P: s.P, start: s.start, decay: VUK.DECAY }));
@@ -769,6 +823,7 @@ export default {
         crowd.material.uniforms.uTime.value = t;
         crowd.material.uniforms.uBoost.value = 1 + 1.2 * B + .8 * warm;
         jewels.material.uniforms.uTime.value = t;
+        ampMat.emissiveIntensity = AMP_GLOW.REST * (1 + .5 * energy) + AMP_GLOW.HIT * (ampPulse ? ampPulse.at(t) : 0) + .4 * B;
         // ---- haze + fog: the blinders lift the air; the fire only warms the low fog near the deck ----
         for (let i = 0; i < hazes.length; i++){
           const h = hazes[i];

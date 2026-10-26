@@ -32,6 +32,16 @@ export const CO2_HOME = RIG.TOWER_Z.flatMap(z => [-1, 1].map(s => [s * (RIG.TOWE
 export const PYRO = { NOZZLE: 1.4, BODY: .75, CLEAR: 1, PLUME_AT: 1.2 };     // (a flame unit: a ~1 m road-case box, its nozzle on top)
 /* the BACKLINE: amp walls either side of the blinder wall, real 4×12 cabinets (76 cm cubes ≈ 1.12 u) */
 export const AMP = { CAB: 1.12, DEEP: .54, HEAD: .4, ROWS: 4, COLS: 8, X0: 29.6, Z: -49.5 };   // (in front of the upstage haze)
+/* who the BACKLINE answers (arena.js: its logos flare with that machine's strikes): the guitar — the
+   first of riff / pogo / bass that plays this song (an anchor with a cue); none → null (rest glow only) */
+export const AMP_BY = ['riff', 'pogo', 'bass'];
+export function ampSource(anchors = []){
+  for (const k of AMP_BY){
+    const a = anchors.find(a => a.key === k && a.cue?.length && a.P > 0);
+    if (a) return a;
+  }
+  return null;
+}
 export const ampColumns = () => [-1, 1].flatMap(s => Array.from({ length: AMP.COLS }, (_, c) => ({ s, c, x: s * (AMP.X0 + (c + .5) * AMP.CAB), z: AMP.Z })));
 
 /* ---- the envelopes (arena.js shaders, at their widest: a big burn at full velocity) ---- */

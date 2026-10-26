@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { layoutStations } from '../src/instruments/stations.js';
 import { STAGE } from '../src/rooms/common.js';
 import { planFooting, footingBoxes, FOOT } from '../src/rooms/footing.js';
-import { planArenaProps, jetClearance, plumeClearance, flameR, CO2_ENV, co2Dir, JET_HOME, CO2_HOME, PYRO, RIG, AMP, rigSolids } from '../src/rooms/arena-props.js';
+import { planArenaProps, jetClearance, plumeClearance, flameR, CO2_ENV, co2Dir, JET_HOME, CO2_HOME, PYRO, RIG, AMP, rigSolids, ampSource } from '../src/rooms/arena-props.js';
 
 /* THE ARENA'S PYRO STANDS CLEAR OF THE MACHINES (src/rooms/arena-props.js): every flame column and CO2
    plume, at its widest, keeps CLEAR (1 u) from every machine, every support the room built under them
@@ -115,5 +115,16 @@ describe('arena props: the pyro keeps its distance', () => {
   });
   it('is deterministic (the same anchors give the same rig)', () => {
     for (const R of FIX.slice(0, 6)){ const A = anchorsOf(R), P = plan(A); expect(planArenaProps(A, P, { floor: F })).toEqual(planArenaProps(A, P, { floor: F })); }
+  });
+});
+
+describe('arena backline: the amps answer the guitar', () => {
+  const g = (key, n = 3) => ({ key, kind: 'station', cue: Array.from({ length: n }, (_, i) => ({ t: i, w: 1 })), P: 10, start: -.6 });
+  it('the riff first, then the pogo, then the string bass; a machine that never strikes is skipped', () => {
+    expect(ampSource([g('bass'), g('pogo'), g('riff')]).key).toBe('riff');
+    expect(ampSource([g('bass'), g('pogo')]).key).toBe('pogo');
+    expect(ampSource([g('riff', 0), g('bass')]).key).toBe('bass');
+    expect(ampSource([g('organ'), g('horns')])).toBe(null);
+    expect(ampSource()).toBe(null);
   });
 });

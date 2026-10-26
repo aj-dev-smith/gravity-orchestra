@@ -132,6 +132,26 @@ export function describeConflicts(cs, label = k => k){
   return cs.map(c => c.kind === 'belt' ? 'overlaps the belt' : c.kind === 'room' ? 'outside the room' : `overlaps ${label(c.key)}`).join(' · ');
 }
 
+/** The layout after the machine `key` is placed at `entry` (an edit's machine — a move, a turn, a height):
+    · the FIRST edit pins every machine as it stands (all: [{ key, x (world), z, yaw }]; layout x is
+      relative to the belt's centre cx) — what you see is what stays;
+    · every machine keeps the HEIGHT the user gave it (liftOf(key): its live one, else its stored one); one
+      the room solve raised (the gallery) has none to keep — the solve decides again where it lands;
+    · entry.lift: a number = the user's height for `key` (0 = ON THE FLOOR, an explicit word: it outranks
+      the gallery raise) · null = forgotten (AUTO: the layout decides) · absent = as it was.
+    Pure: L0 is not touched. */
+export function placeEntry(L0, key, entry, all = [], { cx = 0, liftOf = () => undefined } = {}){
+  const L = { ...L0 };
+  const held = (k, e) => { const u = liftOf(k) ?? L[k]?.lift; return Number.isFinite(u) ? { ...e, lift: u } : e; };
+  if (!Object.keys(L).length)
+    for (const p of all) L[p.key] = held(p.key, { x: p.x - cx, z: p.z, yaw: p.yaw });
+  let e;
+  if (!('lift' in entry)) e = held(key, entry);
+  else { e = { ...entry }; if (!Number.isFinite(entry.lift)) delete e.lift; }
+  L[key] = e;
+  return L;
+}
+
 /* ---- undo: a small stack of layout snapshots (per song id) ---- */
 export function makeHistory(limit = 40){
   let id = null, stack = [];

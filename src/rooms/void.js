@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { STAGE, rng, canvasTex, radialTex, glowPoints, trs } from './common.js';
 import { FOOT } from './footing.js';
 import { makePulse } from './pulse.js';
-import { voidIslands } from './void-isles.js';
+import { voidIslands, skyRocks } from './void-isles.js';
 import { voidFootingStyle, makeVoidMats, makeRuneMat, GLOW_I } from './void-footing.js';
 import { islandGeometry, runeGeometry, litOf, crystalGeometry, makeCrystalMat, makeKeelBeamMat, fillCrystals, axesOf, resample, keelDepth, GROUND } from './void-ground.js';
 /* ============================================================
@@ -17,7 +17,8 @@ import { islandGeometry, runeGeometry, litOf, crystalGeometry, makeCrystalMat, m
      · the islands come from `place(anchors, plan)` — voidIslands (void-isles.js, pure + tested):
        a machine's footprint, a loft's shared deck, every stair and ladder, and the organ's columns
        (a hung machine whose own supports reach the floor) all stand on an island; a chandelier
-       that never reaches the floor floats
+       that never reaches the floor hangs from a SKY ROCK (skyRocks): an island turned over, its
+       soffit where the rods end
      · what stands on an island is cut from it (void-footing.js — the room's footing STYLE): a dais
        of its stone; a terrace of its rock; a rock pillar; a stack of levitating stones; a floating
        ridge for a loft; rock columns under an open stand's feet; stepping stones, carved steps or
@@ -197,11 +198,11 @@ export default {
     /* place(anchors, plan): the islands (voidIslands), their bodies, runes and crystals — a pure fn of
        the anchors + the footing plan, rebuilt only when they change */
     function place(anchors, plan = null){
-      const isles = voidIslands(anchors, plan), lit = litOf(anchors, isles);
-      const { stone, rock, glints } = islandGeometry(isles, { floor: F });
+      const isles = voidIslands(anchors, plan), all = isles.concat(skyRocks(anchors, { ceil: STAGE.CEIL, floor: F })), lit = litOf(anchors, all);
+      const { stone, rock, glints } = islandGeometry(all, { floor: F });
       const swap = (m, g) => { m.geometry.dispose(); m.geometry = g; };
       swap(isl.stone, stone); swap(isl.rock, rock);
-      swap(isl.runes, runeGeometry(isles, anchors, lit, { floor: F }).geometry);
+      swap(isl.runes, runeGeometry(all, anchors, lit, { floor: F }).geometry);
       const cg = crystalGeometry(); fillCrystals(cg, isles, anchors, plan, lit, glints); swap(isl.crystals, cg);
       pulses = lit.map(a => makePulse(a.cue, a)); U.fill(0);
       // a pillar of light under every island's keel (its colour: its one machine's, or the shared cyan)

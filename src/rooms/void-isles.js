@@ -20,6 +20,7 @@
    edges — each lit by the NEAREST machine on its island (its slot), so a machine's strikes run
    round its own stretch of the rim; an island with no machine (the organ's) keeps slot −1 (the
    room's fallback glow).
+   SKY ROCKS (skyRocks): a chandelier whose rods reach the ceiling hangs from an island turned over.
    CRYSTALS (crystalSpots): a few shards hovering just off each machine's own stretch of rim — near
    its deck when it stands high — that breathe and lift on its strikes. A pure fn of anchors + plan:
    every one stays CRYSTAL.CLEAR clear of every machine's solid box and of everything the machines
@@ -284,5 +285,26 @@ export function crystalClearance(spots, anchors, plan){
     }
   }
   return worst;
+}
+/* SKY ROCKS — a hung machine whose suspension reaches the room's ceiling (its box tops out there: the
+   chandelier's three rods) and that stands on no island hangs from a piece of CEILING set adrift: an
+   island turned over, its dressed-stone soffit exactly where the rods end, its keel pointing up. Wide
+   enough that the rods' ends (≤ .55 of its half-width out: ricochet/index.js) land well inside it.
+   → island records (as voidIslands', no machines) + sky: the soffit's height, depthK: a shallower keel */
+export const SKY = { REACH: .25, PAD: 1.6, MIN_R: 3, SIDES: 9, DEPTH: .55 };
+export function skyRocks(anchors, { ceil = 36, floor = -5.5 } = {}){
+  const out = [];
+  for (const a of anchors || []){
+    if (!a || a.kind !== 'hung' || !Array.isArray(a.box) || a.box[3] < ceil - SKY.REACH || a.box[2] <= floor + .5) continue;
+    const R = Math.max(SKY.MIN_R, .55 * Math.max(a.w, a.d) / 2 + SKY.PAD), ph = hash2(a.x, a.z, 81) * Math.PI * 2, pts = [];
+    for (let k = 0; k < SKY.SIDES; k++){
+      const t = ph + k / SKY.SIDES * Math.PI * 2, r = R * (.94 + .12 * hash2(a.x + k, a.z - k, 83));
+      pts.push([a.x + Math.cos(t) * r, a.z + Math.sin(t) * r]);
+    }
+    const H = hull(pts);
+    out.push({ keys: [a.key], machines: 0, slots: [], gslots: [], hull: H, rim: grown(H, ISLE.RIM), group: `sky:${a.key}`, ...centroid(H),
+      sky: Math.min(a.box[3], ceil), depthK: SKY.DEPTH });
+  }
+  return out;
 }
 export { toWorld };

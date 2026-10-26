@@ -4,7 +4,7 @@ import { buildFooting } from '../src/rooms/footing3d.js';
 import { makePulse } from '../src/rooms/pulse.js';
 import { STAGE } from '../src/rooms/common.js';
 import { voidFootingStyle, makeVoidMats } from '../src/rooms/void-footing.js';
-import { voidIslands, runeSpots, crystalSpots, crystalClearance, machinesOf, outOf, rectDist, sepGap, grown, ISLE, CRYSTAL } from '../src/rooms/void-isles.js';
+import { voidIslands, skyRocks, runeSpots, crystalSpots, crystalClearance, machinesOf, outOf, rectDist, sepGap, grown, ISLE, CRYSTAL } from '../src/rooms/void-isles.js';
 import { islandGeometry, runeGeometry, runeSlots, litOf, crystalGeometry, fillCrystals, CRYSTAL_MAX, QUIET, GROUND } from '../src/rooms/void-ground.js';
 
 /* THE VOID (src/rooms/void.js + void-footing.js + void-isles.js): what its machines stand on — stone that
@@ -262,5 +262,60 @@ describe('the Void\'s islands as built (void-ground.js): the floor contract, the
     }
     // the glints hang UNDER their islands (below the platform's slab)
     for (const q of G.glints) expect(q.y).toBeLessThan(FL - GROUND.FASC);
+  });
+});
+
+describe('the Void\'s SKY ROCKS (void-isles.js skyRocks): a chandelier whose rods reach the ceiling hangs from an island turned over', () => {
+  // (Daybreak's chandelier, as main anchors it: its three rods end at the ceiling, .55 of its canopy's radius out)
+  const CH = { key: 'ricochet', kind: 'hung', color: '#8fe9ff', x: 0, z: -1.17, yaw: 0, w: 17.73, d: 17.73, y: 18.06, bottom: 17.72, low: 17.72,
+    box: [-8.87, 8.87, 17.72, 36.03, -10.03, 7.7], cue: [{ t: 2, w: 1 }], P: 20, start: -.6, fixed: true };
+  const A = [...CROWD, CH], CEIL = STAGE.CEIL, sky = skyRocks(A, { ceil: CEIL, floor: FL });
+  it('only a hung machine reaching the ceiling and not the floor gets one: its soffit where the rods end, wide enough for them', () => {
+    expect(sky.map(S => S.keys[0])).toEqual(['ricochet']);
+    expect(sky[0].sky).toBe(CEIL);
+    const soffit = grown(sky[0].hull, -(GROUND.INSET + GROUND.CH)), footR = CH.w / 2;
+    for (let k = 0; k < 36; k++){
+      const a = k / 36 * Math.PI * 2;
+      expect(outOf(grown(soffit, -.3), CH.x + .55 * footR * Math.cos(a), CH.z + .55 * footR * Math.sin(a))).toBe(0);
+    }
+    expect(skyRocks([{ ...CH, box: [...CH.box.slice(0, 3), 30, ...CH.box.slice(4)] }], { ceil: CEIL, floor: FL })).toEqual([]);   // short of the ceiling
+    expect(skyRocks(CROWD, { ceil: CEIL, floor: FL })).toEqual([]);                                                        // the organ stands on the floor
+    expect(skyRocks(A, { ceil: CEIL, floor: FL })).toEqual(sky);                                                           // deterministic
+    expect(voidIslands(A, PLAN)).toEqual(voidIslands(CROWD, PLAN));                     // not ground: the islands (and the staging audit's) are untouched
+  });
+  it('built: the island\'s own body turned over — nothing below its soffit, all inside its outline, every face still facing out; the floor\'s islands unchanged', () => {
+    const I = voidIslands(A, PLAN), base = islandGeometry(I, { floor: FL }), G = islandGeometry(I.concat(sky), { floor: FL });
+    let soffit = 0, keel = 0;
+    for (const k of ['stone', 'rock']){
+      const p0 = base[k].attributes.position.array, p = G[k].attributes.position.array, n = G[k].attributes.normal.array, idx = G[k].index.array;
+      expect(Array.from(p.slice(0, p0.length))).toEqual(Array.from(p0));
+      expect(idx.length).toBeGreaterThan(base[k].index.count);
+      for (let t = base[k].index.count; t < idx.length; t += 3){
+        const V = [idx[t], idx[t + 1], idx[t + 2]].map(v => [p[v * 3], p[v * 3 + 1], p[v * 3 + 2]]);
+        for (const v of V){ expect(v[1]).toBeGreaterThanOrEqual(CEIL - 1e-6); expect(outOf(sky[0].hull, v[0], v[2])).toBeLessThan(1e-4); }
+        const u = V[1].map((x, j) => x - V[0][j]), w = V[2].map((x, j) => x - V[0][j]);
+        const c = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]], o = idx[t] * 3;
+        expect(c[0] * n[o] + c[1] * n[o + 1] + c[2] * n[o + 2]).toBeGreaterThan(-1e-9);          // (a mirror turns faces inside out: the winding follows)
+        if (k === 'stone' && n[o + 1] < -.99 && V.every(v => Math.abs(v[1] - CEIL) < 1e-6)) soffit++;
+        if (k === 'rock' && n[o + 1] > .5) keel++;
+      }
+    }
+    expect(soffit).toBeGreaterThan(0);                      // its dressed stone faces down, at the ceiling: the rods' ends meet it
+    expect(keel).toBeGreaterThan(0);                        // its rock tapers up
+    expect(G.glints).toEqual(base.glints);                  // nothing hangs off it
+  });
+  it('its runes run round its fascia, above the soffit, lit by the chandelier', () => {
+    const I = voidIslands(A, PLAN).concat(sky), lit = litOf(A, I), R = runeSpots(I, A), S = runeSlots(R, I, A, lit);
+    const k = lit.findIndex(a => a.key === 'ricochet');
+    expect(k).toBeGreaterThanOrEqual(0);
+    const mine = S.filter((_, i) => I[R[i].isle].sky != null);
+    expect(mine.length).toBeGreaterThan(8);
+    expect(new Set(mine)).toEqual(new Set([k]));
+    const { geometry } = runeGeometry(I, A, lit, { floor: FL }), p = geometry.attributes.position.array, q = geometry.attributes.aPulse.array;
+    let n = 0;
+    for (let v = 0; v < q.length; v++) if (q[v] === k){
+      n++; expect(p[v * 3 + 1]).toBeGreaterThan(CEIL + GROUND.CH - .05); expect(p[v * 3 + 1]).toBeLessThan(CEIL + GROUND.FASC + .05);
+    }
+    expect(n).toBeGreaterThan(0);
   });
 });

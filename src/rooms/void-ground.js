@@ -14,6 +14,8 @@ import { runeSpots, crystalSpots, machinesOf, hash2, outOf, ISLE } from './void-
      the RUNES   round every fascia, each lit by the nearest machine on its island (rooms/pulse.js
                  over that machine's strike cue: its strikes run round its own stretch of the rim);
                  the organ's island answers the organ
+     a SKY ROCK  the same body turned over at the ceiling, where a chandelier's rods end (its runes
+                 answer the chandelier; nothing hangs off it)
      CRYSTALS    shards hovering off each machine's stretch of rim, breathing, lifting on its
                  strikes: ONE instanced draw, every pose a pure fn of songTime in the vertex shader
                  (+ the static ones hanging under the islands, breathing only)
@@ -83,7 +85,7 @@ function ledgeOf(I, T){
 /* the rock's rings under the ledge: [[x, y, z] per outline point] per PROFILE row — scaled toward the
    island's long axis (a keel, not a cone), every point pulled in (never out) by a hash of where it is */
 function rockRings(I, R0, T){
-  const { a, b, eb } = axesOf(R0.map(p => [p[0], p[2]]), I.cx, I.cz), D = keelDepth(eb), y0 = T - GROUND.FASC;
+  const { a, b, eb } = axesOf(R0.map(p => [p[0], p[2]]), I.cx, I.cz), D = keelDepth(eb) * (I.depthK ?? 1), y0 = T - GROUND.FASC;
   return PROFILE.map(([t, s], j) => {
     if (j === 0) return R0;
     const sA = Math.pow(s, .55), J = j === PROFILE.length - 1 ? .02 : .14, dy = j === PROFILE.length - 1 ? 0 : D * .035;
@@ -95,12 +97,20 @@ function rockRings(I, R0, T){
   });
 }
 
-/** the islands' bodies: { stone, rock } geometries (world space) + the crystals hanging under them */
+/* turn what was just written for one island over, about its own top (y0): heights mirrored, normals
+   with them, every triangle's winding reversed (a mirror turns them inside out) */
+function flipY(b, v0, i0, y0){
+  for (let v = v0; v < b.nv; v++){ b.p[v * 3 + 1] = 2 * y0 - b.p[v * 3 + 1]; if (b.n) b.n[v * 3 + 1] = -b.n[v * 3 + 1]; }
+  for (let t = i0; t < b.ni; t += 3){ const q = b.i[t + 1]; b.i[t + 1] = b.i[t + 2]; b.i[t + 2] = q; }
+}
+/** the islands' bodies: { stone, rock } geometries (world space) + the crystals hanging under them; a
+    sky rock (void-isles.js skyRocks: `sky` = its soffit) is the same body turned over */
 export function islandGeometry(isles, { floor, stagger = .003 } = {}){
   const S = newBuf(), R = newBuf(), glints = [];
   isles.forEach(I => {
-    const T = floor + stagger * (I.group ?? 0), H = I.hull, n = H.length;     // (one landmass: one height — its parts' tops coincide)
+    const T = I.sky ?? floor + stagger * (I.group ?? 0), H = I.hull, n = H.length;     // (one landmass: one height — its parts' tops coincide)
     if (n < 3) return;
+    const s0 = S.nv, si0 = S.ni, r0 = R.nv, ri0 = R.ni;
     const { Pf, Ps, R0 } = ledgeOf(I, T), Pt = insetPoly(H, GROUND.INSET + GROUND.CH), C = [I.cx, T, I.cz];
     for (let i = 0; i < n; i++){
       const j = (i + 1) % n, ex = H[j][0] - H[i][0], ez = H[j][1] - H[i][1], L = Math.hypot(ex, ez) || 1, N = [ez / L, 0, -ex / L];
@@ -121,6 +131,8 @@ export function islandGeometry(isles, { floor, stagger = .003 } = {}){
     }
     const last = rings[rings.length - 1], K = [last.reduce((s, p) => s + p[0], 0) / m, last.reduce((s, p) => s + p[1], 0) / m - .3, last.reduce((s, p) => s + p[2], 0) / m];
     for (let k = 0; k < m; k++) face(R, [K, last[(k + 1) % m], last[k]], DOWN);
+    // a sky rock: all of it turned over about its soffit (its keel points up) — and nothing hangs off it
+    if (I.sky != null){ flipY(S, s0, si0, T); flipY(R, r0, ri0, T); return; }
     // a few crystals hanging under it, on its middle rings, pointing down and out
     const want = Math.min(GROUND.GLINT, 1 + Math.floor(I.area / 40));
     for (let k = 0, got = 0; k < m && got < want; k++){
@@ -160,7 +172,8 @@ const _c = new THREE.Color(), REST = new THREE.Color(0x8a7cff);
 export function runeGeometry(isles, anchors, lit, { floor, stagger = .003 } = {}){
   const E = newBuf(true), spots = runeSpots(isles, anchors), slots = runeSlots(spots, isles, anchors, lit);
   spots.forEach((r, i) => {
-    const T = floor + stagger * (isles[r.isle].group ?? 0), s = slots[i], a = lit[s];
+    const I = isles[r.isle], s = slots[i], a = lit[s];
+    const T = I.sky != null ? I.sky + 2 * GROUND.RUNE_Y : floor + stagger * (I.group ?? 0);   // (a sky rock's fascia runs UP from its soffit)
     const col = a ? _c.set(a.color ?? '#8fa6c8').clone() : REST.clone().multiplyScalar(.7);
     const N = [r.nx, 0, r.nz];
     glyph(E, [r.x, T - GROUND.RUNE_Y, r.z], [N[2], 0, -N[0]], UP, N, GROUND.RUNE_H, r.g, col, s, .018);

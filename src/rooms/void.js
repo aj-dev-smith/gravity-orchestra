@@ -187,7 +187,7 @@ export default {
     const M = makeVoidMats({ envMap, floor: F });
     const footing = voidFootingStyle(M);                                 // (rooms/footing3d.js builds it from the plan)
     const U = new Float32Array(FOOT.MAX_PULSE);                          // the room's own answer: one slot per lit machine
-    const runeMat = makeRuneMat({ base: .18, gain: 1.75 });   // (dim at rest, so a strike's step reads from the wide) runeMat.uniforms.uPulse.value = U;
+    const runeMat = makeRuneMat({ base: .18, gain: 1.75 }); runeMat.uniforms.uPulse.value = U;   // (dim at rest, so a strike's step reads from the wide)
     const crystalMat = makeCrystalMat(U); crystalMat.uniforms.uLift.value = .38;
     const mesh = (mat, name, order = 0) => { const m = new THREE.Mesh(new THREE.BufferGeometry(), mat); m.name = name; m.frustumCulled = false; m.renderOrder = order; m.matrixAutoUpdate = false; group.add(m); return m; };
     const isl = { stone: mesh(M.stone, 'void:island-stone'), rock: mesh(M.rock, 'void:island-rock'), runes: mesh(runeMat, 'void:runes', 2), crystals: mesh(crystalMat, 'void:crystals') };

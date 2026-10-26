@@ -256,7 +256,9 @@ export function crystalSpots(isles, anchors, plan = null){
     }
     for (const sl of I.slots){
       const a = ms[sl], mine = samples.filter(s => s.slot === sl).sort((p, q) => p.d - q.d || p.x - q.x || p.z - q.z), got = [];
-      const raised = Number.isFinite(a.bottom) && a.bottom - F > 2.5;
+      // (a raised machine's crystals hover just under it — unless something of it hangs there (an open stand's
+      // resonators): then they keep to the island, out of its face)
+      const raised = Number.isFinite(a.bottom) && a.bottom - F > 2.5 && !(Number.isFinite(a.low) && a.low < a.bottom - .3);
       for (const s of mine){
         if (got.length >= CRYSTAL.PER) break;
         if (got.some(g => Math.hypot(g.x - s.x, g.z - s.z) < CRYSTAL.SEP)) continue;

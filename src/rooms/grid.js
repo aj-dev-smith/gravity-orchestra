@@ -4,6 +4,7 @@ import { STAGE } from './common.js';
 import { gridPatch } from './grid-shade.js';
 import { gridFootStyle } from './grid-footing.js';
 import { rippleExtra, makeRipples } from './grid-floor.js';
+import { makePlot } from './grid-plot.js';
 /* ============================================================
    ROOM ZERO — the GREYBOX: a dark box whose floor, walls and ceiling are one self-lit blueprint grid
    (8 u tiles, 2 u cells: grid-shade.js — a pure fn of the world point, so every surface agrees, and
@@ -16,6 +17,8 @@ import { rippleExtra, makeRipples } from './grid-floor.js';
      THE FLOOR ANSWERS (grid-floor.js): a strike sends a faint ring out across the grid lines from
        under its machine, and the cells hugging that machine glow with its afterglow — the quietest
        reaction of any room: accents near the machine that plays, a pure fn of songTime.
+     THE STAGE PLOT (grid-plot.js): the room's props — each standing machine's name printed on the
+       floor in front of its spot, with a tape of its colour and, raised, its deck's elevation in metres.
    The walls' grid dims as it climbs (the floor is where things happen). Rooms own no lights.
    ============================================================ */
 
@@ -33,7 +36,7 @@ function surface({ key, hor = 0, fade = null, extra = null }){
 
 export default {
   key: 'grid', label: 'Greybox',
-  build(){
+  build(scene, { renderer } = {}){
     const g = new THREE.Group();
     const { HW, FLOOR, CEIL, BACK, FRONT } = STAGE;
     const W = HW * 2, D = FRONT - BACK, H = CEIL - FLOOR, MZ = (FRONT + BACK) / 2, MY = (CEIL + FLOOR) / 2;
@@ -55,13 +58,15 @@ export default {
 
     const footing = gridFootStyle();
     const ripples = makeRipples(rip.uniforms);
+    const plot = makePlot({ renderer, floor: FLOOR, room: STAGE });
+    g.add(plot.mesh);
     return { group: g, ...STAGE, footing,
       fog: new THREE.FogExp2(0x07060e, .026), background: new THREE.Color(0x07060e),
       /* where the machines stand: the footing's riser tiers learn each machine's footprint; the floor's
          ripple slots are set (rooms/index.js: place runs before the footing is built) */
-      place(anchors, plan){ footing.known(anchors); ripples.place(anchors, plan); },
+      place(anchors, plan){ footing.known(anchors); ripples.place(anchors, plan); plot.place(anchors, plan); },
       update(dt, songTime){ ripples.update(songTime); },
-      get ripples(){ return ripples; },
-      dispose(){ footing.dispose(); floor.m.dispose(); shell.m.dispose(); floorMesh.geometry.dispose(); shellMesh.geometry.dispose(); } };
+      get ripples(){ return ripples; }, get plot(){ return plot; },
+      dispose(){ footing.dispose(); plot.dispose(); floor.m.dispose(); shell.m.dispose(); floorMesh.geometry.dispose(); shellMesh.geometry.dispose(); } };
   },
 };

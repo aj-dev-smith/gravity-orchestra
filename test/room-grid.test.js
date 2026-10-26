@@ -5,8 +5,11 @@ import { buildFooting, makeFootingMats } from '../src/rooms/footing3d.js';
 import { STAGE } from '../src/rooms/common.js';
 import { gridFootStyle } from '../src/rooms/grid-footing.js';
 import { RIPPLE, strikeAges, rippleSlots, packColor, rippleExtra, makeRipples } from '../src/rooms/grid-floor.js';
+import { PLOT, labelLines, labelSize, clearOf, placeLabels } from '../src/rooms/grid-plot.js';
+import { layoutStations } from '../src/instruments/stations.js';
+import fs from 'node:fs';
 
-/* GREYBOX (src/rooms/grid.js + grid-footing.js + grid-floor.js): ROOM ZERO's footing drawn in the room's
+/* GREYBOX (src/rooms/grid.js + grid-footing.js + grid-floor.js + grid-plot.js): ROOM ZERO's footing drawn in the room's
    own language — graphite volumes carrying the floor's world grid, light lines — always inside the
    plan's envelopes, merged into a handful of draws. */
 
@@ -202,5 +205,84 @@ describe('Greybox floor: a strike rings out across the grid', () => {
     expect(U.rS.value[4]).toBeCloseTo(2.1, 5);
     const GL = X.head + X.body;
     for (const u of Object.keys(U)) expect(GL.includes(u), u).toBe(true);                    // every uniform is declared + read
+  });
+});
+
+/* THE STAGE PLOT (grid-plot.js): the room's props — names on the floor, never in anything's way */
+describe('Greybox stage plot: each machine named on the floor, clear of everything', () => {
+  /* an independent check (not the SAT under test): the gap between two convex polygons */
+  const corners = R => { const c = Math.cos(R.yaw || 0), s = Math.sin(R.yaw || 0);
+    return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => [R.x + c * u * R.hw + s * v * R.hd, R.z - s * u * R.hw + c * v * R.hd]); };
+  const inside = (P, [x, z]) => { let sgn = 0; for (let i = 0; i < 4; i++){ const a = P[i], b = P[(i + 1) % 4], c = (b[0] - a[0]) * (z - a[1]) - (b[1] - a[1]) * (x - a[0]); if (Math.abs(c) < 1e-12) continue; if (!sgn) sgn = Math.sign(c); else if (Math.sign(c) !== sgn) return false; } return true; };
+  const segDist = ([x, z], a, b) => { const ex = b[0] - a[0], ez = b[1] - a[1], t = Math.max(0, Math.min(1, ((x - a[0]) * ex + (z - a[1]) * ez) / (ex * ex + ez * ez))); return Math.hypot(x - a[0] - t * ex, z - a[1] - t * ez); };
+  const gap = (A, B) => {
+    if (A.some(p => inside(B, p)) || B.some(p => inside(A, p))) return 0;
+    let d = Infinity;
+    for (const [P, Q] of [[A, B], [B, A]]) for (const p of P) for (let i = 0; i < 4; i++) d = Math.min(d, segDist(p, Q[i], Q[(i + 1) % 4]));
+    return d;
+  };
+  const boxPoly = b => corners({ x: (b[0] + b[1]) / 2, z: (b[4] + b[5]) / 2, hw: (b[1] - b[0]) / 2, hd: (b[5] - b[4]) / 2 });
+  const labelPoly = l => corners({ x: l.x, z: l.z, hw: l.w / 2, hd: l.h / 2 });
+  /* what a label must clear: footprints (a hung machine's only where it reaches the floor), footing envelopes */
+  const obstaclesOf = (anchors, plan) => [
+    ...anchors.filter(a => a.kind !== 'hung' || a.box[2] < plan.floor + PLOT.CLEAR).map(a => ({ what: a.key, P: corners({ x: a.x, z: a.z, hw: a.w / 2, hd: a.d / 2, yaw: a.yaw }) })),
+    ...anchors.filter(a => a.kind === 'hung' && a.box[2] < plan.floor + PLOT.CLEAR).map(a => ({ what: a.key + ' box', P: boxPoly(a.box) })),
+    ...footingBoxes(plan).map(e => ({ what: `${e.kind} ${e.unit}`, P: boxPoly(e.box) })),
+  ];
+  function audit(anchors, plan, tag){
+    const L = placeLabels(anchors, plan, { floor: FL, room: STAGE }), obs = obstaclesOf(anchors, plan);
+    for (const l of L){
+      const P = labelPoly(l);
+      for (const o of obs) expect(gap(P, o.P), `${tag}: ${l.key}'s label vs ${o.what}`).toBeGreaterThanOrEqual(PLOT.CLEAR - 1e-6);
+      for (const m of L) if (m !== l) expect(gap(P, labelPoly(m)), `${tag}: ${l.key} vs ${m.key}`).toBeGreaterThan(.5);
+      for (const [x, z] of P){ expect(Math.abs(x)).toBeLessThanOrEqual(STAGE.HW - PLOT.WALL + 1e-9); expect(z).toBeGreaterThanOrEqual(STAGE.BACK + PLOT.WALL - 1e-9); expect(z).toBeLessThanOrEqual(STAGE.FRONT - PLOT.WALL + 1e-9); }
+      expect(l.z, `${tag}: ${l.key} is never behind its machine`).toBeGreaterThanOrEqual(anchors.find(a => a.key === l.key).z - 1e-9 - Math.max(...anchors.filter(a => a.key === l.key).map(a => a.d)));
+    }
+    return L;
+  }
+
+  it('labelLines: the machine\'s name in capitals; a raised deck reads its elevation in metres', () => {
+    expect(labelLines({ key: 'bells', label: 'Tubular Bells', y: FL + .4 }, FL)).toEqual({ name: 'TUBULAR BELLS', sub: null });
+    expect(labelLines({ key: 'horns', label: 'Bellows Horns', y: FL + 19.33 }, FL)).toEqual({ name: 'BELLOWS HORNS', sub: '+13.1 m' });
+    expect(labelLines({ key: 'x', y: FL + 1 }, FL)).toEqual({ name: 'X', sub: '+0.7 m' });
+    const a = labelSize({ name: 'MARIMBA', sub: null }), b = labelSize({ name: 'MARIMBA', sub: '+4.2 m' });
+    expect(b.w).toBe(a.w); expect(b.h).toBeGreaterThan(a.h);
+  });
+  it('clearOf: turned rects, apart by at least the gap', () => {
+    const R = (x, z, hw, hd, yaw = 0) => { const c = Math.cos(yaw), s = Math.sin(yaw); return { x, z, ax: c, az: -s, bx: s, bz: c, ha: hw, hb: hd }; };
+    expect(clearOf(R(0, 0, 1, 1), R(3, 0, 1, 1), .9)).toBe(true);
+    expect(clearOf(R(0, 0, 1, 1), R(3, 0, 1, 1), 1.1)).toBe(false);
+    expect(clearOf(R(0, 0, 1, 1), R(2.2, 2.2, 1, 1, Math.PI / 4), .1)).toBe(true);     // a diamond off the corner
+    expect(clearOf(R(0, 0, 1, 1), R(1.9, 0, 1, 1, Math.PI / 4), 0)).toBe(false);
+  });
+  it('the crowd: a label per machine it can fit, each clear of every footprint, support and label — deterministic', () => {
+    const L = audit(CROWD, PLAN, 'crowd');
+    expect(L.length).toBeGreaterThanOrEqual(10);
+    expect(L.some(l => l.key === 'organ')).toBe(false);                                          // (hung: it stands on nothing)
+    expect(placeLabels(CROWD, PLAN, { floor: FL, room: STAGE })).toEqual(L);
+  });
+  it('the catalog (every song as staged in the fixture, re-planned): every label clear; most machines named', () => {
+    const FIX = JSON.parse(fs.readFileSync(new URL('./fixtures/staging-rooms.json', import.meta.url))).songs;
+    const ROOM = { x0: -STAGE.HW + 2.5, x1: STAGE.HW - 2.5, z0: STAGE.BACK + 2.5, z1: 31 };
+    let named = 0, standing = 0;
+    for (const R of FIX){
+      const w = R.wall;
+      if (!w) continue;
+      const solved = R.items.length ? layoutStations(R.items.map(({ key, x, z, box, top }) => ({ key, x, z, box, top })), [w[0], w[1], w[4], w[5]], ROOM,
+        { cx: R.cx, bandY: R.bandY, eyeY: 20, wallTop: w[3], hung: R.hung || (R.fixed || []).map(f => [f.box[0], f.box[1], f.box[4], f.box[5]]) }) : {};
+      const anchors = [{ key: 'belt', kind: 'belt', label: 'Belt', x: (w[0] + w[1]) / 2, z: (w[4] + w[5]) / 2, yaw: 0, w: w[1] - w[0], d: w[5] - w[4], y: FL, bottom: FL, low: w[2], box: w, cue: [], fixed: true }];
+      for (const it of R.items){
+        const f = it.foot, p = solved[it.key];
+        if (!f || !p) continue;
+        const deck = p.y ?? f.deck, up = p.y === undefined ? 0 : p.y - (it.deck ?? 0);
+        anchors.push({ key: it.key, kind: it.key === 'drums' ? 'kit' : 'station', label: it.key, x: p.x + f.dx, z: p.z + f.dz, yaw: f.yaw, w: f.w, d: f.d,
+          y: deck, bottom: deck + f.bot, low: deck + f.low, box: [p.x + it.box[0], p.x + it.box[1], it.y0 + up, it.top + up, p.z + it.box[2], p.z + it.box[3]], feet: f.feet, hang: f.hang, cue: [], fixed: false });
+      }
+      for (const h of R.fixed || []) anchors.push({ key: h.key, kind: 'hung', x: (h.box[0] + h.box[1]) / 2, z: (h.box[4] + h.box[5]) / 2, yaw: 0, w: h.box[1] - h.box[0], d: h.box[5] - h.box[4], box: h.box, cue: [], fixed: true });
+      const plan = planFooting(anchors, { floor: FL, room: ROOMB });
+      named += audit(anchors, plan, R.song).length; standing += anchors.filter(a => a.kind !== 'hung').length;
+    }
+    expect(standing).toBeGreaterThan(100);
+    expect(named / standing, `${named} / ${standing} named`).toBeGreaterThan(.8);
   });
 });

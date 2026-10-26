@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { FOOT, railed } from './footing.js';
+import { FOOT, railed, sideNormal } from './footing.js';
+import { newBuf, quad } from './footing3d.js';
 import { SHIP, lampLayout, beaconPocket } from './starship-deck.js';
 /* ============================================================
    STARSHIP FOOTING — what the machines stand on, as SHIP HARDWARE (a room style for
@@ -90,14 +91,26 @@ export function shipMats(envMap = null){
 }
 
 /* ---------------- shared bits (all in the current frame: the pad's / loft's) ---------------- */
-/* a vertical n-gon's sides at local (u, v), corner radius r, y0 → y1 (no caps: a gland block / a plate covers each end) */
+/* a vertical n-gon's sides at local (u, v), corner radius r, y0 → y1 (no caps: a gland block / a plate covers each end).
+   Each side is the face a frame-turned k.box(−s, s, y0, y1, a − .01, a, PZ) would write — written straight into
+   the slot's merged buffer (one quad a side, the same vertices, normals and uvs), without turning the kit's
+   frame n times: the rams' prisms were a third of a tall footing's build. */
+const _Q = new Float32Array(12);
+function slotBuf(k, slot, spec){
+  const b = k._bufs[slot] || (k._bufs[slot] = newBuf());
+  (b.units ||= new Set()).add(spec.loft || spec.id || spec.key);
+  return b;
+}
 function prism(k, spec, slot, u, v, r, y0, y1, n = 12){
-  const [x, z] = k.w(u, v), a = r * Math.cos(Math.PI / n), s = r * Math.sin(Math.PI / n), yaw = spec.yaw || 0;
+  if (!(y1 > y0)) return;
+  const [x, z] = k.w(u, v), a = r * Math.cos(Math.PI / n), s = r * Math.sin(Math.PI / n), yaw = spec.yaw || 0, b = slotBuf(k, slot, spec);
   for (let i = 0; i < n; i++){
-    k.frame({ x, z, yaw: yaw + (i + .5) * 2 * Math.PI / n, key: spec.key, id: spec.id, loft: spec.loft });
-    k.box(slot, -s, s, y0, y1, a - .01, a, PZ);
+    const t = yaw + (i + .5) * 2 * Math.PI / n, C = Math.cos(t), S = Math.sin(t);
+    const fx = x + S * a, fz = z + C * a, ux = C * s, uz = -S * s;            // the face's centre line, its half-width along u
+    _Q[0] = fx - ux; _Q[1] = y0; _Q[2] = fz - uz;  _Q[3] = fx + ux; _Q[4] = y0; _Q[5] = fz + uz;
+    _Q[6] = fx + ux; _Q[7] = y1; _Q[8] = fz + uz;  _Q[9] = fx - ux; _Q[10] = y1; _Q[11] = fz - uz;
+    quad(b, _Q, S, 0, C, null, 0);
   }
-  k.frame(spec);
 }
 /* a telescoping hydraulic RAM at (u, v) from y0 up to y1: a painted housing, two chrome stages, a gland
    block at each joint, a foot plate (hazard) and a head plate; r = the housing's radius */
@@ -387,7 +400,7 @@ function lattice(k, r, yB, levels = null, acc = r.access){
     // the walkway's edge channel (steel, under the grating's rim) and its toe line
     k.box('steel', -gu, gu, y - .2, y - .05, gv - .06, gv, ALL); k.box('steel', -gu, gu, y - .2, y - .05, -gv, -gv + .06, ALL);
     k.box('steel', gu - .06, gu, y - .2, y - .05, -gv + .06, gv - .06, ALL); k.box('steel', -gu, -gu + .06, y - .2, y - .05, -gv + .06, gv - .06, ALL);
-    walkRails(k, gu - .05, gv - .05, y, gs, g0, g1);
+    walkRails(k, gu - .05, gv - .05, y, gs, g0, g1, walkSides(r, gs));
   }
   // the umbilical: a chrome hose up the front face from its floor connector, held off the tower by
   // swing arms (hazard paint, chunky clamps) near the top, bent in onto the deck
@@ -407,19 +420,33 @@ function lattice(k, r, yB, levels = null, acc = r.access){
     }
   }
 }
-/* a walkway's rail ring at deck height y: chrome top rail on steel stanchions, a thin hazard toe line —
-   open over [g0, g1] on side gs (where the ladder's rest landing meets it) */
-function walkRails(k, hu, hv, y, gs, g0, g1){
+/* which sides of a tower's service walkways carry a rail: the FRONT (the side facing the house, +z — the audience)
+   whole, and the ladder's side as a short GUARD either side of where its rest landing meets the walkway (unless the
+   ladder is on the front) — a tall tower has a walkway every LAND_DY, and rails on all four faces of every one read
+   from the wide as a cage of thin lines; the far faces (seen, if at all, through the lattice) go without */
+const WALK_GUARD = 1.6;
+export function walkSides(r, ladderSide = null){
+  let front = null, bz = -Infinity;
+  for (const side of ['+v', '-v', '+u', '-u']){ const z = sideNormal(r, side)[1]; if (z > bz + 1e-9){ bz = z; front = side; } }
+  return { front, guard: ladderSide && ladderSide !== front ? ladderSide : null };
+}
+/* a walkway's rail at deck height y: chrome top rail on steel stanchions, a thin hazard toe line — on the front
+   side (open over [g0, g1] if the ladder's rest landing meets it there) and, on the ladder's side gs, a guard
+   WALK_GUARD long either side of that opening (walkSides) */
+function walkRails(k, hu, hv, y, gs, g0, g1, { front = null, guard = null } = {}){
   const runs = [['-v', [-hu, -hv], [hu, -hv]], ['+u', [hu, -hv], [hu, hv]], ['+v', [hu, hv], [-hu, hv]], ['-u', [-hu, hv], [-hu, -hv]]];
   const RH = 1.1;
   for (const [side, p, q] of runs){
+    const all = front === null || side === front;
+    if (!all && side !== guard) continue;
     const segs = [];
     if (side === gs){
       const al = pt => side[1] === 'u' ? pt[1] : pt[0], cut = x => side[1] === 'u' ? [p[0], x] : [x, p[1]];
       const lo = Math.min(al(p), al(q)), hi = Math.max(al(p), al(q));
-      if (g0 - .05 > lo + .3) segs.push([cut(lo), cut(g0 - .05)]);
-      if (g1 + .05 < hi - .3) segs.push([cut(g1 + .05), cut(hi)]);
-    } else segs.push([p, q]);
+      const l0 = all ? lo : Math.max(lo, g0 - .05 - WALK_GUARD), h1 = all ? hi : Math.min(hi, g1 + .05 + WALK_GUARD);
+      if (g0 - .05 > l0 + .3) segs.push([cut(l0), cut(g0 - .05)]);
+      if (g1 + .05 < h1 - .3) segs.push([cut(g1 + .05), cut(h1)]);
+    } else if (all) segs.push([p, q]);
     for (const [a, b] of segs){
       const L = Math.hypot(b[0] - a[0], b[1] - a[1]); if (L < .2) continue;
       const n = Math.max(1, Math.ceil(L / 2.6));
@@ -583,40 +610,53 @@ export function lampMaterial(){
    for a beacon on a rail post */
 const STRIP_COL = new THREE.Color(0x4fc8ff), LAMP_COL = new THREE.Color(0x8fd8ff);
 export function lampGeometry(lamps){
-  const P = [], C = [], S = [], D = [], H = [], K = [], I = [], col = new THREE.Color();
-  const quad = (a, b, c, d, L) => { const v = P.length / 3;
-    P.push(...a, ...b, ...c, ...d); for (let j = 0; j < 4; j++){ C.push(col.r, col.g, col.b); S.push(L.slot); D.push(L.d); H.push(L.half); K.push(L.kind); }
-    I.push(v, v + 1, v + 2, v, v + 2, v + 3); };
-  for (const L of lamps){
-    if (L.kind === 2) col.copy(STRIP_COL); else if (L.color) col.set(L.color); else col.copy(LAMP_COL);
+  // (presized typed arrays, written in place: the lamps are ~1k quads on a full deck — the old array-spread
+  //  pushes were the costliest part of a cold starship footing build)
+  let nq = 0; for (const L of lamps) nq += L.cube ? 5 : 1;
+  const P = new Float32Array(nq * 12), C = new Float32Array(nq * 12), S = new Float32Array(nq * 4), D = new Float32Array(nq * 4),
+    H = new Float32Array(nq * 4), K = new Float32Array(nq * 4), I = nq * 4 < 65536 ? new Uint16Array(nq * 6) : new Uint32Array(nq * 6), col = new THREE.Color();
+  let q = 0, L = null, lastCol = null;
+  const quad = (ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz) => {
+    const o = q * 12, v = q * 4, w = q * 6;
+    P[o] = ax; P[o + 1] = ay; P[o + 2] = az; P[o + 3] = bx; P[o + 4] = by; P[o + 5] = bz;
+    P[o + 6] = cx; P[o + 7] = cy; P[o + 8] = cz; P[o + 9] = dx; P[o + 10] = dy; P[o + 11] = dz;
+    for (let j = 0; j < 4; j++){ C[o + j * 3] = col.r; C[o + j * 3 + 1] = col.g; C[o + j * 3 + 2] = col.b; S[v + j] = L.slot; D[v + j] = L.d; H[v + j] = L.half; K[v + j] = L.kind; }
+    I[w] = v; I[w + 1] = v + 1; I[w + 2] = v + 2; I[w + 3] = v; I[w + 4] = v + 2; I[w + 5] = v + 3;
+    q++;
+  };
+  for (L of lamps){
+    if (L.kind === 2){ col.copy(STRIP_COL); lastCol = null; }
+    else if (L.color){ if (L.color !== lastCol){ lastCol = L.color; col.set(L.color); } }      // (a CSS parse per colour run, not per lamp)
+    else { col.copy(LAMP_COL); lastCol = null; }
     const [x, y, z] = L.c, [tx, tz] = L.t, n = L.n;
     if (L.cube){
-      const s = L.hl;
-      const v = (a, b, c) => [x + a * s, y + b * s, z + c * s];
-      quad(v(-1, 1, -1), v(-1, 1, 1), v(1, 1, 1), v(1, 1, -1), L);                         // top
-      quad(v(-1, -1, 1), v(1, -1, 1), v(1, 1, 1), v(-1, 1, 1), L); quad(v(1, -1, -1), v(-1, -1, -1), v(-1, 1, -1), v(1, 1, -1), L);
-      quad(v(1, -1, 1), v(1, -1, -1), v(1, 1, -1), v(1, 1, 1), L); quad(v(-1, -1, -1), v(-1, -1, 1), v(-1, 1, 1), v(-1, 1, -1), L);
+      const s = L.hl, x0 = x - s, x1 = x + s, y0 = y - s, y1 = y + s, z0 = z - s, z1 = z + s;
+      quad(x0, y1, z0, x0, y1, z1, x1, y1, z1, x1, y1, z0);                                    // top
+      quad(x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1); quad(x1, y0, z0, x0, y0, z0, x0, y1, z0, x1, y1, z0);
+      quad(x1, y0, z1, x1, y0, z0, x1, y1, z0, x1, y1, z1); quad(x0, y0, z0, x0, y0, z1, x0, y1, z1, x0, y1, z0);
       continue;
     }
     if (n[1] > .5){                                            // lying on the floor, facing up
-      const bx = -tz, bz = tx;
-      const p = (a, b) => [x + tx * a * L.hl + bx * b * L.hh, y, z + tz * a * L.hl + bz * b * L.hh];
-      quad(p(-1, 1), p(1, 1), p(1, -1), p(-1, -1), L);
+      const bx = -tz, bz = tx, al = L.hl, bh = L.hh;
+      // p(a, b) = [x + tx·a·hl + bx·b·hh, y, z + tz·a·hl + bz·b·hh]: p(−1, 1) p(1, 1) p(1, −1) p(−1, −1)
+      quad(x - tx * al + bx * bh, y, z - tz * al + bz * bh, x + tx * al + bx * bh, y, z + tz * al + bz * bh,
+           x + tx * al - bx * bh, y, z + tz * al - bz * bh, x - tx * al - bx * bh, y, z - tz * al - bz * bh);
       continue;
     }
     // standing in a channel, facing n: corners along t × up, counter-clockwise seen from n
-    const p = (a, b) => [x + tx * a * L.hl, y + b * L.hh, z + tz * a * L.hl];
+    const ux = tx * L.hl, uz = tz * L.hl, ya = y - L.hh, yb = y + L.hh;
     const cw = (tz * n[0] - tx * n[2]) > 0;                     // (t × up) · n: which way round faces out
-    if (cw) quad(p(-1, -1), p(-1, 1), p(1, 1), p(1, -1), L); else quad(p(-1, -1), p(1, -1), p(1, 1), p(-1, 1), L);
+    if (cw) quad(x - ux, ya, z - uz, x - ux, yb, z - uz, x + ux, yb, z + uz, x + ux, ya, z + uz);
+    else quad(x - ux, ya, z - uz, x + ux, ya, z + uz, x + ux, yb, z + uz, x - ux, yb, z - uz);
   }
   const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
-  g.setAttribute('aCol', new THREE.Float32BufferAttribute(C, 3));
-  g.setAttribute('aSlot', new THREE.Float32BufferAttribute(S, 1));
-  g.setAttribute('aD', new THREE.Float32BufferAttribute(D, 1));
-  g.setAttribute('aHalf', new THREE.Float32BufferAttribute(H, 1));
-  g.setAttribute('aKind', new THREE.Float32BufferAttribute(K, 1));
-  g.setIndex(I);
+  g.setAttribute('position', new THREE.BufferAttribute(P, 3));
+  g.setAttribute('aCol', new THREE.BufferAttribute(C, 3));
+  g.setAttribute('aSlot', new THREE.BufferAttribute(S, 1));
+  g.setAttribute('aD', new THREE.BufferAttribute(D, 1));
+  g.setAttribute('aHalf', new THREE.BufferAttribute(H, 1));
+  g.setAttribute('aKind', new THREE.BufferAttribute(K, 1));
+  g.setIndex(new THREE.BufferAttribute(I, 1));
   g.computeBoundingSphere();
   return g;
 }

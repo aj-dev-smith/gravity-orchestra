@@ -27,10 +27,18 @@
    rigid move — the kit's group too, rebuilt at its deck when the gesture
    settles), the room's supports re-form under it each frame (a plinth, a
    riser, a platform, a tower; a LOFT with a neighbour at its height — the
-   knob is magnetic to the floor and to a neighbour's deck), and the
-   director re-solves once, at the end. Grabbing the knob in the plan view
-   (a straight-down look hides height) eases the eye to an elevated 3/4 view
-   that frames the selection; PLAN / 3D in the bar flips between the two.
+   knob is magnetic to the floor and to a neighbour's deck). Nothing in stage
+   edit frames a shot, so the director re-solves ONCE, on the way out (a move
+   or a height only re-anchors the room: no hitch at a gesture's end), and an
+   undo of a height step — AUTO too — comes back live, no rebuild. Grabbing
+   the knob in the plan view (a straight-down look hides height) eases the eye
+   to an elevated 3/4 view that frames the selection with its knob landing
+   UNDER THE HAND, and the knob then follows the pointer; PLAN / 3D in the bar
+   flips between the two. The pole stands at a corner whose knob is clear of
+   the bar and the dock; when a gesture leaves it under them anyway, the 3/4
+   view re-frames once. One gesture at a time: a second finger is ignored, a
+   lost pointer capture ends the drag, and an eye that moves under a drag (a
+   damped orbit, a resize) re-anchors it — the machine never moves by itself.
    PgUp / PgDn and ] / [ step ½ u (Shift 2 u), Home sets it on the floor;
    the dock under the stage has ▲ RAISE, ▼ LOWER, FLOOR (an explicit 0) and
    AUTO (the layout decides — e.g. the gallery raise). One undo step per
@@ -91,7 +99,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   /* an oriented footprint (4 corners, boxCorners order: local x runs c0→c1, local z c1→c2) */
   const setRect = (line, fill, poly, y, yaw = 0) => {
     const p = line.geometry.attributes.position;
-    [...poly, poly[0]].forEach(([x, z], i) => p.setXYZ(i, x, y, z));
+    for (let i = 0; i < 5; i++){ const q = poly[i % 4]; p.setXYZ(i, q[0], y, q[1]); }
     p.needsUpdate = true; line.geometry.computeBoundingSphere();
     const cx = poly.reduce((a, q) => a + q[0], 0) / 4, cz = poly.reduce((a, q) => a + q[1], 0) / 4;
     fill.position.set(cx, y - .01, cz); fill.rotation.y = yaw;
@@ -117,6 +125,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   shadow.userData.noMerge = shadow.userData.noFadeGate = true; shadow.raycast = () => {}; shadow.renderOrder = 2;
   const shadowLine = tag(new THREE.Line(rectGeo(), lineMat(C.sel, .38)));
   const dropGeo = new THREE.BufferGeometry(); dropGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(24), 3));
+  dropGeo.setAttribute('lineDistance', new THREE.Float32BufferAttribute(new Float32Array(8), 1));   // (the dashes: written in place — no garbage)
   const drops = tag(new THREE.LineSegments(dropGeo, new THREE.LineDashedMaterial({ color: C.sel, dashSize: .5, gapSize: .32, transparent: true, opacity: .8, depthTest: false, depthWrite: false, fog: false })));
   shadow.visible = shadowLine.visible = drops.visible = false;
   gizmo.add(shadow, shadowLine, drops);
@@ -136,7 +145,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   bar.addEventListener('click', e => {
     const b = e.target.closest('button'), a = b?.dataset.a;
     if (!a) return;
-    if (a === 'undo'){ select(null); host.undo(); }   // (a burst of height taps still settling is dropped: the undo rebuilds)
+    if (a === 'undo') host.undo();                     // (the selection stays: a height step comes back live, under it)
     else if (a === 'snap'){ snapOn = !snapOn; b.classList.toggle('on', snapOn); }
     else if (a === 'plan') setView('plan');
     else if (a === '3d') setView('3d');
@@ -163,6 +172,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     up: dock.querySelector('[data-a=up]'), down: dock.querySelector('[data-a=down]'), floor: dock.querySelector('[data-a=floor]'), auto: dock.querySelector('[data-a=auto]'),
     ccw: dock.querySelector('[data-a=ccw]'), cw: dock.querySelector('[data-a=cw]'),
   };
+  const readEl = dock.querySelector('.sd-read');
   dock.addEventListener('click', e => {
     const b = e.target.closest('button'), a = b?.dataset.a;
     if (!a || !sel) return;
@@ -183,6 +193,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
               major: poleSvg.querySelector('.sp-major'), labs: [...poleSvg.querySelectorAll('.sp-lab text')] };
   const knobEl = document.createElement('div'); knobEl.className = 'se-knob'; knobEl.hidden = true;
   knobEl.setAttribute('role', 'slider'); knobEl.setAttribute('aria-label', 'height: drag up or down');
+  knobEl.setAttribute('aria-orientation', 'vertical'); knobEl.setAttribute('aria-valuemin', '0'); knobEl.tabIndex = 0;
   knobEl.innerHTML = '<span>▲</span><span>▼</span>';
   const chipEl = document.createElement('div'); chipEl.className = 'se-chip'; chipEl.hidden = true;
   chipEl.innerHTML = '<b></b><i></i><em></em>';
@@ -203,7 +214,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   }
   function refresh({ reset = false } = {}){
     const keep = reset ? null : sel?.key;
-    if (reset){ hover = null; drag = null; info = null; }
+    if (reset){ endDrag(false); hover = null; info = null; }
     if (on) haze(true);
     for (const p of pieces){ gizmo.remove(p.line, p.fill); p.line.geometry.dispose(); p.el.remove(); }
     pieces = host.pieces().map(p => {
@@ -291,12 +302,13 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     const plan = host.footing?.(), pad = plan?.pads?.find(q => q.key === p.key);
     const L = pad?.loft ? plan.lofts.find(l => l.id === pad.loft) : null;
     const r = readout({ lift: h.lift, user: h.user, h: pad ? pad.h : h.bottom - h.floor, loft: L ? L.keys.filter(k => k !== p.key).map(labelOf) : [] });
-    r.max = maxOf(p, h); r.atMax = h.lift >= r.max - 1e-6;
+    r.max = maxOf(p, h); r.atMax = h.lift >= r.max - 1e-6; r.lift = h.lift;
     return r;
   }
   const maxOf = (p, h = H(p)) => liftMax({ lift: h.lift, top: topOf(p), ceil: h.ceil });
   /* neighbours whose deck this one can share (a LOFT): the lift that levels it with each */
   function targetsOf(p, h = H(p)){
+    if (h.open) return [];                              // (an open stand stands on posts: the planner never lofts it)
     const others = [];
     for (const o of pieces){
       if (o === p) continue;
@@ -305,19 +317,34 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     }
     return loftTargets({ bottom0: h.bottom - h.lift, box: bounds(fpOf(p)) }, others);
   }
-  /* the POLE stands just outside the footprint's corner nearest the eye (kept while a lift runs; it moves
-     to another corner only when that one is clearly nearer — no flicker as the eye orbits) */
+  /* the POLE stands just outside one of the footprint's corners: one whose KNOB lands in the screen's free
+     band (under the bar, over the dock — never under the UI), and of those the nearest the eye. It is kept
+     while a lift runs, and moves to another corner only when that one is clearly better (in the band where
+     this one isn't, or clearly nearer) — no flicker as the eye orbits */
+  const _pc = [{}, {}, {}, {}], _ps = {};
   function poleOf(p){
-    const fp = fpOf(p), e = cam.camera.position;
-    const cx = fp.reduce((a, q) => a + q[0], 0) / 4, cz = fp.reduce((a, q) => a + q[1], 0) / 4;
-    const dist = i => Math.hypot(fp[i][0] - e.x, fp[i][1] - e.z);
+    const fp = fpOf(p), e = cam.camera.position, y = H(p)?.bottom ?? baseOf(p), B = bandPx || freeBand();
+    const cx = (fp[0][0] + fp[1][0] + fp[2][0] + fp[3][0]) / 4, cz = (fp[0][1] + fp[1][1] + fp[2][1] + fp[3][1]) / 4;
+    for (let i = 0; i < 4; i++){
+      const q = fp[i], dx = q[0] - cx, dz = q[1] - cz, L = Math.hypot(dx, dz) || 1, c = _pc[i];
+      c.x = q[0] + dx / L * .9; c.z = q[1] + dz / L * .9; c.d = Math.hypot(q[0] - e.x, q[1] - e.z);
+      proj(c.x, y, c.z, _ps);
+      c.inb = !_ps.behind && _ps.x > B.x0 && _ps.x < B.x1 && _ps.y > B.y0 && _ps.y < B.y1;
+    }
+    const better = (i, j) => _pc[i].inb !== _pc[j].inb ? _pc[i].inb : _pc[i].d < _pc[j].d;
     let best = 0;
-    for (let i = 1; i < 4; i++) if (dist(i) < dist(best)) best = i;
-    const keepI = p.poleI ?? best;
-    if (!(drag && drag.mode === 'lift' && drag.piece === p) && dist(best) < dist(keepI) * .88) p.poleI = best;
+    for (let i = 1; i < 4; i++) if (better(i, best)) best = i;
+    const keepI = p.poleI ?? best, locked = drag && drag.mode === 'lift' && drag.piece === p;
+    if (!locked && (_pc[best].inb && !_pc[keepI].inb || _pc[best].inb === _pc[keepI].inb && _pc[best].d < _pc[keepI].d * .88)) p.poleI = best;
     else p.poleI = keepI;
-    const q = fp[p.poleI], dx = q[0] - cx, dz = q[1] - cz, L = Math.hypot(dx, dz) || 1;
-    return { x: q[0] + dx / L * .9, z: q[1] + dz / L * .9 };
+    const c = _pc[p.poleI];
+    return { x: c.x, z: c.z, inb: c.inb };
+  }
+  /* the screen's free band, in CSS px: under the bar, over the dock, in from the sides (read once a frame) */
+  let bandPx = null;
+  function freeBand(){
+    const W = innerWidth, H0 = innerHeight, br = bar.hidden ? null : bar.getBoundingClientRect(), dr = dock.hidden ? null : dock.getBoundingClientRect();
+    return { x0: 28, x1: W - 28, y0: (br && br.top < H0 / 2 ? br.bottom : 0) + 30, y1: (dr && dr.height ? dr.top : H0 - 40) - 30 };
   }
   const _q = new THREE.Vector3();
   let domR = null;                                      // (the canvas rect: read once per draw — never between DOM writes)
@@ -329,7 +356,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     return out;
   }
   const _a = {}, _b = {}, _t = {}, _k = {};
-  let lastRead = null, readSig = null, shown = false;
+  let lastRead = null, readSig = null, shown = false, knobIn = true;
   const unread = () => { lastRead = null; readSig = null; };
   /* has anything the handle is drawn from changed since it was drawn (the eye, the lens, the viewport,
      the machine's height + spot, the drag, the hint) — a still frame costs nothing */
@@ -375,8 +402,9 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     setRect(shadowLine, shadow, fp, F, yawOf(p));
     // drop lines: footprint corner (at its base) → the floor
     const dp = dropGeo.attributes.position;
-    fp.forEach(([x, z], i) => { dp.setXYZ(i * 2, x, base + .04, z); dp.setXYZ(i * 2 + 1, x, F, z); });
-    dp.needsUpdate = true; drops.computeLineDistances(); dropGeo.computeBoundingSphere();
+    const ld = dropGeo.attributes.lineDistance;
+    for (let i = 0; i < 4; i++){ const [x, z] = fp[i]; dp.setXYZ(i * 2, x, base + .04, z); dp.setXYZ(i * 2 + 1, x, F, z); ld.setX(i * 2, 0); ld.setX(i * 2 + 1, Math.abs(base + .04 - F)); }
+    dp.needsUpdate = true; ld.needsUpdate = true; dropGeo.computeBoundingSphere();
     drops.visible = up && h.lift > .05;
     // the pole: floor → a little above where it stands; the scale from its lift-0 height, a tick a metre
     const at = poleOf(p), top = Math.max(base, zero) + 2.6;
@@ -406,10 +434,14 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     for (; li < P.labs.length; li++) P.labs[li].style.display = 'none';
     P.ticks.setAttribute('d', minor); P.major.setAttribute('d', major);
     domR = null;
-    // the knob, where it stands; the readout beside it (away from the screen edge; above a finger)
+    // the knob, where it stands; the readout beside it (away from the screen edge; above a finger; inside
+    // the free band — never under the bar or the dock). In the PLAN the dock + the tags say the height.
     knobEl.style.transform = `translate(${_k.x.toFixed(1)}px, ${_k.y.toFixed(1)}px) translate(-50%, -50%)`;
+    const B = bandPx || freeBand();
+    knobIn = !_k.behind && _k.x > B.x0 - 20 && _k.x < B.x1 + 20 && _k.y > B.y0 - 24 && _k.y < B.y1 + 24;
+    chipEl.classList.toggle('plan', view === 'plan');
     const W = innerWidth, right = _k.x < W - 190, touchDrag = drag?.mode === 'lift' && drag.touch;
-    const cy = touchDrag ? _k.y - 74 : _k.y;
+    const cy = Math.max(B.y0 - 10, Math.min(B.y1 + 10, touchDrag ? _k.y - 74 : _k.y));
     chipEl.classList.toggle('left', !right);
     chipEl.style.transform = `translate(${(_k.x + (right ? 26 : -26)).toFixed(1)}px, ${cy.toFixed(1)}px) translate(${right ? '0' : '-100%'}, -50%)`;
     if (!tipSeen && !tipEl.hidden){                 // (under the chip — over it when the knob is low: the dock is there)
@@ -421,16 +453,18 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   const labOff = () => (knobW ||= knobEl.offsetWidth) ? knobW / 2 + 9 : 24;   // (the knob's width, measured once it shows)
   /* the readout, written only when it changes (the chip + the dock) */
   function setRead(r){
-    const key = `${r.value}|${r.name}|${r.loft}|${r.auto}|${r.atMax}|${sel?.key}`;
+    const key = `${r.value}|${r.name}|${r.loft}|${r.auto}|${r.atMax}|${sel?.key}|${r.lift}`;
     if (key === lastRead) return;
     lastRead = key;
     chip.val.textContent = r.value; chip.band.textContent = r.floor ? '' : r.name + (r.auto ? ' · AUTO' : '');
     chip.loft.textContent = r.loft; chipEl.classList.toggle('loft', !!r.loft);
-    D.val.textContent = r.value; D.band.textContent = (r.floor ? 'FLOOR' : r.name) + (r.auto ? ' · AUTO' : '') + (r.atMax && !r.floor ? ' · MAX' : '');
+    // (on the floor the value says so: the band line only says whose word it is — next to a FLOOR button)
+    D.val.textContent = r.value; D.band.textContent = r.floor ? (r.auto ? 'AUTO' : '') : r.name + (r.auto ? ' · AUTO' : '') + (r.atMax ? ' · MAX' : '');
     D.loft.textContent = r.loft; dock.classList.toggle('loft', !!r.loft);
     D.up.disabled = r.atMax; D.down.disabled = r.floor; D.floor.disabled = r.floor && !r.auto; D.auto.disabled = r.auto;
     D.up.title = r.atMax ? `as high as it goes (${fmtMeters(r.max)} — ${r.max < 23.99 ? 'the ceiling' : 'the tallest tower'})` : 'raise it ½ u ≈ 34 cm (PgUp or ] · Shift: 2 u)';
     knobEl.setAttribute('aria-valuetext', `${r.value} ${r.floor ? '' : r.name}`.trim());
+    knobEl.setAttribute('aria-valuenow', (+r.lift.toFixed(2)).toString()); knobEl.setAttribute('aria-valuemax', (+r.max.toFixed(2)).toString());
   }
   /* the dock: the selection's name + controls — or, for a machine that can't move, why */
   function paintDock(){
@@ -453,7 +487,9 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
 
   /* ---- pointer: pick, drag, turn ---- */
   function rayAt(e){ rayAtXY(e.clientX, e.clientY); }
+  let rayAtY = 0;
   function rayAtXY(x, y){
+    rayAtY = y;
     const r = dom.getBoundingClientRect();
     ndc.set(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1);
     ray.setFromCamera(ndc, cam.camera);
@@ -503,9 +539,16 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   }
   addEventListener('pointerdown', e => {
     if (!on || e.target !== dom || e.button > 0) return;
+    if (drag){
+      // ONE gesture at a time: a second finger mid-drag is neither a new gesture nor the orbit's (it would
+      // swing the eye under the first). (A mouse has one pointer: a drag still open is a lost release.)
+      if (e.pointerType !== 'mouse' && e.pointerId !== drag.id){ cam.orbit.enabled = false; return; }
+      endDrag(true);
+    }
     rayAt(e);
     const hit = pick();
-    downAt = { x: e.clientX, y: e.clientY, hit: !!hit };
+    const fresh = hit && hit.piece !== sel;              // (a different machine picked: the 3/4 view may re-frame it)
+    downAt = { x: e.clientX, y: e.clientY, hit: !!hit, fresh };
     if (!hit){ ease = null; return; }                    // empty space: the orbit has it (and stops any glide)
     settle.flush();                                     // (a burst of height taps settles before a new gesture)
     cam.orbit.enabled = false;                          // this press is ours (OrbitControls checks at pointerdown)
@@ -557,6 +600,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       try { dom.releasePointerCapture(d.id); } catch (_){}
       dom.style.cursor = '';
       if (d.moved) commit(d.piece);
+      if (d.moved || downAt?.fresh) keepInView();        // (the 3/4 view: the knob back out from under the UI)
     } else if (downAt && !downAt.hit && e.target === dom && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) < 5){   // a click on empty space…
       rayAt(e);
       const f = pickFixed();                            // …or on what can't move: say why
@@ -567,6 +611,24 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   };
   addEventListener('pointerup', release, { capture: true });
   addEventListener('pointercancel', release, { capture: true });
+  // a capture taken away (the OS, a tab switch) ends the gesture as a release would — a drag never outlives its pointer
+  dom.addEventListener('lostpointercapture', e => { if (drag && drag.mode !== 'lift' && e.pointerId === drag.id) release(e); });
+  /* end whatever gesture is open — write = keep what it did (a release), else drop it (the world it moved
+     is being rebuilt: a song change) */
+  function endDrag(write){
+    const d = drag; if (!d) return;
+    if (d.mode === 'lift'){
+      if (write){ endLift(); return; }
+      drag = null;
+      try { knobEl.releasePointerCapture(d.id); } catch (_){}
+      knobEl.classList.remove('drag'); document.body.classList.remove('se-lifting'); readEl.setAttribute('aria-live', 'polite');
+      return;
+    }
+    drag = null;
+    try { dom.releasePointerCapture(d.id); } catch (_){}
+    dom.style.cursor = '';
+    if (write && d.moved) commit(d.piece);
+  }
 
   function setPivot(p, x, z){
     if (p.kind === 'kit'){ const k = host.kitPivot(); p.obj.position.x += x - k.x; p.obj.position.z += z - k.z; }
@@ -584,8 +646,9 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     setYaw(sel, free || !snapOn ? sel.obj.rotation.y + dir * Math.PI / 36 : snapYaw(sel.obj.rotation.y + dir * Math.PI / 12));
     check(); paint();
     const p = sel;
-    clearTimeout(turn._t); turn._t = setTimeout(() => commit(p), 350);   // a burst of Q/E taps commits once
+    clearTimeout(turn._t); turn._p = p; turn._t = setTimeout(turnDone, 350);   // a burst of Q/E taps commits once
   }
+  function turnDone(){ const p = turn._p; clearTimeout(turn._t); turn._t = turn._p = null; if (p){ commit(p); keepInView(); } }
   const entryOf = p => { const c = pivotOf(p); return { x: c.x - host.cx(), z: c.z, yaw: p.canRotate ? p.obj.rotation.y : 0 }; };
   const allNow = () => pieces.map(q => ({ key: q.key, ...pivotOf(q), yaw: q.canRotate ? q.obj.rotation.y : 0 }));
   function commit(p){
@@ -609,30 +672,62 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   const settle = makeSettle(SETTLE_MS);
   knobEl.addEventListener('pointerdown', e => {
     if (!on || !sel || e.button > 0 || drag) return;
-    settle.flush();
+    settle.flush(); if (turn._t) turnDone();
     const p = sel, h = H(p);
     if (!h) return;
-    drag = { piece: p, mode: 'lift', id: e.pointerId, touch: e.pointerType === 'touch', px: e.clientX, py: e.clientY, free: e.shiftKey || !snapOn,
-             y0: null, lift0: h.lift, cur: h.lift, opened: false, at: poleOf(p), max: maxOf(p, h), targets: targetsOf(p, h), magnet: null };
+    drag = { piece: p, mode: 'lift', id: e.pointerId, touch: e.pointerType === 'touch', px: e.clientX, py: e.clientY, lx: e.clientX, ly: e.clientY,
+             free: e.shiftKey || !snapOn, y0: null, lift0: h.lift, cur: h.lift, opened: false, at: null, max: maxOf(p, h), targets: targetsOf(p, h),
+             magnet: null, hand: false, cs: new Float64Array(20) };
     try { knobEl.setPointerCapture(e.pointerId); } catch (_){}
-    knobEl.classList.add('drag'); document.body.classList.add('se-lifting');
+    knobEl.classList.add('drag'); document.body.classList.add('se-lifting'); readEl.setAttribute('aria-live', 'off');
     learned();
-    // a straight-down look hides height: grabbing the knob there eases to the 3/4 view first (the drag
-    // anchors where the eye lands — relative, so nothing jumps)
-    if (view !== '3d') setView('3d'); else paint();
+    // a straight-down look hides height: grabbing the knob there eases to the 3/4 view first — framed so
+    // the knob lands UNDER THE HAND (the grab pixel), and the drag then anchors the knob to the pointer, so
+    // a flick made during the swing still counts (camera never moves once the drag has anchored)
+    if (view !== '3d'){ drag.hand = true; setView('3d', { hand: { x: e.clientX, y: e.clientY }, dur: .42 }); }
+    else paint();
   });
+  // a capture taken away ends the lift as a release would (it never follows a hovering mouse)
+  knobEl.addEventListener('lostpointercapture', e => { if (drag && drag.mode === 'lift' && e.pointerId === drag.id) endLift(); });
+  // the knob is a slider for a keyboard too (focus it: ↑ / ↓, Shift = 2 u)
+  knobEl.addEventListener('keydown', e => {
+    if (!on || !sel || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown'){ e.preventDefault(); e.stopPropagation(); liftStep(e.key === 'ArrowUp' ? 1 : -1, e.shiftKey); }
+  });
+  /* has the eye or the viewport changed since the drag last looked (an orbit's damping glide, a wheel zoom,
+     a fly key, a phone's URL bar) — then the drag re-anchors where it is, and the machine doesn't move by itself */
+  function camMoved(d){
+    const m = cam.camera.matrixWorld.elements, q = cam.camera.projectionMatrix.elements, c = d.cs;
+    let ch = false;
+    for (let i = 0; i < 16; i++) if (c[i] !== m[i]){ ch = true; c[i] = m[i]; }
+    if (c[16] !== q[0] || c[17] !== q[5] || c[18] !== innerWidth || c[19] !== innerHeight){ ch = true; c[16] = q[0]; c[17] = q[5]; c[18] = innerWidth; c[19] = innerHeight; }
+    return ch;
+  }
   /* once a frame: the pointer → the knob's drag plane → the lift (snapped, magnetic) → the machine */
   function liftFrame(){
     const d = drag;
     if (!d || d.mode !== 'lift' || ease) return;
-    if (d.y0 === null){                                 // ANCHOR (where the eye landed): the pole at the corner nearest it now
-      d.piece.poleI = null; d.at = poleOf(d.piece); d.screen = undefined;
+    if (d.y0 === null){                                 // ANCHOR, where the eye is now (after a swing: where it landed)
+      d.at = poleOf(d.piece); d.screen = undefined;     // (the corner: chosen for the eye the swing aimed at — locked now)
+      camMoved(d);
       rayAtXY(d.px, d.py);
-      const y0 = dragY(d);
-      if (y0 !== null){ d.y0 = y0; d.lift0 = d.cur; }
-      return;
+      const y = dragY(d);
+      if (y === null) return;
+      d.lift0 = d.cur;
+      // after the swing the knob stands under the hand: the knob then FOLLOWS the pointer (y0 = the knob's own
+      // height — what the pointer did during the swing counts); grabbed in place (3D): relative — no jump
+      proj(d.at.x, H(d.piece).bottom, d.at.z, _k);
+      d.y0 = d.hand && !d.screen && Math.abs(_k.x - d.lx) < 90 && Math.abs(_k.y - d.ly) < 90 ? H(d.piece).bottom : y;
+      d.lx = d.px; d.ly = d.py;
+      if (d.y0 === y) return;
+    } else if (camMoved(d)){                            // the eye moved under the drag: re-anchor at the pointer's LAST
+      d.screen = undefined;                             //  spot (this frame's own move still counts)
+      rayAtXY(d.lx, d.ly);
+      const y = dragY(d);
+      if (y !== null){ d.y0 = y; d.lift0 = d.cur; }
     }
     rayAtXY(d.px, d.py);
+    d.lx = d.px; d.ly = d.py;
     const y = dragY(d);
     if (y === null) return;
     const r = dragLift({ lift0: d.lift0, y0: d.y0, y, max: d.max, free: d.free, targets: d.targets });
@@ -654,17 +749,18 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       }
       if (!d.screen) return y;
     }
-    if (d.screen) return -d.py * d.upp;
+    if (d.screen) return -rayAtY * d.upp;
     return rayPlaneY(ray.ray.origin, ray.ray.direction, d.at, e);
   }
   function endLift(){
     const d = drag; drag = null;
     try { knobEl.releasePointerCapture(d.id); } catch (_){}
-    knobEl.classList.remove('drag'); document.body.classList.remove('se-lifting');
-    if (!d.opened) return;
+    knobEl.classList.remove('drag'); document.body.classList.remove('se-lifting'); readEl.setAttribute('aria-live', 'polite');
+    if (!d.opened){ paint(); return; }
     host.liftWrite(d.piece.key, { ...entryOf(d.piece), lift: d.cur }, allNow());
     host.liftSettle();
     onChange(); paint();
+    keepInView();
   }
   /* a lift, live: the machine moves rigidly, the room re-anchors + re-plans its supports (the host) */
   let liftMs = [];
@@ -691,7 +787,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     if (!settle.pending) host.liftBegin();
     queued = { p, u };
     learned();
-    settle.poke(() => { applyQueued(); host.liftSettle(); onChange(); paint(); });
+    settle.poke(() => { applyQueued(); host.liftSettle(); onChange(); paint(); keepInView(); });
     onChange();
   }
   function applyQueued(){
@@ -706,7 +802,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     const p = sel; if (!liftable(p) || drag || !Number.isFinite(H(p).user)) return;
     settle.flush();
     host.liftAuto(p.key, entryOf(p), allNow());
-    onChange(); paint();
+    onChange(); paint(); keepInView();
   }
   function nudge(){ chipEl.classList.remove('nudge'); void chipEl.offsetWidth; chipEl.classList.add('nudge'); }
 
@@ -754,9 +850,11 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       cam.orbit.maxDistance = 110; cam.orbit.maxPolarAngle = Math.PI * .47;   // stay above the floor plane
       haze(true); refresh(); setViewBtns('plan'); view = 'plan'; overview({ ease: true });
     } else {
+      if (drag) endDrag(true);
+      if (turn._t) turnDone();
       settle.flush();
-      if (drag?.mode === 'lift') endLift();
       sel = hover = drag = info = null; ease = null; dom.style.cursor = ''; haze(false);
+      host.leave?.();                                   // (the director catches up with what was moved, once)
       cam.freeFov = null; lowerCeiling();
       cam.orbit.maxDistance = prevMax ?? cam.orbit.maxDistance; cam.orbit.maxPolarAngle = prevPolar ?? cam.orbit.maxPolarAngle;
       if (prevMode && prevMode !== 'free') cam.mode = prevMode;
@@ -930,16 +1028,56 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   }
   /* PLAN / 3D */
   function setViewBtns(v){ for (const b of bar.querySelectorAll('.se-view button')) b.classList.toggle('on', b.dataset.a === v); }
-  function setView(v){
+  function setView(v, { hand = null, dur } = {}){
     if (!on) return;
     view = v; setViewBtns(v); paint();
     if (v === 'plan') overview({ ease: true });
-    else { const t = pose3D(sel); if (t) goTo({ ...t, lift: null }, true); }
+    else { const t = pose3D(sel); if (t){ if (hand && sel) underHand(t, sel, hand); goTo({ ...t, lift: null }, true, dur); } }
+  }
+  /* the 3/4 pose `t`, slid across the screen so the selection's height KNOB lands on `hand` (the pixel it was
+     grabbed at): the eye + aim move in the view plane (the eye kept in the room); the pole's corner is chosen
+     for that eye and locked for the drag */
+  const _h = {};
+  function underHand(t, p, hand){
+    const c = cam.camera, fov0 = c.fov, pos0 = c.position.clone(), q0 = c.quaternion.clone();
+    const pose = () => { c.fov = t.fov; c.updateProjectionMatrix(); c.position.copy(t.eye); c.lookAt(t.aim); c.updateMatrixWorld(true); };
+    pose();
+    const y = H(p)?.bottom ?? baseOf(p);
+    p.poleI = null; const at = poleOf(p);
+    proj(at.x, y, at.z, _h);
+    if (!_h.behind){
+      _r.setFromMatrixColumn(c.matrixWorld, 0); _u.setFromMatrixColumn(c.matrixWorld, 1); _p.setFromMatrixColumn(c.matrixWorld, 2);
+      const depth = Math.max(1, -_e.set(at.x, y, at.z).sub(c.position).dot(_p));
+      const wpp = 2 * depth * Math.tan(THREE.MathUtils.degToRad(t.fov / 2)) / Math.max(1, dom.clientHeight);
+      const want = _e.copy(_r).multiplyScalar((_h.x - hand.x) * wpp).addScaledVector(_u, (hand.y - _h.y) * wpp);
+      const eye = t.eye.clone().add(want), lim = host.roomBox || {}, floor = host.floorY ?? 0;
+      if (Number.isFinite(lim.y1)) eye.y = Math.min(eye.y, lim.y1);
+      if (Number.isFinite(lim.z1)) eye.z = Math.min(eye.z, lim.z1);
+      if (Number.isFinite(lim.x1)) eye.x = Math.max(-lim.x1, Math.min(lim.x1, eye.x));
+      eye.y = Math.max(eye.y, floor + 1.5);
+      t.aim.add(_e.copy(eye).sub(t.eye)); t.eye.copy(eye);
+      pose(); p.poleI = null; poleOf(p);                // (the corner, for the eye it will land at)
+    }
+    c.fov = fov0; c.updateProjectionMatrix(); c.position.copy(pos0); c.quaternion.copy(q0); c.updateMatrixWorld(true);
+  }
+  /* after a gesture in the 3/4 view: when the knob has ended up under the bar / the dock / off the screen,
+     or the machine itself has risen out of the frame, the eye re-frames the selection once (never during
+     a gesture) */
+  const _kv = {};
+  function keepInView(){
+    if (!on || view !== '3d' || !sel || drag || ease || !liftable(sel)) return;
+    const B = bandPx = freeBand(); paintHeight(true); bandPx = null;
+    const c = pivotOf(sel), inB = () => !_kv.behind && _kv.y > B.y0 - 30 && _kv.y < B.y1 && _kv.x > 0 && _kv.x < innerWidth;
+    proj(c.x, topOf(sel), c.z, _kv); let bodyIn = inB();     // (its top, and where it stands: both clear of the UI)
+    proj(c.x, baseOf(sel), c.z, _kv); bodyIn = bodyIn && inB();
+    // (a margin inside the band: a knob or a machine grazing the dock's edge is re-framed too)
+    if (knobIn && _k.y > B.y0 + 10 && _k.y < B.y1 - 40 && bodyIn) return;
+    const t = pose3D(sel); if (t) goTo({ ...t, lift: null }, true);
   }
   /* the eye's glide (smoothstep; reduced motion: a cut) — a ceiling lift (the plan from above) is made as it
      leaves, a lowered one restored as it lands (the ceiling never blocks the way) */
   let ease = null;
-  function goTo({ eye, aim, fov, lift }, glide){
+  function goTo({ eye, aim, fov, lift }, glide, dur = VIEW3D.ease){
     if (lift != null){ lowerCeiling(); liftCeiling(lift); }
     const c = cam.camera;
     if (!glide || reduce){
@@ -948,7 +1086,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       ease = null; return;
     }
     // (from the LIVE aim: cam.target — the director's, on the way in; the orbit's own in free-look)
-    ease = { t0: performance.now(), dur: VIEW3D.ease * 1000, p0: c.position.clone(), p1: eye.clone(), a0: cam.target.clone(), a1: aim.clone(), f0: c.fov, f1: fov, lower: lift == null };
+    ease = { t0: performance.now(), dur: dur * 1000, p0: c.position.clone(), p1: eye.clone(), a0: cam.target.clone(), a1: aim.clone(), f0: c.fov, f1: fov, lower: lift == null };
   }
   function easeFrame(){
     if (!ease) return;
@@ -962,6 +1100,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   /* per frame: the eye's glide, the knob's lift, keep the name tags + the handle over their machines */
   function update(){
     if (!on) return;
+    bandPx = sel ? freeBand() : null;                   // (read before this frame's DOM writes)
     easeFrame();
     liftFrame();
     if (queued) applyQueued();
@@ -980,13 +1119,19 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       p.el.style.transform = `translate(${x.toFixed(1)}px, ${((1 - _v.y) / 2 * H0).toFixed(1)}px) translate(-50%, -100%)`;
     }
     if (sel) paintHeight();
+    bandPx = null;
   }
 
   function syncUndo(n){ const b = bar.querySelector('[data-a=undo]'); b.disabled = !n; b.title = n ? `undo the last change (⌘Z / Ctrl+Z) · ${n} step${n === 1 ? '' : 's'}` : 'nothing to undo'; }
 
   return { toggle, refresh, update, overview, measureAll, syncUndo, get on(){ return on; }, get selected(){ return sel?.key || null; },
            /* height: a pending burst of taps settles now (before an undo, a song change) */
-           flush: () => settle.flush(), cancel: () => { settle.cancel(); queued = null; },
+           flush: () => settle.flush(),
+           /* the gesture still open (a drag, a burst of taps, a burst of turns) ends now, as if released — an
+              undo then undoes IT */
+           finish(){ if (drag) endDrag(true); if (turn._t) turnDone(); settle.flush(); },
+           /* …or is dropped (the world it moved is being rebuilt: a song change, a reset) */
+           cancel(){ endDrag(false); clearTimeout(turn._t); turn._t = turn._p = null; settle.cancel(); queued = null; },
            get view(){ return view; }, setView,
            /* dev/test: the live footprints (oriented corners + their bounds) + conflicts */
            state: () => pieces.map(p => { const fp = fpOf(p); return { key: p.key, box: bounds(fp).map(v => +v.toFixed(2)), corners: fp.map(q => q.map(v => +v.toFixed(2))),

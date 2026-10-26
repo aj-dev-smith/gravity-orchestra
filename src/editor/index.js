@@ -23,7 +23,7 @@ import { makeStageEdit } from './stage-edit.js';
 import { midiSources, midiSourcesIn, defaultMidiMapping, applyMidiMapping, songSources, defaultSongMapping, applySongMapping,
          setTarget, sameMapping, loadMapping, saveMapping, sanitizeMapping, targetsFor, machineOf } from './mapping.js';
 import { convertToSong } from '../midi/convert.js';
-import { placeSlot, placeEntry, sanitizeLayout, encodeLayout, loadLayout, saveLayout, makeHistory } from './placement.js';
+import { placeSlot, placeEntry, sanitizeLayout, encodeLayout, loadLayout, saveLayout, makeHistory, liftOnlyUndo } from './placement.js';
 
 /** "bars 33–48 (0:41 of 3:27) — the chorus" — a phrase window in words */
 export function loopText(p, short = false){
@@ -217,9 +217,10 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     place(key, entry, all){
       history.push(curId, layout());                 // (undo: the layout as it was before this move)
       saveLayout(store, curId, placed(key, entry, all));
-      host.restage();
+      host.restage({ director: false });             // (the director catches up on the way out: leave)
       stage.refresh();
     },
+    leave(){ host.directorNow?.(); },
     /* HEIGHT (the handle — height.js): a gesture opens ONE undo step (liftBegin: the layout as it was),
        writes as it goes (liftWrite — cheap: the machine already moved live, only the stored layout
        follows) and settles once, at its end (liftSettle: the kit rebuilt at its deck, the room
@@ -232,8 +233,9 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     liftAuto(key, entry, all){
       history.push(curId, layout());
       saveLayout(store, curId, placed(key, { ...entry, lift: null }, all));
-      host.liftLive(key, undefined);
-      if (key === 'drums'){ host.liftSettle(); stage.refresh(); } else host.rebuild(true);
+      // live: the room solve's own height for where it stands (a station moved since it was solved: only
+      // a fresh solve can say — the world is rebuilt)
+      if (host.liftLive(key, undefined)){ host.liftSettle(); stage.refresh(); } else host.rebuild(true);
       syncButtons();
     },
     resetLayout(){ stage.cancel(); history.push(curId, layout()); saveLayout(store, curId, {}); ignoreSongStage.add(curId); host.rebuild(true); },
@@ -243,19 +245,23 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
      holding songTime (each station is re-placed from its slot; an empty layout = the solved stage
      again). A burst of height taps still settling is simply dropped: the rebuild re-derives it all */
   function undo(){
-    stage.cancel();
+    stage.finish();                                  // (a gesture still running / settling ends first: it is the step undone)
     const prev = history.pop(curId);
     if (!prev) return false;
+    const cur = layout(), lifts = liftOnlyUndo(prev, cur);
     if (!Object.keys(prev).length) ignoreSongStage.add(curId); else ignoreSongStage.delete(curId);
     saveLayout(store, curId, prev);
-    host.rebuild(true);
+    // a HEIGHT step comes back live (the machines move, the room re-anchors — no rebuild, the music runs on);
+    // anything else, or a height only a fresh solve can give back, rebuilds holding songTime
+    if (lifts && lifts.every(l => host.liftLive?.(l.key, l.lift))){ if (lifts.length) host.liftSettle(); stage.refresh(); syncButtons(); }
+    else host.rebuild(true);
     return true;
   }
 
   /* ---- the HUD pills: MAP · EDIT (next to SHARE LINK) ---- */
   const row = document.createElement('div'); row.className = 'ed-row';
   const mapBtn = Object.assign(document.createElement('button'), { className: 'ed-pill', textContent: 'MAP', title: 'instrument map — who plays what' });
-  const editBtn = Object.assign(document.createElement('button'), { className: 'ed-pill', textContent: 'EDIT STAGE', title: 'move the machines around the room (E)' });
+  const editBtn = Object.assign(document.createElement('button'), { className: 'ed-pill', textContent: 'EDIT STAGE', title: 'move, turn and raise the machines (E)' });
   row.append(mapBtn, editBtn);
   const share = document.getElementById('share');
   (share?.parentNode || document.getElementById('hud') || document.body).insertBefore(row, share ? share.nextSibling : null);
@@ -270,7 +276,7 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     const cm = curKey && songs[curKey] ? customMap() : false, cs = curKey ? customStage() : false;
     mapBtn.classList.toggle('custom', cm); editBtn.classList.toggle('custom', cs);
     mapBtn.title = cm ? 'instrument map — re-mapped (AUTO in the panel puts it back)' : 'instrument map — who plays what';
-    editBtn.title = cs ? 'move the machines (E) — this song’s stage is hand-placed' : 'move the machines around the room (E)';
+    editBtn.title = cs ? 'move, turn and raise the machines (E) — this song’s stage is hand-placed' : 'move, turn and raise the machines (E)';
     if (share) share.hidden = !(curKey === 'imported' || curKey === 'shared' || cm || cs);
     stage.syncUndo(history.size(curId));
   }
@@ -411,8 +417,10 @@ function injectStyles(){
   .se-tag.sel{border-color:var(--amber);color:var(--amber);box-shadow:0 0 18px rgba(255,183,100,.3)}
   .se-tag.bad{border-color:#ff4d5e;color:#ff6b7a}
   body.stage-editing #cams{opacity:0;pointer-events:none}
-  .se-view{display:inline-flex;border:1px solid rgba(90,97,120,.45);border-radius:999px;overflow:hidden}
-  .se-btns .se-view button{border:none;border-radius:0;padding:4px 10px;background:none}
+  .se-view{display:inline-flex;border:1px solid rgba(90,97,120,.45);border-radius:999px}
+  .se-btns .se-view button{border:none;border-radius:0;padding:4px 10px;background:none;position:relative}
+  .se-btns .se-view button:first-child{border-radius:999px 0 0 999px}.se-btns .se-view button:last-child{border-radius:0 999px 999px 0}
+  .se-btns .se-view button::after{content:'';position:absolute;inset:-9px -6px}
   .se-btns .se-view button.on{color:var(--amber);background:rgba(255,183,100,.1)}
   /* the selection DOCK (stage-edit.js): who it is · ▼ height ▲ · FLOOR · AUTO · turn */
   .se-dock{position:fixed;left:50%;bottom:46px;transform:translateX(-50%);z-index:12;display:flex;align-items:center;gap:14px;
@@ -467,12 +475,15 @@ function injectStyles(){
   .se-chip em{font-style:normal;color:#7fe3c8;font-size:8.5px;letter-spacing:.18em;text-transform:uppercase}
   .se-chip:not(.loft) em{display:none}
   .se-chip.loft{border-color:rgba(127,227,200,.55)}
+  .se-chip.plan{display:none}
+  .se-knob:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
   .se-chip.nudge{animation:se-nudge .32s ease}
   @keyframes se-nudge{0%,100%{margin-left:0}25%{margin-left:-5px}75%{margin-left:5px}}
   .se-tip{position:fixed;left:0;top:0;z-index:7;display:flex;align-items:center;gap:6px;padding:4px 4px 4px 10px;border-radius:9px;
     background:rgba(30,20,8,.82);border:1px dashed rgba(255,183,100,.5);color:var(--amber);font:9.5px ui-monospace,'SF Mono',Menlo,Consolas,monospace;
     letter-spacing:.08em;white-space:nowrap}
-  .se-tip button{background:none;border:none;color:var(--amber);font:inherit;font-size:15px;line-height:1;cursor:pointer;min-width:28px;min-height:28px;padding:0}
+  .se-tip button{background:none;border:none;color:var(--amber);font:inherit;font-size:15px;line-height:1;cursor:pointer;min-width:28px;min-height:28px;padding:0;position:relative}
+  .se-tip button::after{content:'';position:absolute;inset:-8px}
   body.se-lifting .se-tag:not(.sel){opacity:.3}
   body.se-lifting,body.se-lifting *{cursor:ns-resize!important}
   @media (pointer:coarse){

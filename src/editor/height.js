@@ -104,18 +104,19 @@ const gridAt = (u, max) => { const g = Math.min(max, Math.round(u / LIFT_STEP) *
 
 /** A key / ▲ ▼ press: one step from `cur` in `dir` (±1) — to the NEXT grid line that way (a lift off the
     grid — the gallery's, a free drag's — steps onto it), or ±LIFT_BIG then the grid (big). A neighbour's
-    top passed on the way (or caught near where it lands) stops it there: a loft is a step of its own.
+    top passed on the way (or landed on exactly) stops it there: a loft is a step of its own. Only one
+    strictly on the way — a key never jumps farther than its step (the drag's magnet is the wide catch).
     Clamped to [0, max]. → { lift, magnet } like snapLift */
 export function stepLift(cur, dir, { big = false, max = FOOT.LIFT_MAX, targets = [] } = {}){
   const c = clamp(Number.isFinite(cur) ? cur : 0, 0, max), s = Math.sign(dir) || 1;
   let next = big ? Math.round((c + s * LIFT_BIG) / LIFT_STEP) * LIFT_STEP
                  : (s > 0 ? Math.floor(c / LIFT_STEP + 1e-6) + 1 : Math.ceil(c / LIFT_STEP - 1e-6) - 1) * LIFT_STEP;
   next = clamp(next, 0, max);                              // (past the limit: the step lands ON it)
-  // a neighbour's top on the way (strictly beyond where we are, not past where we land + its catch)
+  // a neighbour's top on the way (strictly beyond where we are, not past where we land)
   let stop = null;
   for (const t of targets){
-    const ahead = (t.lift - c) * s, d = Math.abs(t.lift - next);
-    if (ahead > 1e-6 && (ahead < Math.abs(next - c) - 1e-9 || d <= MAGNET.loft + 1e-9) && t.lift <= max + 1e-9 && t.lift >= 0)
+    const ahead = (t.lift - c) * s;
+    if (ahead > 1e-6 && ahead <= Math.abs(next - c) + 1e-9 && t.lift <= max + 1e-9 && t.lift >= 0)
       if (!stop || (t.lift - c) * s < (stop.lift - c) * s) stop = t;
   }
   if (stop) return { lift: stop.lift, magnet: { kind: 'loft', key: stop.key, label: stop.label } };

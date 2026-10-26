@@ -740,6 +740,7 @@ function buildWorld(keyName){
   // PERF: bake each station's provably-still parts into one mesh per material (mergestatic.js —
   // posed across the whole loop first: a part that ever moves or blinks is left alone).
   // ?nomerge skips it (A/B).
+  let kitMerge = null;                                  // (the kit's bake, again for a kit rebuilt at a new slot: restage)
   if (!NO_MERGE){
     const times = Array.from({ length: 48 }, (_, k) => -LEAD_IN + (k + .37) / 48 * (P0 + LEAD_IN));
     mergeStats = { merged: 0, removed: 0 };
@@ -772,7 +773,8 @@ function buildWorld(keyName){
     mergeAudit = [];
     const audited = (key, r) => { if (r.audit?.length) mergeAudit.push({ key, parts: r.audit }); return r; };
     instLive.forEach(r => { const ev = instEvs(r); add(audited(r.I.key, mergeStatic(r.station, t => r.inst.update(t, P0, 0, RUN), sweepFor(ev), () => r.inst.update(-LEAD_IN, P0, 0, POSE0), opt(ev)))); });
-    if (drumGroup){ const ev = kitEvs(); add(audited('drums', mergeStatic(drumGroup, t => drumKit.update(t, P0, 0, RUN), sweepFor(ev), () => drumKit.update(-LEAD_IN, P0, 0, POSE0), opt(ev)))); }
+    kitMerge = () => { const ev = kitEvs(); return mergeStatic(drumGroup, t => drumKit.update(t, P0, 0, RUN), sweepFor(ev), () => drumKit.update(-LEAD_IN, P0, 0, POSE0), opt(ev)); };
+    if (drumGroup) add(audited('drums', kitMerge()));
   }
 
   // a full room is deep: thin the haze so the back tier still reads from the wide shot
@@ -786,7 +788,7 @@ function buildWorld(keyName){
               sky: Array.isArray(S.sky) ? S.sky.filter(c => Array.isArray(c) && Number.isFinite(c[0]) && typeof c[1] === 'string') : null,
               rollT: ROLL_T, beat: BEAT, P: ROLL_T + LOOP_T,
               drums: S.drums || null, melody: S.melody, loopBeats, start: ARM_AT });   // (the arena solves its pyro cues from these)
-  curBuild = { S, view: stageView, wallW, P0, buildKit };
+  curBuild = { S, view: stageView, wallW, P0, buildKit, kitMerge };
   placeRoom();
 
   audio.setBeat(BEAT);
@@ -891,15 +893,16 @@ const kitHits = S => Object.values(S.drums || {}).flatMap(hits => hits.map(norma
    (__dev.lift: a station is moved rigidly first). Re-anchor the room and re-solve the director's
    shots from where things now stand. A dragged or lifted KIT is rebuilt at its new slot (its
    contacts are world-space). No re-solve of any physics; songTime runs on. */
-function restage(){
+function restage({ director = true } = {}){            // (director: false — stage edit re-solves it once, on the way out)
   if (!curBuild) return;
-  const { S, view, P0, buildKit } = curBuild;
+  const { S, view, P0, buildKit, kitMerge } = curBuild;
   const dx = drumGroup?.position.x || 0, dz = drumGroup?.position.z || 0, deck = kitDeck();
   if (drumGroup && (dx || dz || Math.abs(deck - kitSlot.y) > 1e-6)){
     kitSlot = dx || dz ? { ...kitSlot, x: kitSlot.x + dx, z: kitSlot.z + dz, pin: true, y: deck } : { ...kitSlot, y: deck };
     world.remove(drumGroup); disposeTree(drumGroup);
     drumGroup = buildKit(); world.add(drumGroup);
-    if (!NO_MERGE){
+    if (kitMerge) kitMerge();                           // (the build's own bake: its strike sweep + rest pose)
+    else if (!NO_MERGE){
       const times = Array.from({ length: 48 }, (_, k) => -LEAD_IN + (k + .37) / 48 * (P0 + LEAD_IN));
       mergeStatic(drumGroup, t => drumKit.update(t, P0, 0, { started: true, skipStrikes: true, onStrike(){} }), times);
     }
@@ -907,7 +910,7 @@ function restage(){
   }
   instLive.forEach(r => r.station.updateMatrixWorld(true));
   placeRoom();
-  syncDirector(S, view);
+  if (director) syncDirector(S, view);
   fadeMats = collectFadeMats(world); fadeWarm = 3;
 }
 
@@ -1400,13 +1403,26 @@ fillSongMenu(sel, SONGS, isRuntimeSong);              // shelved <optgroup>s (so
 if (soloI && SONGS['solo-' + soloKey]) sel.value = 'solo-' + soloKey;
 /* CREATION TOOLS (src/editor/): the instrument MAP (who plays what) + STAGE EDIT (where it
    stands). Data over the song — main asks it for the effective song + each station's slot. */
+/* the director, while stage edit is open: nothing frames a shot (the eye is free), so a move / a height
+   gesture re-anchors the room only and marks this build's edit STALE — re-solved once, on the way out */
+let edStale = null;                                     // the build (curBuild) whose director is behind its stage
+/* the height the ROOM SOLVE gave a floor station (its gallery raise, or 0) — while it still stands where
+   that solve put it (moved since: null — only a fresh solve can say) */
+function autoLiftOf(r){
+  const s = lastLayout?.solved?.[r.I.key], p = r.station.position;
+  if (!s || Math.abs(s.x - p.x) > 1e-3 || Math.abs(s.z - p.z) > 1e-3) return null;
+  return s.y === undefined ? 0 : Math.max(0, s.y - r.ground);
+}
 const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: SONGS,
   machines: INSTRUMENTS.map(I => ({ key: I.key, label: I.label, color: I.color })),
   host: {
     key: () => sel.value,
     rebuild(keepTime){ const t = songTime, was = playing; buildWorld(sel.value); if (keepTime && started){ songTime = t; skipStrikes = true; if (!was) setPlaying(false); }
       audio.primeSamples(); audio.showState(); },        // (called from a tap/change: a gesture — §5)
-    restage,
+    restage(o){ restage(o); if (o?.director === false) edStale = curBuild; },
+    /* leaving stage edit: the director catches up with every move / height made in it (once) */
+    // (a frame after the editor has closed — the DONE tap answers at once; a rebuild in between re-solved it anyway)
+    directorNow(){ const b = edStale; edStale = null; if (b) requestAnimationFrame(() => setTimeout(() => { if (b === curBuild && !editor.stage.on) syncDirector(b.S, b.view); else if (b === curBuild) edStale = b; }, 0)); },
     pieces: () => [
       ...instLive.filter(r => !r.slot.hang).map(r => ({ key: r.I.key, label: r.I.label, color: r.I.color, obj: r.station, kind: 'station', canRotate: true })),
       ...(drumGroup && curBuild?.S.drums ? [{ key: 'drums', label: 'Drum Machine', color: '#ff8a3d', obj: drumGroup, kind: 'kit', canRotate: false,
@@ -1434,11 +1450,12 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
       out.top = a.box ? a.box[3] : a.y + 3; out.floor = ROOM.FLOOR; out.ceil = ROOM.CEIL; out.open = Array.isArray(a.feet) || Array.isArray(a.hang);
       return out;
     },
-    /* …set LIVE, mid-gesture (u undefined: the user's height is forgotten — AUTO). A floor station moves
-       rigidly (no legs to regrow). The kit's GROUP moves rigidly too — no rebuild per frame: its strikes
-       report their contact plus the group's offset (drumStrike), so they stay where the drums are — and
-       liftSettle rebuilds it at its deck. The room re-anchors + re-plans its footing now; the director
-       re-solves once, when the gesture settles. */
+    /* …set LIVE, mid-gesture (u undefined: the user's height is forgotten — AUTO: a station takes the
+       room solve's own height for where it stands, autoLiftOf; false when only a fresh solve can say).
+       A floor station moves rigidly (no legs to regrow). The kit's GROUP moves rigidly too — no rebuild
+       per frame: its strikes report their contact plus the group's offset (drumStrike), so they stay where
+       the drums are — and liftSettle rebuilds it at its deck. The room re-anchors + re-plans its footing
+       now; the director re-solves once, when stage edit closes. */
     liftLive(key, u){
       const set = Number.isFinite(u) ? clampLift(u) : undefined;
       if (set === undefined) delete devLift[key];       // (AUTO: a page-wide ?lift= / __dev.lift for it goes too)
@@ -1452,17 +1469,19 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
       } else {
         const r = instLive.find(q => q.I.key === key && !q.slot.hang);
         if (!r) return false;
+        const to = set !== undefined ? set : autoLiftOf(r);
+        if (to === null) return false;
         r.slot.lift = set;
-        if (set !== undefined) r.setLift(set);
+        r.setLift(to);
       }
       placeRoom();
       return true;
     },
     /* …the gesture is over: a kit moved live is rebuilt at its deck (restage sees the deck it was built at
-       differ from its lift's), the room re-anchored, the director re-solved */
+       differ from its lift's) and the room re-anchored; the director waits for the way out (directorNow) */
     liftSettle(){
       if (drumGroup && drumGroup.position.y) kitSlot.y -= drumGroup.position.y;
-      restage();
+      restage({ director: false }); edStale = curBuild;
     },
     footing: () => rooms.footing,                         // the live plan: the readout's LOFT mates
     /* what can't be moved here — and why (stage edit says so when one is clicked) */

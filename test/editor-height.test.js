@@ -152,10 +152,12 @@ describe('height — the keys / ▲ ▼ steps', () => {
     expect(stepLift(3, 1, { targets })).toEqual({ lift: 3.27, magnet: { kind: 'loft', key: 'bass', label: 'String Bass' } });
     expect(stepLift(3.27, 1, { targets }).lift).toBe(3.5);
     expect(stepLift(3.27, -1, { targets }).lift).toBe(3);
-    expect(stepLift(4, -1, { targets }).lift).toBe(3.27);                        // (3.5 is within the deck's catch: it lands ON the deck)
+    expect(stepLift(4, -1, { targets }).lift).toBe(3.5);                         // (a key never jumps past its step: 3.5, then the deck)
     expect(stepLift(3.5, -1, { targets }).lift).toBe(3.27);
     expect(stepLift(0, 1, { big: true, targets }).lift).toBe(2);                 // a big step that lands well short of it
-    expect(stepLift(1, 1, { big: true, targets }).lift).toBe(3.27);              // …one that lands inside its catch
+    expect(stepLift(1, 1, { big: true, targets }).lift).toBe(3);                 // …one that lands short of it (3: no jump to the deck)
+    expect(stepLift(2.5, 1, { targets: [{ key: 'bass', lift: 3 }] })).toMatchObject({ lift: 3, magnet: { kind: 'loft', key: 'bass' } });   // landing ON a deck: a loft
+    for (let u = 0; u < 4; u += .5) expect(stepLift(u, 1, { targets: [{ key: 'bass', lift: 3 }] }).lift).toBe(u + .5);   // every ½ u reachable beside it
     expect(stepLift(2, 1, { big: true, targets }).lift).toBe(3.27);              // …and one that passes it
     // the gallery: ▼ from a loft mate's deck isn't caught by that same deck
     expect(stepLift(18.935, -1, { targets: [{ key: 'strum', lift: 18.935 }] }).lift).toBe(18.5);
@@ -223,5 +225,27 @@ describe('height — the layout a gesture writes (placement.js placeEntry), undo
     expect(P.sanitizeLayout(back.stage)).toEqual(P.sanitizeLayout(L));
     expect(P.sanitizeLayout(back.stage).drums.lift).toBe(2);
     expect(P.sanitizeLayout(back.stage).horns).not.toHaveProperty('lift');
+  });
+});
+
+describe('height — a height step undoes LIVE (placement.js liftOnlyUndo)', () => {
+  const cur = { marimba: { x: -17.5, z: -12.5, yaw: 1.309, lift: 3 }, horns: { x: 15.5, z: -20.5, yaw: -.15, lift: 0 }, drums: { x: 19, z: 19, yaw: 0, lift: 2 } };
+  it('only the lifts that changed, back to what they were (undefined = AUTO)', () => {
+    const prev = { ...cur, marimba: { ...cur.marimba, lift: 1 }, horns: { x: 15.5, z: -20.5, yaw: -.15 } };
+    expect(P.liftOnlyUndo(prev, cur)).toEqual([{ key: 'marimba', lift: 1 }, { key: 'horns', lift: undefined }]);
+    expect(P.liftOnlyUndo(cur, cur)).toEqual([]);
+  });
+  it('the solved stage ({}): every machine back to AUTO where it stands', () => {
+    expect(P.liftOnlyUndo({}, cur)).toEqual([{ key: 'marimba', lift: undefined }, { key: 'horns', lift: undefined }, { key: 'drums', lift: undefined }]);
+    expect(P.liftOnlyUndo({}, {})).toEqual([]);
+  });
+  it('a move, a turn, a machine pinned or unpinned → null (the stage is rebuilt)', () => {
+    expect(P.liftOnlyUndo({ ...cur, marimba: { ...cur.marimba, x: -17 } }, cur)).toBeNull();
+    expect(P.liftOnlyUndo({ ...cur, marimba: { ...cur.marimba, yaw: 1.4 } }, cur)).toBeNull();
+    expect(P.liftOnlyUndo({ ...cur, marimba: { ...cur.marimba, yaw: 1.309 + 2 * Math.PI } }, cur)).toEqual([]);   // (a whole turn is no turn)
+    const { drums, ...less } = cur;
+    expect(P.liftOnlyUndo(less, cur)).toBeNull();
+    expect(P.liftOnlyUndo(cur, less)).toBeNull();
+    expect(P.liftOnlyUndo(cur, {})).toBeNull();                               // (undoing a RESET LAYOUT)
   });
 });

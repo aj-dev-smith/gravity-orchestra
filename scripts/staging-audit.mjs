@@ -53,7 +53,10 @@ function probeStatic(){
       const sx = _b.max.x - _b.min.x, sz = _b.max.z - _b.min.z;
       if (sx > 40 || sz > 40) continue;                                  // floors, walls, decks: not standing obstacles
       if (_b.max.y < ROOMB.FLOOR + 1) continue;                         // flush with the floor
-      solid.push({ name: o.name || o.geometry.type, b: [_b.min.x, _b.max.x, _b.min.y, _b.max.y, _b.min.z, _b.max.z] });
+      // (userData.owners[i]: the machine a room set this instance BESIDE — the cathedral's candlesticks, placed
+      //  in that machine's own turned frame, may stand inside the box its turn swells: tested against that
+      //  machine in ITS frame — its turned w × d footprint — not its box)
+      solid.push({ name: o.name || o.geometry.type, b: [_b.min.x, _b.max.x, _b.min.y, _b.max.y, _b.min.z, _b.max.z], owner: o.userData.owners?.[i] });
     }
   });
   const boxes = D.boxes();
@@ -78,8 +81,15 @@ function probeStatic(){
     const a = boxes.ricochet, b = boxes[k];
     if (ov(a, b) && Math.min(a[1][1], b[1][1]) - Math.max(a[0][1], b[0][1]) > .05 && k !== 'belt:lead' && !k.startsWith('belt:')) overlaps.push(`ricochet×${k} (3D)`);
   }
+  const anc = Object.fromEntries((D.anchors?.() || []).map(a => [a.key, a]));
+  const inOwn = (s, A) => {                                          // does an owned solid's footprint meet its owner's turned w × d?
+    const c = Math.cos(A.yaw || 0), n = Math.sin(A.yaw || 0), dx = (s.b[0] + s.b[1]) / 2 - A.x, dz = (s.b[4] + s.b[5]) / 2 - A.z;
+    const r = Math.max(s.b[1] - s.b[0], s.b[5] - s.b[4]) / 2;
+    return Math.abs(c * dx - n * dz) < A.w / 2 + r - .05 && Math.abs(n * dx + c * dz) < A.d / 2 + r - .05; };
   for (const k of keys){ const a = boxes[k];
-    for (const s of solid) if (Math.min(a[1][0], s.b[1]) - Math.max(a[0][0], s.b[0]) > .05 && Math.min(a[1][2], s.b[5]) - Math.max(a[0][2], s.b[4]) > .05
+    for (const s of solid) if (s.owner === k && anc[k] && anc[k].w > 0 && anc[k].d > 0){
+      if (inOwn(s, anc[k]) && Math.min(a[1][1], s.b[3]) - Math.max(a[0][1], s.b[2]) > .05) overlaps.push(`${k}×room:${s.name} (own frame)`);
+    } else if (Math.min(a[1][0], s.b[1]) - Math.max(a[0][0], s.b[0]) > .05 && Math.min(a[1][2], s.b[5]) - Math.max(a[0][2], s.b[4]) > .05
       && Math.min(a[1][1], s.b[3]) - Math.max(a[0][1], s.b[2]) > .05) overlaps.push(`${k}×room:${s.name}`); }
   // what the OTHER machines stand on (rooms/footing.js envelopes) never runs into a machine
   const own = k => k.startsWith('belt:') ? 'belt' : k;

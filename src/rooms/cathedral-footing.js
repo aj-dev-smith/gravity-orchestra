@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { FOOT } from './footing.js';
+import { gapOf, onSide } from './footing3d.js';
 /* ============================================================
    CATHEDRAL FOOTING — what the machines stand on in the Cathedral Nave: STONE and OAK.
    A room style for rooms/footing3d.js (its header is the contract): every hook writes into the
@@ -118,6 +119,20 @@ function oakTex(){
   t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4;
   return t;
 }
+/* the limestone's TOPS: the kit maps a top face (x, z) onto the same 4 u tile as a wall, so the .5 u courses lay
+   out on a plinth's top as long pale boards — a stone plinth read as timber decking. On an up-facing face the
+   courses open to ~1.5 u: FLAGSTONES (the same texture and draw; a shader tweak, constant per material) */
+function flagTops(m){
+  m.onBeforeCompile = sh => {
+    sh.vertexShader = 'varying float vUp;\n' + sh.vertexShader.replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n  vUp = objectNormal.y;');
+    sh.fragmentShader = 'varying float vUp;\n' + sh.fragmentShader.replace('#include <map_fragment>', `#ifdef USE_MAP
+      vec2 fuv = vUp > .5 ? vec2(vMapUv.x + .37, vMapUv.y * .34 + .19) : vMapUv;
+      diffuseColor *= texture2D( map, fuv );
+    #endif`);
+  };
+  m.customProgramCacheKey = () => 'cathedral:flag-tops';
+  return m;
+}
 /* the light: additive, unlit, fog-free — a brass line at rest; on its machine's strike it brightens and its
    machine's own hue warms into it (uPulse: one slot per pad, written by the footing's update) */
 function brassEdgeMat(){
@@ -145,13 +160,8 @@ function brassEdgeMat(){
 }
 
 /* ---- small geometry ---- */
-/* (along a, out o) on one side of a rect → local [u, v] (rooms/footing3d.js onSide) */
-const onSide = (r, side) => { const k = side[0] === '+' ? 1 : -1;
-  return side[1] === 'u' ? (a, o) => [k * (r.hw + o), a] : (a, o) => [a, k * (r.hd + o)]; };
-/* where a deck's parapet opens for its access: [side, a0, a1] along that side (footing3d gapOf) */
-const gapOf = acc => !acc ? [null, 0, 0] : acc.kind === 'stair' ? [acc.side, acc.a1 - acc.out, acc.a1] : (() => {
-  const mid = (acc.a0 + acc.a1) / 2, off = acc.flights > 1 ? ((acc.flights - 1) % 2 ? .45 : -.45) : 0;
-  return [acc.side, mid + off - .48, mid + off + .48]; })();
+/* (onSide: along a, out o on one side of a rect → local [u, v]; gapOf: where a deck's parapet opens for its
+   access — both rooms/footing3d.js's own, so the parapets open exactly where the kit's would) */
 /* does the segment p → q (local u, v) cross the rect [u0, u1, v0, v1] grown by g? (footing3d segHits) */
 function segHits(p, q, R, g){
   if (!R) return false;
@@ -754,20 +764,12 @@ function makeForms(k){
   }
 }
 
-/* what a hook returns when it drew its parts INTO the kit (the merged meshes carry them — that is what
-   keeps the footing to a handful of draws): a mark that leaves the footing group the moment it is added,
-   so no empty node is left per pad (footStats counts the group's children as its draws) */
-function drawnMark(){
-  const g = new THREE.Group(); g.name = 'footing:drawn';
-  g.addEventListener('added', () => g.removeFromParent());
-  return g;
-}
 
 /** the Cathedral's footing style (rooms/footing3d.js): its materials are made once, on first use, and
     are the room's to dispose (style.dispose()) */
 export function cathedralFooting(){
   let made = null, tex = [];
-  const DRAWN = drawnMark();
+  const DRAWN = true;                                   // (a hook that drew its parts INTO the kit's merged slots: handled, nothing to add)
   const forms = new WeakMap(), of = k => forms.get(k) || forms.set(k, makeForms(k)).get(k);
   const hook = name => (spec, k) => {
     const f = of(k);
@@ -784,7 +786,7 @@ export function cathedralFooting(){
       tex = [ashlarTex(), oakTex()];
       made = {
         // pale warm limestone (its colour is in the map: ≈ .55 albedo — it must not go black in a dim room)
-        base: new THREE.MeshStandardMaterial({ map: tex[0], roughness: .86, metalness: 0, envMap: env, envMapIntensity: .3 }),
+        base: flagTops(new THREE.MeshStandardMaterial({ map: tex[0], roughness: .86, metalness: 0, envMap: env, envMapIntensity: .3 })),
         // dark oak, a waxed sheen
         deck: new THREE.MeshStandardMaterial({ map: tex[1], roughness: .55, metalness: 0, envMap: env, envMapIntensity: .55 }),
         // wrought iron (brackets; any kit form that falls back)

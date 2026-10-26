@@ -6,7 +6,7 @@ import { buildFooting, makeFootingMats, DEFAULT_STYLE } from '../src/rooms/footi
 import { makePulse } from '../src/rooms/pulse.js';
 import { STAGE } from '../src/rooms/common.js';
 import { cathedralFooting, CATH, pointed } from '../src/rooms/cathedral-footing.js';
-import { PROPS, CORONAS, CANDLE, obstaclesOf, placeCoronas, placePrickets, placeCandles, coronaClear, rectDist, dxz, dInf, candleCue } from '../src/rooms/cathedral-props.js';
+import { PROPS, CORONAS, CANDLE, obstaclesOf, placeCoronas, placePrickets, placeCandles, coronaClear, rectDist, dxz, dInf, ownDist, candleCue } from '../src/rooms/cathedral-props.js';
 
 /* THE CATHEDRAL NAVE (src/rooms/cathedral*.js): what its machines stand on (STONE and OAK — a moulded
    plinth, a chancel dais, an arcaded tribune, clustered piers + a stair turret, a choir loft, stone
@@ -89,6 +89,15 @@ describe('cathedral footing: stone and oak, drawn inside the plan', () => {
       if (u > .8) expect(plan.lofts.length, `lift ${u}: the pair shares a loft`).toBe(1);
       f.dispose();
     }
+  });
+  it('the limestone\'s TOPS are flagstones (the courses open on an up-facing face), not boards — same map, same draw', () => {
+    const base = cathedralFooting().mats(null, {}).base;
+    expect(base.customProgramCacheKey()).toBe('cathedral:flag-tops');
+    const sh = { vertexShader: THREE.ShaderLib.standard.vertexShader, fragmentShader: THREE.ShaderLib.standard.fragmentShader };
+    base.onBeforeCompile(sh);
+    expect(sh.vertexShader).toContain('vUp = objectNormal.y');
+    expect(sh.fragmentShader).not.toContain('#include <map_fragment>');
+    expect(sh.fragmentShader).toMatch(/vUp > \.5 \? vec2\(vMapUv\.x \+ \.37, vMapUv\.y \* \.34/);
   });
   it('every face looks out: its winding agrees with its normal', () => {
     const f = build();
@@ -273,12 +282,17 @@ describe('cathedral props: coronas, prickets, candles — clear of the machines'
     expect(slots.length).toBeLessThanOrEqual(PROPS.MAX_SLOT);
     for (const c of C){
       expect(c.x >= STAGE_RECT.x0 + PROPS.STICK_R && c.x <= STAGE_RECT.x1 - PROPS.STICK_R && c.z >= STAGE_RECT.z0 + PROPS.STICK_R && c.z <= STAGE_RECT.z1 - PROPS.STICK_R, `${c.key} inside`).toBe(true);
-      for (const { key, box: b, foot } of OBS){
+      const mine = CROWD.find(a => a.key === c.key), myPad = PLAN.pads.find(p => p.key === c.key && !p.loft);
+      for (const { key, box: b, foot, kind } of OBS){
         if (gapY(FL, FL + PROPS.STICK_H, b[2], b[3]) >= PROPS.CLEAR) continue;     // (well above it)
         // CLEAR from a support; an arm's length from a machine's box along x or z (STICK_CLEAR: what a box leaves
-        // out — a record's pads — and the staging audit's box test: the stick's square misses the box grown by it)
-        if (foot) expect(dxz(c.x, c.z, b), `${c.key} candle vs ${key}`).toBeGreaterThanOrEqual(PROPS.STICK_R + PROPS.CLEAR - 1e-9);
-        else expect(dInf(c.x, c.z, b), `${c.key} candle vs ${key}`).toBeGreaterThanOrEqual(PROPS.STICK_R + PROPS.STICK_CLEAR - 1e-9);
+        // out — a record's pads — and the staging audit's box test: the stick's square misses the box grown by it).
+        // Its OWN machine / pad / stair: the same, in that machine's frame (a turn swells their boxes over its flanks)
+        const self = key === c.key;
+        if (foot) expect(self && kind === 'pad' && myPad ? rectDist(myPad, c.x, c.z) : self && kind === 'access' && myPad?.access ? rectDist(accessRect(myPad, myPad.access), c.x, c.z) : dxz(c.x, c.z, b),
+          `${c.key} candle vs ${key}`).toBeGreaterThanOrEqual(PROPS.STICK_R + PROPS.CLEAR - 1e-9);
+        else expect(self ? ownDist({ x: mine.x, z: mine.z, yaw: mine.yaw, hw: mine.w / 2, hd: mine.d / 2 }, c.x, c.z) : dInf(c.x, c.z, b),
+          `${c.key} candle vs ${key}`).toBeGreaterThanOrEqual(PROPS.STICK_R + PROPS.STICK_CLEAR - 1e-9);
       }
       for (const o of C) if (o !== c) expect(Math.hypot(o.x - c.x, o.z - c.z)).toBeGreaterThanOrEqual(2 * PROPS.STICK_R + PROPS.CLEAR - 1e-9);
       for (const a of avoid) expect(Math.hypot(a.x - c.x, a.z - c.z)).toBeGreaterThanOrEqual(a.r + PROPS.STICK_R + PROPS.CLEAR - 1e-9);
@@ -295,19 +309,34 @@ describe('cathedral props: coronas, prickets, candles — clear of the machines'
       expect(Math.hypot(o.x - c.x, o.z - c.z), `${c.key} vs ${o.key}`).toBeGreaterThanOrEqual(PROPS.STICK_APART - 1e-9);
     for (const c of C) for (const e of ENV) if (e.kind === 'access')
       expect(dxz(c.x, c.z, e.box), `${c.key} vs ${e.unit}'s stair / ladder`).toBeGreaterThanOrEqual(PROPS.STICK_R + PROPS.CLEAR + PROPS.LANDING - 1e-9);
-    // a machine alone in the room: one stick on each side face, neither in front of its front edge (square to the
-    // room: a TURNED machine's box — what the staging audit tests a stick against — swells over its flanks, and
-    // its pair falls back to its back corners)
-    for (const yaw of [0, Math.PI / 2, -Math.PI / 2]){
-      const q = Math.abs(Math.sin(yaw)) > .5, lone = [{ ...st('solo', 0, 10, 10, 6), yaw, box: q ? [-3, 3, FL + .4, FL + 5.4, 5, 15] : [-5, 5, FL + .4, FL + 5.4, 7, 13] }];
+    // a machine alone in the room, WHATEVER ITS YAW (a loneTurn grand, a user's turn): one stick on each of ITS
+    // side faces, beside its front half (like altar candles — never off at its back corners, never out in front of
+    // its front face), an arm's length from it in its own frame
+    for (const yaw of [0, .55, -.6, .9, -1.2, Math.PI / 2, -Math.PI / 2, Math.PI]){
+      const c = Math.cos(yaw), s = Math.sin(yaw), hx = 5 * Math.abs(c) + 3 * Math.abs(s), hz = 5 * Math.abs(s) + 3 * Math.abs(c);
+      const lone = [{ ...st('solo', 0, 10, 10, 6), yaw, box: [-hx, hx, FL + .4, FL + 5.4, 10 - hz, 10 + hz] }];   // (its box: the turned rect's AABB)
       const P1 = planFooting(lone, { floor: FL, room: ROOMB });
       const L = placeCandles(lone, P1, obstaclesOf(lone, P1), { room: STAGE_RECT, floor: FL }), pad = P1.pads[0];
       expect(L.length, `yaw ${yaw}`).toBe(2);
-      const c = Math.cos(yaw), s = Math.sin(yaw), loc = L.map(q => [c * (q.x - pad.x) - s * (q.z - pad.z), s * (q.x - pad.x) + c * (q.z - pad.z)]);
-      const sideU = loc.every(([u]) => Math.abs(u) > pad.hw), sideV = loc.every(([, v]) => Math.abs(v) > pad.hd);
-      expect(sideU || sideV, `yaw ${yaw}: on two side faces`).toBe(true);
-      expect(Math.sign(loc[0][sideU ? 0 : 1]), `yaw ${yaw}: on OPPOSITE faces`).toBe(-Math.sign(loc[1][sideU ? 0 : 1]));
-      for (const q of L) expect(q.z, `yaw ${yaw}: not out in front of it`).toBeLessThan(Math.max(...[[1, 1], [1, -1], [-1, 1], [-1, -1]].map(([a, b]) => pad.z - s * a * pad.hw + c * b * pad.hd)));
+      const loc = L.map(q => [c * (q.x - pad.x) - s * (q.z - pad.z), s * (q.x - pad.x) + c * (q.z - pad.z)]);
+      expect(loc.every(([u]) => Math.abs(u) > pad.hw), `yaw ${yaw}: on its side faces`).toBe(true);
+      expect(Math.sign(loc[0][0]), `yaw ${yaw}: on OPPOSITE faces`).toBe(-Math.sign(loc[1][0]));
+      for (const [, v] of loc){ expect(v, `yaw ${yaw}: beside its front half`).toBeGreaterThanOrEqual(0); expect(v).toBeLessThanOrEqual(pad.hd); }
+      for (const q of L) expect(ownDist({ x: 0, z: 10, yaw, hw: 5, hd: 3 }, q.x, q.z)).toBeGreaterThanOrEqual(PROPS.STICK_R + PROPS.STICK_CLEAR - 1e-9);
+    }
+  });
+  it('a crowded machine: single sticks off its front before any stick in front of it (the wide\'s foreground)', () => {
+    // its back against the stage's back, a neighbour hard by one flank: no pair fits off its front — the old
+    // fallback stood a pair in FRONT of it; now one stick takes its open flank
+    const z = STAGE.BACK + 4.5, A = [st('solo', 0, z, 10, 6), st('nb', 12, z, 6, 8)], P1 = planFooting(A, { floor: FL, room: ROOMB });
+    const L = placeCandles(A, P1, obstaclesOf(A, P1), { room: STAGE_RECT, floor: FL }).filter(c => c.key === 'solo'), pad = P1.pads.find(q => q.key === 'solo');
+    expect(L.length).toBeGreaterThan(0);
+    for (const q of L){ expect(q.z - pad.z, 'never in front of its front face').toBeLessThanOrEqual(pad.hd); expect(Math.abs(q.x - pad.x)).toBeGreaterThan(pad.hw); }
+    // and in the whole crowd: no stick ever stands RIGHT in front of its machine (inside its front face's width)
+    for (const c of placeCandles(CROWD, PLAN, obstaclesOf(CROWD, PLAN), { room: STAGE_RECT, floor: FL })){
+      const S = PLAN.pads.find(q => q.key === c.key && !q.loft); if (!S) continue;
+      const co = Math.cos(S.yaw || 0), sn = Math.sin(S.yaw || 0), u = co * (c.x - S.x) - sn * (c.z - S.z), v = sn * (c.x - S.x) + co * (c.z - S.z);
+      expect(v > S.hd && Math.abs(u) < S.hw, `${c.key}: in front of it`).toBe(false);
     }
   });
   it('the candles\' cue: an event per strike — scaled to the machine\'s own loud hits, decaying within its own gap', () => {

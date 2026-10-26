@@ -1,4 +1,4 @@
-import { footingBoxes, toWorld } from './footing.js';
+import { footingBoxes, toWorld, accessRect } from './footing.js';
 /* ============================================================
    CATHEDRAL PROPS — where the nave's movable things stand, as PURE functions of what the machines
    occupy (rooms/index.js: place(anchors, plan) → these, then cathedral.js writes instance matrices; no
@@ -10,9 +10,13 @@ import { footingBoxes, toWorld } from './footing.js';
      PRICKETS  the candle stands by the piers (x = ±40.5, outside the ±38 stage — they never meet a
                machine there, but a layout may): slid along the nave; else hidden.
      CANDLES   the room's REACTION: two brass candlesticks per standing machine, on the floor beside
-               what it stands on (its pad, or the loft it shares) — FLANKING it first (one on each
-               side face, just in front of its middle: never between the audience and the
-               machine), then a pair at its back corners, then its front — clear of every obstacle
+               what it stands on (its pad, or the loft it shares) — FLANKING it first, in ITS OWN
+               frame whatever its yaw (one on each of its side faces, just in front of its middle,
+               like altar candles: a turned grand's pair turns with it), then a pair at its back
+               corners, then single sticks off its front, and only then its front CORNERS (never
+               right in front of it, in the wide's foreground: a machine boxed in on its flanks,
+               back AND front corners gets no candles — its footing's edge still answers it) —
+               clear of every obstacle
                and of the floor in front of every stair / ladder (LANDING), STICK_APART from another
                machine's sticks, clear of the prickets, inside the stage. Their flames flare on
                their machine's strikes (cathedral.js, a pulse per machine: rooms/pulse.js).
@@ -28,7 +32,9 @@ export const PROPS = {
   STICK_R: .5,               // a candlestick's foot
   STICK_CLEAR: 2,            // what a candlestick keeps from a MACHINE's box, along x or z (boxes are how the
                              //  shot solve and the staging audit see things): an arm's length — a box is its
-                             //  solid parts, and some reach past it (the turntable's record + pads ≈ 1.6 u)
+                             //  solid parts, and some reach past it (the turntable's record + pads ≈ 1.6 u).
+                             //  From its OWN machine the same reach is taken in that machine's frame (its turned
+                             //  w × d footprint, not the box a turn swells over its flanks: ownDist)
   STICK_H: 4.9,              // …and its height to the flame's tip (flared)
   STICK_APART: 4,            // what two machines' candlesticks keep between them (a pair of one machine: 2·R + CLEAR) —
                              //  so a neighbour's pair never lines up with this one's into one cluster
@@ -60,6 +66,12 @@ export function obstaclesOf(anchors = [], plan = null){
 export const dxz = (x, z, b) => Math.hypot(Math.max(b[0] - x, 0, x - b[1]), Math.max(b[4] - z, 0, z - b[5]));
 export const dInf = (x, z, b) => Math.max(b[0] - x, 0, x - b[1], b[4] - z, z - b[5]);
 const yNear = (a0, a1, b0, b1, g) => Math.min(a1, b1) + g > Math.max(a0, b0);
+/** dInf in a machine's OWN frame: the same along its u or v, from its turned footprint { x, z, yaw, hw, hd }
+    (an anchor's w × d about its x, z — the solid parts, before the turn) */
+export function ownDist(O, x, z){
+  const c = Math.cos(O.yaw || 0), s = Math.sin(O.yaw || 0), dx = x - O.x, dz = z - O.z;
+  return Math.max(Math.abs(c * dx - s * dz) - O.hw, Math.abs(s * dx + c * dz) - O.hd, 0);
+}
 
 /** is a corona at (x, y, z) clear — its ring + candles, and its chain up to the vault? */
 export function coronaClear(x, y, z, obs, clear = PROPS.CLEAR){
@@ -97,10 +109,14 @@ export function placePrickets(obs, list, { r = .6, h = 5.6, floor = -5.5 } = {})
 export function placeCandles(anchors = [], plan = null, obs = obstaclesOf(anchors, plan), { room = null, avoid = [], floor = -5.5 } = {}){
   const pads = plan?.pads || [], lofts = plan?.lofts || [], out = [], R = PROPS.STICK_R, C = PROPS.CLEAR;
   const tall = obs.filter(({ box: b }) => yNear(floor, floor + PROPS.STICK_H, b[2], b[3], C));
-  let key = null;
+  // (its OWN machine, pad and stair are measured in its own frame — their boxes swell over a turned machine's flanks)
+  let key = null, own = null, ownPad = null, ownAcc = null;
+  const footD = (k, kind, x, z, b) => k !== key ? dxz(x, z, b) : kind === 'pad' && ownPad ? rectDist(ownPad, x, z)
+    : kind === 'access' && ownAcc ? rectDist(ownAcc, x, z) : dxz(x, z, b);
   const clearAt = (x, z, also = []) => {
     if (room && (x < room.x0 + R || x > room.x1 - R || z < room.z0 + R || z > room.z1 - R)) return false;
-    for (const { box: b, foot, kind } of tall) if (foot ? dxz(x, z, b) < R + C + (kind === 'access' ? PROPS.LANDING : 0) : dInf(x, z, b) < R + PROPS.STICK_CLEAR) return false;
+    for (const { key: k, box: b, foot, kind } of tall) if (foot ? footD(k, kind, x, z, b) < R + C + (kind === 'access' ? PROPS.LANDING : 0)
+      : (k === key ? ownDist(own, x, z) : dInf(x, z, b)) < R + PROPS.STICK_CLEAR) return false;
     for (const c of out) if (Math.hypot(c.x - x, c.z - z) < (c.key === key ? 2 * R + C : PROPS.STICK_APART)) return false;
     for (const c of also) if (Math.hypot(c.x - x, c.z - z) < 2 * R + C) return false;
     for (const a of avoid) if (Math.hypot(a.x - x, a.z - z) < a.r + R + C) return false;
@@ -111,25 +127,24 @@ export function placeCandles(anchors = [], plan = null, obs = obstaclesOf(anchor
   for (const a of anchors || []){
     if (!a || a.kind === 'hung' || a.kind === 'belt' || a.fixed || !(a.w > 0 && a.d > 0)) continue;
     if (slot >= PROPS.MAX_SLOT || out.length + PROPS.PER > PROPS.POOL) break;
-    key = a.key;
+    key = a.key; own = { x: a.x, z: a.z, yaw: a.yaw || 0, hw: a.w / 2, hd: a.d / 2 };
+    ownPad = pads.find(q => q.key === a.key && !q.loft) || null; ownAcc = ownPad?.access ? accessRect(ownPad, ownPad.access) : null;
     const S = supportOf(a, pads, lofts), others = machines.filter(b => b !== a && b.key !== a.key);
     // BESIDE its machine: nearer what it stands on than any other machine
     const mine = (x, z) => { const d = rectDist(S, x, z); return others.every(b => dxz(x, z, b.box) > d + .3); };
     const ok = (p, also) => mine(p[0], p[1]) && clearAt(p[0], p[1], also);
-    let got = null;
-    for (const [p, q] of pairsRound(S)){                                   // a PAIR at the two ends of one side…
-      if (!ok(p, [])) continue;
-      if (!ok(q, [{ x: p[0], z: p[1] }])) continue;
-      got = [p, q]; break;
-    }
-    if (!got){                                                             // …else the best single spots
-      got = [];
-      for (const p of singlesRound(S)){
+    // a PAIR off its front (flanks, then back) → SINGLES off its front → only then its front: a front stick
+    //  stands between the audience and the machine (the wide's foreground)
+    const pair = list => { for (const [p, q] of list) if (ok(p, []) && ok(q, [{ x: p[0], z: p[1] }])) return [p, q]; return null; };
+    const singles = list => { const got = [];
+      for (const p of list){
         if (got.length >= PROPS.PER) break;
         if (got.some(g => Math.hypot(g[0] - p[0], g[1] - p[1]) < 3.5)) continue;
         if (ok(p, got.map(g => ({ x: g[0], z: g[1] })))) got.push(p);
       }
-    }
+      return got.length ? got : null; };
+    const P = pairsRound(S), Q = singlesRound(S);
+    const got = pair(P.filter(c => !c.front)) || singles(Q.filter(c => !c.front)) || pair(P.filter(c => c.front)) || singles(Q.filter(c => c.front)) || [];
     if (!got.length) continue;
     for (const [x, z] of got) out.push({ key: a.key, slot, x, z });
     slot++;
@@ -156,43 +171,42 @@ export function rectDist(S, x, z){
   return Math.hypot(Math.max(Math.abs(u) - S.hw, 0), Math.max(Math.abs(v) - S.hd, 0));
 }
 const RINGS = [1.6, 2.1, 2.7, 3.4, 4.3], PAIR_RINGS = RINGS.slice(0, 4);
-/* a support's four sides: { f: (along t ∈ [−1, 1], ring m) → [x, z], nz: its outward normal's z (+z faces
-   the audience), hl: its half-length, front: the end (±1) of it that lies toward the audience } */
+/* a support's four sides IN ITS OWN FRAME (a machine faces its local +v — the audience at yaw 0 — and turns
+   with its yaw): { f: (along t ∈ [−1, 1], ring m) → [x, z], fv: its outward normal along v (+1 its front,
+   −1 its back, 0 a flank), hl: its half-length, front: the end (±1) of a flank toward the machine's front } */
 function sidesOf(S){
-  const at = (u, v) => toWorld(S, u, v), c = Math.cos(S.yaw || 0), s = Math.sin(S.yaw || 0);
-  const sides = [
-    { f: (t, m) => at(t * (S.hw + m), S.hd + m), n: [s, c], hl: S.hw },          // +v
-    { f: (t, m) => at(t * (S.hw + m), -(S.hd + m)), n: [-s, -c], hl: S.hw },     // −v
-    { f: (t, m) => at(S.hw + m, t * (S.hd + m)), n: [c, -s], hl: S.hd },         // +u
-    { f: (t, m) => at(-(S.hw + m), t * (S.hd + m)), n: [-c, s], hl: S.hd },      // −u
-  ];
-  return sides.map((d, i) => ({ ...d, nz: d.n[1], i, front: d.f(1, 0)[1] >= d.f(-1, 0)[1] ? 1 : -1 }));
+  const at = (u, v) => toWorld(S, u, v);
+  return [
+    { f: (t, m) => at(t * (S.hw + m), S.hd + m), fv: 1, hl: S.hw },          // +v: its front
+    { f: (t, m) => at(t * (S.hw + m), -(S.hd + m)), fv: -1, hl: S.hw },      // −v: its back
+    { f: (t, m) => at(S.hw + m, t * (S.hd + m)), fv: 0, hl: S.hd },          // +u: a flank
+    { f: (t, m) => at(-(S.hw + m), t * (S.hd + m)), fv: 0, hl: S.hd },       // −u: the other
+  ].map((d, i) => ({ ...d, i, front: 1 }));
 }
 const RING_PAIRS = (() => { const c = [];
   for (const a of PAIR_RINGS) for (const b of PAIR_RINGS) c.push([a, b]);
   return c.sort((p, q) => Math.max(...p) - Math.max(...q) || p[0] + p[1] - q[0] - q[1] || p[0] - q[0]); })();
 /* where along a side a flanking stick stands (k × its half-length toward the front), on ring m */
 const flankT = (d, m, k) => d.front * k * d.hl / (d.hl + m);
-/* candidate PAIRS, best first: FLANKING (the two sides that face most across the audience's view — a
-   stick on each, near the front), then the back side's corners / thirds, then the front side's */
+/* candidate PAIRS, best first: FLANKING (its own two side faces — a stick on each, near its front), then
+   its back side's corners / thirds, then its front side's corners (each tagged .front: on its front side) */
 function pairsRound(S){
-  const out = [], sd = sidesOf(S);
-  const flank = sd.slice().sort((a, b) => Math.abs(a.nz) - Math.abs(b.nz) || a.i - b.i), [A] = flank;
-  const B = sd.find(d => d.i === (A.i ^ 1));                                  // (its opposite side)
+  const out = [], sd = sidesOf(S), A = sd[2], B = sd[3];
+  const tag = (c, front) => (c.front = front, c);                          // (front: on its front side)
   for (const k of PROPS.FLANK_AT)
-    for (const [ma, mb] of RING_PAIRS) out.push([A.f(flankT(A, ma, k), ma), B.f(flankT(B, mb, k), mb)]);
-  for (const d of sd.filter(x => x !== A && x !== B).sort((a, b) => a.nz - b.nz || a.i - b.i)){
-    for (const [ma, mb] of RING_PAIRS) out.push([d.f(-1, ma), d.f(1, mb)]);
-    for (const [ma, mb] of RING_PAIRS) out.push([d.f(-1 / 3, ma), d.f(1 / 3, mb)]);
+    for (const [ma, mb] of RING_PAIRS) out.push(tag([A.f(flankT(A, ma, k), ma), B.f(flankT(B, mb, k), mb)], false));
+  for (const d of [sd[1], sd[0]]){
+    for (const [ma, mb] of RING_PAIRS) out.push(tag([d.f(-1, ma), d.f(1, mb)], d.fv > 0));
+    if (d.fv < 0) for (const [ma, mb] of RING_PAIRS) out.push(tag([d.f(-1 / 3, ma), d.f(1 / 3, mb)], false));   // (never its front's thirds: right in front of it)
   }
   return out;
 }
-/* single spots, the same preference (the flanks near the front, then the back, then the front) */
+/* single spots, the same preference (the flanks near its front, then its back, then its front corners) */
 function singlesRound(S){
-  const out = [], sd = sidesOf(S).sort((a, b) => Math.abs(a.nz) - Math.abs(b.nz) || a.nz - b.nz || a.i - b.i);
+  const out = [], s0 = sidesOf(S), sd = [s0[2], s0[3], s0[1], s0[0]];
   for (const m of RINGS) for (const d of sd){
-    const ts = Math.abs(d.nz) < .5 ? PROPS.FLANK_AT.map(k => flankT(d, m, k)) : [-1, 1, -1 / 3, 1 / 3];
-    for (const t of ts) out.push(d.f(t, m));
+    const ts = d.fv === 0 ? PROPS.FLANK_AT.map(k => flankT(d, m, k)) : d.fv < 0 ? [-1, 1, -1 / 3, 1 / 3] : [-1, 1];
+    for (const t of ts){ const p = d.f(t, m); p.front = d.fv > 0; out.push(p); }
   }
   return out;
 }

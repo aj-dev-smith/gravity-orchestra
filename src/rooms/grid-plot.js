@@ -7,9 +7,12 @@ import { footingBoxes } from './footing.js';
    lift: by the user, or the layout's gallery raise), by how much in metres (1 u = .677 m: "+4.2 m").
    A machine standing on its own tall stand (the turntable) is not "raised". Lift it and it re-reads.
 
-   It is for the viewer who walks the floor (free-fly, eye level, the headset): the print fades out with
-   distance from the eye (PLOT.NEAR → PLOT.FAR) and in the bottom of the frame (under the HUD's button
-   row) — the director's wide and the phone's portrait never show it. Shader-only: no per-frame work.
+   It is chalk for the viewer who WALKS the floor (free-fly at eye level, a headset standing on it): the
+   print is there only when the eye is low (PLOT.EYE: under ~3.4 m, gone by ~5.4 m over the floor) AND
+   near (PLOT.NEAR → PLOT.FAR), and never in the bottom of the frame (under the HUD's button row). The
+   director's film never shows it — its eyes are high or far (measured over a loop of 9 songs: labels lit
+   in 18–74 % of the director's frames before this gate, 0 % after; the button row and EDIT STAGE's tags
+   already name the machines there). plotFade is the rule; the shader is the same rule. No per-frame work.
 
    placeLabels (PURE, tested) finds each label a spot in FRONT of what its machine stands on (the room is
    seen from +z; labels read along +x, like a plot on a page) — else beside it — slid out and along
@@ -32,9 +35,16 @@ export const PLOT = {
   WALL: .6,         // keep this far inside the room's walls (u)
   M_PER_U: .677,
   RAISED: 1,        // a machine lifted this far (u) reads its lift
-  NEAR: 15, FAR: 24,// the print is full within NEAR of the eye, gone past FAR (u)
+  NEAR: 7, FAR: 12, // the print is full within NEAR of the eye, gone past FAR (u)
+  EYE: [5, 8],      // …and only while the eye is this low over the floor (full under [0], gone over [1] — u)
   LOW: [-.9, -.72], // …and fades out below this band of the frame (NDC y: the HUD's button row)
 };
+const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+/** PURE. How much of a label's print shows (0..1): `dist` from the eye (u), the eye's height over the
+    floor `eyeH` (u), the point's frame height `ndcY` — the floor shader's own rule, mirrored for tests. */
+export function plotFade(dist, eyeH, ndcY = 0){
+  return (1 - smooth(PLOT.NEAR, PLOT.FAR, dist)) * (1 - smooth(PLOT.EYE[0], PLOT.EYE[1], eyeH)) * smooth(PLOT.LOW[0], PLOT.LOW[1], ndcY);
+}
 
 /** PURE. The label's lines: its machine's name (caps) and, when raised, by how much (its LIFT — deck
     over the spot where it would sit on the floor; a tall stand of its own is not a lift). */
@@ -125,10 +135,11 @@ export function makePlot({ renderer = null, floor = 0, room = null } = {}){
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 pW; varying vec4 pC;')
       .replace('#include <opaque_fragment>', `#include <opaque_fragment>
         float pF = (1. - smoothstep(${PLOT.NEAR.toFixed(1)}, ${PLOT.FAR.toFixed(1)}, distance(pW, cameraPosition)))
+                 * (1. - smoothstep(${PLOT.EYE[0].toFixed(2)}, ${PLOT.EYE[1].toFixed(2)}, cameraPosition.y - ${floor.toFixed(3)}))
                  * smoothstep(${PLOT.LOW[0].toFixed(2)}, ${PLOT.LOW[1].toFixed(2)}, pC.y / max(pC.w, 1e-4));
         gl_FragColor.rgb *= pF;`);
   };
-  mat.customProgramCacheKey = () => 'grid:plot';
+  mat.customProgramCacheKey = () => `grid:plot:${floor}`;
   let canvas = null, tex = null, sig = '', labels = [], texH = 0;
   const aniso = renderer?.capabilities?.getMaxAnisotropy?.() ?? 1;
 

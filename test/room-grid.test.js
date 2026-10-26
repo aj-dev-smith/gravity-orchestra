@@ -5,7 +5,7 @@ import { buildFooting, makeFootingMats } from '../src/rooms/footing3d.js';
 import { STAGE } from '../src/rooms/common.js';
 import { gridFootStyle } from '../src/rooms/grid-footing.js';
 import { RIPPLE, strikeAges, rippleSlots, accentsOf, packColor, rippleExtra, makeRipples } from '../src/rooms/grid-floor.js';
-import { PLOT, labelLines, labelSize, clearOf, placeLabels } from '../src/rooms/grid-plot.js';
+import { PLOT, labelLines, labelSize, clearOf, placeLabels, plotFade } from '../src/rooms/grid-plot.js';
 import { layoutStations } from '../src/instruments/stations.js';
 import fs from 'node:fs';
 
@@ -287,6 +287,16 @@ describe('Greybox floor: a strike rings out across the grid', () => {
 
 /* THE STAGE PLOT (grid-plot.js): the room's props — names on the floor, never in anything's way */
 describe('Greybox stage plot: each machine named on the floor, clear of everything', () => {
+  it('the print is chalk for a WALKER: low + near eyes read it, the director\'s eyes never do', () => {
+    const M = 1.478;                                              // u per metre (xrplan U_PER_M)
+    expect(plotFade(4, 1.7 * M)).toBeCloseTo(1, 6);               // standing beside it
+    expect(plotFade(9, 1.7 * M)).toBeGreaterThan(.3);             // a few strides off: still reads
+    expect(plotFade(13, 1.7 * M)).toBe(0);                        // across the room: gone
+    expect(plotFade(4, 8)).toBe(0);                               // an eye 5.4 m up (the director's lowest crane): gone
+    expect(plotFade(4, 30)).toBe(0);                              // the stage wide / EDIT STAGE plan: its tags name them
+    expect(plotFade(4, 1.7 * M, -.95)).toBe(0);                   // under the HUD's button row
+    for (let d = 0; d < 20; d += .5) expect(plotFade(d + .5, 3)).toBeLessThanOrEqual(plotFade(d, 3) + 1e-12);   // monotone in distance
+  });
   /* an independent check (not the SAT under test): the gap between two convex polygons */
   const corners = R => { const c = Math.cos(R.yaw || 0), s = Math.sin(R.yaw || 0);
     return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => [R.x + c * u * R.hw + s * v * R.hd, R.z - s * u * R.hw + c * v * R.hd]); };

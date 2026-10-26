@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { STATIONS, layoutStations, MARGIN, AUDIENCE, hangPlace, WING_REF, GALLERY_DROP } from '../src/instruments/stations.js';
+import { STATIONS, layoutStations, MARGIN, AUDIENCE, hangPlace, WING_REF, GALLERY_DROP, SEATS, SEAT_R, STAR, STAR_GRAZE } from '../src/instruments/stations.js';
+import { FOOT } from '../src/rooms/footing.js';
 import { KIT_ROOM } from '../src/marbledrums.js';
 import { STAGE } from '../src/rooms/common.js';
 
@@ -20,6 +21,8 @@ const itemsFor = keys => [
 ];
 const walls = { '1 bay': [-12, 12, -4.1, 2], '2 bays': [-22, 22, -4.1, 2.3], '3 bays': [-28, 28, -4.1, 2.3] };
 const world = (solved, it) => [solved[it.key].x + it.box[0], solved[it.key].x + it.box[1], solved[it.key].z + it.box[2], solved[it.key].z + it.box[3]];
+/* the SEAT a band machine stands in (within SEAT_R of one of ITS seats, x relative to the belt centre) */
+const seatOf = (key, at, cx = 0) => (STATIONS[key].floor || []).find(n => Math.hypot(at.x - cx - SEATS[n].x, at.z - SEATS[n].z) <= SEAT_R + 1e-9) ?? null;
 const clear = (a, b) => a[1] <= b[0] || b[1] <= a[0] || a[3] <= b[2] || b[3] <= a[2];
 
 describe('hung stations (stations.js hangPlace)', () => {
@@ -79,14 +82,19 @@ describe('room staging (stations.js layoutStations)', () => {
     // takes the stations a song's floor can't (no approved machine climbs up when the floor clears)
     for (const k of APPROVED) expect(solved[k]?.y, k).toBeUndefined();
   });
-  it('the newer machines\' slots are clean by design: belt + kit + every new floor machine (+ the organ loft) keeps every slot', () => {
+  it('the newer machines\' slots are clean by design: belt + kit + every new floor machine (+ the organ loft) — the floor ones keep every slot, the BAND takes its floor SEATS (floor first: nobody climbs)', () => {
+    // (2026-10-25: this room used to raise riff / strum / horns / pogo onto the gallery — lone towers
+    //  with the floor half empty; floor first, each takes the first of its seats that is free)
     const keys = floorKeys.filter(k => !APPROVED.includes(k));
     expect(keys.length).toBeGreaterThanOrEqual(5);
     const solved = layoutStations(itemsFor(keys), walls['1 bay'], ROOM, { hung: [ORGAN_1BAY] });
     for (const k of keys){
-      expect({ x: solved[k].x, z: solved[k].z }, k).toEqual({ x: STATIONS[k].x, z: STATIONS[k].z });
-      expect(solved[k].y, k).toBe(STATIONS[k].gallery ? 15.7 - GALLERY_DROP : undefined);
+      expect(solved[k].y, `${k} on the floor`).toBeUndefined();
+      if (!STATIONS[k].gallery) expect({ x: solved[k].x, z: solved[k].z }, k).toEqual({ x: STATIONS[k].x, z: STATIONS[k].z });
     }
+    // the band's picks, in BAND order: the riff front and centre, the strum front-left, the horns
+    // on the left wing — the pogo finds the left wing taken and takes the right one
+    expect(['riff', 'strum', 'horns', 'pogo'].map(k => seatOf(k, solved[k]))).toEqual(['centre', 'left', 'wingL', 'wingR']);
   });
   it('the wings ride out with a wider belt (gap to the wall edge kept), the margin is real air', () => {
     const one = layoutStations(itemsFor(floorKeys), walls['1 bay'], ROOM);
@@ -185,11 +193,159 @@ describe('room staging (stations.js layoutStations)', () => {
       }
     });
     if (strict){
-      for (const k of keys) if (STATIONS[k]?.gallery) expect(solved[k].y, `${k} is gallery-born`).toBeDefined();
+      // FLOOR FIRST (2026-10-25 — these rooms used to raise every gallery-born machine): a realistic room
+      // has floor to spare, so NOBODY climbs — the band stands in its floor seats
+      expect(up.map(u => u[0]), 'nobody on the gallery').toEqual([]);
+      for (const k of keys) if (STATIONS[k]?.gallery) expect(seatOf(k, solved[k], cx), `${k} in one of its seats`).not.toBeNull();
       for (const k of APPROVED) if (keys.includes(k)) expect(solved[k].y, `${k} stays on the floor`).toBeUndefined();
-      for (let i = 0; i < up.length; i++) for (let j = i + 1; j < up.length; j++)   // one ROW: nobody stands behind anybody
-        expect(up[i][1][1] <= up[j][1][0] || up[j][1][1] <= up[i][1][0], `${up[i][0]} stacked with ${up[j][0]}`).toBe(true);
     }
     expect(layoutStations(items, wall, ROOM, { bandY: BAND, eyeY: EYE, wallTop: TOP, hung })).toEqual(solved);   // deterministic
+  });
+});
+
+/* FLOOR FIRST + THE STAR (2026-10-25). The gallery is the overflow, not the band's home: riff / strum /
+   horns / pogo stand on the FLOOR in the first free one of their SEATS (seen from the audience, not
+   parked behind the kit), and climb only when every seat is taken — then side by side, one loft. The
+   song's STAR (its signature machine) stands front and centre, nobody in its foreground. MEASURED
+   rooms: main's built footprints / tops / decks (__dev.layout, the floor at −5.5), rounded. */
+describe('floor first: the band on the floor, the star front and centre (stations.js layoutStations)', () => {
+  const ENV = { bandY: 4.2, eyeY: 20 };
+  const it_ = (key, x, z, box, top, deck, extra = {}) => ({ key, x, z, box, top, deck, ...extra });
+  const R = {
+    entertainer: { wall: [-10.9, 10.9, -4.1, 1.7], top: 15.9, hung: [], items: [
+      it_('bass', -20, 3.6, [-5.9, 5.9, -6.9, 6.9], 4.3, -5.1), it_('dulcimer', -27.5, 17, [-5.8, 5.8, -3.9, 4.9], .5, -5.1),
+      it_('horns', 15.5, -11, [-7.2, 7.1, -2.9, 3.6], 3.2, -5.1), it_('strum', -28.9, -11, [-5.6, 5.7, -2.6, 2.4], .1, -5.1),
+      it_('drums', 11, 19, [-9.2, 2.8, -2.7, 2.8], 4.9, -4.8)] },
+    forge: { wall: [-10.9, 10.9, -4, 1.7], top: 15.8, hung: [[-5.5, 5.5, -16, -11.3]], items: [
+      it_('bass', -20, 3.6, [-5.9, 5.9, -6.9, 6.9], 4.3, -5.1), it_('horns', 15.5, -11, [-7.2, 7.1, -2.6, 3.2], 2.9, -5.1),
+      it_('riff', -14, -11, [-6.6, 6.7, -3.1, 3.2], .4, -5.1), it_('drums', 11, 19, [-9.2, 9.4, -2.7, 3], 6.2, -4.8)] },
+    finale: { wall: [-10.9, 10.9, -4, 1.7], top: 15.8, hung: [[-6.6, 6.6, -16, -11.3]], items: [
+      it_('bass', -20, 3.6, [-5.9, 5.9, -6.9, 6.9], 4.3, -5.1), it_('bells', 26, -10, [-6.4, 6.4, -5.9, 5.9], 10.8, -5.1),
+      it_('bowwheel', 28, 15.5, [-5.6, 5.7, -3.4, 3.4], 8.4, -4.8), it_('dulcimer', -27.5, 17, [-5.8, 5.8, -3.7, 4.9], .5, -5.1),
+      it_('horns', 15.5, -11, [-7.2, 7.1, -2.6, 3.2], 2.7, -5.1), it_('marimba', -25, -10.5, [-7.4, 7, -6.9, 7.2], 2.9, -4.8),
+      it_('riff', -14, -11, [-6.6, 6.7, -3.1, 3.2], .4, -5.1), it_('strum', -28.9, -11, [-5.8, 5.7, -2.7, 2.2], .5, -5.1),
+      it_('turntable', 0, 12.5, [-8.3, 8.3, -8.3, 8.3], 8.1, -.9), it_('drums', 11, 19, [-9.2, 9.4, -2.7, 3], 6.2, -4.8)] },
+    'mop.mid': { wall: [-10.9, 10.9, -4, 3.3], top: 15.7, hung: [], star: 'riff', items: [
+      it_('pogo', 29.9, -11, [-5.5, 5.5, -2.4, 2.1], -.2, -5.1), it_('riff', -14, -11, [-6.6, 6.7, -3.1, 3.2], .4, -5.1),
+      it_('drums', 11, 19, [-9.2, 9.4, -2.7, 3], 6.2, -4.8)] },
+    'alabama.mid': { wall: [-10.9, 10.9, -4, 3.3], top: 15.7, hung: [[-3.5, 3.5, -15.2, -10.5]], star: 'dulcimer', items: [
+      it_('dulcimer', -27.5, 17, [-5.8, 5.8, -3.9, 4.9], .5, -5.1), it_('pogo', 29.9, -11, [-5.5, 5.5, -2.4, 2.1], -.2, -5.1),
+      it_('riff', -14, -11, [-6.6, 6.7, -3.1, 3.2], .4, -5.1), it_('drums', 11, 19, [-9.2, 6.4, -2.7, 2.8], 3.3, -4.8)] },
+    'pianoman.mid': { wall: [-10.9, 10.9, -4, 3.3], top: 15.7, hung: [], star: 'dulcimer', items: [
+      it_('dulcimer', -27.5, 17, [-5.6, 5.6, -3.3, 4.9], .5, -5.1)] },
+  };
+  const solve = (r, extra = {}) => layoutStations(r.items, r.wall, ROOM, { ...ENV, wallTop: r.top, hung: r.hung, star: r.star ?? null, ...extra });
+  const BAND_KEYS = ['riff', 'strum', 'horns', 'pogo'];
+
+  for (const [name, r] of Object.entries(R)) it(`${name}: clean, deterministic, the band on the floor in its seats${name === 'finale' ? ' — but the floor is FULL' : ''}`, () => {
+    const solved = solve(r);
+    const boxes = r.items.map(it => world(solved, it));
+    boxes.forEach((b, i) => {
+      expect(clear(b, r.wall), `${r.items[i].key} × wall`).toBe(true);
+      for (let j = i + 1; j < boxes.length; j++) expect(clear(b, boxes[j]), `${r.items[i].key} × ${r.items[j].key}`).toBe(true);
+      expect(b[0] >= ROOM.x0 - 1e-9 && b[1] <= ROOM.x1 + 1e-9 && b[2] >= ROOM.z0 - 1e-9 && b[3] <= ROOM.z1 + 1e-9, `${r.items[i].key} in the room`).toBe(true);
+    });
+    const up = r.items.filter(it => solved[it.key].y !== undefined).map(it => it.key);
+    if (name !== 'finale'){
+      expect(up, 'nobody on the gallery while the floor has room').toEqual([]);
+      for (const it of r.items) if (BAND_KEYS.includes(it.key) && it.key !== r.star) expect(seatOf(it.key, solved[it.key]), `${it.key} in a seat`).not.toBeNull();
+    }
+    expect(solve(r)).toEqual(solved);
+  });
+
+  it('a SEAT the audience can\'t see the machine in is not free: The Entertainer\'s horns never stand on the right wing behind the kit', () => {
+    // (the wing is clear — but from the wide's eye the kit's arch covers the brass; the next free seat,
+    //  front and centre in front of the belt, is under the strike band's sightline: the horns stand there)
+    const solved = solve(R.entertainer);
+    expect(seatOf('horns', solved.horns)).toBe('centre');
+    expect(seatOf('strum', solved.strum)).toBe('left');
+  });
+
+  it('Forge: no lone towers — the riff front and centre, the horns at the front-left corner (the left seat would hide the bass, the right wing is behind the kit)', () => {
+    const solved = solve(R.forge);
+    expect(seatOf('riff', solved.riff)).toBe('centre');
+    expect(seatOf('horns', solved.horns)).toBe('cornerL');
+  });
+
+  it('a floor that is genuinely FULL opens the gallery: the fewest climb, in one row behind the belt (Starship Groove)', () => {
+    const r = R.finale, solved = solve(r);
+    const up = r.items.filter(it => solved[it.key].y !== undefined);
+    expect(up.map(it => it.key).sort()).toEqual(['horns', 'riff']);               // (the strum still finds a seat)
+    expect(seatOf('strum', solved.strum)).toBe('left');
+    for (const k of APPROVED) if (solved[k]) expect(solved[k].y, `${k} on the floor`).toBeUndefined();
+    const [a, b] = up.map(it => world(solved, it));
+    for (const it of up){
+      const w = world(solved, it);
+      expect(solved[it.key].y).toBeCloseTo(r.top - GALLERY_DROP, 9);
+      expect((w[2] + w[3]) / 2, `${it.key} behind the belt`).toBeLessThan(r.wall[2]);
+      for (const h of r.hung) expect(w[1] <= h[0] || h[1] <= w[0] || w[2] >= h[3], `${it.key} in the organ's footprint / shadow`).toBe(true);
+    }
+    expect(a[1] <= b[0] || b[1] <= a[0], 'one row: neither behind the other').toBe(true);
+  });
+  it('…and a machine that climbs takes the spot BESIDE one already up (one loft — rooms/footing.js), not its own far slot', () => {
+    // (a floor walled off by the user's pinned pads: only the gallery behind the belt is left — the
+    //  pogo's own slot is at the far right end; beside the riff it shares the riff's loft)
+    const pad = (key, x0, x1, z0, z1) => ({ key, x: (x0 + x1) / 2, z: (z0 + z1) / 2, box: [-(x1 - x0) / 2, (x1 - x0) / 2, -(z1 - z0) / 2, (z1 - z0) / 2], pin: true });
+    const items = [pad('padL', ROOM.x0, -18, ROOM.z0, ROOM.z1), pad('padR', 18, ROOM.x1, ROOM.z0, ROOM.z1), pad('padF', -16.5, 16.5, 3.5, ROOM.z1),
+      { key: 'riff', x: STATIONS.riff.x, z: STATIONS.riff.z, box: [-6.6, 6.7, -3.2, 3.2] }, { key: 'pogo', x: STATIONS.pogo.x, z: STATIONS.pogo.z, box: [-5.5, 5.5, -2.4, 2.4] }];
+    const wall = walls['1 bay'], solved = layoutStations(items, wall, ROOM, { wallTop: 15.7 });
+    expect(solved.riff.y).toBeCloseTo(15.7 - GALLERY_DROP, 9); expect(solved.pogo.y).toBeCloseTo(15.7 - GALLERY_DROP, 9);
+    const a = world(solved, items[3]), b = world(solved, items[4]);
+    expect(a[1] <= b[0] || b[1] <= a[0], 'one row').toBe(true);
+    expect(Math.max(a[0] - b[1], b[0] - a[1], a[2] - b[3], b[2] - a[3]), 'one loft').toBeLessThanOrEqual(FOOT.LOFT_GAP);
+    expect(layoutStations(items, wall, ROOM, { wallTop: 15.7 })).toEqual(solved);
+  });
+
+  it('a solo never climbs: each band machine alone stands on the floor in its FIRST seat (kit or no kit)', () => {
+    for (const k of BAND_KEYS) for (const kit of [false, true]){
+      const items = [{ key: k, x: STATIONS[k].x, z: STATIONS[k].z, box: boxOf(STATIONS[k]) }, ...(kit ? [{ key: 'drums', ...KIT }] : [])];
+      const solved = layoutStations(items, walls['1 bay'], ROOM);
+      expect(solved[k].y, `${k} solo`).toBeUndefined();
+      expect(seatOf(k, solved[k]), `${k} solo${kit ? ' + kit' : ''}`).toBe(STATIONS[k].floor[0]);
+    }
+  });
+
+  /* the star's FOREGROUND: anyone whose back edge is in front of the star's front edge and whose
+     footprint, seen from the audience, overlaps the star's (past STAR_GRAZE) stays under the
+     audience's sightline to the star's base (its deck) */
+  const foreground = (r, solved, star) => {
+    const S = world(solved, r.items.find(it => it.key === star)), base = r.items.find(it => it.key === star).deck;
+    const cx = (r.wall[0] + r.wall[1]) / 2, ax = cx + AUDIENCE.dx, az = AUDIENCE.z;
+    return r.items.filter(it => it.key !== star).filter(it => {
+      const b = world(solved, it);
+      if (b[2] <= S[3]) return false;
+      const k = (az - S[3]) / (az - b[2]), p0 = ax + (b[0] - ax) * k, p1 = ax + (b[1] - ax) * k;
+      if (p1 <= S[0] + STAR_GRAZE || p0 >= S[1] - STAR_GRAZE) return false;
+      return it.top > base + (ENV.eyeY - base) * (b[2] - S[3]) / (az - S[3]) + 1e-9;
+    }).map(it => it.key);
+  };
+  for (const name of ['mop.mid', 'alabama.mid', 'pianoman.mid']) it(`THE STAR: ${name}'s signature (${R[name].star}) stands front and centre, nobody in its foreground`, () => {
+    const r = R[name], solved = solve(r);
+    expect(solved[r.star]).toEqual({ x: (r.wall[0] + r.wall[1]) / 2 + STAR.x, z: STAR.z });
+    expect(foreground(r, solved, r.star)).toEqual([]);
+    expect(solve({ ...r, star: null })[r.star], 'without a star it keeps its own slot / seat').not.toEqual(solved[r.star]);
+  });
+  it('THE STAR: the kit steps aside out of its foreground (Master of Puppets: the riff in front of the belt, the kit to its right)', () => {
+    const r = R['mop.mid'], solved = solve(r), plain = solve({ ...r, star: null });
+    expect(solved.drums.x).toBeGreaterThan(plain.drums.x);
+    expect(seatOf('pogo', solved.pogo)).toBe('wingL');
+  });
+  it('THE STAR: a tall one steps forward until it is under the strike band\'s sightline; it never climbs', () => {
+    const bells = it_('bells', 26, -10, [-6.4, 6.4, -5.9, 5.9], 10.8, -5.1), kit = R.forge.items.find(it => it.key === 'drums');
+    const r = { wall: [-10.9, 10.9, -4.1, 1.7], top: 15.9, hung: [], star: 'bells', items: [bells, kit] }, solved = solve(r);
+    const b = world(solved, bells), zp = (r.wall[2] + r.wall[3]) / 2;
+    expect(solved.bells.y).toBeUndefined();
+    expect(solved.bells.x).toBe(STAR.x);
+    expect(solved.bells.z).toBeGreaterThan(STAR.z);
+    expect(bells.top).toBeLessThanOrEqual(ENV.bandY + (ENV.eyeY - ENV.bandY) * (Math.max(b[2], zp) - zp) / (AUDIENCE.z - zp) + 1e-9);
+    expect(foreground(r, solved, 'bells')).toEqual([]);
+  });
+  it('PINS win: a pinned star stays where the user put it; a pinned band machine behind the belt stands on the gallery there (as before)', () => {
+    const r = R['mop.mid'], riff = r.items.find(it => it.key === 'riff');
+    const items = r.items.map(it => it.key === 'riff' ? { ...it, x: 20, z: 12, pin: true } : it);
+    const solved = layoutStations(items, r.wall, ROOM, { ...ENV, wallTop: r.top, star: 'riff' });
+    expect(solved.riff).toEqual({ x: 20, z: 12 });
+    const back = layoutStations(r.items.map(it => it.key === 'riff' ? { ...it, pin: true } : it), r.wall, ROOM, { ...ENV, wallTop: r.top, star: 'riff' });
+    expect(back.riff).toEqual({ x: riff.x, z: riff.z, y: r.top - GALLERY_DROP });
   });
 });

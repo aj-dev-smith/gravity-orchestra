@@ -218,6 +218,12 @@ describe('the mic stands (studio-props.js): pure, and clear of everything', () =
       expect(s.z, s.key).toBeGreaterThan(p.z - 1e-9);                                    // (the house is at +z)
     }
   });
+  it('the room\'s own floor props are obstacles too', () => {
+    const tube = M[0] && [M[0].x - .5, M[0].x + .5, FL, FL + 14, M[0].z - .5, M[0].z + .5];
+    const N = micStands(CROWD, PLAN, room, [tube]);
+    for (const s of N) expect(boxGap(s.box, tube)).toBeGreaterThanOrEqual(PROP_CLEAR - 1e-9);
+    expect(N.find(s => s.key === M[0].key)?.x).not.toBe(M[0].x);
+  });
   it('deterministic: the same anchors + plan, the same stands; none without a plan', () => {
     expect(micStands(CROWD, PLAN, room)).toEqual(M);
     expect(micStands(CROWD, null, room)).toEqual([]);

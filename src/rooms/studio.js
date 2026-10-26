@@ -270,6 +270,7 @@ export default {
       const c = new THREE.Color(tubeCol[i]);
       tubeGlowM.push(trs(x, F + TB + TH / 2, z, 0, 0, 0, 5, TH + 4, 5)); tubeGlowC.push(c);
     });
+    const PROP_OBS = tubeSpots.map(([x, z]) => [x - 1, x + 1, F, F + TB + TH, z - 1, z + 1]);   // (the mic stands keep clear)
     const tubes = new THREE.InstancedMesh(new THREE.CylinderGeometry(.24, .24, 1, 10), new THREE.MeshBasicMaterial({ color: 0xffffff }), tubeM.length);
     tubeM.forEach((m, i) => { tubes.setMatrixAt(i, m); tubes.setColorAt(i, new THREE.Color(tubeCol[i]).multiplyScalar(3)); });
     group.add(tubes);
@@ -340,7 +341,7 @@ export default {
       place(anchors, plan){
         meters = (plan?.pulses || []).map(s => makeMeter(s.cue, { P: s.P, start: s.start }));
         VUS.level.fill(0); VUS.peak.fill(0); VUS.tally.fill(0);
-        const mics = micStands(anchors, plan, { x0: -HW + 1, x1: HW - 1, z0: BACK + 13, z1: FRONT - 2 }).slice(0, MAX_STANDS);
+        const mics = micStands(anchors, plan, { x0: -HW + 1, x1: HW - 1, z0: BACK + 13, z1: FRONT - 2 }, PROP_OBS).slice(0, MAX_STANDS);
         mics.forEach((m, i) => stands.setMatrixAt(i, trs(m.x, F, m.z, 0, -m.heading, 0)));
         stands.count = mics.length; stands.instanceMatrix.needsUpdate = true; stands.computeBoundingSphere();
       },

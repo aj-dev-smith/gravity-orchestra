@@ -8,7 +8,7 @@ import { AUDIENCE } from './studio-props.js';
 
      flush  a RUG RISER — a low black kickboard riser under a worn Persian rug (its border, corners
             and medallion keep their size whatever the rug's; ivory fringe over the ends the audience
-            sees at left and right). The belt stands in a plain black riser with an aluminium cap.
+            sees at left and right). The belt stands in a low carpeted riser with an aluminium nosing.
      low    a CARPETED RISER — charcoal carpet, an aluminium nosing, a black kickboard; solid black
             stage steps with carpet treads.
      mid    ROAD-CASE PIERS — stacks of black flight cases (aluminium valance, ball corners, lid
@@ -515,10 +515,11 @@ export function studioFooting(){
     flush(p, K){
       atlas();
       const W = writer(K).frame(p), F = K.floor, side = frontSide(p);
-      if (p.fixed){                                              // the belt: a plain black riser under its posts, an aluminium cap
+      if (p.fixed){                                              // the belt: a low black riser under its posts — carpet, an aluminium nosing
         const T = F + FOOT.KERB;
-        K.box('base', -p.hw + .03, p.hw - .03, F - .04, T - .025, -p.hd + .03, p.hd - .03, NOBOT);
-        W.box(-p.hw + .01, p.hw - .01, T - .025, T, -p.hd + .01, p.hd - .01, ALL & ~NY, () => S('alu'));
+        K.box('base', -p.hw + .03, p.hw - .03, F - .04, T - .03, -p.hd + .03, p.hd - .03, NOBOT);
+        carpet(W, -p.hw + .07, p.hw - .07, -p.hd + .07, p.hd - .07, T - .004);
+        nosing(W, p.hw - .01, p.hd - .01, T - .004, .07, .05);
         panel(K, W, p, side, .03, F + .012, T - .03, p.key, p.pulse, null, null, { name: false });
         return claim(K);
       }

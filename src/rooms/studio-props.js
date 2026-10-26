@@ -8,7 +8,8 @@
    footingBoxes: pads, lofts, stairs, ladders). The practicals stand in the aisles, where nothing else
    ever does (|x| > STAGE.HW + 4 · z < STAGE.BACK); the MIC STANDS come to the machines:
 
-     micStands(anchors, plan, room) → [{ key, x, z, heading, box }]
+     micStands(anchors, plan, room, extra?) → [{ key, x, z, heading, box }]   (extra: the room's own
+       floor props — AABBs a stand keeps clear of too)
        a boom stand per machine standing on the floor (a flush or low support — not the belt), on the
        side the house sees, its boom reaching toward the machine and its mic stopping PROP_CLEAR short
        of it; the corners first (a stand never parks in front of the middle of what it mics); none when
@@ -52,9 +53,9 @@ export function micBox(x, z, h, F){
 }
 
 /** the boom stands: see the header. room: { x0, x1, z0, z1 } — the floor they may stand on */
-export function micStands(anchors = [], plan = null, room = { x0: -49, x1: 49, z0: -33, z1: 64 }){
+export function micStands(anchors = [], plan = null, room = { x0: -49, x1: 49, z0: -33, z1: 64 }, extra = []){
   if (!plan) return [];
-  const F = plan.floor, obs = obstacles(anchors, plan), out = [], taken = [];
+  const F = plan.floor, obs = obstacles(anchors, plan).concat(extra), out = [], taken = [];
   for (const p of plan.pads){
     if (p.fixed || p.loft || p.open || !(p.band === 'flush' || p.band === 'low')) continue;
     // the side the house sees (its outward normal toward AUDIENCE)

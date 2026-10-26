@@ -21,6 +21,7 @@ import { makeMarbleDrums, KIT_SOLO, KIT_ROOM, KIT_STAND, kitAnchor } from './mar
 import { makeCameraRig } from './camera.js';
 import { makeRoomHost, ROOMS } from './rooms/index.js';
 import { groundOf, clampLift, FOOT } from './rooms/footing.js';
+import { footingDraws } from './rooms/footing3d.js';
 import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
 import { stationFor, layoutStations, soloStar, HANG_CLEAR, hangPlace } from './instruments/stations.js';
 import { eventTimes, wrapP } from './instruments/clock.js';
@@ -2036,7 +2037,8 @@ if (new URLSearchParams(location.search).has('debug')){
     anchors: () => lastAnchors,
     footing: () => rooms.footing,                         // the plan (pads, lofts, accesses: rooms/footing.js)
     footBoxes: () => rooms.footBoxes,                     // its envelopes, as the shot solve sees them
-    footStats: () => { const g = rooms.footGroup; return { draws: g.children.length, tris: g.children.reduce((s, m) => s + (m.geometry?.index ? m.geometry.index.count / 3 : 0), 0), ms: g.userData.ms, room: rooms.key }; },
+    footStats: () => { const g = rooms.footGroup; return { ...footingDraws(g), ms: g.userData.ms, room: rooms.key }; },   // (what the GPU draws: visible meshes, never a style's empty Group)
+    room: () => rooms.room,                               // the live room object (its group, place / update, userData hooks) — null for 'off'
     get stage(){ return { ...ROOM, lowMs: +lowMs.toFixed(1) }; },
     hung: () => instLive.filter(r => r.slot.hang).map(r => ({ key: r.I.key, box: solidBox(r.station, drawn) })),   // (solid: the merged cable/glow batches aren't bulk)
     hang: () => instLive.filter(r => r.slot.hang).map(r => ({ key: r.I.key, wallTop: +stageWall.max.y.toFixed(2), low: +hangLow(r.station).toFixed(2), y: +r.station.position.y.toFixed(2) })),

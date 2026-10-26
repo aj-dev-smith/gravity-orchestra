@@ -10,22 +10,26 @@ import * as THREE from 'three';
    the same room. Without a DOM (unit tests) the textures are null and only the LAYOUT exists.
    ============================================================ */
 
-const S = 2048;                                          // the atlas (px, square)
+const SW = 2048, SH = 1024;                              // the atlas (px): 2048 × 1024 — every region at its old
+                                                         //  resolution, repacked (the square's top quarter stood empty:
+                                                         //  half the GPU memory, half the upload)
 /* regions: [x, y, w, h] in canvas px (y down) */
 export const LAYOUT = {
-  // (rows 0–511: free — the rug's field + medallion lie under its riser now, never seen)
-  borderA: [0, 512, 512, 128], borderB: [512, 512, 512, 128],
-  cornerA: [1024, 512, 128, 128], cornerB: [1152, 512, 128, 128],
-  fringe: [1280, 512, 512, 64], alu: [1280, 576, 512, 64],
-  ball: [1792, 512, 64, 64], bindA: [1856, 512, 64, 64], bindB: [1920, 512, 64, 64], black: [1984, 512, 64, 64],
-  latch: [1792, 576, 128, 64], handle: [1920, 576, 128, 64],
-  carpet: [0, 640, 256, 256], grating: [256, 640, 256, 256], laminate: [512, 640, 256, 256],
-  strap: [768, 640, 64, 256], cable: [832, 640, 64, 64], chrome: [832, 704, 64, 64], red: [832, 768, 64, 64],
-  wood: [896, 640, 128, 256],
-  stencils: [1024, 640, 1024, 512],                      // 2 × 8 cells of 512 × 64: case stencils
-  names: [0, 1152, 2048, 512],                           // 4 × 8 cells of 512 × 64: every machine's name
-  skirt: [0, 1664, 512, 256],                            // pleated black stage skirting (a riser's sides)
+  // (the rug's field + medallion lie under its riser — never seen, never painted)
+  borderA: [0, 0, 512, 128], borderB: [512, 0, 512, 128],
+  cornerA: [1024, 0, 128, 128], cornerB: [1152, 0, 128, 128],
+  fringe: [1280, 0, 512, 64], alu: [1280, 64, 512, 64],
+  ball: [1792, 0, 64, 64], bindA: [1856, 0, 64, 64], bindB: [1920, 0, 64, 64], black: [1984, 0, 64, 64],
+  latch: [1792, 64, 128, 64], handle: [1920, 64, 128, 64],
+  carpet: [0, 128, 256, 256], grating: [256, 128, 256, 256], laminate: [512, 128, 256, 256],
+  strap: [768, 128, 64, 256], cable: [832, 128, 64, 64], chrome: [832, 192, 64, 64], red: [832, 256, 64, 64],
+  wood: [896, 128, 128, 256],
+  stencils: [1024, 128, 1024, 512],                      // 2 × 8 cells of 512 × 64: case stencils
+  names: [0, 384, 1024, 576],                            // 2 × 9 cells of 512 × 64: every machine's name
+  skirt: [1024, 640, 512, 256],                          // pleated black stage skirting (a riser's sides)
 };
+export const ATLAS_SIZE = [SW, SH];
+const NAME_COLS = 2, STENCIL_COLS = 2;
 export const NAMES = {                                   // (pad key → its stencil; anything else: the house name)
   belt: 'GRAVITY ORCHESTRA', drums: 'DRUM MACHINE', marimba: 'MARIMBA', bells: 'TUBULAR BELLS', bass: 'STRING BASS',
   musicbox: 'MUSIC BOX', bowls: 'SINGING BOWLS', turntable: 'TURNTABLE', ricochet: 'RICOCHET', volley: 'VOLLEY',
@@ -37,7 +41,7 @@ export const STENCILS = ['GRAVITY ORCH.', 'STUDIO B', 'FRAGILE', 'BACKLINE', 'TH
 
 /* a region → its uv rect { s0, s1, t0 (bottom), t1 (top) }, inset by `pad` px against mip bleed */
 export function uvRect([x, y, w, h], pad = 1.5){
-  return { s0: (x + pad) / S, s1: (x + w - pad) / S, t0: 1 - (y + h - pad) / S, t1: 1 - (y + pad) / S };
+  return { s0: (x + pad) / SW, s1: (x + w - pad) / SW, t0: 1 - (y + h - pad) / SH, t1: 1 - (y + pad) / SH };
 }
 /* the uv rects of the layout + the name / stencil cells, each narrowed to its text's own width
    (aspect = text width / cell height, measured when painted; 6 without a DOM) */
@@ -47,8 +51,8 @@ function atlasUV(aspects = {}){
   const cell = (r, i, cols) => [r[0] + (i % cols) * 512, r[1] + Math.floor(i / cols) * 64, 512, 64];
   const text = (c, aspect) => { const w = Math.min(c[2], aspect * c[3]); return { ...uvRect([c[0] + (c[2] - w) / 2, c[1], w, c[3]], 1), aspect: w / c[3], px: c }; };
   R.name = {};
-  Object.keys(NAMES).forEach((k, i) => { R.name[k] = text(cell(LAYOUT.names, i, 4), aspects['n:' + k] || 6); });
-  R.stencil = STENCILS.map((s, i) => text(cell(LAYOUT.stencils, i, 2), aspects['s:' + i] || 6));
+  Object.keys(NAMES).forEach((k, i) => { R.name[k] = text(cell(LAYOUT.names, i, NAME_COLS), aspects['n:' + k] || 6); });
+  R.stencil = STENCILS.map((s, i) => text(cell(LAYOUT.stencils, i, STENCIL_COLS), aspects['s:' + i] || 6));
   return R;
 }
 export { atlasUV };
@@ -276,7 +280,7 @@ export const PLATE = '#17181d';                           // the panel plate / t
 /* ORM (G = roughness, B = metalness) per region — a half-resolution canvas, same layout */
 function paintORM(o){
   const k = .5, put = (reg, rough, metal) => { o.fillStyle = `rgb(255,${Math.round(rough * 255)},${Math.round(metal * 255)})`; o.fillRect(reg[0] * k, reg[1] * k, reg[2] * k, reg[3] * k); };
-  o.fillStyle = 'rgb(255,242,0)'; o.fillRect(0, 0, S * k, S * k);                     // wool / paint: matte
+  o.fillStyle = 'rgb(255,242,0)'; o.fillRect(0, 0, SW * k, SH * k);                     // wool / paint: matte
   for (const r of ['laminate']) put(LAYOUT[r], .62, .04);
   for (const r of ['alu', 'ball', 'latch', 'handle', 'chrome']) put(LAYOUT[r], .28, .85);
   put(LAYOUT.grating, .5, .55); put(LAYOUT.black, .32, .1); put(LAYOUT.cable, .55, 0); put(LAYOUT.red, .4, 0); put(LAYOUT.wood, .6, 0);
@@ -290,10 +294,10 @@ export function releaseStudioAtlas(){ if (painted){ painted.map?.dispose(); pain
 export function studioAtlas(){
   if (painted) return painted;
   if (typeof document === 'undefined'){ painted = { map: null, orm: null, uv: atlasUV() }; return painted; }
-  const c = document.createElement('canvas'); c.width = c.height = S;
+  const c = document.createElement('canvas'); c.width = SW; c.height = SH;
   const x = c.getContext('2d');
   const R = rng(4242), aspects = {};
-  x.clearRect(0, 0, S, S);
+  x.clearRect(0, 0, SW, SH);
   // (the field + medallion lie under the riser: only the border, its corners and the fringe are painted)
   paintBorder(x, LAYOUT.borderA, RUGS.A, 21); paintBorder(x, LAYOUT.borderB, RUGS.B, 22);
   paintCorner(x, LAYOUT.cornerA, RUGS.A, 31); paintCorner(x, LAYOUT.cornerB, RUGS.B, 32);
@@ -307,12 +311,16 @@ export function studioAtlas(){
   paintSkirt(x, LAYOUT.skirt);
   const U = atlasUV();
   const plate = (a, b, w, h) => { x.fillStyle = PLATE; x.fillRect(a, b, w, h); };
-  const lam = LAYOUT.laminate, onCase = (a, b, w, h) => { for (let ox = 0; ox < w; ox += lam[2]) x.drawImage(c, lam[0] + 8, lam[1] + 8, Math.min(lam[2], w - ox) - 16, h, a + ox, b, Math.min(lam[2], w - ox), h); };
+  // (the case laminate under a stencil: its tile copied out ONCE — drawing the atlas onto itself made the
+  //  browser snapshot the whole canvas for every one of the 16 stencils)
+  const lam = LAYOUT.laminate, lc = document.createElement('canvas'); lc.width = lam[2]; lc.height = lam[3];
+  lc.getContext('2d').drawImage(c, lam[0], lam[1], lam[2], lam[3], 0, 0, lam[2], lam[3]);
+  const onCase = (a, b, w, h) => { for (let ox = 0; ox < w; ox += lam[2]) x.drawImage(lc, 8, 8, Math.min(lam[2], w - ox) - 16, h, a + ox, b, Math.min(lam[2], w - ox), h); };
   Object.entries(NAMES).forEach(([k, s]) => { aspects['n:' + k] = stencil(x, U.name[k].px, s, R, plate, PLATE); });
   STENCILS.forEach((s, i) => { aspects['s:' + i] = stencil(x, U.stencil[i].px, s, R, onCase, '#33333a', 40); });
   const map = new THREE.CanvasTexture(c);
   map.colorSpace = THREE.SRGBColorSpace; map.anisotropy = 8; map.flipY = true;
-  const oc = document.createElement('canvas'); oc.width = oc.height = S / 2;
+  const oc = document.createElement('canvas'); oc.width = SW / 2; oc.height = SH / 2;
   paintORM(oc.getContext('2d'));
   const orm = new THREE.CanvasTexture(oc);
   painted = { map, orm, uv: atlasUV(aspects), canvas: c };

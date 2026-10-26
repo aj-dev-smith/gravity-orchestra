@@ -136,7 +136,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   const bar = document.createElement('div'); bar.className = 'se-bar'; bar.hidden = true;
   bar.innerHTML = `<b>STAGE EDIT</b><span class="se-hint"></span>
     <span class="se-btns">
-    <button data-a="undo" title="undo the last change (⌘Z / Ctrl+Z)">↶<i> UNDO</i></button>
+    <button data-a="undo" title="undo the last change (⌘Z / Ctrl+Z)">↶<i> UNDO</i></button><button data-a="redo" title="redo (⌘⇧Z / Ctrl+Y)" hidden>↷<i> REDO</i></button>
     <button data-a="snap" class="on" title="snap to the ½-unit grid / 15° (hold Shift to place freely)">⌗<i> SNAP</i></button>
     <span class="se-view" role="group" aria-label="view"><button data-a="plan" class="on" title="straight down over the whole stage">PLAN</button><button data-a="3d" title="an elevated 3/4 view — height reads">3D</button></span>
     <button data-a="reset" title="forget this song's layout — back to the solved stage">⟲<i> RESET LAYOUT</i></button>
@@ -147,6 +147,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     const b = e.target.closest('button'), a = b?.dataset.a;
     if (!a) return;
     if (a === 'undo') host.undo();                     // (the selection stays: a height step comes back live, under it)
+    else if (a === 'redo') host.redo?.();
     else if (a === 'snap'){ snapOn = !snapOn; b.classList.toggle('on', snapOn); }
     else if (a === 'plan') setView('plan');
     else if (a === '3d') setView('3d');
@@ -1197,7 +1198,10 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     };
     steps(x, y, 2);
   }
-  function syncUndo(n){ const b = bar.querySelector('[data-a=undo]'); b.disabled = !n; b.title = n ? `undo the last change (⌘Z / Ctrl+Z) · ${n} step${n === 1 ? '' : 's'}` : 'nothing to undo'; }
+  function syncUndo(n, r = 0){
+    const b = bar.querySelector('[data-a=undo]'); b.disabled = !n; b.title = n ? `undo the last change (⌘Z / Ctrl+Z) · ${n} step${n === 1 ? '' : 's'}` : 'nothing to undo';
+    const f = bar.querySelector('[data-a=redo]'); f.hidden = !r; f.title = `redo (⌘⇧Z / Ctrl+Y) · ${r} step${r === 1 ? '' : 's'}`;   // (shown only while there is one to redo)
+  }
 
   return { toggle, refresh, update, overview, measureAll, syncUndo, get on(){ return on; }, get selected(){ return sel?.key || null; },
            /* height: a pending burst of taps settles now (before an undo, a song change) */

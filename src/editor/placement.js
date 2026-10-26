@@ -171,15 +171,24 @@ export function liftOnlyUndo(prev, cur, eps = 2e-3){
   return out;
 }
 
-/* ---- undo: a small stack of layout snapshots (per song id) ---- */
+/* ---- undo / redo: small stacks of layout snapshots (per song id) ---- */
 export function makeHistory(limit = 40){
-  let id = null, stack = [];
+  let id = null, stack = [], fwd = [];
+  const own = songId => { if (songId !== id){ id = songId; stack = []; fwd = []; } };
+  const add = (arr, layout) => { arr.push(sanitizeLayout(layout)); if (arr.length > limit) arr.shift(); };
   return {
-    /** remember `layout` (the state BEFORE an edit) for song `songId` */
-    push(songId, layout){ if (songId !== id){ id = songId; stack = []; } stack.push(sanitizeLayout(layout)); if (stack.length > limit) stack.shift(); },
+    /** remember `layout` (the state BEFORE an edit) for song `songId` — a NEW edit: what was undone can't be redone */
+    push(songId, layout){ own(songId); add(stack, layout); fwd = []; },
     /** the last remembered layout for `songId`, or null */
     pop(songId){ return songId === id && stack.length ? stack.pop() : null; },
     size(songId){ return songId === id ? stack.length : 0; },
+    /** an UNDO remembers the layout it left (for redo) */
+    stash(songId, layout){ own(songId); add(fwd, layout); },
+    /** a REDO: the last layout undone, or null — and keep(…) remembers the one it leaves, for undo (the redo
+        branch stays) */
+    unstash(songId){ return songId === id && fwd.length ? fwd.pop() : null; },
+    keep(songId, layout){ own(songId); add(stack, layout); },
+    redoSize(songId){ return songId === id ? fwd.length : 0; },
   };
 }
 

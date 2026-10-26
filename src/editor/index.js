@@ -244,7 +244,7 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
       syncButtons();
     },
     resetLayout(){ stage.cancel(); history.push(curId, layout()); saveLayout(store, curId, {}); ignoreSongStage.add(curId); host.rebuild(true); },
-    undo,
+    undo, redo,
   } });
   /* undo the last stage move (or reset, or height gesture): back to the layout before it — a rebuild
      holding songTime (each station is re-placed from its slot; an empty layout = the solved stage
@@ -253,16 +253,29 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     stage.finish();                                  // (a gesture still running / settling ends first: it is the step undone)
     const prev = history.pop(curId);
     if (!prev) return false;
-    const cur = layout(), lifts = liftOnlyUndo(prev, cur);
-    if (!Object.keys(prev).length) ignoreSongStage.add(curId); else ignoreSongStage.delete(curId);
-    saveLayout(store, curId, prev);
-    // a HEIGHT step comes back live (the machines move, the room re-anchors — no rebuild, the music runs on);
-    // anything else, or a height only a fresh solve can give back, rebuilds holding songTime
-    // (back to the empty layout: the SOLVED stage — an AUTO there is the build's own solve, not a pinned one)
-    const fresh = !Object.keys(prev).length;
+    history.stash(curId, layout());                  // (redo: the layout this undo leaves)
+    goToLayout(prev);
+    return true;
+  }
+  /* REDO (⌘⇧Z / Ctrl+Y, ↷): the last undone step again — until a new edit starts another branch */
+  function redo(){
+    stage.finish();                                  // (a gesture still open ends first: a new edit — nothing to redo)
+    const next = history.unstash(curId);
+    if (!next) return false;
+    history.keep(curId, layout());
+    goToLayout(next);
+    return true;
+  }
+  /* the stage to layout `to` (an undo's or a redo's): a HEIGHT-only step comes back live (the machines move, the
+     room re-anchors — no rebuild, the music runs on); anything else, or a height only a fresh solve can give,
+     rebuilds holding songTime. (To the empty layout: the SOLVED stage — an AUTO there is the build's own solve,
+     not a pinned one.) */
+  function goToLayout(to){
+    const cur = layout(), lifts = liftOnlyUndo(to, cur), fresh = !Object.keys(to).length;
+    if (fresh) ignoreSongStage.add(curId); else ignoreSongStage.delete(curId);
+    saveLayout(store, curId, to);
     if (lifts && lifts.every(l => host.liftLive?.(l.key, l.lift, { fresh }))){ if (lifts.length) host.liftSettle(); stage.refresh(); syncButtons(); }
     else host.rebuild(true);
-    return true;
   }
 
   /* ---- the HUD pills: MAP · EDIT (next to SHARE LINK) ---- */
@@ -285,14 +298,16 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     mapBtn.title = cm ? 'instrument map — re-mapped (AUTO in the panel puts it back)' : 'instrument map — who plays what';
     editBtn.title = cs ? 'move, turn and raise the machines (E) — this song’s stage is hand-placed' : 'move, turn and raise the machines (E)';
     if (share) share.hidden = !(curKey === 'imported' || curKey === 'shared' || cm || cs);
-    stage.syncUndo(history.size(curId));
+    stage.syncUndo(history.size(curId), history.redoSize(curId));
   }
   addEventListener('keydown', e => {
     if (e.key === 'Escape' && panel.open && !stage.on) openPanel(false);
     // ⌘Z / Ctrl+Z: undo the last stage move (while stage edit is open; never inside a text field)
-    if (stage.on && (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !/^(input|textarea)$/i.test(e.target?.tagName || '')){
-      e.preventDefault(); e.stopPropagation(); undo();
-    }
+    // ⌘⇧Z / Ctrl+Shift+Z / Ctrl+Y: redo it
+    if (!stage.on || !(e.metaKey || e.ctrlKey) || /^(input|textarea)$/i.test(e.target?.tagName || '')) return;
+    const k = e.key.toLowerCase();
+    if (k === 'z' && !e.shiftKey){ e.preventDefault(); e.stopPropagation(); undo(); }
+    else if ((k === 'z' && e.shiftKey) || (k === 'y' && e.ctrlKey && !e.metaKey)){ e.preventDefault(); e.stopPropagation(); redo(); }
   }, { capture: true });
   injectStyles();
   /* the import's panel opens on its own — but never over the play veil: the first tap on a ?midi= boot
@@ -335,7 +350,7 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
       const S = song(key), L = layout();
       return Object.keys(L).length ? { ...S, stage: encodeLayout(L) } : S;
     },
-    openMap: openPanel, toggleEdit: v => stage.toggle(v), undo,
+    openMap: openPanel, toggleEdit: v => stage.toggle(v), undo, redo,
     get stage(){ return stage; }, get panel(){ return panel; },
     get id(){ return curId; },
   };
@@ -411,6 +426,7 @@ function injectStyles(){
   .se-btns button{background:rgba(7,6,14,.6);border:1px solid rgba(90,97,120,.45);color:var(--dim);font:inherit;font-size:10px;letter-spacing:.14em;
     padding:4px 10px;border-radius:999px;cursor:pointer}
   .se-btns button:hover{color:var(--ink)}
+  .se-btns button[hidden]{display:none}
   .se-btns button.on{color:var(--amber);border-color:rgba(255,183,100,.5)}
   .se-btns button.done{color:var(--amber);border-color:var(--amber)}
   .se-btns button:disabled{opacity:.35;cursor:default}

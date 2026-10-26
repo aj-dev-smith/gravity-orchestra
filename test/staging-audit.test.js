@@ -15,9 +15,9 @@ import { voidIslands } from '../src/rooms/void.js';
    against a dev server). For each: re-run the pure room solve (layoutStations) and the pure
    shot solve (solveShotEye) and assert
      • no two footprints overlap (station ↔ station ↔ drums ↔ the belt bays), all in the room;
-     • in EVERY room (the fixture's `rooms` table: each room's standing geometry — cathedral piers,
-       studio gear, graves / trees / gate piers; the Void's islands grow under each song's machines,
-       so it isn't tabled) every director station shot is CLEAR — ≤ 20 % of its 15 probe rays hit
+     • in EVERY room (the fixture's `rooms` table: each room's standing geometry FOR THAT SONG — cathedral
+       piers + the candlesticks round its layout, studio gear + its mic stands, graves / trees / gate
+       piers; the Void's islands grow under each song's machines, so it isn't tabled) every director station shot is CLEAR — ≤ 20 % of its 15 probe rays hit
        another machine or the room first — its eye inside the room (with sway room) and in clear air;
      • the belt's follow offset, RE-SOLVED here, is clean for marbles anywhere along the wall;
      • what the machines stand on (rooms/footing.js — re-planned here wherever the solve puts them)
@@ -30,6 +30,11 @@ import { voidIslands } from '../src/rooms/void.js';
    browser solve sees it too). */
 const FIXFILE = JSON.parse(fs.readFileSync(new URL('./fixtures/staging-rooms.json', import.meta.url)));
 const FIX = FIXFILE.songs, ROOMSOLIDS = FIXFILE.rooms;
+/* a room's standing geometry for ONE song: the solids every song shares + that song's own (its layout
+   moves the cathedral's candlesticks, the studio's mic stands, the graves — scripts/staging-audit.mjs
+   records them per song). An older fixture's plain list is one set for every song. null: not recorded */
+const solidsIn = (room, song) => { const T = ROOMSOLIDS[room];
+  return Array.isArray(T) ? T : T && Array.isArray(T.by?.[song]) ? T.all.concat(T.by[song]) : null; };
 const ROOM = { x0: -STAGE.HW + 2.5, x1: STAGE.HW - 2.5, z0: STAGE.BACK + 2.5, z1: 31 };
 const EYE_ROOM = { x0: -STAGE.HW + 1.5, x1: STAGE.HW - 1.5, y0: STAGE.FLOOR + 1.5, y1: STAGE.CEIL - 1.5, z0: STAGE.BACK + 1.5, z1: STAGE.FRONT - 1.5 };
 const clear2 = (a, b) => a[1] <= b[0] || b[1] <= a[0] || a[5] <= b[4] || b[5] <= a[4];
@@ -105,6 +110,8 @@ describe('staging audit: every song lays out clean and every station shot sees i
     for (const k of Object.keys(SONGS)) expect(have.has(k), `${k} missing from the fixture — regenerate it`).toBe(true);
     for (const m of ['room-tour.mid', 'canon-in-d.mid']) expect(have.has(m), m).toBe(true);
     expect(Object.keys(ROOMSOLIDS).sort()).toEqual(['arena', 'cathedral', 'graveyard', 'grid', 'starship', 'studio']);
+    for (const room of Object.keys(ROOMSOLIDS)) for (const R of FIX)
+      expect(solidsIn(room, R.song), `${room}: no solids recorded for ${R.song} — regenerate the fixture`).toBeTruthy();
     for (const R of FIX) for (const it of R.items) expect(it.foot, `${R.song} ${it.key}: no footing anchor — regenerate the fixture`).toBeTruthy();
   });
   for (const R of FIX){
@@ -153,8 +160,9 @@ describe('staging audit: every song lays out clean and every station shot sees i
       expect(I.reduce((n, isl) => n + isl.machines, 0)).toBe(FT.anchors.filter(a => a.kind !== 'hung').length);
     });
 
-    if (R.shots.length) for (const [roomKey, solids] of Object.entries(ROOMSOLIDS))
+    if (R.shots.length) for (const roomKey of Object.keys(ROOMSOLIDS))
       it(`${R.song} in the ${roomKey}: every station shot is clear (≤ 20 % blocked), in the room, in clear air`, () => {
+        const solids = solidsIn(roomKey, R.song) || [];
         for (const sh of R.shots){
           const self = boxes[sh.owner];
           const at = sh.owner in solved ? solved[sh.owner] : { x: 0, z: 0 };

@@ -101,6 +101,11 @@ function warren(k, slot, a, b, y0, y1, n, w = GDIM.LACE){
 /* ---- the forms (each in its spec's frame: the kit sets it) ---- */
 function makeForms(k, marginOf){
   const F = F_OF(k);
+  /* does the local direction (du, dv) face the BACK wall (world −z, away from the audience)? A face
+     that does is only ever seen THROUGH its tower or loft, behind the machines: it keeps its ties
+     and verticals but no lace — from a three-quarter view its zig-zag crossed the near face's into
+     a diamond lattice busier than the horns and riff on the gallery above it */
+  const backward = (du, dv) => { const o = k.w(0, 0), q = k.w(du, dv), L = Math.hypot(du, dv) || 1; return (q[1] - o[1]) / L < -.5; };
   /* a box on one side of a rect: along a0..a1, out o0..o1 */
   const sideBox = (r, side) => { const S = onSide(r, side);
     return (slot, a0, a1, o0, o1, y0, y1, faces = ALL) => { const p = S(a0, o0), q = S(a1, o1);
@@ -204,7 +209,7 @@ function makeForms(k, marginOf){
     const n = Math.max(1, Math.round((Hc - .14) / GDIM.PITCH)), dy = (Hc - .14) / n;
     const ol = Math.hypot(o[0], o[1]) || 1, N = [[0, -1], [1, 0], [0, 1], [-1, 0]];     // face f's outward normal (C[f] → C[f+1])
     for (let f = 0; f < 4; f++){
-      if ((N[f][0] * o[0] + N[f][1] * o[1]) / ol < .3) continue;
+      if ((N[f][0] * o[0] + N[f][1] * o[1]) / ol < .3 || backward(N[f][0], N[f][1])) continue;
       const A = C[f], B = C[(f + 1) % 4];
       for (let j = 0; j < n; j++){
         const ya = y0 + .07 + j * dy, [p, q] = (j + f) % 2 ? [A, B] : [B, A];
@@ -235,11 +240,12 @@ function makeForms(k, marginOf){
       beam(a, b, yB);
       const L = Math.hypot(b[0] - a[0], b[1] - a[1]), dx = (b[0] - a[0]) / L, dz = (b[1] - a[1]) / L, s = GDIM.COL / 2;
       const A = [a[0] + dx * s, a[1] + dz * s], B = [b[0] - dx * s, b[1] - dz * s];
+      const back = backward(dz, -dx);                       // (the ring runs counter-clockwise: (dz, −dx) points out)
       let yPrev = F + .4;
       for (const y of [...levels.filter(y => y > F + 2 && y < yH - 1.5), yH - .05]){
         if (y < yH - .2) k.bar('glace', [A[0], y, A[1]], [B[0], y, B[1]], GDIM.LINE, GDIM.LINE);
         const n = Math.max(1, Math.round(L / Math.max(y - yPrev, 3))), at = j => [A[0] + (B[0] - A[0]) * j / n, A[1] + (B[1] - A[1]) * j / n];
-        warren(k, 'glace', A, B, yPrev, y, n);
+        if (!back) warren(k, 'glace', A, B, yPrev, y, n);
         for (let j = 1; j < n; j++){ const p = at(j); k.bar('deck', [p[0], yPrev, p[1]], [p[0], y, p[1]], .08, .08); }
         yPrev = y;
       }

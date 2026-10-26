@@ -722,7 +722,7 @@ export default {
     const ePos = embers.geometry.attributes.position, gPos = fgGeo.attributes.position, PER = ePos.count / JETS;
     const jewelSize = jewels.geometry.attributes.aSize, UPV = V(0, 1, 0), _dir = new THREE.Vector3();
     let rig = null;
-    // the BACKLINE answers the guitar: the first of riff / pogo / bass that plays (a pulse of its own cue,
+    // the BACKLINE answers the electric part: the riff, else the pogo bass, if it plays (a pulse of its own cue,
     // scaled to its own norm); no guitar → the logos glow at rest with the room's energy
     let ampPulse = null;
     function place(anchors = [], plan = null){

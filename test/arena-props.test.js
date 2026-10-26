@@ -120,10 +120,11 @@ describe('arena props: the pyro keeps its distance', () => {
 
 describe('arena backline: the amps answer the guitar', () => {
   const g = (key, n = 3) => ({ key, kind: 'station', cue: Array.from({ length: n }, (_, i) => ({ t: i, w: 1 })), P: 10, start: -.6 });
-  it('the riff first, then the pogo, then the string bass; a machine that never strikes is skipped', () => {
+  it('the riff first, then the pogo; the string bass (an upright) never drives it; a machine that never strikes is skipped', () => {
     expect(ampSource([g('bass'), g('pogo'), g('riff')]).key).toBe('riff');
     expect(ampSource([g('bass'), g('pogo')]).key).toBe('pogo');
-    expect(ampSource([g('riff', 0), g('bass')]).key).toBe('bass');
+    expect(ampSource([g('riff', 0), g('pogo')]).key).toBe('pogo');
+    expect(ampSource([g('riff', 0), g('bass')])).toBe(null);
     expect(ampSource([g('organ'), g('horns')])).toBe(null);
     expect(ampSource()).toBe(null);
   });

@@ -215,7 +215,7 @@ export default {
         const P = resample(I.hull, GROUND.SEG), { a, ea, eb } = axesOf(P, I.cx, I.cz), D = keelDepth(eb);
         const one = I.slots.length === 1 ? lit[I.slots[0]] : null;
         _c.copy(one ? _c.set(one.color ?? '#5fd8ff') : SHARED);
-        const top = F + .003 * (I.group ?? 0) - GROUND.FASC - GROUND.LEDGE_DY - .6 * D;   // (inside the rock, faded in: no rim shows)
+        const top = F - .003 * ((I.group ?? 0) % 4) - GROUND.FASC - GROUND.LEDGE_DY - .6 * D;   // (inside the rock, faded in: no rim shows)
         pillar.setMatrixAt(n, trs(I.cx, top, I.cz, 0, -Math.atan2(a[1], a[0]), 0, Math.max(.8, ea * .7), PILLAR, Math.max(.8, eb * 1.05)));
         pillar.setColorAt(n, _c); n++;
       });

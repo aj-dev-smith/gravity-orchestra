@@ -108,7 +108,7 @@ function flipY(b, v0, i0, y0){
 export function islandGeometry(isles, { floor, stagger = .003 } = {}){
   const S = newBuf(), R = newBuf(), glints = [];
   isles.forEach(I => {
-    const T = I.sky ?? floor + stagger * (I.group ?? 0), H = I.hull, n = H.length;     // (one landmass: one height — its parts' tops coincide)
+    const T = I.sky ?? floor - stagger * ((I.group ?? 0) % 4), H = I.hull, n = H.length;     // (one landmass: one height — its parts' tops coincide; neighbours step DOWN a hair, never above the floor)
     if (n < 3) return;
     const s0 = S.nv, si0 = S.ni, r0 = R.nv, ri0 = R.ni;
     const { Pf, Ps, R0 } = ledgeOf(I, T), Pt = insetPoly(H, GROUND.INSET + GROUND.CH), C = [I.cx, T, I.cz];
@@ -173,7 +173,7 @@ export function runeGeometry(isles, anchors, lit, { floor, stagger = .003 } = {}
   const E = newBuf(true), spots = runeSpots(isles, anchors), slots = runeSlots(spots, isles, anchors, lit);
   spots.forEach((r, i) => {
     const I = isles[r.isle], s = slots[i], a = lit[s];
-    const T = I.sky != null ? I.sky + 2 * GROUND.RUNE_Y : floor + stagger * (I.group ?? 0);   // (a sky rock's fascia runs UP from its soffit)
+    const T = I.sky != null ? I.sky + 2 * GROUND.RUNE_Y : floor - stagger * ((I.group ?? 0) % 4);   // (a sky rock's fascia runs UP from its soffit)
     const col = a ? _c.set(a.color ?? '#8fa6c8').clone() : REST.clone().multiplyScalar(.7);
     const N = [r.nx, 0, r.nz];
     glyph(E, [r.x, T - GROUND.RUNE_Y, r.z], [N[2], 0, -N[0]], UP, N, GROUND.RUNE_H, r.g, col, s, .018);

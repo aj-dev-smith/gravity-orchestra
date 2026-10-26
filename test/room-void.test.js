@@ -228,7 +228,7 @@ describe('the Void\'s islands as built (void-ground.js): the floor contract, the
   const I = voidIslands(CROWD, PLAN), G = islandGeometry(I, { floor: FL }), lit = litOf(CROWD, I);
   const verts = g => { const p = g.attributes.position.array, out = []; for (let i = 0; i < p.length; i += 3) out.push([p[i], p[i + 1], p[i + 2]]); return out; };
   it('an island\'s top IS the floor (STAGE.FLOOR: the machines\' ground) — nothing of it rises above, its stone and rock stay inside its outline', () => {
-    const top = FL + .003 * Math.max(...I.map(i => i.group));
+    const top = FL;                                                               // (landmasses step DOWN a hair: none rises above)
     for (const v of verts(G.stone)) expect(v[1]).toBeLessThanOrEqual(top + 1e-6);
     for (const v of verts(G.rock)) expect(v[1]).toBeLessThanOrEqual(top - GROUND.FASC + 1e-6);
     // every vertex lies inside (or on) some island's outline

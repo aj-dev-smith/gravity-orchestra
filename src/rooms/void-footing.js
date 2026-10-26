@@ -39,13 +39,17 @@ export const VD = {
   CAP: .16,                 // a terrace's stone cap
   DECK: .46, DECK_LOFT: .52,// a raised deck's depth (deeper where a machine dips into it: pad.well)
   RUNE_H: .26, RUNE_STEP: .62,                    // fascia runes: glyph height, spacing
-  GAP: .34, STONE: 2.6,     // a levitating stack: the air between stones, a stone's height
+  GAP: .34, STONE: 3.9,     // a levitating cairn: the air between stones (varied ±), a stone's mean height
   POST: .11, RAIL_Y: 1.02, RAIL_SPAN: 2.2,        // rails of light on stone posts (≤ FOOT.RAIL)
   STEP_T: .2,               // a stepping stone's slab
   BAR: .055, RUNG: .042,    // a ladder of light: stile, rung
   VEIN: .075,               // a crystal vein's width
+  TIER: 5.5,                // an open stand's columns: tied by stone lintels every ≤ this (≤ kit.DIM.OPEN_TIER)
 };
 const UP = [0, 1, 0], DOWN = [0, -1, 0];
+/* runes carved FLAT into an island sit above its highest top (islands stagger by .003 per landmass group,
+   void-ground.js; up to 3 groups and a margin) */
+const RING_Y = .014;
 const _P = new Float32Array(12), _col = new THREE.Color(), WHITE = new THREE.Color(1, 1, 1);
 
 /* ---- the writer: faces in WORLD space, each with its own flat normal, turned to face `want` ----
@@ -335,35 +339,67 @@ function pillar(kit, S, r, yTop, { cu = 0, cv = 0, ru = r.hw, rv = r.hd, k = 7, 
   return R;
 }
 
-/* HIGH: a STACK of levitating stones from the floor to yTop — a cairn: rough boulders (bulging, turned,
-   a little off-centre), each hovering over the one below on a cushion of crystal light */
-const BOULDER = [[0, .7], [.12, .93], [.48, 1.04], [.84, .95], [1, .7]];
+/* HIGH: a CAIRN of levitating stones from the floor to yTop — a big rooted base stone, then fewer, smaller,
+   rougher boulders toward the top: every one its own height and outline, turned, a little off-centre and
+   tilted a few degrees, hovering over the one below on a small core of crystal light (pebbles orbit the
+   wider gaps). Everything stays inside the support's (ru, rv) rect, between the floor and yTop. */
+const BOULDERS = [
+  [[0, .66], [.13, .92], [.46, 1.04], [.82, .96], [1, .7]],
+  [[0, .72], [.2, .97], [.58, 1.03], [.88, .9], [1, .62]],
+  [[0, .62], [.1, .86], [.36, 1.03], [.76, .99], [1, .74]],
+];
+const ROOTSTONE = [[0, 1], [.1, 1.03], [.42, .97], [.8, .84], [1, .62]];     // the ground stone: planted, broad at its foot
+const MAXB = 1.17;                                                       // (a boulder's widest: bulge 1.04 × jitter 1.12)
 function stack(kit, S, r, yTop, { cu = 0, cv = 0, ru = r.hw, rv = r.hd, k = 11, s0 = .72, runes = true, lit = r } = {}){
-  const F = kit.floor, H = yTop - (F - .04), K = Math.max(2, Math.round(H / VD.STONE)), h = (H - (K - 1) * VD.GAP) / K;
-  const col = colOf(lit, .38), q0 = kit.w(cu, cv), RU = Math.max(.12, ru - .1), RV = Math.max(.12, rv - .1);
-  let prev = null;
+  const F = kit.floor, y00 = F - .04, H = yTop - y00, q0 = kit.w(cu, cv), hs = (i, j) => hash2(q0[0], q0[1], k + i * 13 + j);
+  const K = Math.max(2, Math.round(H / VD.STONE)), col = colOf(lit, .38), RU = Math.max(.12, ru - .1), RV = Math.max(.12, rv - .1);
+  // heights: the base stone the tallest, the rest 0.6–1.5 × by hash; the gaps between them vary too
+  const wt = Array.from({ length: K }, (_, i) => i === 0 ? 1.45 : .62 + .85 * hs(i, 1));
+  const gap = Array.from({ length: K - 1 }, (_, i) => VD.GAP * (.75 + .6 * hs(i, 2)));
+  const hSum = H - gap.reduce((s, g) => s + g, 0), wSum = wt.reduce((s, w) => s + w, 0);
+  const sBase = Math.min(.84, s0 + .14), sTop = Math.max(.4, s0 - .3);
+  let y0 = y00, prev = null;
   for (let i = 0; i < K; i++){
-    const y0 = F - .04 + i * (h + VD.GAP), y1 = y0 + h, jit = hash2(q0[0], q0[1], k + i), j2 = hash2(q0[0], q0[1], k + i + 50);
-    const sc = Math.min(.8, i === 0 ? s0 + .06 : s0 - .08 + .14 * jit), room = Math.max(0, 1 - 1.04 * sc);
-    const ou = cu + (j2 - .5) * 2 * room * RU * .8, ov = cv + (hash2(q0[0], q0[1], k + i + 70) - .5) * 2 * room * RV * .8;
-    const a0 = jit * 6.283, poly = ell(RU * sc, RV * sc, 9, ou, ov, a0);
-    const R = BOULDER.map(([t, f], j) => rockRing(kit, poly, f, y0 + t * h, k + i * 11 + j * 3, ou, ov, j === 2 ? .12 : .08, j && j < 4 ? h * .03 : 0));
+    const h = hSum * wt[i] / wSum, y1 = y0 + h, t = K > 1 ? i / (K - 1) : 0;
+    const sc = Math.min(sBase, sBase + (sTop - sBase) * t + (i ? (hs(i, 3) - .5) * .12 : 0));
+    const room = Math.max(0, 1 - MAXB * sc) * .95;                      // (how far it may sit off-centre and stay inside)
+    const ou = cu + (hs(i, 4) - .5) * 2 * room * RU, ov = cv + (hs(i, 5) - .5) * 2 * room * RV;
+    const ra = RU * sc, rb = RV * sc, a0 = hs(i, 6) * 6.283, poly = ell(ra, rb, 9, ou, ov, a0);
+    // a tilt (a few degrees, not the ground stone, not the one carrying the deck): sheared rings inside [y0, y1]
+    const tilt = i && i < K - 1 ? .045 + .05 * hs(i, 7) : 0, ta = hs(i, 8) * 6.283, tu = Math.cos(ta) * tilt, tv = Math.sin(ta) * tilt;
+    const lean = Math.min(h * .2, (Math.abs(tu) * ra + Math.abs(tv) * rb) * MAXB);
+    const prof = i ? BOULDERS[Math.floor(hs(i, 9) * BOULDERS.length) % BOULDERS.length] : ROOTSTONE;
+    const yb = y0 + lean, ye = y1 - lean, sh = (p, y) => [p[0], p[1], y + Math.max(-lean, Math.min(lean, (p[0] - ou) * tu + (p[1] - ov) * tv))];
+    const R = prof.map(([tt, f], j) => rockRing(kit, poly, f, yb + tt * (ye - yb), k + i * 11 + j * 3, ou, ov, j === 2 ? .12 : .08, j && j < 4 ? h * .03 : 0).map(p => sh(p, p[2])));
     for (let j = 0; j + 1 < R.length; j++) band(kit, S.rock, R[j], R[j + 1], ou, ov);
     const dome = (ring, y, want) => { let mu = 0, mv = 0; for (const p of ring){ mu += p[0]; mv += p[1]; } mu /= ring.length; mv /= ring.length;
-      const C = W(kit, mu, y, mv); for (let a = 0; a < ring.length; a++){ const p = ring[a], q = ring[(a + 1) % ring.length]; face(S.rock, [C, W(kit, p[0], p[2], p[1]), W(kit, q[0], q[2], q[1])], want); } };
-    dome(R[R.length - 1], y1, UP); dome(R[0], y0 + (i ? 0 : .02), DOWN);
-    if (runes){                                                           // faint runes round each stone (the machine's own light, dim)
+      const C = W(kit, mu, Math.min(y1, Math.max(y0, sh([mu, mv], y)[2])), mv); for (let a = 0; a < ring.length; a++){ const p = ring[a], q = ring[(a + 1) % ring.length]; face(S.rock, [C, W(kit, p[0], p[2], p[1]), W(kit, q[0], q[2], q[1])], want); } };
+    dome(R[R.length - 1], Math.min(y1, ye + h * .04), UP); dome(R[0], i ? Math.max(y0, yb - h * .04) : y0 + .02, DOWN);
+    if (runes && (i === 0 || hs(i, 10) < .5)){                            // faint runes on the base stone and on some others
       const mid = R[2];
       for (let f = 0; f < 9; f += 3){
         const A = mid[f], B = mid[(f + 1) % 9], mu = (A[0] + B[0]) / 2, mv = (A[1] + B[1]) / 2, nu = mu - ou, nv = mv - ov, nl = Math.hypot(nu, nv) || 1;
         const N = dirW(kit, nu / nl, nv / nl), C = W(kit, mu, (A[2] + B[2]) / 2, mv);
-        glyph(S.edge, C, [N[2], 0, -N[0]], UP, N, Math.min(.5, h * .2), glyphOf(C[0], C[2], i), col, lit.pulse ?? 0, .06);
+        glyph(S.edge, C, [N[2], 0, -N[0]], UP, N, Math.min(.5, h * .16), glyphOf(C[0], C[2], i), col, lit.pulse ?? 0, .06);
       }
     }
-    if (prev) glowGap(kit, S, (prev[0] + ou) / 2, (prev[1] + ov) / 2, Math.min(prev[2], RU * sc) * .45, Math.min(prev[3], RV * sc) * .45, y0 - VD.GAP, y0);   // the cushion of light under it
-    prev = [ou, ov, RU * sc, RV * sc];
+    if (prev){                                                            // a small core of light in the air between them
+      const g0 = prev.y1, g1 = y0, mu = (prev.ou + ou) / 2, mv = (prev.ov + ov) / 2, rr = Math.min(prev.ra, ra) * .26, rs = Math.min(prev.rb, rb) * .26;
+      glowGap(kit, S, mu, mv, rr, rs, g0 - .04, g1 + .04, .06);
+      // a pebble or two orbiting the gap, just outside the stones' tapered ends
+      const np = g1 - g0 > .3 ? 1 + (hs(i, 11) > .55 ? 1 : 0) : 0;
+      for (let p = 0; p < np; p++){
+        const a = hs(i, 12 + p) * 6.283 + p * 2.6, pr = Math.min(.2, .06 + .05 * Math.min(ra, rb));
+        const lim = (d, R) => Math.max(-(R - pr), Math.min(R - pr, d));
+        const pu = cu + lim(mu - cu + Math.cos(a) * Math.min(prev.ra, ra) * .82, RU), pv = cv + lim(mv - cv + Math.sin(a) * Math.min(prev.rb, rb) * .82, RV);
+        const yp = (g0 + g1) / 2 + (hs(i, 14 + p) - .5) * .08;
+        crystal(kit, S.rock, pu, yp - pr * .3, pv, pr, pr * 1.3, UP, a);
+      }
+    }
+    prev = { ou, ov, ra, rb, y1 };
+    y0 = y1 + (i < K - 1 ? gap[i] : 0);
   }
-  return F - .04 + K * h + (K - 1) * VD.GAP;
+  return y00 + H;
 }
 
 /* a STAIR of floating STEPPING STONES (a mid platform's): each a little island with a glowing tip */
@@ -421,8 +457,23 @@ function access(kit, S, r, T, acc, solid){
   else steppingStones(kit, S, r, T, acc);
 }
 
-/* OPEN: a rock column under every foot (a stack of small stones once it is tall), a ring of runes on the
-   island round its feet; nothing crosses what hangs (pad.hang) */
+/* OPEN: a rock column under every foot, a ring of runes on the island round its feet; nothing crosses what
+   hangs (pad.hang). A tall one is built in TIERS (≤ VD.TIER): its columns grow stouter with height, and at
+   every tier a dressed-stone collar rings each column and a stone LINTEL with a seam of crystal light under
+   it ties each column to the next — an aqueduct of the island's stone — except where a lintel would pass
+   what hangs (then only below its lowest part, pad.hangY). A lifted one is climbed by a ladder of light. */
+function segHits(p, q, R, g){                                           // (footing3d's: does p → q cross R grown by g?)
+  if (!R) return false;
+  let t0 = 0, t1 = 1;
+  const d = [q[0] - p[0], q[1] - p[1]], lo = [R[0] - g, R[2] - g], hi = [R[1] + g, R[3] + g];
+  for (let k = 0; k < 2; k++){
+    if (Math.abs(d[k]) < 1e-12){ if (p[k] < lo[k] || p[k] > hi[k]) return false; continue; }
+    let a = (lo[k] - p[k]) / d[k], b = (hi[k] - p[k]) / d[k]; if (a > b) [a, b] = [b, a];
+    t0 = Math.max(t0, a); t1 = Math.min(t1, b); if (t0 > t1) return false;
+  }
+  return true;
+}
+const COLUMN = [[0, 1.12], [.15, .96], [.6, .9], [.88, .98], [1, 1.1]];
 function openStand(kit, S, p){
   const F = kit.floor, T = p.top, H = T - F;
   const feet = p.feet?.length ? p.feet : [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => [a * (p.hw - .6), b * (p.hd - .6), .3]);
@@ -433,26 +484,49 @@ function openStand(kit, S, p){
     const [du, dv] = [[x0 - u - s, 0], [x1 - u + s, 0], [0, z0 - v - s], [0, z1 - v + s]].sort((a, b) => Math.abs(a[0] + a[1]) - Math.abs(b[0] + b[1]))[0];
     return Math.abs(du + dv) <= rr ? [u + du, v + dv] : null;
   };
+  const yA = F + .16, yB = T - .1, nT = H > VD.TIER + 1 ? Math.ceil((yB - yA) / VD.TIER) : 1;
+  const yT = Array.from({ length: nT + 1 }, (_, t) => yA + (yB - yA) * t / nT);
+  const grow = 1 + Math.min(.45, Math.max(0, H - 4) / 30);              // (a taller column is a stouter one)
+  const cu0 = feet.reduce((s, f) => s + f[0], 0) / feet.length, cv0 = feet.reduce((s, f) => s + f[1], 0) / feet.length;
+  const hull = [];
   let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
-  feet.forEach(([fu, fv, rr = .3], i) => {
+  feet.slice().sort((f, g) => Math.atan2(f[1] - cv0, f[0] - cu0) - Math.atan2(g[1] - cv0, g[0] - cu0)).forEach(([fu, fv, rr = .3], i) => {
     u0 = Math.min(u0, fu); u1 = Math.max(u1, fu); v0 = Math.min(v0, fv); v1 = Math.max(v1, fv);
-    const s = Math.max(.2, Math.min(.36, rr * .55)), q = clip(fu, fv, s + .06, rr);
+    const s0 = Math.max(.2, Math.min(.36, rr * .55)), s = Math.min(s0 * grow, .5), q = clip(fu, fv, s + .06, rr);
     if (!q) return;
-    const [u, v] = q, foot = p;
-    kit.box('deck', u - s - .16, u + s + .16, T - .1, T, v - s - .16, v + s + .16, 63);          // the cap under the foot
+    const [u, v] = q;
+    hull.push([u, v, s]);
+    kit.box('deck', u - s0 - .16, u + s0 + .16, T - .1, T, v - s0 - .16, v + s0 + .16, 63);          // the cap under the foot
     kit.box('deck', u - s - .24, u + s + .24, F - .04, F + .16, v - s - .24, v + s + .24, 1 | 4 | 8 | 16 | 32);   // its base stone
-    if (H > 10) stack(kit, S, foot, T - .1, { cu: u, cv: v, ru: s + .16, rv: s + .16, k: 70 + i, s0: 1, runes: false });
-    else {
-      const poly = ell(s + .06, s + .06, 7, u, v, .4 + i);
-      const R = rockBody(kit, S.rock, poly, F + .1, T - .1, [[0, 1.12], [.15, .96], [.6, .9], [.88, .98], [1, 1.1]], 80 + i * 6, u, v, .08);
+    const poly = ell(s + .06, s + .06, 7, u, v, .4 + i);
+    for (let t = 0; t < nT; t++){
+      const c0 = yT[t] + (t ? .14 : -.06), c1 = yT[t + 1] - (t < nT - 1 ? .14 : 0);
+      const R = rockBody(kit, S.rock, poly, c0, c1, COLUMN, 80 + i * 6 + t * 17, u, v, .08);
       // a vein up its outer face
-      const n = poly.length, j = Math.floor(hash2(u, v, 81) * n), j1 = (j + 1) % n;
+      const n = poly.length, j = Math.floor(hash2(u, v, 81 + t) * n), j1 = (j + 1) % n;
       let prev = null;
-      for (let t = 1; t < R.length - 1; t++){ const A = R[t][j], B = R[t][j1], mu = (A[0] + B[0]) / 2, mv = (A[1] + B[1]) / 2, my = (A[2] + B[2]) / 2;
+      for (let k = 1; k < R.length - 1; k++){ const A = R[k][j], B = R[k][j1], mu = (A[0] + B[0]) / 2, mv = (A[1] + B[1]) / 2, my = (A[2] + B[2]) / 2;
         const nu = mu - u, nv = mv - v, nl = Math.hypot(nu, nv) || 1, P = W(kit, mu + nu / nl * .03, my, mv + nv / nl * .03);
         if (prev) stroke(S.glow, prev, P, VD.VEIN * .8, dirW(kit, nu / nl, nv / nl)); prev = P; }
+      if (t){ const c = s + .2;                                           // the collar where two tiers meet
+        chamferSlab(kit, S.stone, S.stone, oct(c, c, c * .3, u, v), yT[t] - .16, yT[t] + .16, .03, oct(c - .03, c - .03, c * .3 - .01, u, v));
+        cap(kit, S.stone, at(oct(c, c, c * .3, u, v), yT[t] - .16), DOWN); }
     }
   });
+  // the lintels: each column to the next at every tier, a seam of crystal light under each
+  if (nT > 1 && hull.length > 1){
+    const clearY = Number.isFinite(p.hangY) ? p.hangY - .3 : -Infinity;
+    for (let i = 0; i < hull.length; i++){
+      if (hull.length === 2 && i) break;
+      const a = hull[i], b = hull[(i + 1) % hull.length], near = segHits(a, b, HG, .4);
+      for (let t = 1; t < nT; t++){
+        const y = yT[t];
+        if (near && y + .2 > clearY) continue;                            // (a lintel never crosses what hangs)
+        kit.bar('deck', [a[0], y, a[1]], [b[0], y, b[1]], .3, .3, 63);
+        kit.bar('glow', [a[0], y - .19, a[1]], [b[0], y - .19, b[1]], .1, .05, 63);
+      }
+    }
+  }
   // the ring of runes round its feet, carved flat into the island
   const ru0 = Math.max(-p.hw + .2, u0 - .75), ru1 = Math.min(p.hw - .2, u1 + .75), rv0 = Math.max(-p.hd + .2, v0 - .75), rv1 = Math.min(p.hd - .2, v1 + .75);
   const col = colOf(p), edges = [[[ru0, rv0], [ru1, rv0]], [[ru1, rv0], [ru1, rv1]], [[ru1, rv1], [ru0, rv1]], [[ru0, rv1], [ru0, rv0]]];
@@ -460,11 +534,12 @@ function openStand(kit, S, p){
     const L = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.max(1, Math.floor(L / .85));
     const du = (b[0] - a[0]) / L, dv = (b[1] - a[1]) / L, inU = -dv, inV = du;    // (the ring runs CCW in (u, v): inward is its left)
     for (let i = 0; i < n; i++){
-      const s = (i + .5) * L / n, C = W(kit, a[0] + du * s, F + .003, a[1] + dv * s);
+      const s = (i + .5) * L / n, C = W(kit, a[0] + du * s, F + RING_Y, a[1] + dv * s);
       const Vw = dirW(kit, inU, inV), Uw = dirW(kit, du, dv);
       glyph(S.edge, C, Uw, Vw, UP, .34, glyphOf(C[0], C[2], 2), col, p.pulse, .004);
     }
   }
+  access(kit, S, p, T, p.access, false);                                // (lifted off the island: a ladder of light)
 }
 
 /* ---- the STYLE (rooms/footing3d.js): the room hands over its materials ---- */
@@ -480,7 +555,7 @@ export function voidFootingStyle(M){
       corbel(kit, S, p, T - D, cb, .92, .62, 13);
       for (const [cu, cv, ru, rv, i] of supports(p)){
         stack(kit, S, p, T - D - cb - VD.GAP, { cu, cv, ru, rv, k: 11 + i * 7 });
-        glowGap(kit, S, cu, cv, (ru - .1) * .45, (rv - .1) * .45, T - D - cb - VD.GAP, T - D - cb);
+        glowGap(kit, S, cu, cv, (ru - .1) * .24, (rv - .1) * .24, T - D - cb - VD.GAP, T - D - cb, .06);
       }
     }
     rails(kit, p, T, p.access);
@@ -509,7 +584,7 @@ export function voidFootingStyle(M){
           if (L.band === 'mid') pillar(kit, S, L, yK + .2, { cu, cv, ru: ru + .1, rv: rv + .1, k: 21 + i * 4, veins: 2 });
           else {
             const yT = yK - VD.GAP, q = kit.w(cu, cv), lit = members.reduce((b, m) => !b || Math.hypot(m.x - q[0], m.z - q[1]) < Math.hypot(b.x - q[0], b.z - q[1]) ? m : b, null) || L;
-            stack(kit, S, L, yT, { cu, cv, ru: ru + .1, rv: rv + .1, k: 31 + i * 4, s0: .9, lit }); glowGap(kit, S, cu, cv, ru * .42, rv * .42, yT, yK);
+            stack(kit, S, L, yT, { cu, cv, ru: ru + .1, rv: rv + .1, k: 31 + i * 4, s0: .9, lit }); glowGap(kit, S, cu, cv, ru * .24, rv * .24, yT, yK, .06);
           }
         }
         rails(kit, L, T, L.access);
@@ -545,9 +620,9 @@ function supports(r){
   });
 }
 /* the cushion of light between a stack's top stone and what it carries */
-function glowGap(kit, S, cu, cv, ru, rv, y0, y1){
-  if (y1 - y0 < .2 || ru < .05 || rv < .05) return;
-  slab(kit, S.glow, S.glow, ell(ru, rv, 8, cu, cv, .3), y0 + .1, y1 - .1, { bottom: true });
+function glowGap(kit, S, cu, cv, ru, rv, y0, y1, ins = .1){
+  if (y1 - y0 < 2 * ins + .08 || ru < .05 || rv < .05) return;
+  slab(kit, S.glow, S.glow, ell(ru, rv, 8, cu, cv, .3), y0 + ins, y1 - ins, { bottom: true });
 }
 
 /* ---- the Void's MATERIALS (one set per room: the islands AND the footing wear them) ---- */

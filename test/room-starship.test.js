@@ -6,7 +6,8 @@ import { planFooting, footingBoxes, FOOT } from '../src/rooms/footing.js';
 import { buildFooting, makeFootingMats } from '../src/rooms/footing3d.js';
 import { STAGE } from '../src/rooms/common.js';
 import { shipFooting, lampMaterial } from '../src/rooms/starship-footing.js';
-import { SHIP, makeStrikeClock, makeDeckLights, cueLight, CUE, lampLayout, deckProps, rectsWithin, deckSpots, DECK_PROPS } from '../src/rooms/starship-deck.js';
+import { SHIP, makeStrikeClock, makeDeckLights, cueLight, CUE, lampLayout, deckProps, rectsWithin, deckSpots, DECK_PROPS, beaconPocket } from '../src/rooms/starship-deck.js';
+import { toWorld } from '../src/rooms/footing.js';
 
 /* The Starship deck's moving sky is a pure fn of songTime: the banking turns land on bar lines,
    are level through the loop's breath (seamless at the loop seam), and the star field is exactly
@@ -196,6 +197,23 @@ describe('starship footing: ship hardware, drawn', () => {
       if (Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) < 1e-9) flat++;
     }
     expect(flat).toBe(0);
+    f.dispose();
+  });
+  it('a plate\'s / a dais\'s status beacon lies in a pocket let into its top (seen from above), the pocket really there', () => {
+    const f = buildShip(), steel = meshesOf(f).find(m => m.name === 'footing:steel'), lamps = lampLayout(PLAN);
+    let n = 0;
+    for (const p of PLAN.pads){
+      const bp = beaconPocket(p);
+      if (!bp) continue;
+      n++;
+      const [x, z] = toWorld(p, bp.u, bp.v), L = lamps.find(l => l.kind === 1 && l.slot === p.pulse);
+      expect(L.n, p.key).toEqual([0, 1, 0]);
+      expect(Math.hypot(L.c[0] - x, L.c[2] - z), p.key).toBeLessThan(1e-9);
+      expect(L.c[1]).toBeLessThan(p.top); expect(L.c[1]).toBeGreaterThan(p.top - bp.depth + .02);   // (over the pocket's floor, under the top)
+      const ys = crossing(steel, x + .01, z + .01).filter(y => y < p.top + 1e-6 && y > p.top - .2);
+      expect(ys.some(y => Math.abs(y - (p.top - bp.depth + .02)) < 1e-6), `${p.key}: pocket floor`).toBe(true);
+    }
+    expect(n).toBeGreaterThanOrEqual(5);
     f.dispose();
   });
   it('a machine that dips into its support (the kit\'s pistons: well) — the deck is solid that deep, at every height', () => {

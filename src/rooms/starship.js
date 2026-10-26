@@ -28,16 +28,27 @@ import { makeDeckLights, deckSpots, deckProps } from './starship-deck.js';
    STAGE.CEIL and every long rib / rail spans > 40 u (the shot solve reads
    them as the hall's shell, not standing obstacles); the glass is a
    transparent shader (never an occluder). Owns no lights.
-   Perf: ~21 draw calls, all instanced/merged; per frame = a handful of
-   uniforms + 72 instance colours. No allocation.
+
+   WHAT THE MACHINES STAND ON is ship hardware (starship-footing.js, a footing
+   style): deck plates with hazard paint + tie-down rings, scissor lifts,
+   telescoping rams, gantry towers, grated catwalks. In each plate's light
+   channel the machine's RUNNING LIGHTS race round from every strike, and a
+   STATUS BEACON (a lens in the deck top / a lamp on a rail post) glows while
+   it plays and blinks it in after a rest — one additive draw for every machine,
+   a pure fn of songTime (starship-deck.js). DECK FURNITURE: hatches on the
+   deck plates + cargo lashed in the side bays, each only where it keeps 1 u
+   clear of every machine and its footing (place()).
+   Perf: ~23 draw calls, all instanced/merged (+ the footing: 5–6 incl. the
+   lights); per frame = a handful of uniforms + 72 instance colours + the
+   lights' two vec4[32] arrays. No allocation.
    ============================================================ */
 
 const F = STAGE.FLOOR;
 const FOG = 0x05070f;
-const DECK_X = 48;                 // deck half-width (stations live inside |x| ≤ 35.5)
+const DECK_X = 48;                 // deck half-width (stations live inside |x| ≤ STAGE.HW 38; cargo in the bays outboard)
 const DECK_Z0 = -44, DECK_Z1 = 46; // canopy/bow seam … stern
 const BOW = 22;                    // bow dome depth beyond DECK_Z0
-const CAN_B = 70;                  // canopy height (semi-axis): apex at F + 70 = 48, far above STAGE.CEIL
+const CAN_B = 70;                  // canopy height (semi-axis): apex at F + 70 = 64.5, far above STAGE.CEIL (the eye room's top corners, x ±36.5 at y 34.5, stay under the glass only for CAN_B ≳ 62)
 const CAN_Z1 = 26;                 // the canopy's open stern end (the audience camera sits aft of it)
 const AXIS = new THREE.Vector3(0, 5, -4);   // the ship's roll axis (≈ the strike band, mid-deck)
 
@@ -340,6 +351,7 @@ export default {
     /* what the machines stand on: ship hardware, and in its light channels the running lights + status
        beacons (one additive draw, built with the footing — starship-footing.js), lit from update() */
     const LAMPS = lampMaterial(), FOOT_STYLE = shipFooting({ lamps: LAMPS });
+    FOOT_STYLE.mats(null, { envMap });                         // (its materials made with the room, not on a footing build)
     const group = new THREE.Group();
     const R = rng(1977);
 

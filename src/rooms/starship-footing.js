@@ -128,7 +128,12 @@ function slab(k, r, T, D, top = 'deck', pocket = null){
   } else k.box(top, -hw + .05, hw - .05, T - .03, T, -hd + .05, hd - .05, PY);
   k.box('deck', -hw + I, hw - I, T - SHIP.CH0, T - L, -hd + I, hd - I, SIDES);          // the light channel
   k.box('hazard', -hw + .004, hw - .004, T - D, T - SHIP.CH0, -hd + .004, hd - .004, SIDES);
-  k.box('steel', -hw + .004, hw - .004, T - D, T - D + .02, -hd + .004, hd - .004, NY);
+  if (top !== 'grate') k.box('steel', -hw + .004, hw - .004, T - D, T - D + .02, -hd + .004, hd - .004, NY);
+  else {                                                          // (a grating is open below: the fascia's inner faces)
+    const y0 = T - D, y1 = T - .03, t = .03;
+    k.box('steel', -hw + t, hw - t, y0, y1, hd - t, hd - .004, NZ); k.box('steel', -hw + t, hw - t, y0, y1, -hd + .004, -hd + t, PZ);
+    k.box('steel', hw - t, hw - .004, y0, y1, -hd + t, hd - t, NX); k.box('steel', -hw + .004, -hw + t, y0, y1, -hd + t, hd - t, PX);
+  }
 }
 /* a square pocket let into a deck's top at (cu, cv): its floor `depth` down, its four walls */
 function pit(k, cu, cv, h, T, depth){

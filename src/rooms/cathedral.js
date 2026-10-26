@@ -4,6 +4,8 @@ import { STAGE, rng, canvasTex, radialTex, shaftTex, glowPoints, glowMat, instan
 import { cathedralFooting } from './cathedral-footing.js';
 import { CORONAS, PROPS, obstaclesOf, placeCoronas, placePrickets, placeCandles, candleCue } from './cathedral-props.js';
 import { makePulse } from './pulse.js';
+import { planFooting } from './footing.js';
+import { buildFooting } from './footing3d.js';
 /* ============================================================
    CATHEDRAL NAVE — clustered stone piers marching away into warm haze,
    a pointed-arch arcade, a clerestory of stained glass throwing slanted
@@ -173,6 +175,14 @@ function roseTex(){
   });
 }
 
+/* a small crowd that exercises every footing form (build()'s warm-up) */
+const WARM_CROWD = F => {
+  const st = (key, x, z, h, extra = {}) => ({ key, kind: 'station', x, z, yaw: 0, w: 8, d: 5, y: F + h, bottom: F + h, low: F + h,
+    box: [x - 4, x + 4, F + h, F + h + 4, z - 2.5, z + 2.5], cue: [], P: 20, start: -.6, ...extra });
+  return [st('a', -30, 20, .4), st('b', -15, 20, 2.4), st('c', 0, 20, 6), st('d', 15, 20, 14), st('e', -10, -20, 9), st('f', 0, -20, 9),
+    { ...st('g', 28, 0, 8), w: 14, d: 14, box: [21, 35, F + 3, F + 12, -7, 7], low: F + 3, feet: [[-5, -4, .7], [5, -4, .7], [-5, 4, .7], [5, 4, .7]], hang: [-6, 4, 4.8, 5.7] }];
+};
+
 export default {
   key: 'cathedral', label: 'Cathedral Nave',
   build(scene, { envMap }){
@@ -187,7 +197,10 @@ export default {
        plane is 200 u — and it is no solid: no boxes) */
     { const fm = FOOT_STYLE.mats(null, { envMap });
       const warm = new THREE.Mesh(new THREE.BoxGeometry(.01, .01, .01), [fm.base, fm.deck, fm.steel, fm.brass, fm.glow, fm.edge]);
-      warm.position.set(0, F - 3000, 0); warm.name = 'cathedral:warm'; warm.userData.boxes = []; group.add(warm); }
+      warm.position.set(0, F - 3000, 0); warm.name = 'cathedral:warm'; warm.userData.boxes = []; group.add(warm);
+      // …and every form runs once here (a throwaway footing: every band, a loft, a turret, an open stand), so the
+      // first REAL footing — built on the swap's frame — doesn't pay the first run of this code
+      try { buildFooting(planFooting(WARM_CROWD(F), { floor: F }), FOOT_STYLE, { mats: {}, envMap }).dispose(); } catch(e){} }
     const pierZ = Array.from({ length: NB + 1 }, (_, i) => Z0 - i * BAY);
 
     // ---- floor: worn marble chequer, a touch of gloss so the glows pool in it ----
@@ -469,6 +482,10 @@ export default {
         flashes[c.slot] = makePulse(cc.cue, { P: a.P, start: a.start, decay: cc.flash, lead: .01 }); }
     }
 
+    // (place() once on the warm-up crowd, then back to an empty room: its first real run — on the swap's
+    //  frame — doesn't pay the first run of the placement code either)
+    try { const wc = WARM_CROWD(F); place(wc, planFooting(wc, { floor: F })); } catch(e){}
+    place([], null);
     const glassBase = glassMat.color.clone();
     return {
       group, ...STAGE, FRONT: Z0, BACK: zEnd, HW: NAVE_X, CEIL: CLER_TOP,

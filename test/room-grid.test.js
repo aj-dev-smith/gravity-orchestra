@@ -34,6 +34,30 @@ const meshes = f => { const out = []; f.group.traverse(o => { if (o.isMesh) out.
 const styled = () => { const s = gridFootStyle(); s.known(CROWD); return s; };
 const build = (style = styled(), plan = PLAN, env = ENV) => buildFooting(plan, style, { boxes: env, mats: makeFootingMats() });
 
+/* THE CATALOG as staged (test/fixtures/staging-rooms.json, re-solved + re-planned as test/staging-audit.test.js
+   does): every song's anchors and footing plan — the real crowds the room must hold */
+function catalog(){
+  const FIX = JSON.parse(fs.readFileSync(new URL('./fixtures/staging-rooms.json', import.meta.url))).songs;
+  const ROOM = { x0: -STAGE.HW + 2.5, x1: STAGE.HW - 2.5, z0: STAGE.BACK + 2.5, z1: 31 }, out = [];
+  for (const R of FIX){
+    const w = R.wall;
+    if (!w) continue;
+    const solved = R.items.length ? layoutStations(R.items.map(({ key, x, z, box, top }) => ({ key, x, z, box, top })), [w[0], w[1], w[4], w[5]], ROOM,
+      { cx: R.cx, bandY: R.bandY, eyeY: 20, wallTop: w[3], hung: R.hung || (R.fixed || []).map(f => [f.box[0], f.box[1], f.box[4], f.box[5]]) }) : {};
+    const anchors = [{ key: 'belt', kind: 'belt', label: 'Belt', color: '#ffaa55', x: (w[0] + w[1]) / 2, z: (w[4] + w[5]) / 2, yaw: 0, w: w[1] - w[0], d: w[5] - w[4], y: FL, bottom: FL, low: w[2], box: w, cue: [], fixed: true }];
+    for (const it of R.items){
+      const f = it.foot, p = solved[it.key];
+      if (!f || !p) continue;
+      const deck = p.y ?? f.deck, up = p.y === undefined ? 0 : p.y - (it.deck ?? 0);
+      anchors.push({ key: it.key, kind: it.key === 'drums' ? 'kit' : 'station', label: it.key, color: '#88aaff', x: p.x + f.dx, z: p.z + f.dz, yaw: f.yaw, w: f.w, d: f.d,
+        y: deck, bottom: deck + f.bot, low: deck + f.low, box: [p.x + it.box[0], p.x + it.box[1], it.y0 + up, it.top + up, p.z + it.box[2], p.z + it.box[3]], feet: f.feet, hang: f.hang, cue: [], fixed: false });
+    }
+    for (const h of R.fixed || []) anchors.push({ key: h.key, kind: 'hung', x: (h.box[0] + h.box[1]) / 2, z: (h.box[4] + h.box[5]) / 2, yaw: 0, w: h.box[1] - h.box[0], d: h.box[5] - h.box[4], box: h.box, cue: [], fixed: true });
+    out.push({ song: R.song, anchors, plan: planFooting(anchors, { floor: FL, room: ROOMB }) });
+  }
+  return out;
+}
+
 /* how far a mesh's vertices stray outside the envelopes (or under the floor) */
 function worstOut(m, B){
   const p = m.geometry.attributes.position.array;
@@ -72,6 +96,38 @@ describe('Greybox footing: the plan, drawn in the room\'s own language', () => {
       expect(worst, `${m.name}: ${worst.toFixed(3)} u out at ${at && at.map(v => v.toFixed(2))}`).toBeLessThanOrEqual(.035);
     }
     f.dispose();
+  });
+  it('the catalog (every staged song, re-planned): everything drawn inside its envelopes, ≤ 6 children', () => {
+    const s = gridFootStyle(), mats = makeFootingMats();
+    for (const { song, anchors, plan } of catalog()){
+      s.known(anchors);
+      const env = footingBoxes(plan), f = buildFooting(plan, s, { boxes: env, mats }), B = env.map(e => e.box);
+      expect(f.group.children.length, song).toBeLessThanOrEqual(6);
+      for (const m of meshes(f)){
+        const { worst, at } = worstOut(m, B);
+        expect(worst, `${song} ${m.name}: ${worst.toFixed(3)} u out at ${at && at.map(v => v.toFixed(2))}`).toBeLessThanOrEqual(.035);
+      }
+      f.dispose();
+    }
+    s.dispose();
+  });
+  it('lifted (every machine raised 1.6 / 6 / 14 u — risers, platforms, towers, lofts of real neighbours): still inside', () => {
+    const s = gridFootStyle(), mats = makeFootingMats(), bands = new Set();
+    for (const { song, anchors } of catalog().filter(c => ['daybreak-engine', 'finale', 'bald-mountain', 'campfire'].includes(c.song))) for (const u of [1.6, 6, 14]){
+      const up = anchors.map(a => a.kind === 'station' || a.kind === 'kit'
+        ? { ...a, y: a.y + u, bottom: a.bottom + u, low: a.low + u, box: [a.box[0], a.box[1], a.box[2] + u, a.box[3] + u, a.box[4], a.box[5]] } : a);
+      const plan = planFooting(up, { floor: FL, room: ROOMB }), env = footingBoxes(plan), B = env.map(e => e.box);
+      plan.pads.forEach(p => bands.add(p.open ? 'open-' + p.band : p.band)); plan.lofts.forEach(L => bands.add('loft-' + L.band));
+      s.known(up);
+      const f = buildFooting(plan, s, { boxes: env, mats });
+      for (const m of meshes(f)){
+        const { worst, at } = worstOut(m, B);
+        expect(worst, `${song} +${u}: ${m.name} ${worst.toFixed(3)} u out at ${at && at.map(v => v.toFixed(2))}`).toBeLessThanOrEqual(.035);
+      }
+      f.dispose();
+    }
+    for (const b of ['low', 'mid', 'high', 'open-mid', 'open-high', 'loft-mid', 'loft-high']) expect(bands.has(b), b).toBe(true);
+    s.dispose();
   });
   it('the shot solve sees every support: an OPAQUE standard mesh carries every envelope', () => {
     const f = build(), body = meshes(f).find(m => m.name === 'footing:deck');
@@ -262,25 +318,9 @@ describe('Greybox stage plot: each machine named on the floor, clear of everythi
     expect(placeLabels(CROWD, PLAN, { floor: FL, room: STAGE })).toEqual(L);
   });
   it('the catalog (every song as staged in the fixture, re-planned): every label clear; most machines named', () => {
-    const FIX = JSON.parse(fs.readFileSync(new URL('./fixtures/staging-rooms.json', import.meta.url))).songs;
-    const ROOM = { x0: -STAGE.HW + 2.5, x1: STAGE.HW - 2.5, z0: STAGE.BACK + 2.5, z1: 31 };
     let named = 0, standing = 0;
-    for (const R of FIX){
-      const w = R.wall;
-      if (!w) continue;
-      const solved = R.items.length ? layoutStations(R.items.map(({ key, x, z, box, top }) => ({ key, x, z, box, top })), [w[0], w[1], w[4], w[5]], ROOM,
-        { cx: R.cx, bandY: R.bandY, eyeY: 20, wallTop: w[3], hung: R.hung || (R.fixed || []).map(f => [f.box[0], f.box[1], f.box[4], f.box[5]]) }) : {};
-      const anchors = [{ key: 'belt', kind: 'belt', label: 'Belt', x: (w[0] + w[1]) / 2, z: (w[4] + w[5]) / 2, yaw: 0, w: w[1] - w[0], d: w[5] - w[4], y: FL, bottom: FL, low: w[2], box: w, cue: [], fixed: true }];
-      for (const it of R.items){
-        const f = it.foot, p = solved[it.key];
-        if (!f || !p) continue;
-        const deck = p.y ?? f.deck, up = p.y === undefined ? 0 : p.y - (it.deck ?? 0);
-        anchors.push({ key: it.key, kind: it.key === 'drums' ? 'kit' : 'station', label: it.key, x: p.x + f.dx, z: p.z + f.dz, yaw: f.yaw, w: f.w, d: f.d,
-          y: deck, bottom: deck + f.bot, low: deck + f.low, box: [p.x + it.box[0], p.x + it.box[1], it.y0 + up, it.top + up, p.z + it.box[2], p.z + it.box[3]], feet: f.feet, hang: f.hang, cue: [], fixed: false });
-      }
-      for (const h of R.fixed || []) anchors.push({ key: h.key, kind: 'hung', x: (h.box[0] + h.box[1]) / 2, z: (h.box[4] + h.box[5]) / 2, yaw: 0, w: h.box[1] - h.box[0], d: h.box[5] - h.box[4], box: h.box, cue: [], fixed: true });
-      const plan = planFooting(anchors, { floor: FL, room: ROOMB });
-      named += audit(anchors, plan, R.song).length; standing += anchors.filter(a => a.kind !== 'hung').length;
+    for (const { song, anchors, plan } of catalog()){
+      named += audit(anchors, plan, song).length; standing += anchors.filter(a => a.kind !== 'hung').length;
     }
     expect(standing).toBeGreaterThan(100);
     expect(named / standing, `${named} / ${standing} named`).toBeGreaterThan(.8);

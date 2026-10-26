@@ -13,7 +13,10 @@ import { footingBoxes, toWorld, accessRect } from './footing.js';
                what it stands on (its pad, or the loft it shares) — FLANKING it first, in ITS OWN
                frame whatever its yaw (one on each of its side faces, just in front of its middle,
                like altar candles: a turned grand's pair turns with it), then a pair at its back
-               corners, then its front — clear of every obstacle
+               corners, then single sticks off its front, and only then its front CORNERS (never
+               right in front of it, in the wide's foreground: a machine boxed in on its flanks,
+               back AND front corners gets no candles — its footing's edge still answers it) —
+               clear of every obstacle
                and of the floor in front of every stair / ladder (LANDING), STICK_APART from another
                machine's sticks, clear of the prickets, inside the stage. Their flames flare on
                their machine's strikes (cathedral.js, a pulse per machine: rooms/pulse.js).
@@ -130,20 +133,18 @@ export function placeCandles(anchors = [], plan = null, obs = obstaclesOf(anchor
     // BESIDE its machine: nearer what it stands on than any other machine
     const mine = (x, z) => { const d = rectDist(S, x, z); return others.every(b => dxz(x, z, b.box) > d + .3); };
     const ok = (p, also) => mine(p[0], p[1]) && clearAt(p[0], p[1], also);
-    let got = null;
-    for (const [p, q] of pairsRound(S)){                                   // a PAIR at the two ends of one side…
-      if (!ok(p, [])) continue;
-      if (!ok(q, [{ x: p[0], z: p[1] }])) continue;
-      got = [p, q]; break;
-    }
-    if (!got){                                                             // …else the best single spots
-      got = [];
-      for (const p of singlesRound(S)){
+    // a PAIR off its front (flanks, then back) → SINGLES off its front → only then its front: a front stick
+    //  stands between the audience and the machine (the wide's foreground)
+    const pair = list => { for (const [p, q] of list) if (ok(p, []) && ok(q, [{ x: p[0], z: p[1] }])) return [p, q]; return null; };
+    const singles = list => { const got = [];
+      for (const p of list){
         if (got.length >= PROPS.PER) break;
         if (got.some(g => Math.hypot(g[0] - p[0], g[1] - p[1]) < 3.5)) continue;
         if (ok(p, got.map(g => ({ x: g[0], z: g[1] })))) got.push(p);
       }
-    }
+      return got.length ? got : null; };
+    const P = pairsRound(S), Q = singlesRound(S);
+    const got = pair(P.filter(c => !c.front)) || singles(Q.filter(c => !c.front)) || pair(P.filter(c => c.front)) || singles(Q.filter(c => c.front)) || [];
     if (!got.length) continue;
     for (const [x, z] of got) out.push({ key: a.key, slot, x, z });
     slot++;
@@ -188,23 +189,24 @@ const RING_PAIRS = (() => { const c = [];
 /* where along a side a flanking stick stands (k × its half-length toward the front), on ring m */
 const flankT = (d, m, k) => d.front * k * d.hl / (d.hl + m);
 /* candidate PAIRS, best first: FLANKING (its own two side faces — a stick on each, near its front), then
-   its back side's corners / thirds, then its front side's */
+   its back side's corners / thirds, then its front side's corners (each tagged .front: on its front side) */
 function pairsRound(S){
   const out = [], sd = sidesOf(S), A = sd[2], B = sd[3];
+  const tag = (c, front) => (c.front = front, c);                          // (front: on its front side)
   for (const k of PROPS.FLANK_AT)
-    for (const [ma, mb] of RING_PAIRS) out.push([A.f(flankT(A, ma, k), ma), B.f(flankT(B, mb, k), mb)]);
+    for (const [ma, mb] of RING_PAIRS) out.push(tag([A.f(flankT(A, ma, k), ma), B.f(flankT(B, mb, k), mb)], false));
   for (const d of [sd[1], sd[0]]){
-    for (const [ma, mb] of RING_PAIRS) out.push([d.f(-1, ma), d.f(1, mb)]);
-    for (const [ma, mb] of RING_PAIRS) out.push([d.f(-1 / 3, ma), d.f(1 / 3, mb)]);
+    for (const [ma, mb] of RING_PAIRS) out.push(tag([d.f(-1, ma), d.f(1, mb)], d.fv > 0));
+    if (d.fv < 0) for (const [ma, mb] of RING_PAIRS) out.push(tag([d.f(-1 / 3, ma), d.f(1 / 3, mb)], false));   // (never its front's thirds: right in front of it)
   }
   return out;
 }
-/* single spots, the same preference (the flanks near its front, then its back, then its front) */
+/* single spots, the same preference (the flanks near its front, then its back, then its front corners) */
 function singlesRound(S){
   const out = [], s0 = sidesOf(S), sd = [s0[2], s0[3], s0[1], s0[0]];
   for (const m of RINGS) for (const d of sd){
-    const ts = d.fv === 0 ? PROPS.FLANK_AT.map(k => flankT(d, m, k)) : [-1, 1, -1 / 3, 1 / 3];
-    for (const t of ts) out.push(d.f(t, m));
+    const ts = d.fv === 0 ? PROPS.FLANK_AT.map(k => flankT(d, m, k)) : d.fv < 0 ? [-1, 1, -1 / 3, 1 / 3] : [-1, 1];
+    for (const t of ts){ const p = d.f(t, m); p.front = d.fv > 0; out.push(p); }
   }
   return out;
 }

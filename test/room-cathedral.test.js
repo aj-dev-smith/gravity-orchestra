@@ -324,6 +324,20 @@ describe('cathedral props: coronas, prickets, candles — clear of the machines'
       for (const q of L) expect(ownDist({ x: 0, z: 10, yaw, hw: 5, hd: 3 }, q.x, q.z)).toBeGreaterThanOrEqual(PROPS.STICK_R + PROPS.STICK_CLEAR - 1e-9);
     }
   });
+  it('a crowded machine: single sticks off its front before any stick in front of it (the wide\'s foreground)', () => {
+    // its back against the stage's back, a neighbour hard by one flank: no pair fits off its front — the old
+    // fallback stood a pair in FRONT of it; now one stick takes its open flank
+    const z = STAGE.BACK + 4.5, A = [st('solo', 0, z, 10, 6), st('nb', 12, z, 6, 8)], P1 = planFooting(A, { floor: FL, room: ROOMB });
+    const L = placeCandles(A, P1, obstaclesOf(A, P1), { room: STAGE_RECT, floor: FL }).filter(c => c.key === 'solo'), pad = P1.pads.find(q => q.key === 'solo');
+    expect(L.length).toBeGreaterThan(0);
+    for (const q of L){ expect(q.z - pad.z, 'never in front of its front face').toBeLessThanOrEqual(pad.hd); expect(Math.abs(q.x - pad.x)).toBeGreaterThan(pad.hw); }
+    // and in the whole crowd: no stick ever stands RIGHT in front of its machine (inside its front face's width)
+    for (const c of placeCandles(CROWD, PLAN, obstaclesOf(CROWD, PLAN), { room: STAGE_RECT, floor: FL })){
+      const S = PLAN.pads.find(q => q.key === c.key && !q.loft); if (!S) continue;
+      const co = Math.cos(S.yaw || 0), sn = Math.sin(S.yaw || 0), u = co * (c.x - S.x) - sn * (c.z - S.z), v = sn * (c.x - S.x) + co * (c.z - S.z);
+      expect(v > S.hd && Math.abs(u) < S.hw, `${c.key}: in front of it`).toBe(false);
+    }
+  });
   it('the candles\' cue: an event per strike — scaled to the machine\'s own loud hits, decaying within its own gap', () => {
     const P = 20, dense = Array.from({ length: 80 }, (_, i) => ({ t: i * .25, w: .3 + .1 * (i % 3) })), sparse = [{ t: 2, w: .4 }, { t: 9, w: .5 }];
     const d = candleCue(dense, P), sp = candleCue(sparse, P);

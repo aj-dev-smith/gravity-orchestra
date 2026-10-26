@@ -62,6 +62,7 @@
      machine is selected.
    ============================================================ */
 import { snap, snapYaw, conflicts, describeConflicts, footprint, boxCorners, bounds, inPoly } from './placement.js';
+import { GALLERY_DROP } from '../instruments/stations.js';
 import { readout, dragLift, stepLift, loftTargets, liftMax, rayPlaneY, makeSettle, bandName, TICK_U, fmtMeters } from './height.js';
 
 const C = { idle: 0x6c7aa0, hover: 0xcfd6e6, sel: 0xffb764, bad: 0xff4d5e, belt: 0x3d6dff };
@@ -71,7 +72,8 @@ const SETTLE_MS = 700;                               // a burst of height taps /
                                                      //  (past an OS key-repeat delay, ~.5 s: a held PgUp is ONE gesture)
 const deg = d => d * Math.PI / 180;
 const VIEW3D = { el: deg(31), az: deg(38), fov: 42, maxFov: 70, ease: .55 };   // the 3/4 view: ~RCT's dimetric tilt, a longer lens
-const GRAB_HEAD = 8;                                 // a knob grabbed in the PLAN: the 3/4 swing frames this much raise (u ≈ 5.4 m) over the machine's top
+const GRAB_HEAD = 8;                                 // a knob grabbed in the PLAN: the 3/4 swing frames at least this much raise (u ≈ 5.4 m) over the machine's top
+const GRAB_OVER = 1;                                 //  …or, when it is more, the raise to the rear GALLERY's deck / the highest LOFT it could join, + this
 
 export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {} }){
   let on = false, pieces = [], sel = null, hover = null, drag = null, snapOn = true, info = null;
@@ -1057,8 +1059,17 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     if (v === 'plan') overview({ ease: true });
     else { const head = hand && sel ? headOf(sel) : 0, t = pose3D(sel, { head }); if (t){ if (hand && sel) underHand(t, sel, hand, head); goTo({ ...t, lift: null }, true, dur); } }
   }
-  /* the raise a grab's swing frames over the machine's top: GRAB_HEAD, or what is left to its ceiling */
-  const headOf = p => { const h = H(p); return h ? Math.max(0, Math.min(GRAB_HEAD, maxOf(p, h) - h.lift)) : 0; };
+  /* the raise a grab's swing frames over the machine's top: enough to reach the rear GALLERY's deck (the belt's
+     top housing − GALLERY_DROP — the big raise people make) or the highest LOFT it could join, at least
+     GRAB_HEAD — never more than is left to its ceiling */
+  function headOf(p){
+    const h = H(p); if (!h) return 0;
+    let want = GRAB_HEAD;
+    const w = host.wall?.();
+    if (w && !w.isEmpty()) want = Math.max(want, w.max.y - GALLERY_DROP - h.bottom + GRAB_OVER);
+    for (const t of targetsOf(p, h)) want = Math.max(want, t.lift - h.lift + GRAB_OVER);
+    return Math.max(0, Math.min(want, maxOf(p, h) - h.lift));
+  }
   /* the 3/4 pose `t`, slid across the screen so the selection's height KNOB lands on `hand` (the pixel it was
      grabbed at): the eye + aim move in the view plane (the eye kept in the room); the pole's corner is chosen
      for that eye and locked for the drag. HEADROOM: a grab high on the screen would carry the machine's top
@@ -1091,9 +1102,27 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       // (…and sideways: the machine's whole footprint, at its base and at the raise's top, inside the band — a
       //  phone's narrow frame put half of it off the edge)
       let lo = 0, hi = 0;
-      for (const [qx, qz] of fpOf(p)) for (const qy of [y, topOf(p) + head]){ proj(qx, qy, qz, _ht); if (!_ht.behind){ lo = Math.min(lo, _ht.x - _h.x); hi = Math.max(hi, _ht.x - _h.x); } }
+      const sides = () => { lo = 0; hi = 0;
+        for (const [qx, qz] of fpOf(p)) for (const qy of [y, topOf(p) + head]){ proj(qx, qy, qz, _ht); if (!_ht.behind){ lo = Math.min(lo, _ht.x - _h.x); hi = Math.max(hi, _ht.x - _h.x); } } };
+      sides();
+      // (a footprint WIDER than the band — a phone's frame, a horn rank at the widest lens: the eye steps BACK
+      //  along its line through the knob (the knob keeps its pixel; everything shrinks ~1/k), as far as the room lets it)
+      const wB = B.x1 - B.x0 - 16;
+      if (hi - lo > wB && wB > 40){
+        const k = Math.min(3, (hi - lo) / wB * 1.06), lim = host.roomBox || {};
+        const back = _e.set(at.x, y, at.z), eye = t.eye.clone().sub(back).multiplyScalar(k).add(back);
+        if (Number.isFinite(lim.y1)) eye.y = Math.min(eye.y, lim.y1);
+        if (Number.isFinite(lim.z1)) eye.z = Math.min(eye.z, lim.z1);
+        if (Number.isFinite(lim.x1)) eye.x = Math.max(-lim.x1, Math.min(lim.x1, eye.x));
+        t.aim.add(back.copy(eye).sub(t.eye)); t.eye.copy(eye); pose();
+        proj(at.x, y, at.z, _h); proj(c0.x, topOf(p) + head, c0.z, _ht);
+        span = _h.behind || _ht.behind ? 0 : Math.max(0, _h.y - _ht.y);
+        sides();
+      }
       const xa = B.x0 + 8 - lo, xb = B.x1 - 8 - hi;
-      hand = { x: xa <= xb ? Math.min(Math.max(hand.x, xa), xb) : (xa + xb) / 2,
+      // (still too wide — the room's wall stopped the step back: the KNOB stays under the finger, kept in the
+      //  band — centring a frame that is overfull either way only put the handle 400 px from the hand)
+      hand = { x: xa <= xb ? Math.min(Math.max(hand.x, xa), xb) : Math.min(Math.max(hand.x, B.x0 + 24), B.x1 - 24),
                y: Math.min(Math.max(hand.y, B.y0 + 12 + span), Math.max(hand.y, B.y1 - 40)) };
       _r.setFromMatrixColumn(c.matrixWorld, 0); _u.setFromMatrixColumn(c.matrixWorld, 1); _p.setFromMatrixColumn(c.matrixWorld, 2);
       const depth = Math.max(1, -_e.set(at.x, y, at.z).sub(c.position).dot(_p));

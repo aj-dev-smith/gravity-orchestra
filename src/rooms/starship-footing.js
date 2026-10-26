@@ -76,11 +76,11 @@ function grateTex(){
 export function shipMats(envMap = null){
   const hz = hazardTex(), dm = diamondTex(), gr = grateTex();
   const m = {
-    steel: new THREE.MeshStandardMaterial({ color: 0x7d8183, metalness: .35, roughness: .5, envMap, envMapIntensity: .4 }),
+    steel: new THREE.MeshStandardMaterial({ color: 0x87817a, metalness: .35, roughness: .5, envMap, envMapIntensity: .4 }),
     deck: new THREE.MeshStandardMaterial({ color: 0x9c9fa5, map: dm, bumpMap: dm, bumpScale: 1.2, metalness: .5, roughness: .46, envMap, envMapIntensity: .5 }),
     hazard: new THREE.MeshStandardMaterial({ color: 0xffffff, map: hz, metalness: .2, roughness: .62, envMap, envMapIntensity: .35 }),
     chrome: new THREE.MeshStandardMaterial({ color: 0xe2e7ef, metalness: .92, roughness: .14, envMap, envMapIntensity: 1.3 }),
-    grate: new THREE.MeshStandardMaterial({ color: 0x858989, alphaMap: gr, alphaTest: .5, side: THREE.DoubleSide, metalness: .5, roughness: .45, envMap, envMapIntensity: .5 }),
+    grate: new THREE.MeshStandardMaterial({ color: 0x8a857e, alphaMap: gr, alphaTest: .5, side: THREE.DoubleSide, metalness: .5, roughness: .45, envMap, envMapIntensity: .5 }),
   };
   if (hz) hz.colorSpace = THREE.SRGBColorSpace;
   if (dm) dm.colorSpace = THREE.SRGBColorSpace;

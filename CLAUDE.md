@@ -52,6 +52,12 @@ machines sit the count-in out (ARM_AT, §7 Transport); the search runs as parall
 page remembers its plans (same plans, bit for bit); the HUD has ■ STOP / ▶ START and ↺ RESTART.
 Still not pushed to GitHub.
 
+**STAGING WORLD (2026-10-25, branch `staging-world`, off `main` 6db6c8c) is NOT merged to `main` and NOT
+deployed.** The floor came up (-22 to -5.5), machines are set IN the rooms with a per-machine lift,
+supports are styled by each room by height band, rooms react to strikes, the layout is floor-first, and
+EDIT STAGE edits height. Its changelog and guide: [`docs/STAGING-WORLD.md`](docs/STAGING-WORLD.md). Rollback
+target when it ships = 6db6c8c. Wave 4 (per-room polish) is pending merge.
+
 `npm run deploy` builds + ships to production. It does not care which branch you're
 on. Treat it as live, and confirm with the human before running it.
 
@@ -112,6 +118,15 @@ on. Treat it as live, and confirm with the human before running it.
                      footing3d.js (the render kit + DEFAULT_STYLE + tintStyle, a room's own
                      materials — test/footing3d.test.js),
                      pulse.js (pure: a strike cue → a light envelope of songTime — test/pulse.test.js).
+                     Each room's own footing STYLE + reactions + props: grid-{shade,footing,floor,plot}.js,
+                     cathedral-{footing,props}.js, studio-{footing,atlas,vu,props}.js, void-{isles,ground,
+                     footing}.js, graveyard-{footing,place}.js, arena-{footing,props,cues}.js,
+                     starship-{footing,deck}.js (tests: test/room-<key>.test.js, arena-staging, arena-props).
+                     The machines are SET IN the rooms: docs/STAGING-WORLD.md.
+    src/editor/      the creation tools: stage-edit.js (EDIT STAGE), placement.js (layout entries
+                     [x, z, yaw, lift?], history with undo + redo), mapping.js + panel.js (MAP), and
+                     height.js (pure: the RCT-style HEIGHT rules — snap ½ u, magnets, metres, band names,
+                     liftMax — test/editor-height.test.js).
     src/midi/        MIDI import: parse.js (type-0/1 → tracks, FAITHFUL — keeps every
                      channel incl. 9, with velocity) + convert.js (→ song JSON, quantized,
                      lock-rule-correct; channel 9 → drum lanes via drumByGm — see §6)
@@ -132,9 +147,11 @@ on. Treat it as live, and confirm with the human before running it.
     src/main.js      scene, rigs, buildWorld, ballPos, animate(), controls — the orchestrator
     test/            Vitest: engine ballistics, song lock-rule, drum validation, MIDI, the
                      juggler's plan audit + bake, share round-trip, every plugin's honesty suite,
-                     staging audit + footing, director, XR (55 files / 2649 tests, 2026-10-25; ~1.5 min)
+                     staging audit + footing, director, XR (63 files / 2883 tests, 2026-10-25; ~1.5 min)
     docs/OVERNIGHT-2026-10-07.md   the night's changelog: what each new machine / room / song
                      is and the URL to try it
+    docs/STAGING-WORLD.md   2026-10-25 staging world (branch staging-world): floor, lift, footing, rooms
+                     that react, floor-first layout, height editing — changelog + the room footing contract
     VISION.md        the product north star (vision, not spec)
     docs/PLAN-*.md   design notes: PLAN-{real,seamless}-conveyor (how the static band
                      was reasoned out) + PLAN-staging (instrument/room/support/placement
@@ -714,19 +731,47 @@ parallel song branches, so merge the key lists and regenerate the fixture ONCE o
   loops `rideEvery` = ⌈share / RIDE_LONGRUN .22⌉ rides only every n-th pass (`round(base/P) %
   rideEvery` — still pure). Reduced-motion viewers never get directed rides; XR never moves the head
   (a ride in TOUR lands you on the lead pad). Only BELT balls are ridden (instrument lobs: open).
-- **Gallery staging tier** (`stations.js layoutStations`, main `rig.setLift` + `stageFrame`): the
-  floor was full at 14 machines, so a raised rear GALLERY sits `GALLERY_DROP` (2 u) under the belt's
-  top housing (y ≈ 13.7) — the audience sees it over the belt. riff / strum / horns / pogo
-  have gallery slots either side of the hung organ loft; dulcimer + bowwheel take the front CORNERS.
-  Pass order: floor at margin 1 → .7 → .45, then the gallery opens to any station, borrowing depth
-  last. Gallery machines avoid every hung footprint (organ, chandelier, court) AND the space behind
-  it; drums + turntable never go up; a station the user pins behind the belt goes up. A raised
-  station is LIFTED (a rigid move: gallery deck − its ground; a user's own lift wins) — its supports
-  are the room's (rooms/footing.js), not its own legs. `stageFrame` keeps every
-  front-row machine's full width + `FRONT_KEEP` .25 of its front half (corner machines are no longer
-  cut in half). Only stations with events are placed. Shared-file scar: STATIONS is the one edit a
-  new floor plugin can't avoid — run the slot search against test/stations.test.js (1–3 bays ±
-  turntable) or every other station's solved position moves.
+- **Staging layout** (`stations.js layoutStations`, main `rig.setLift` + `stageFrame`; was the "gallery
+  tier"): **FLOOR FIRST.** riff / strum / horns / pogo carry `floor: [seat…]` (SEATS: centre, left,
+  right, wingL/R, cornerL/R, backL/R); each takes the first free seat within `SEAT_R` 4.5, and a seat the
+  audience's eyes see > `HIDE_MAX` .3 hidden (OCC_EYES: 3–4 fixed eyes, not the real wide) is not free.
+  Floor passes (margin 1 → .7 → .45) come before ANY gallery pass. The rear GALLERY is the overflow and
+  is a LOFT: it sits `GALLERY_DROP` (2 u) under the belt's top housing (y ≈ 13.7), the fewest machines
+  climb, and a climber goes BESIDE one already up (one loft, `FOOT.LOFT_GAP`) — only Starship Groove
+  climbs today. Gallery machines avoid every hung footprint AND the space behind it; drums + turntable
+  never go up; a station the user pins behind the belt goes up. A raised station is LIFTED (a rigid move:
+  gallery deck − its ground; a user's own lift wins). **The STAR** (imports' signature, or a song's
+  `director.signature`; main passes `stageStar`) stands at `STAR` (belt centre, z 10), never climbs, and
+  nobody taller than the sightline to its base stands in its foreground. **Stagecraft** (wave 3, tried
+  first, dropped if it would cost the floor a machine): the kit's DRUM RISER — while a band machine plays
+  the kit stands on the right wing (`KIT_RISER` {x 22.5, z 5, lift 3}) on a 3 u dais if the wing is free and
+  the kit is seen there (a user's lift 0 keeps it down; Campfire and Starship Groove keep it front-right);
+  the band takes the side with fewer machines first; TIERED RISERS (`SEAT_RISE` [1.5, 3]: a back seat
+  z < 10 hidden behind the front row takes the smallest riser that makes it seen; front seats never rise);
+  `loneTurn` (a lone star with a `turn` hint, the grand .55 rad, is turned by main before it is measured).
+  The solver returns `lift` for a riser; main applies it unless the user set a height (kit: `kitSlot.rise`).
+  `stageFrame` keeps every front-row machine's full width + `FRONT_KEEP` .25 of its front half. main
+  `bandOn()` keeps the gallery's low wide directions while a gallery-born machine is live. Only stations
+  with events are placed. Shared-file scar: STATIONS is the one edit a new floor plugin can't avoid — run
+  the slot search against test/stations.test.js (1–3 bays ± turntable) or every other station's solved
+  position moves.
+- **STAGE EDIT height** (`src/editor/height.js` pure, `stage-edit.js`; RCT-style): select a floor machine and
+  a HEIGHT HANDLE stands at its footprint corner nearest the eye — a pole with a tick per metre, a ▲▼ knob,
+  a readout chip (`+12.8 m · TOWER · LOFT · RIFF FORGE`). Heights are SAID in metres (`M_PER_U` ≈ .677 u→m)
+  with the band name FLOOR / RISER / PLATFORM / TOWER. Drag the knob (relative; snaps ½ u = `LIFT_STEP`,
+  Shift = free; MAGNETS: the floor within .3, a neighbour's deck within `LOFT_DY` so the two share a loft);
+  PgUp / PgDn and ] / [ step ½ u (Shift 2 u), Home = floor; the dock has ▲ RAISE · ▼ LOWER · FLOOR (an
+  explicit 0, outranks the gallery raise) · AUTO. Limits: `FOOT.LIFT_MAX` and the top ≤ ceiling − `CEIL_GAP` 1 u.
+  During a gesture the machine moves rigidly (stations `rig.setLift`, the kit's drumGroup) and the room
+  re-anchors + re-plans its footing every frame (~2–5 ms); at its end (`SETTLE_MS` 700) the kit rebuilds
+  and the director re-solves once (0.3–0.7 s). Grabbing the knob in the plan view eases to an elevated 3/4
+  view with `GRAB_HEAD` 8 u of raise framed (the camera never moves mid-drag); PLAN | 3D flips. One undo step
+  per gesture; REDO = ⌘⇧Z / Ctrl+Y (`placement.js makeHistory`). `placeEntry` is the one write path. AUTO,
+  an undo back to AUTO and a MOVE of a machine with no user lift all take exactly what a RELOAD would give:
+  main `autoLiftOf` re-runs `layoutStations` with the build's args (`lastLayout.args`) and every machine
+  pinned where it stands. Share links + saved layouts carry `[x, z, yaw, lift]` (lift 0 kept; absent = AUTO).
+  The MAP panel and STAGE EDIT are one tool at a time. Host: `height(key, out)`, `liftLive(key, u)`,
+  `liftSettle()`. Dev: `?lift=marimba:4,drums:2` / `__dev.lift(key, u)`.
 - **Rooms** (`src/rooms/`): each room is pure set dressing in the static world — `FLOOR` stays
   `STAGE.FLOOR` (−5.5 since 2026-10-25; it was −22, every machine on ~15 m of legs) (HW/BACK/FRONT/
   CEIL may widen, as the studio and arena do); `place(anchors, plan)` gets every machine's footprint, deck,
@@ -741,6 +786,16 @@ parallel song branches, so merge the key lists and regenerate the fixture ONCE o
   only the SKY (≈ 5.7° per 4-bar phrase, alternating, level through the breath; `loopBeat()` counts
   from each loop's downbeat — the 1.2 s seam tail isn't whole beats); star streaks move `z0 + v·t mod
   L` with every speed n·L/T_WRAP and songTime mod T_WRAP on the CPU (no float drift, no snap).
+  **Each room dresses the footing and answers its machines** (docs/STAGING-WORLD.md has the table): grid =
+  graphite volumes edged in light + strike ripples on the floor (pool of 20) + a stage plot naming each
+  machine; cathedral = stone and oak, an engaged stair turret over 5 u, brass candlesticks that flare;
+  studio = rugs, road cases, truss, a catwalk loft, per-support VU panels; void = every machine on an
+  ISLAND whose top is STAGE.FLOOR, crystals that lift on strikes, a sky rock for the chandelier; graveyard =
+  ledger / chest tomb / mausoleum / scaffold / crypt terrace, a churchyard planned round the machines,
+  flame + fog + wisps; arena = Litedeck / Layher scaffold / box truss, an LED VU ring per deck, pyro that
+  stands clear; starship = deck plate / chrome rams / lattice gantry, running lights + beacons. Props keep
+  `GY.CLEAR`-style clearance from every footprint and every `footingBoxes` envelope (for a rotated pad use
+  the plan's `supportRects`, never its AABB).
 - **FOOTING** (2026-10-25 — the machines no longer bring legs; the room holds them up). The host
   (rooms/index.js) plans it once per set of anchors (`planFooting`: a pad per standing machine by
   HEIGHT BAND — flush plinth ≤ .8 · low dais + stair ≤ 3.5 · mid braced platform, rails, stair or
@@ -754,7 +809,15 @@ parallel song branches, so merge the key lists and regenerate the fixture ONCE o
   `footingBoxes(plan)` — the envelopes the shot solve treats as solid (shotrig roomSolids reads a
   merged mesh's `userData.boxes`), the director's glide test and the wide's band test raycast,
   XR keeps its pads out of, and test/staging-audit.test.js re-plans at the solved spots (the
-  fixture's `foot`). THE EDGE: a strip of the machine's colour round its pad answers its own strikes
+  fixture's `foot`). A form / edge hook returns `null` (the kit's own form), `true` (handled, nothing to
+  add — it wrote into the merged slots) or an Object3D (joins the footing; an empty Group still works);
+  there is NO `open` hook (an open stand reaches its band's hook with `spec.open`/`feet`/`hang`); every pad
+  has `spec.foot = [w, d]`; `kit.slot(name)` is a style's own slot, `gapOf` / `landings` are exported.
+  `footStats` counts only visible meshes with geometry. **HOST PREWARM** (idle, after the first frames):
+  every unvisited room is built, PLACED on the current anchors, footed and single-passed (perftune) before
+  `renderer.compile` — a swap compiles 0 programs, R takes ~0.1–0.5 ms; a room must create `instanceColor`
+  at build and set `userData.boxes` on a merged mesh that spans floor to ceiling. `beamMat`'s facing term is
+  capped at 1 (a bloom blob under a lifted kit). THE EDGE: a strip of the machine's colour round its pad answers its own strikes
   (pulse.js over the anchor's cue: afterglow exp(−dt/.45), max not sum, + anticipation; one uniform
   slot per pad, silent in the count-in) — an accent, never a strobe.
   Rooms DRESS it with `tintStyle({ base, steel, deck })` (footing3d.js: the kit's forms in the room's own
@@ -885,14 +948,28 @@ tempo, the blob-URL console noise and the forced breath wide shot are all FIXED)
 - **Bake cost on dense imports**: every distinct riff chord is its own id (~6.5 ms; a 640-hit part
   with no repeats ≈ 4 s); a 3-timbre organ import ≈ 190 ids ≈ 60 MB Float32; cymbals ≈ 330 ms at load
   (more on a phone — render ride variant 2 lazily if it bites). Consider capping chords / timbres.
-- **Staging**: with the gallery in use the wide `stage` shot goes steep (eye y ≈ 34) — Forge in the
-  arena frames its star (the riff) small top-left on the gallery and the kit runs under the button bar
-  (its anvil script covers the climax); the starship tutti wide is high and steep; the portrait stage
-  shot frames only belt + hung + turntable; all-14-machines on 3 bays is crowded (riff behind horns,
-  ~3 u of front depth borrowed). An import's SIGNATURE machine isn't moved to the front — Arena MoP's
-  riff stands on the gallery. Stage edit decides gallery height only at rebuild. Winter's grand is
-  cropped bottom-left in the Void's wide. Starship Groove in the graveyard: the riff station's box
-  overlaps a room prop (staging-audit `ov:1 riff×room`; on the classic belt too).
+- **Staging** (the floor-first layout fixed: the star is front and centre, the band takes the floor, only
+  Starship Groove uses the gallery, so the steep gallery wide is rare; the portrait stage shot still frames
+  only belt + hung + turntable). Still open: seats and risers are judged from the solver's fixed eyes
+  (OCC_EYES), not the real wide; `KIT_RISER.lift` is a fixed 3 u; Mars's centre riff is ~35 % behind the
+  kit's arch; Starship Groove's two climbers (15.6 u apart) get two towers, not one loft; a STAR exists
+  only for imports or `director.signature`; Piano Man's lone grand is a three-quarter but still on the
+  belt's axis; Danse Macabre's bass is 100 % and Daybreak's music box 82–99 % behind the kit from a low eye
+  (pre-existing); on imports the MAP panel opens over the kit's riser; Winter's grand is cropped
+  bottom-left in the Void's wide; Starship Groove in the graveyard: the riff station's box overlaps a room
+  prop (staging-audit `ov:1 riff×room`).
+- **Staging world (branch `staging-world`, unmerged; docs/STAGING-WORLD.md has the full list)**: NOTHING was
+  seen on a real iPhone or Quest (headless Chrome, 390×844 touch emulation, IWER draw counts; the height
+  knob is not in the VR menu). Editing: a 0.3–0.9 s pause when a height gesture ends (synchronous restage);
+  a >8 u drag carries the top under the bar until release; unselected name tags can overlap; on a phone the
+  knob can land ~120 px off the finger; an explicit FLOOR on a gallery machine behind the belt stays there
+  (the bar warns). The turntable's open stand at lift 0 is ~4.2 u tall with no ladder (the climb check uses
+  lift, not height). Rooms: the Void's keel shader lacks the `beamMat` cap; the arena's blinders / par cans
+  are still sized for −22 and its front-wash pars aim at y −8; the staging audit freezes per-layout room
+  props at the first song's positions; first footing builds are 8–16 ms on finale under load (target ~10;
+  cathedral / starship ≈ 2× the kit; graveyard with two lofts ~23 ms); strike reactions are quiet by design
+  (graveyard barely shows in a wide); grid's light lattice is brighter than the old steel (`glace` knob)
+  and its floor ripple loop is unmeasured on a phone GPU.
 - **Director**: whole-song imports give `ride` .28–.39 (cap .14 — pre-existing); some rooms can't fit
   every cap (Piano Man's dulcimer .41 vs .34) — the least-over edit wins; a signature's first shot can
   open ~3 beats early on an idle machine (the director pre-cuts); `shares.ride` is one pass — divide
@@ -918,7 +995,7 @@ tempo, the blob-URL console noise and the forced breath wide shot are all FIXED)
   chase jumps part of a beat once a loop in the breath; arena fog/floor pools read grey-blotchy low in
   wide shots, CO2 plumes read as solid cones, and drum-less stretches get no pyro (Canon-Orchestra
   ≈ 60 s); AR exit restores the pre-AR room; long room/song names truncate on the VR menu; AR at true
-  scale doesn't fit a room (the band is 18.7 m up); MAP / EDIT STAGE are 2D-only.
+  scale doesn't fit a room (the band is 18.7 m up); MAP / EDIT STAGE (incl. the height knob) are 2D-only.
 - Wall-clock bake-budget tests (e.g. inst-riff "bakes the whole demo fast") can flake when the
   machine is loaded by parallel agents/suites — re-run the file alone before believing it.
 
@@ -939,8 +1016,8 @@ Near-term, in rough priority:
 
 1. **Hear it / wear it**: a real-iPhone listen (buckets, cymbals, velocity) and the Quest 2 pass
    (docs/XR.md §0). Everything after this depends on what those say.
-2. **Staging for the star**: put an import's signature machine front and centre (not up on the
-   gallery), and tame the steep gallery wide shot.
+2. **Staging world**: merge `staging-world` (wave 4 polish first), then hear/wear it. The star is front
+   and centre and the gallery is a rare loft now; what's left is real-hardware checks and the open issues in §8.
 3. **Timbre seams**: a reed voice for horns, a belt timbre (a guitar line on a belt), a loop-sustain
    seam for voices (drones past 4 s), per-event timbre instead of id suffixes if it keeps growing.
 4. **Melody/drum editor** — piano-roll + drum-grid, exports the same song format (mode 2).

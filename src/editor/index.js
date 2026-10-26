@@ -23,7 +23,7 @@ import { makeStageEdit } from './stage-edit.js';
 import { midiSources, midiSourcesIn, defaultMidiMapping, applyMidiMapping, songSources, defaultSongMapping, applySongMapping,
          setTarget, sameMapping, loadMapping, saveMapping, sanitizeMapping, targetsFor, machineOf } from './mapping.js';
 import { convertToSong } from '../midi/convert.js';
-import { placeSlot, sanitizeLayout, encodeLayout, loadLayout, saveLayout, makeHistory } from './placement.js';
+import { placeSlot, placeEntry, sanitizeLayout, encodeLayout, loadLayout, saveLayout, makeHistory } from './placement.js';
 
 /** "bars 33–48 (0:41 of 3:27) — the chorus" — a phrase window in words */
 export function loopText(p, short = false){
@@ -52,6 +52,10 @@ const store = (() => { try { return window.localStorage; } catch (e){ return nul
  *   wall()           the belt's world Box3 · cx() its centre x · kitPivot() the kit's slot point (world)
  *   visBox(obj)      drawn world bounds · room {x0,x1,z0,z1} where footprints may go · roomBox eye limits
  *   floorY           the room floor's world y (the grid + the belt's footprint lie on it)
+ *   lift(key)        the HEIGHT the user gave a machine (undefined: the layout decides)
+ *   height(key)      its height now { lift, user, deck, bottom, top, floor, ceil, open } (null: none to give)
+ *   liftLive(key, u) set it live, mid-gesture (u undefined: forget the user's) · liftSettle() the gesture is over
+ *   footing()        the live footing plan (rooms/footing.js) · fixed() what can't move here, and why
  */
 export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
   let midi = null;                                   // { parsed, label, id } — the last MIDI import
@@ -204,28 +208,42 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
   const veilUp = () => { const o = document.getElementById('overlay'); return !!o && !o.classList.contains('gone'); };
 
   /* ---- stage edit ---- */
+  /* the layout with `key` placed at `entry` (placement.js placeEntry: the first edit pins the room as it
+     stands; heights the user gave are kept; entry.lift a number / null (AUTO) / absent) */
+  const placed = (key, entry, all) => placeEntry(layout(), key, entry, all, { cx: host.cx(), liftOf: k => host.lift?.(k) });
   const stage = makeStageEdit({ THREE, scene, cam, dom, onChange: syncButtons, host: {
     pieces: host.pieces, wall: host.wall, cx: host.cx, kitPivot: host.kitPivot, visBox: host.visBox, room: host.room, roomBox: host.roomBox, roomGroup: host.roomGroup,
-    floorY: host.floorY,
+    floorY: host.floorY, height: host.height, liftLive: host.liftLive, footing: host.footing, fixed: host.fixed,
     place(key, entry, all){
-      let L = layout();
-      history.push(curId, L);                        // (undo: the layout as it was before this move)
-      // a machine keeps the HEIGHT the user gave it (host.lift: its live one — else its entry's); one
-      // the room solve raised (the gallery) has none to keep: the solve decides again where it lands
-      const held = (k, e) => { const u = host.lift?.(k) ?? L[k]?.lift; return Number.isFinite(u) ? { ...e, lift: u } : e; };
-      if (!Object.keys(L).length)                    // the first move PINS the whole room as it stands:
-        for (const p of all) L[p.key] = held(p.key, { x: p.x - host.cx(), z: p.z, yaw: p.yaw });   // what you see is what stays
-      L = { ...L, [key]: held(key, entry) };
-      saveLayout(store, curId, L);
+      history.push(curId, layout());                 // (undo: the layout as it was before this move)
+      saveLayout(store, curId, placed(key, entry, all));
       host.restage();
       stage.refresh();
     },
-    resetLayout(){ history.push(curId, layout()); saveLayout(store, curId, {}); ignoreSongStage.add(curId); host.rebuild(true); },
+    /* HEIGHT (the handle — height.js): a gesture opens ONE undo step (liftBegin: the layout as it was),
+       writes as it goes (liftWrite — cheap: the machine already moved live, only the stored layout
+       follows) and settles once, at its end (liftSettle: the kit rebuilt at its deck, the room
+       re-anchored, the director re-solved) */
+    liftBegin(){ history.push(curId, layout()); syncButtons(); },
+    liftWrite(key, entry, all){ saveLayout(store, curId, placed(key, entry, all)); },
+    liftSettle(){ host.liftSettle(); stage.refresh(); syncButtons(); },   // (refresh: a kit rebuilt at its deck is a new group)
+    /* AUTO: the user's height is forgotten — the layout decides again (a station: the room is solved
+       afresh — the gallery raise is the solve's; the kit: back on its plinth, live) */
+    liftAuto(key, entry, all){
+      history.push(curId, layout());
+      saveLayout(store, curId, placed(key, { ...entry, lift: null }, all));
+      host.liftLive(key, undefined);
+      if (key === 'drums'){ host.liftSettle(); stage.refresh(); } else host.rebuild(true);
+      syncButtons();
+    },
+    resetLayout(){ stage.cancel(); history.push(curId, layout()); saveLayout(store, curId, {}); ignoreSongStage.add(curId); host.rebuild(true); },
     undo,
   } });
-  /* undo the last stage move (or reset): back to the layout before it — a rebuild holding songTime
-     (each station is re-placed from its slot; an empty layout = the solved stage again) */
+  /* undo the last stage move (or reset, or height gesture): back to the layout before it — a rebuild
+     holding songTime (each station is re-placed from its slot; an empty layout = the solved stage
+     again). A burst of height taps still settling is simply dropped: the rebuild re-derives it all */
   function undo(){
+    stage.cancel();
     const prev = history.pop(curId);
     if (!prev) return false;
     if (!Object.keys(prev).length) ignoreSongStage.add(curId); else ignoreSongStage.delete(curId);
@@ -280,7 +298,7 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
       const keys = host.pieces().map(p => p.key).sort().join(',');
       const newSong = curId !== builtId, newCast = keys !== builtKeys;
       builtId = curId; builtKeys = keys;
-      if (newSong) status = '';
+      if (newSong){ status = ''; stage.cancel(); }
       if (stage.on){ stage.refresh({ reset: newSong }); if (newSong || newCast) stage.overview(); }
       if (panelWanted && host.key() !== 'imported') panelWanted = false;
       openWanted();
@@ -388,9 +406,79 @@ function injectStyles(){
   .se-tag{position:absolute;left:0;top:0;white-space:nowrap;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:9.5px;letter-spacing:.16em;
     text-transform:uppercase;color:var(--c);background:rgba(7,6,14,.72);border:1px solid rgba(90,97,120,.45);border-radius:999px;padding:3px 9px}
   .se-tag.hov{border-color:var(--ink)}
+  .se-tag i{font-style:normal;opacity:.75;margin-left:7px;letter-spacing:.06em;text-transform:none}
+  .se-tag i:empty{display:none}
   .se-tag.sel{border-color:var(--amber);color:var(--amber);box-shadow:0 0 18px rgba(255,183,100,.3)}
   .se-tag.bad{border-color:#ff4d5e;color:#ff6b7a}
-  body.stage-editing #cams{opacity:.35;pointer-events:none}
+  body.stage-editing #cams{opacity:0;pointer-events:none}
+  .se-view{display:inline-flex;border:1px solid rgba(90,97,120,.45);border-radius:999px;overflow:hidden}
+  .se-btns .se-view button{border:none;border-radius:0;padding:4px 10px;background:none}
+  .se-btns .se-view button.on{color:var(--amber);background:rgba(255,183,100,.1)}
+  /* the selection DOCK (stage-edit.js): who it is · ▼ height ▲ · FLOOR · AUTO · turn */
+  .se-dock{position:fixed;left:50%;bottom:46px;transform:translateX(-50%);z-index:12;display:flex;align-items:center;gap:14px;
+    max-width:calc(100vw - 32px);background:rgba(7,6,14,.9);border:1px solid rgba(90,97,120,.5);border-left:3px solid var(--c);border-radius:16px;
+    padding:8px 10px 8px 14px;color:var(--dim);font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:10px;letter-spacing:.1em;
+    box-shadow:0 14px 44px rgba(0,0,0,.45);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);user-select:none;-webkit-user-select:none}
+  .se-dock[hidden]{display:none!important}
+  .sd-name{display:grid;grid-template-columns:auto 1fr;column-gap:8px;row-gap:3px;align-items:center;min-width:0}
+  .sd-name i{width:8px;height:8px;border-radius:50%;background:var(--c);box-shadow:0 0 10px var(--c)}
+  .sd-name b{color:var(--c);font-weight:600;letter-spacing:.2em;text-transform:uppercase;white-space:nowrap;font-size:10.5px;overflow:hidden;text-overflow:ellipsis}
+  .sd-loft{grid-column:2;font-style:normal;color:#7fe3c8;font-size:9px;letter-spacing:.18em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-transform:uppercase}
+  .se-dock:not(.loft) .sd-loft{display:none}
+  .sd-h,.sd-more,.sd-turn{display:flex;align-items:center;gap:6px;flex:none}
+  .se-dock button{min-width:44px;height:44px;background:rgba(7,6,14,.6);border:1px solid rgba(90,97,120,.5);color:var(--ink);font:inherit;
+    font-size:10px;letter-spacing:.16em;border-radius:12px;cursor:pointer;padding:0 12px;transition:border-color .15s,color .15s,background .15s;touch-action:manipulation}
+  .se-dock button:hover:not(:disabled){border-color:rgba(255,183,100,.7);color:var(--amber)}
+  .se-dock button:active:not(:disabled){background:rgba(255,183,100,.14)}
+  .se-dock button:focus-visible{outline:none;border-color:var(--ink)}
+  .se-dock button:disabled{opacity:.28;cursor:default}
+  .se-dock .sd-step{font-size:13px;letter-spacing:0;color:var(--amber);border-color:rgba(255,183,100,.45);padding:0 12px}
+  .se-dock .sd-step i{font-style:normal;font-size:9.5px;letter-spacing:.18em}
+  .se-dock .sd-turn button{font-size:15px;letter-spacing:0;padding:0}
+  .sd-read{display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:13ch;line-height:1.1}
+  .sd-read b{color:var(--ink);font-size:14px;font-weight:600;letter-spacing:.05em;white-space:nowrap}
+  .sd-read i{font-style:normal;color:var(--amber);font-size:8.5px;letter-spacing:.24em;margin-top:4px;white-space:nowrap}
+  .sd-why{display:none;color:var(--ink);opacity:.85;letter-spacing:.08em;white-space:nowrap}
+  .se-dock.fixed{border-left-color:var(--dim)}
+  .se-dock.fixed .sd-why{display:block}
+  .se-dock.fixed .sd-h,.se-dock.fixed .sd-more,.se-dock.fixed .sd-turn{display:none}
+  .se-dock.nolift .sd-h,.se-dock.nolift .sd-more{display:none}
+  /* the HEIGHT handle on the screen: the pole + its metre scale, the knob, its readout, the first-time hint */
+  .se-pole{position:fixed;left:0;top:0;width:100vw;height:100vh;pointer-events:none;z-index:6;overflow:visible}
+  .se-pole .sp-rail{stroke:rgba(255,183,100,.42);stroke-width:2;fill:none}
+  .se-pole .sp-run{stroke:var(--amber);stroke-width:4;stroke-linecap:round;fill:none;filter:drop-shadow(0 0 5px rgba(255,183,100,.75))}
+  .se-pole .sp-ticks{stroke:rgba(255,183,100,.6);stroke-width:1.3;fill:none}
+  .se-pole .sp-major{stroke:rgba(255,214,160,.95);stroke-width:2;fill:none}
+  .se-pole text{fill:var(--amber);font:600 9px ui-monospace,'SF Mono',Menlo,Consolas,monospace;letter-spacing:.1em;paint-order:stroke;stroke:rgba(7,6,14,.9);stroke-width:3px}
+  .se-knob{position:fixed;left:0;top:0;z-index:8;width:30px;height:40px;border-radius:15px;box-sizing:border-box;background:rgba(22,15,8,.94);
+    border:2px solid var(--amber);color:var(--amber);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+    font:9px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace;cursor:ns-resize;touch-action:none;user-select:none;-webkit-user-select:none;
+    box-shadow:0 0 0 4px rgba(255,183,100,.13),0 0 22px rgba(255,183,100,.5);transition:box-shadow .15s,background .15s}
+  .se-knob::before{content:'';position:absolute;inset:-14px -16px;border-radius:24px}
+  .se-knob span{pointer-events:none}
+  .se-knob:hover,.se-knob.drag{background:rgba(52,34,14,.97);box-shadow:0 0 0 7px rgba(255,183,100,.22),0 0 34px rgba(255,183,100,.8)}
+  .se-knob[hidden],.se-chip[hidden],.se-tip[hidden]{display:none!important}
+  .se-chip{position:fixed;left:0;top:0;z-index:7;pointer-events:none;display:flex;flex-direction:column;gap:3px;padding:6px 10px 6px 10px;border-radius:10px;
+    background:rgba(7,6,14,.84);border:1px solid rgba(255,183,100,.42);font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;white-space:nowrap;
+    box-shadow:0 6px 22px rgba(0,0,0,.4)}
+  .se-chip b{color:var(--ink);font-size:13px;font-weight:600;letter-spacing:.05em}
+  .se-chip i{font-style:normal;color:var(--amber);font-size:8.5px;letter-spacing:.26em}
+  .se-chip i:empty{display:none}
+  .se-chip em{font-style:normal;color:#7fe3c8;font-size:8.5px;letter-spacing:.18em;text-transform:uppercase}
+  .se-chip:not(.loft) em{display:none}
+  .se-chip.loft{border-color:rgba(127,227,200,.55)}
+  .se-chip.nudge{animation:se-nudge .32s ease}
+  @keyframes se-nudge{0%,100%{margin-left:0}25%{margin-left:-5px}75%{margin-left:5px}}
+  .se-tip{position:fixed;left:0;top:0;z-index:7;display:flex;align-items:center;gap:6px;padding:4px 4px 4px 10px;border-radius:9px;
+    background:rgba(30,20,8,.82);border:1px dashed rgba(255,183,100,.5);color:var(--amber);font:9.5px ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+    letter-spacing:.08em;white-space:nowrap}
+  .se-tip button{background:none;border:none;color:var(--amber);font:inherit;font-size:15px;line-height:1;cursor:pointer;min-width:28px;min-height:28px;padding:0}
+  body.se-lifting .se-tag:not(.sel){opacity:.3}
+  body.se-lifting,body.se-lifting *{cursor:ns-resize!important}
+  @media (pointer:coarse){
+    .se-knob{width:36px;height:48px;border-radius:18px;font-size:11px}
+    .se-knob::before{inset:-16px -18px}
+  }
   @media (max-width:640px){
     .map-panel{top:auto;bottom:12px;right:8px;left:8px;width:auto;max-height:58vh}
     .mp-row{grid-template-columns:minmax(0,1fr) 128px;grid-template-areas:"info sel" "spark spark"}
@@ -398,7 +486,15 @@ function injectStyles(){
     .se-bar{top:10px;left:8px;right:8px;transform:none;max-width:none;border-radius:14px;gap:6px 10px;padding:7px 8px 7px 12px}
     .se-bar .se-hint{order:3;flex-basis:100%;min-width:0;font-size:9.5px}
     .se-btns{gap:4px}.se-btns button{padding:6px 10px;font-size:13px;letter-spacing:0}
+    .se-btns .se-view button{font-size:10px;letter-spacing:.12em;padding:6px 9px}
     .se-btns i{display:none}
+    .se-dock{left:8px;right:8px;bottom:42px;transform:none;max-width:none;display:grid;grid-template-columns:minmax(0,1fr) auto;
+      grid-template-areas:"name turn" "h more" "why why";gap:8px 8px;padding:8px 8px 8px 12px;border-radius:16px}
+    .sd-name{grid-area:name}.sd-turn{grid-area:turn}.sd-h{grid-area:h}.sd-more{grid-area:more}.sd-why{grid-area:why;white-space:normal}
+    .sd-read{min-width:11ch}
+    .se-dock .sd-step{padding:0}.se-dock .sd-step i{display:none}
+    .se-dock.fixed{grid-template-areas:"name" "why";grid-template-columns:1fr}
+    body.stage-editing #note{opacity:0}
     body.stage-editing #hud{opacity:0;pointer-events:none}
     body.stage-editing #hud *{pointer-events:none!important}
   }

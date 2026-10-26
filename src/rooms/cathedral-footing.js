@@ -155,7 +155,6 @@ export function pointed(s, h){ const R = (h * h + s * s) / (2 * s); return { R, 
 /* ---- the forms, written into one kit's slots (its frame set to the spec by the caller) ---- */
 function makeForms(k){
   const F = k.floor, C = CATH;
-  const G = () => new THREE.Group();
 
   /* the machine's light: four strips round a rect, just proud of its faces (y0..y1) */
   function inlay(u0, u1, v0, v1, y0, y1, p, o = .018){
@@ -557,7 +556,7 @@ function makeForms(k){
     return gapOf(acc);
   }
   return {
-    inlay, inset, plinthBlock, blindArcade, stoneDeck, arcade, balustrade, gallery, turret, oakLadder, chancelStair, stoneStair, G, access,
+    inlay, inset, plinthBlock, blindArcade, stoneDeck, arcade, balustrade, gallery, turret, oakLadder, chancelStair, stoneStair, access,
     flush(p){
       if (p.fixed){                                                         // the belt's kerb: its posts stand in it
         const T = F + FOOT.KERB;
@@ -656,17 +655,27 @@ function makeForms(k){
   }
 }
 
+/* what a hook returns when it drew its parts INTO the kit (the merged meshes carry them — that is what
+   keeps the footing to a handful of draws): a mark that leaves the footing group the moment it is added,
+   so no empty node is left per pad (footStats counts the group's children as its draws) */
+function drawnMark(){
+  const g = new THREE.Group(); g.name = 'footing:drawn';
+  g.addEventListener('added', () => g.removeFromParent());
+  return g;
+}
+
 /** the Cathedral's footing style (rooms/footing3d.js): its materials are made once, on first use, and
     are the room's to dispose (style.dispose()) */
 export function cathedralFooting(){
   let made = null, tex = [];
+  const DRAWN = drawnMark();
   const forms = new WeakMap(), of = k => forms.get(k) || forms.set(k, makeForms(k)).get(k);
   const hook = name => (spec, k) => {
     const f = of(k);
     if (name !== 'loft' && spec.open) f.open(spec);
     else if (name === 'loft') f.loft(spec, k.plan.pads.filter(p => p.loft === spec.id));
     else f[name](spec);
-    return f.G();
+    return DRAWN;
   };
   return {
     key: 'cathedral',
@@ -687,7 +696,7 @@ export function cathedralFooting(){
       };
       return made;
     },
-    edge: () => new THREE.Group(),                                         // (every pad's light is drawn by its form)
+    edge: () => DRAWN,                                                     // (every pad's light is drawn by its form)
     flush: hook('flush'), low: hook('low'), mid: hook('mid'), high: hook('high'), loft: hook('loft'),
     dispose(){
       if (made) for (const m of Object.values(made)) m.dispose();

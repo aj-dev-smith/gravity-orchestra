@@ -1,9 +1,13 @@
 import * as THREE from 'three';
 import { STAGE } from './common.js';
+import { gridFootStyle } from './grid-footing.js';
 /* ROOM ZERO — the greybox dev room: a grid-walled box around the static band,
    extracted verbatim from main.js. The grid is procedural; an emissiveMap of the
    same grid self-lights the lines so they read in the dark (and feed bloom a touch).
-   Fog fades the far walls into haze, which keeps the conveyor wrap / ball death hidden. */
+   Fog fades the far walls into haze, which keeps the conveyor wrap / ball death hidden.
+   WHAT THE MACHINES STAND ON (grid-footing.js): the grid folded up out of the floor — graphite
+   volumes carrying the floor's own cells and lines, edged in light; lattice towers drawn in light,
+   glass mezzanines, ladders of light rungs. The machine's own colour is its reactive edge. */
 function gridTex(){
   const S = 256, c = document.createElement('canvas'); c.width = c.height = S;
   const x = c.getContext('2d');
@@ -41,8 +45,10 @@ export default {
     add(panel(W, H), 0, Math.PI,  0, MY, FRONT);           // front wall (behind the camera)
     add(panel(D, H), 0,  Math.PI/2, -HW, MY, MZ);          // left wall
     add(panel(D, H), 0, -Math.PI/2,  HW, MY, MZ);          // right wall
-    return { group: g, ...STAGE,
+    const footing = gridFootStyle();
+    return { group: g, ...STAGE, footing,
       fog: new THREE.FogExp2(0x07060e, .026), background: new THREE.Color(0x07060e),
-      dispose(){ base.dispose(); } };
+      place(anchors){ footing.known(anchors); },          // (the riser tiers learn each machine's footprint)
+      dispose(){ base.dispose(); footing.dispose(); } };
   },
 };

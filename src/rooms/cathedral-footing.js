@@ -48,7 +48,22 @@ export const CATH = {
   OAK_BAY: 1.15,              // the oak gallery front's post pitch
 };
 
-/* ---- materials (made once per room; the room disposes them) ---- */
+/* ---- materials (made once per room — in its build(), so a room swap never paints them; the room
+   disposes them) ---- */
+/* n grains (dark lo / light hi, alpha a0 + R()·da, up to w × h px) blended straight into the pixels — one
+   ImageData pass instead of n fillRects (a texture paints in ~1 ms, not ~8) */
+function speckle(x, S, R, n, tint, lo, hi, a0, da, w, h){
+  const img = x.getImageData(0, 0, S, S), d = img.data;
+  for (let i = 0; i < n; i++){
+    const [r, g, b] = tint(R() < .5 ? lo : hi), a = a0 + R() * da, px = R() * S | 0, py = R() * S | 0;
+    const gw = 1 + (R() * (w - 1) + .5 | 0), gh = 1 + (R() * (h - 1) + .5 | 0);
+    for (let yy = 0; yy < gh; yy++) for (let xx = 0; xx < gw; xx++){
+      const o = 4 * (((py + yy) % S) * S + (px + xx) % S);
+      d[o] += (r - d[o]) * a; d[o + 1] += (g - d[o + 1]) * a; d[o + 2] += (b - d[o + 2]) * a;
+    }
+  }
+  x.putImageData(img, 0, 0);
+}
 function ashlarTex(){
   if (typeof document === 'undefined') return null;
   const S = 512, c = document.createElement('canvas'); c.width = c.height = S;
@@ -73,12 +88,13 @@ function ashlarTex(){
   for (let i = 0; i < 70; i++){                                           // soft stains (wraps)
     const cx = R() * S, cy = R() * S, rr = 10 + R() * 46, a = .03 + R() * .05, dark = R() < .6;
     for (const ox of [-S, 0, S]) for (const oy of [-S, 0, S]){
+      if (cx + ox + rr < 0 || cx + ox - rr > S || cy + oy + rr < 0 || cy + oy - rr > S) continue;   // (only the copies that land on the tile)
       const g = x.createRadialGradient(cx + ox, cy + oy, 0, cx + ox, cy + oy, rr);
       g.addColorStop(0, dark ? `rgba(90,70,48,${a})` : `rgba(255,246,226,${a})`); g.addColorStop(1, 'rgba(0,0,0,0)');
       x.fillStyle = g; x.fillRect(cx + ox - rr, cy + oy - rr, 2 * rr, 2 * rr);
     }
   }
-  for (let i = 0; i < 5000; i++){ const v = R() < .5 ? 70 : 245; x.fillStyle = `rgba(${v},${v - 8},${v - 20},${.04 + R() * .07})`; x.fillRect(R() * S, R() * S, 1 + R(), 1 + R()); }
+  speckle(x, S, R, 5000, v => [v, v - 8, v - 20], 70, 245, .04, .07, 2, 2);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4;
   return t;
@@ -97,7 +113,7 @@ function oakTex(){
       else { x.moveTo(0, p + o); x.bezierCurveTo(S * .3, p + o + 6, S * .7, p + o - 6, S, p + o); } }
     x.stroke();
   }
-  for (let i = 0; i < 2500; i++){ const v = R() < .5 ? 30 : 150; x.fillStyle = `rgba(${v},${v * .7 | 0},${v * .45 | 0},${.05 + R() * .07})`; x.fillRect(R() * S, R() * S, 1, 1 + R() * 3); }
+  speckle(x, S, R, 2500, v => [v, v * .7, v * .45], 30, 150, .05, .07, 1, 4);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4;
   return t;
@@ -148,6 +164,8 @@ function segHits(p, q, R, g){
   }
   return true;
 }
+/* how far under a deck's edge its arcade wall's outer face stands (set back − half the wall) */
+const WALL_O = { square: CATH.ARC_IN - CATH.WALL / 2, cluster: CATH.CL_IN - .25 };
 /* a pointed arch over a clear half-span s rising h (≥ s): each half a circle of radius R about a centre xc
    across the middle — R = (h² + s²) / 2s, xc = R − s (equilateral when h = s√3) */
 export function pointed(s, h){ const R = (h * h + s * s) / (2 * s); return { R, xc: R - s }; }
@@ -235,9 +253,13 @@ function makeForms(k){
     return { hu, hv, faces: [{ along: 'u', at: -hv, pts: pu }, { along: 'u', at: hv, pts: pu }, { along: 'v', at: -hu, pts: pv }, { along: 'v', at: hu, pts: pv }],
       piers: [...pu.flatMap(u => [[u, -hv], [u, hv]]), ...pv.slice(1, -1).flatMap(v => [[-hu, v], [hu, v]])] };
   }
-  const faceBox = (f, slot, x0, x1, y0, y1, d0, d1, faces = ALL) => f.along === 'u'
-    ? k.box(slot, x0, x1, y0, y1, f.at + d0, f.at + d1, faces) : k.box(slot, f.at + d0, f.at + d1, y0, y1, x0, x1, faces);
-  const facePt = (f, x, y) => f.along === 'u' ? [x, y, f.at] : [f.at, y, x];
+  /* a face: an axis line of a rect ({along, at}) or any SEGMENT (segFace: an open stand's bays) — x runs
+     along it, d across it */
+  const faceBox = (f, slot, x0, x1, y0, y1, d0, d1, faces = ALL) => f.seg
+    ? k.bar(slot, facePt(f, x0, (y0 + y1) / 2), facePt(f, x1, (y0 + y1) / 2), d1 - d0, y1 - y0, ALL)
+    : f.along === 'u' ? k.box(slot, x0, x1, y0, y1, f.at + d0, f.at + d1, faces) : k.box(slot, f.at + d0, f.at + d1, y0, y1, x0, x1, faces);
+  const facePt = (f, x, y) => f.seg ? [f.a[0] + f.d[0] * x, y, f.a[1] + f.d[1] * x] : f.along === 'u' ? [x, y, f.at] : [f.at, y, x];
+  const segFace = (a, b) => { const L = Math.hypot(b[0] - a[0], b[1] - a[1]); return { seg: true, a, L, d: [(b[0] - a[0]) / L, (b[1] - a[1]) / L] }; };
   /* a face's own flags → the kit's: e1 / e0 the +along / −along ends, ds both depth sides, PY / NY as they are */
   const FL = (f, { e1 = 0, e0 = 0, ds = 1, top = 0, bot = 0 } = {}) => (top ? PY : 0) | (bot ? NY : 0) | (f.along === 'u'
     ? (e1 ? PX : 0) | (e0 ? NX : 0) | (ds ? PZ | NZ : 0) : (e1 ? PZ : 0) | (e0 ? NZ : 0) | (ds ? PX | NX : 0));
@@ -297,7 +319,7 @@ function makeForms(k){
      meet. 'square' (a tribune): one storey. 'cluster' (a tower / a high loft — always tall): a
      cathedral's ELEVATION in two storeys — the main arcade on clustered piers, a sill course at the
      gallery level, and above it a GALLERY of paired arches on a colonnette in every bay */
-  function arcade(r, yB, kind){
+  function arcade(r, yB, kind, shut = null){
     const cl = kind === 'cluster', ins = cl ? C.CL_IN : C.ARC_IN, H = yB - F;
     const span = cl ? Math.min(C.CL_SPAN, Math.max(3.4, H * .5)) : Math.min(5.2, Math.max(2.2, H * .58));
     const { hu, hv, faces, piers } = pierFaces(r, ins, span);
@@ -310,7 +332,15 @@ function makeForms(k){
     const h1 = Math.max(sMax * 1.02, Math.min(sMax * (cl ? 1.6 : 1.5), (crown - F) * .62));
     const y0 = Math.max(F + .9, crown - h1);
     for (const [u, v] of piers) cl ? clusterPier(u, v, y0) : squarePier(u, v, C.PIER, y0);
-    for (const f of faces) for (let i = 0; i + 1 < f.pts.length; i++) archBay(f, f.pts[i], f.pts[i + 1], ph, ph, y0, crown, t, wd, yS);
+    // a bay an ENGAGED stair turret stands in is WALLED UP (the turret bonds into masonry: nothing of it
+    // shows through an open arch): a coursed wall on a plinth course, floor to deck, both storeys
+    const shutF = shut && (shut.side[1] === 'v' ? 'u' : 'v'), shutS = shut && (shut.side[0] === '+' ? 1 : -1);
+    const isShut = (f, i) => !!shut && f.along === shutF && Math.sign(f.at) === shutS && f.pts[i] < shut.a1 + .05 && f.pts[i + 1] > shut.a0 - .05;
+    for (const f of faces) for (let i = 0; i + 1 < f.pts.length; i++){
+      if (!isShut(f, i)){ archBay(f, f.pts[i], f.pts[i + 1], ph, ph, y0, crown, t, wd, yS); continue; }
+      faceBox(f, STONE, f.pts[i], f.pts[i + 1], F - .04, F + .3, -wd / 2 - .06, wd / 2 + .06, FL(f, { top: 1 }));
+      faceBox(f, STONE, f.pts[i], f.pts[i + 1], F + .3, yB, -wd / 2, wd / 2, FL(f));
+    }
     for (const [u, v] of [[-hu, -hv], [hu, -hv], [hu, hv], [-hu, hv]]) k.box(STONE, u - wd / 2, u + wd / 2, y0, yB, v - wd / 2, v + wd / 2, SIDES);
     if (!two) return;
     // the gallery: a sill course round every face, the piers carried up as shafts, paired arches between
@@ -327,6 +357,7 @@ function makeForms(k){
       }
       for (let i = 0; i + 1 < f.pts.length; i++){
         const xa = f.pts[i], xb = f.pts[i + 1], m = (xa + xb) / 2;
+        if (isShut(f, i)) continue;                                                                                  // (walled up)
         if ((m - xa - ph - pc) / 2 < .3){ archBay(f, xa, xb, ph, ph, y2, crown2, t * .8, wd, yB); continue; }
         faceBox(f, STONE, m - pc, m + pc, yG, y2 - .12, -wd / 2 + .06, wd / 2 - .06, SIDES);                            // the colonnette
         faceBox(f, STONE, m - pc - .07, m + pc + .07, y2 - .12, y2, -wd / 2 + .02, wd / 2 - .02, ALL);
@@ -415,10 +446,25 @@ function makeForms(k){
   }
 
   /* ---- access, in this room's idiom ---- */
-  function access(r, T, acc, low){
+  /* an access's turret, if it is one: its 12-gon's radii (a = along the side, o = out from it) */
+  const TUR = { N: 12, MO: .06 };
+  function turretDims(acc, engaged){
+    const span = acc.a1 - acc.a0, cN = Math.cos(Math.PI / TUR.N), lim = engaged ? Math.min(span / 2, acc.out) - TUR.MO : 0;
+    return { cN, ra: (engaged ? lim : span / 2 - TUR.MO) / cN, ro: (engaged ? lim : acc.out / 2 - TUR.MO) / cN, oc: engaged ? 0 : acc.out / 2 };
+  }
+  const isTurret = (r, T, acc) => !!acc && acc.kind !== 'stair' && T - F > C.TURRET_MIN;
+  /* the along-range an ENGAGED turret takes on its side (its arcade bay is walled up), or null */
+  function turretShut(r, T, acc){
+    if (!isTurret(r, T, acc) || r.open) return null;
+    const am = (acc.a0 + acc.a1) / 2, { ra } = turretDims(acc, true);
+    return { side: acc.side, a0: am - ra, a1: am + ra };
+  }
+  /* wallO: how far under the deck the arcade wall's OUTER face stands (an engaged turret drops the faces
+     that would stand behind it) */
+  function access(r, T, acc, low, wallO = Infinity){
     if (!acc) return gapOf(acc);
     if (acc.kind === 'stair'){ low ? chancelStair(r, T, acc) : stoneStair(r, T, acc); return gapOf(acc); }
-    if (T - F > C.TURRET_MIN) return turret(r, T, acc, !r.open);
+    if (isTurret(r, T, acc)) return turret(r, T, acc, !r.open, wallO);
     oakLadder(r, T, acc); return gapOf(acc);
   }
   /* a solid stone flight hugging one side (footing.js access): its blocks from the floor, a brass nosing
@@ -484,28 +530,38 @@ function makeForms(k){
      the machine's footprint). FREE-STANDING (an open stand: no deck, and things hang under it): an oval
      in the access rect under a pointed cap. Ashlar walls on a base course, slit windows climbing a helix
      round its outer faces, lit from within. Returns where the deck's balustrade opens: [side, a0, a1] */
-  function turret(r, T, acc, engaged){
-    const S = onSide(r, acc.side), am = (acc.a0 + acc.a1) / 2, span = acc.a1 - acc.a0, N = 12, mo = .06, cN = Math.cos(Math.PI / N);
-    const lim = engaged ? Math.min(span / 2, acc.out) - mo : 0;
-    const ra = (engaged ? lim : span / 2 - mo) / cN, ro = (engaged ? lim : acc.out / 2 - mo) / cN, oc = engaged ? 0 : acc.out / 2;
+  function turret(r, T, acc, engaged, wallO = Infinity){
+    const S = onSide(r, acc.side), am = (acc.a0 + acc.a1) / 2, N = TUR.N, { cN, ra, ro, oc } = turretDims(acc, engaged);
     const V = Array.from({ length: N }, (_, i) => { const f = 2 * Math.PI * (i + .5) / N; return [am + ra * Math.cos(f), oc + ro * Math.sin(f)]; });
     const W3 = (q, y) => { const [u, v] = S(q[0], q[1]); return [u, y, v]; };
-    const wt = .14, sh = .06, sl = .64, yTop = engaged ? T : T + .3;
+    const wt = .14, sh = .06, sl = .64, yTop = T;
     const E = V.map((p, i) => { const q = V[(i + 1) % N], L = Math.hypot(q[0] - p[0], q[1] - p[1]), t = [(q[0] - p[0]) / L, (q[1] - p[1]) / L];
       return { p, q, L, t, n: [t[1], -t[0]], m: [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2] }; });
     const shift = (q, n, d) => [q[0] - n[0] * d, q[1] - n[1] * d];
     const along = (e, x, d) => [e.m[0] + e.t[0] * x - e.n[0] * d, e.m[1] + e.t[1] * x - e.n[1] * d];   // x along the face from its middle, d in from it
+    // its DOOR: a pointed oak door at the foot of the face that looks out (where a climber walks up)
+    let iD = 0; for (let i = 1; i < N; i++) if (E[i].m[1] > E[iD].m[1]) iD = i;
+    const Dt = F + 2.5, door = yTop - Dt > 1;
     // the slits: up a helix, only in the faces that look out (the stair winds behind them)
     const outer = i => engaged ? E[i].n[1] > .45 : E[i].n[1] > -.3;
     const slit = new Map();
     for (let j = 0, y = F + 1.3; y + sl < yTop - .45; j++, y += .95){
       const ang = Math.PI / 2 + 2.2 * Math.sin(j * .9), i = ((Math.round(ang / (2 * Math.PI / N)) - 1) % N + N) % N;
-      if (outer(i)) (slit.get(i) || slit.set(i, []).get(i)).push([y, y + sl]);
+      if (outer(i) && !(door && i === iD && y < Dt + .45)) (slit.get(i) || slit.set(i, []).get(i)).push([y, y + sl]);
     }
     for (let i = 0; i < N; i++){
       const e = E[i], cuts = slit.get(i) || [], hl = e.L / 2;
+      if (engaged && Math.max(e.p[1], e.q[1]) < -wallO) continue;              // (behind the walled-up bay: never seen)
       let y = F - .04;
       const wall = (y0, y1) => { if (y1 > y0 + .005) k.bar(STONE, W3(along(e, -hl, wt / 2), (y0 + y1) / 2), W3(along(e, hl, wt / 2), (y0 + y1) / 2), wt, y1 - y0, SIDES); };
+      if (door && i === iD){
+        const dw = Math.max(.12, Math.min(.27, hl - .07)), ym = (F - .04 + Dt) / 2;
+        for (const sg of [-1, 1]) k.bar(STONE, W3(along(e, sg * hl, wt / 2), ym), W3(along(e, sg * dw, wt / 2), ym), wt, Dt - F + .04, ALL);   // the jambs
+        k.bar(OAK, W3(along(e, -dw, wt * .75), (F + .34 + Dt) / 2), W3(along(e, dw, wt * .75), (F + .34 + Dt) / 2), .05, Dt - F - .34, ALL);   // the door, set back
+        for (const sg of [-1, 1]) k.bar(STONE, W3(along(e, sg * (dw + .03), .02), Dt - .12), W3(along(e, 0, .02), Dt + .26), .1, .1, ALL);   // its pointed hood
+        k.bar(BRASS, W3(along(e, -dw * .7, wt * .7), F + 1.75), W3(along(e, dw * .7, wt * .7), F + 1.75), .03, .05, ALL);   // a brass strap (no iron slot for one strap)
+        y = Dt;
+      }
       for (const [s0, s1] of cuts){
         wall(y, s0);
         for (const sg of [-1, 1]) k.bar(STONE, W3(along(e, sg * hl, wt / 2), (s0 + s1) / 2), W3(along(e, sg * sh, wt / 2), (s0 + s1) / 2), wt, s1 - s0, ALL);
@@ -541,18 +597,36 @@ function makeForms(k){
       }
       return [acc.side, am - ra * cN + .15, am + ra * cN - .15];
     }
-    // free-standing: the eaves course, then a pointed cap in three tiers of slates to a brass finial
-    const c = [am, oc], top = T + RAIL_H - .02, y0 = yTop;
+    // FREE-STANDING (beside an open stand): it ends where the climb arrives — a floor at the deck's level,
+    // a crenellated parapet round every face but the ones toward the machine, and a stone BRIDGE across to
+    // it (kept out of what hangs under the deck): the climb visibly lands on the stand
+    const rIn = ro * cN - wt + .02, rIa = ra * cN - wt + .02;
+    for (let o0 = oc - rIn; o0 < oc + rIn - .01; o0 += .3){
+      const o1 = Math.min(oc + rIn, o0 + .3), om = Math.abs((o0 + o1) / 2 - oc), w = rIa * Math.sqrt(Math.max(0, 1 - (om / rIn) ** 2)) + .02, p = S(am - w, o0), q = S(am + w, o1);
+      k.box(STONE, Math.min(p[0], q[0]), Math.max(p[0], q[0]), T - .22, T, Math.min(p[1], q[1]), Math.max(p[1], q[1]), PY | NY);
+    }
+    let k2 = 0;
     for (const e of E){
-      const hl = e.L / 2;
-      k.bar(STONE, W3(along(e, -hl - .014, wt / 2 - .025), y0 - .08), W3(along(e, hl + .014, wt / 2 - .025), y0 - .08), wt + .05, .16, ALL);
-      for (let t = 0; t < 3; t++){
-        const s0 = 1 - t / 3, s1 = 1 - (t + 1) / 3, at = s => [c[0] + (e.m[0] - c[0]) * s, c[1] + (e.m[1] - c[1]) * s];
-        k.bar(STONE, W3(at(s0), y0 + (top - .14 - y0) * t / 3), W3(at(s1), y0 + (top - .14 - y0) * (t + 1) / 3), e.L * s0 + .03, .06, ALL);
+      if (e.n[1] < -.45) continue;                                             // (open toward the machine)
+      const pi = shift(e.p, e.n, .1), qi = shift(e.q, e.n, .1);
+      k.bar(STONE, W3(pi, T + .5), W3(qi, T + .5), .2, 1, ALL);
+      k.bar(STONE, W3(pi, T + 1.06), W3(qi, T + 1.06), .2, .12, ALL);
+      if (e.m[1] > oc + .2 && (k2++ % 2 === 0)){
+        const L = Math.hypot(qi[0] - pi[0], qi[1] - pi[1]), g = Math.min(.08, L * .15), t = [(qi[0] - pi[0]) / L, (qi[1] - pi[1]) / L];
+        k.bar(STONE, W3([pi[0] + t[0] * g, pi[1] + t[1] * g], T + 1.27), W3([qi[0] - t[0] * g, qi[1] - t[1] * g], T + 1.27), .16, .3, ALL);
       }
     }
-    const [fu, fv] = S(c[0], c[1]);
-    k.box(BRASS, fu - .035, fu + .035, top - .2, top, fv - .035, fv + .035, ALL);
+    // the bridge: from the turret's inner face across to the stand, as far in as it may go
+    const oIn = oc - ro * cN + .05, bw = Math.min(.45, ra * cN * .6);
+    let reach = 0;
+    for (const o of [-.9, -.6, -.3, 0]){
+      const p = S(am - bw, o), q = S(am + bw, oIn), R0 = [Math.min(p[0], q[0]), Math.max(p[0], q[0]), Math.min(p[1], q[1]), Math.max(p[1], q[1])];
+      if (!r.hang || R0[1] < r.hang[0] - .05 || R0[0] > r.hang[1] + .05 || R0[3] < r.hang[2] - .05 || R0[2] > r.hang[3] + .05){ reach = o; break; }
+    }
+    { const p = S(am - bw, reach), q = S(am + bw, oIn);
+      k.box(STONE, Math.min(p[0], q[0]), Math.max(p[0], q[0]), T - .24, T, Math.min(p[1], q[1]), Math.max(p[1], q[1]), ALL);
+      if (oIn > .15) for (const sg of [-1, 1]){ const a = W3([am + sg * (bw - .04), .05], T + .45), b = W3([am + sg * (bw - .04), oIn], T + .45);   // its low parapets (over the
+        k.bar(STONE, a, b, .08, .9, ALL); } }                                                                                         //  access rect only: the stand's own envelope ends at its deck)
     return gapOf(acc);
   }
   return {
@@ -573,13 +647,13 @@ function makeForms(k){
     },
     mid(p){
       const D = stoneDeck(p, p.top, p);
-      arcade(p, p.top - D, 'square');
-      balustrade(p, p.top, access(p, p.top, p.access, false));
+      arcade(p, p.top - D, 'square', turretShut(p, p.top, p.access));
+      balustrade(p, p.top, access(p, p.top, p.access, false, WALL_O.square));
     },
     high(p){
       const D = stoneDeck(p, p.top, p);
-      arcade(p, p.top - D, 'cluster');
-      balustrade(p, p.top, access(p, p.top, p.access, false));
+      arcade(p, p.top - D, 'cluster', turretShut(p, p.top, p.access));
+      balustrade(p, p.top, access(p, p.top, p.access, false, WALL_O.cluster));
     },
     loft(L, members){
       const T = L.top;
@@ -588,19 +662,21 @@ function makeForms(k){
         if (T - F > 1.05) blindArcade(L, F + .2, T - .26, back);
         memberBands(L, members, T - .24 - .03 - C.INLAY, T - .24 - .03, back);
       } else {
-        const D = stoneDeck(L, T, null), yB = T - D;
-        arcade(L, yB, L.band === 'high' ? 'cluster' : 'square');
+        const D = stoneDeck(L, T, null), yB = T - D, kind = L.band === 'high' ? 'cluster' : 'square';
+        arcade(L, yB, kind, turretShut(L, T, L.access));
         memberBands(L, members, yB + (D - Math.min(C.CORNICE, D * .4)) * .55 - C.INLAY / 2, yB + (D - Math.min(C.CORNICE, D * .4)) * .55 + C.INLAY / 2, .06);
-        gallery(L, T, access(L, T, L.access, false));
+        gallery(L, T, access(L, T, L.access, false, WALL_O[kind]));
         return;
       }
       access(L, T, L.access, true);
     },
-    /* an OPEN stand: a colonnette under every foot (slid off what hangs), stone lintels between them only
-       where they keep out of it (a tall one tied by string courses below what hangs), a brass ring set
-       in the floor round them */
+    /* an OPEN stand: a colonnette under every foot (slid off what hangs) — clustered, ringed every ≤ 6 u,
+       when tall — and between neighbours clear of what hangs, an ARCADE: pointed arches (a long side
+       gets colonnettes between, so its arches stay pointed), coursed spandrels and a cornice band
+       under the deck. Where an arch can't stand (too low a stand, or what hangs is in the way) a single
+       lintel at the top, only if it clears what hangs. A brass ring set in the floor round them (its light). */
     open(p){
-      const T = p.top, H = T - F;
+      const T = p.top, H = T - F, tall = H > 6.5;
       const feet = p.feet?.length ? p.feet : [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => [a * (p.hw - .6), b * (p.hd - .6), .3]);
       const cu = feet.reduce((s, f) => s + f[0], 0) / feet.length, cv = feet.reduce((s, f) => s + f[1], 0) / feet.length;
       const HG = p.hang, clip = (u, v, s, rr) => {
@@ -610,26 +686,49 @@ function makeForms(k){
         const [du, dv] = [[x0 - u - s, 0], [x1 - u + s, 0], [0, z0 - v - s], [0, z1 - v + s]].sort((a, b) => Math.abs(a[0] + a[1]) - Math.abs(b[0] + b[1]))[0];
         return Math.abs(du + dv) <= rr ? [u + du, v + dv] : null;
       };
-      const hull = [];
-      for (const [fu, fv, rr = .3] of feet.slice().sort((f, g) => Math.atan2(f[1] - cv, f[0] - cu) - Math.atan2(g[1] - cv, g[0] - cu))){
-        const s = Math.max(.2, Math.min(.34, rr * .5)), at = clip(fu, fv, s + .12, rr);
-        if (!at) continue;
-        const [u, v] = at; hull.push([u, v]);
+      const rings = tall ? Array.from({ length: Math.ceil((H - .8) / 6) - 1 }, (_, i) => F + .3 + (H - .8) * (i + 1) / Math.ceil((H - .8) / 6)) : [];
+      const colonnette = (u, v, s) => {
         k.box(STONE, u - s - .12, u + s + .12, F - .04, F + .22, v - s - .12, v + s + .12, NOBOT);     // the base
-        k.box(STONE, u - s, u + s, F + .22, T - .28, v - s, v + s, SIDES);                              // the shaft
+        if (tall){                                                                                      // a core + four shafts
+          const c = s * .62, sh = s * .38;
+          k.box(STONE, u - c, u + c, F + .22, T - .28, v - c, v + c, SIDES);
+          for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) k.box(STONE, u + a * c - sh, u + a * c + sh, F + .22, T - .28, v + b * c - sh, v + b * c + sh, SIDES);
+          for (const y of rings) k.box(STONE, u - s - .06, u + s + .06, y - .1, y + .1, v - s - .06, v + s + .06, ALL);   // shaft rings
+        } else k.box(STONE, u - s, u + s, F + .22, T - .28, v - s, v + s, SIDES);                       // the shaft
         k.box(STONE, u - s - .06, u + s + .06, T - .28, T - .14, v - s - .06, v + s + .06, ALL);        // the capital
         k.box(STONE, u - s - .12, u + s + .12, T - .14, T, v - s - .12, v + s + .12, ALL);              // the abacus (the foot rests on it)
+      };
+      const hull = [];
+      for (const [fu, fv, rr = .3] of feet.slice().sort((f, g) => Math.atan2(f[1] - cv, f[0] - cu) - Math.atan2(g[1] - cv, g[0] - cu))){
+        const s = Math.max(.2, Math.min(tall ? .4 : .34, rr * (tall ? .6 : .5))), at = clip(fu, fv, s + .12, rr);
+        if (!at) continue;
+        const [u, v] = at; hull.push([u, v, s]);
+        colonnette(u, v, s);
       }
-      const y0 = F + .3, y1 = T - .5, nT = Math.max(1, Math.ceil((y1 - y0) / 6)), clearY = Number.isFinite(p.hangY) ? p.hangY - .3 : -Infinity;
+      const yTop = T - .16, crown = yTop - .2, avail = crown - (F + 1.1), ring = tall ? .24 : .2, wd = .3;
       if (hull.length > 1) for (let i = 0; i < hull.length; i++){
         const a = hull[i], b = hull[(i + 1) % hull.length];
         if (hull.length === 2 && i) break;
-        if (segHits(a, b, p.hang, .15)) continue;
-        k.bar(STONE, [a[0], T - .3, a[1]], [b[0], T - .3, b[1]], .26, .32, ALL);                       // the lintel
-        if (H <= 6.5) continue;
-        const near = segHits(a, b, p.hang, 1);
-        for (let t = 1; t < nT + 1; t++){ const y = y0 + (y1 - y0) * t / (nT + 1); if (near && y > clearY) break;
-          k.bar(STONE, [a[0], y, a[1]], [b[0], y, b[1]], .22, .26, ALL); }                              // string courses
+        const lintel = () => { if (!segHits(a, b, p.hang, .15) || !(T - .46 > (p.hangY ?? -Infinity) + .1)) k.bar(STONE, [a[0], T - .3, a[1]], [b[0], T - .3, b[1]], .26, .32, ALL); };
+        if (segHits(a, b, p.hang, .2)){ if (!segHits(a, b, p.hang, .15)) lintel(); continue; }
+        // the fewest bays whose pointed arches fit under the deck, every colonnette between clear of what hangs
+        const f = segFace(a, b), sm = Math.min(a[2], b[2]);
+        let bays = null;
+        for (let n = 1; n <= 4 && !bays; n++){
+          const xs = Array.from({ length: n + 1 }, (_, q) => f.L * q / n), hs = xs.map((_, q) => q === 0 ? a[2] : q === n ? b[2] : sm);
+          const sMax = Math.max(...xs.slice(1).map((x, q) => (x - xs[q] - hs[q] - hs[q + 1]) / 2));
+          if (sMax < .3 || sMax * 1.02 > avail) continue;
+          if (xs.slice(1, -1).some(x => { const [u, , v] = facePt(f, x, 0); const c = clip(u, v, sm + .12, 0); return !c || c[0] !== u || c[1] !== v; })) continue;
+          bays = { xs, hs };
+        }
+        if (!bays){ lintel(); continue; }
+        const { xs, hs } = bays;
+        for (let q = 1; q < xs.length - 1; q++){ const [u, , v] = facePt(f, xs[q], 0); colonnette(u, v, hs[q]); }
+        for (let q = 0; q + 1 < xs.length; q++){
+          const s = (xs[q + 1] - xs[q] - hs[q] - hs[q + 1] - .12) / 2, h = Math.max(s * 1.02, Math.min(s * 1.6, avail));
+          archBay(f, xs[q], xs[q + 1], hs[q] + .06, hs[q + 1] + .06, crown - h, crown, ring, wd, yTop);
+        }
+        k.bar(STONE, [a[0], T - .08, a[1]], [b[0], T - .08, b[1]], wd + .08, .16, ALL);                  // the cornice band under the deck
       }
       let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
       for (const [u, v] of feet){ u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); }

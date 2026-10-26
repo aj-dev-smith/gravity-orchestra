@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { STAGE, rng, canvasTex, radialTex, shaftTex, glowPoints, glowMat, instanced, trs } from './common.js';
 import { cathedralFooting } from './cathedral-footing.js';
-import { CORONAS, PROPS, obstaclesOf, placeCoronas, placePrickets, placeCandles } from './cathedral-props.js';
+import { CORONAS, PROPS, obstaclesOf, placeCoronas, placePrickets, placeCandles, candleCue } from './cathedral-props.js';
 import { makePulse } from './pulse.js';
 /* ============================================================
    CATHEDRAL NAVE — clustered stone piers marching away into warm haze,
@@ -20,8 +20,9 @@ import { makePulse } from './pulse.js';
    place(anchors, plan) keeps the movable props clear of every machine and its
    footing (cathedral-props.js: coronas raised / slid, prickets slid — instance
    matrices only) and sets two brass CANDLESTICKS beside every standing machine:
-   their flames lengthen and brighten on its strikes (a pulse per machine,
-   rooms/pulse.js — a pure fn of songTime, silent in the count-in). No lights.
+   their flames gutter and lengthen on its strikes (cathedral-props candleCue: an
+   event per strike, scaled to the machine's own loud hits, decaying within its
+   own gap — rooms/pulse.js, a pure fn of songTime, silent in the count-in). No lights.
    ============================================================ */
 
 const NAVE_X = 47;          // pier centre-line (|x|) — clear of the widest station (bells ≈ 37)
@@ -180,6 +181,13 @@ export default {
     const R = rng(42);
     const F = STAGE.FLOOR;
     const zEnd = Z0 - NB * BAY;
+    /* the footing's materials, made NOW (build() runs in the host's idle prewarm): their canvas textures
+       never paint on a room swap's frame. A speck far under the floor wears every one of them, so the
+       prewarm compiles their programs and uploads their maps too (it is never in view — the camera's far
+       plane is 200 u — and it is no solid: no boxes) */
+    { const fm = FOOT_STYLE.mats(null, { envMap });
+      const warm = new THREE.Mesh(new THREE.BoxGeometry(.01, .01, .01), [fm.base, fm.deck, fm.steel, fm.brass, fm.glow, fm.edge]);
+      warm.position.set(0, F - 3000, 0); warm.name = 'cathedral:warm'; warm.userData.boxes = []; group.add(warm); }
     const pierZ = Array.from({ length: NB + 1 }, (_, i) => Z0 - i * BAY);
 
     // ---- floor: worn marble chequer, a touch of gloss so the glows pool in it ----
@@ -301,7 +309,8 @@ export default {
 
     const fP = [], fC = [], fS = [], fPh = [], hP = [], hC = [], hS = [], hPh = [];
     const flameCol = [1.0, .62, .25];
-    const iron = new THREE.MeshStandardMaterial({ color: 0x18140f, metalness: .8, roughness: .5, envMap });
+    // wrought iron, warm and legible in the haze (a near-black albedo read as a hole in this light)
+    const iron = new THREE.MeshStandardMaterial({ color: 0x4a3f33, metalness: .5, roughness: .55, envMap, envMapIntensity: .8 });
     const ringM = [], chainM = [];
     const CORONA = CORONAS;                                         // (place() raises / slides one clear of a machine)
     CORONA.forEach(([cx, cy, cz]) => {
@@ -316,18 +325,36 @@ export default {
     const rings = instanced(new THREE.TorusGeometry(3.2, .13, 6, 36), iron, ringM);
     const chains = instanced(new THREE.CylinderGeometry(.05, .05, 1, 4), iron, chainM);
     group.add(rings, chains);
+    /* a PRICKET HEARSE at every pier: a stepped foot, a turned stem with a knop, a rack (≈ 1.9 m up) on
+       two braces carrying seven drip pans and tapers, tall and short by turns — the flames stand on them */
+    const RACK = 2.78, TAPER = [.3, .65], PK = .45;
+    const hearseGeo = mergeGeometries([
+      new THREE.CylinderGeometry(.62, .78, .16, 10).translate(0, .08, 0),
+      new THREE.CylinderGeometry(.22, .48, .5, 10).translate(0, .41, 0),
+      new THREE.CylinderGeometry(.065, .085, RACK - .66, 8).translate(0, (RACK + .66) / 2, 0),
+      new THREE.SphereGeometry(.16, 10, 6).translate(0, 1.55, 0),
+      new THREE.BoxGeometry(3 * PK * 2 + .3, .08, .1).translate(0, RACK - .04, 0),          // the rack
+      new THREE.CylinderGeometry(.03, .03, 1.36, 6).rotateZ(Math.PI / 2 - .5).translate(-.6, RACK - .36, 0),   // its braces
+      new THREE.CylinderGeometry(.03, .03, 1.36, 6).rotateZ(-(Math.PI / 2 - .5)).translate(.6, RACK - .36, 0),
+      ...Array.from({ length: 7 }, (_, k) => new THREE.CylinderGeometry(.13, .06, .06, 10).translate((k - 3) * PK, RACK + .02, 0)),   // drip pans
+    ].map(g => g.toNonIndexed()));
+    const waxGeo = mergeGeometries(Array.from({ length: 7 }, (_, k) =>
+      new THREE.CylinderGeometry(.05, .06, TAPER[k % 2], 8).translate((k - 3) * PK, RACK + .05 + TAPER[k % 2] / 2, 0).toNonIndexed()));
     const standM = [], PRICKETS = [];
-    for (const s of [-1, 1]) for (const z of pierZ){                 // pricket stands at every pier
+    for (const s of [-1, 1]) for (const z of pierZ){                 // pricket hearses at every pier
       const x = s * (NAVE_X - 6.5);
       PRICKETS.push([x, z]);
-      standM.push(trs(x, F + 2.2, z, 0, 0, 0, 1, 4.4, 1));
+      standM.push(trs(x, F, z));
       for (let k = 0; k < 7; k++){
-        fP.push(x + (k - 3) * .45, F + 4.6 + (k % 2) * .5, z + (R() - .5) * .8);
-        fC.push(...flameCol); fS.push(.38 + R() * .1); fPh.push(R()); }
-      hP.push(x, F + 4.8, z); hC.push(.4, .18, .06); hS.push(6); hPh.push(R());
+        R();                                                         // (the old z jitter: keeps every later phase as it was)
+        fP.push(x + (k - 3) * PK, F + RACK + .05 + TAPER[k % 2] + .12, z);
+        fC.push(...flameCol); fS.push(.34 + R() * .08); fPh.push(R()); }
+      hP.push(x, F + RACK + .6, z); hC.push(.4, .18, .06); hS.push(6); hPh.push(R());
     }
-    const stands = instanced(new THREE.CylinderGeometry(.18, .6, 1, 6), iron, standM);
-    group.add(stands);
+    const stands = instanced(hearseGeo, iron, standM);
+    const waxM = new THREE.MeshStandardMaterial({ color: 0xf1e3c6, roughness: .55, metalness: 0, emissive: 0x7a4012, emissiveIntensity: .45 });
+    const pTapers = instanced(waxGeo, waxM, standM);
+    group.add(stands, pTapers);
     const flames = glowPoints(fP, { colors: fC, sizes: fS, phases: fPh, map: flame, size: 1, flicker: .3, rate: 9 });
     const halos = glowPoints(hP, { colors: hC, sizes: hS, phases: hPh, size: 1, flicker: .18, rate: 5,
       map: radialTex(64, [[0, .55], [.25, .22], [.6, .05], [1, 0]]) });
@@ -342,7 +369,7 @@ export default {
     // ---- the room's REACTION: two brass candlesticks beside every standing machine (place() → where),
     //      their flames lengthening + brightening on its strikes (a pulse per machine) ----
     const brass = new THREE.MeshStandardMaterial({ color: 0xc9a05a, metalness: .55, roughness: .32, envMap, envMapIntensity: 1 });
-    const wax = new THREE.MeshStandardMaterial({ color: 0xf1e3c6, roughness: .55, metalness: 0, emissive: 0x7a4012, emissiveIntensity: .45 });
+    const wax = waxM;
     const stickGeo = mergeGeometries([
       new THREE.CylinderGeometry(.36, .5, .14, 12).translate(0, .07, 0),             // the foot
       new THREE.CylinderGeometry(.18, .32, .26, 12).translate(0, .27, 0),
@@ -354,6 +381,7 @@ export default {
     const sticks = new THREE.InstancedMesh(stickGeo, brass, PROPS.POOL);
     const tapers = new THREE.InstancedMesh(new THREE.CylinderGeometry(.085, .1, .8, 10).translate(0, .4, 0), wax, PROPS.POOL);
     sticks.count = tapers.count = 0;
+    sticks.userData.perLayout = tapers.userData.perLayout = true;   // (solids that move with the layout: a fixture recorded for one song's layout is not every song's)
     group.add(sticks, tapers);
     const WICK = 2.69 + .8;                                          // (the flame stands on the taper)
     const fq = new THREE.PlaneGeometry(1, 1).translate(0, .5, 0);
@@ -364,31 +392,32 @@ export default {
     flameGeo.setAttribute('aWick', aWick); flameGeo.setAttribute('aSlot', aSlot);
     flameGeo.setAttribute('aPh', new THREE.InstancedBufferAttribute(Float32Array.from({ length: PROPS.POOL }, () => R()), 1));
     flameGeo.instanceCount = 0;
-    const U = new Float32Array(PROPS.MAX_SLOT), pulses = [];
+    const U = new Float32Array(PROPS.MAX_SLOT), UF = new Float32Array(PROPS.MAX_SLOT), pulses = [], flashes = [];
     const flameMat = new THREE.ShaderMaterial({
-      uniforms: { uPulse: { value: U }, uTime: { value: 0 }, uBoost: { value: 1 } },
+      uniforms: { uPulse: { value: U }, uFlash: { value: UF }, uTime: { value: 0 }, uBoost: { value: 1 } },
       vertexShader: /* glsl */`
         attribute vec3 aWick; attribute float aSlot, aPh;
-        uniform float uPulse[${PROPS.MAX_SLOT}]; uniform float uTime, uBoost;
-        varying vec2 vUv; varying float vI;
+        uniform float uPulse[${PROPS.MAX_SLOT}]; uniform float uFlash[${PROPS.MAX_SLOT}]; uniform float uTime, uBoost;
+        varying vec2 vUv; varying float vI, vF;
         void main(){
-          float p = uPulse[int(aSlot + .5)];
+          int sl = int(aSlot + .5);
+          float p = uPulse[sl], f = uFlash[sl];          // the afterglow · the gutter on the hit itself
           float fl = .5 + .5 * sin(uTime * 8.3 + aPh * 6.283) * sin(uTime * 4.7 + aPh * 11.);
           vec3 w = (modelMatrix * vec4(aWick, 1.)).xyz, to = cameraPosition - w;
           vec3 right = normalize(vec3(to.z, 0., -to.x) + vec3(1e-4, 0., 0.));
-          float wd = .55 * (1. + .2 * p), ht = .85 * (1. + .75 * p) * (.94 + .06 * fl);   // a strike: taller, brighter
+          float wd = .55 * (1. + .15 * p + .3 * f), ht = .85 * (1. + .55 * p + .35 * f) * (.94 + .06 * fl);   // a strike: taller, brighter
           vec3 pos = w + right * position.x * wd + vec3(0., position.y * ht - .14, 0.);
-          vUv = uv; vI = uBoost * (.8 + .2 * fl) * (1. + 1.2 * p);
+          vUv = uv; vF = f; vI = uBoost * (.8 + .2 * fl) * (1. + .9 * p + 1.4 * f);
           gl_Position = projectionMatrix * viewMatrix * vec4(pos, 1.);
         }`,
       fragmentShader: /* glsl */`
-        varying vec2 vUv; varying float vI;
+        varying vec2 vUv; varying float vI, vF;
         void main(){
           vec2 q = vUv - vec2(.5, .2);
           float up = max(q.y, 0.);
           float d = length(vec2(q.x * (2.4 + up * 8.), q.y * (q.y > 0. ? 1.5 : 3.4)));
           float core = smoothstep(.34, .02, d), heart = smoothstep(.13, 0., length(vec2(q.x * 5., (q.y + .02) * 2.6)));
-          float glow = .2 * smoothstep(.5, 0., length(vec2(q.x * 1.25, q.y * .9)));
+          float glow = (.2 + .25 * vF) * smoothstep(.5, 0., length(vec2(q.x * 1.25, q.y * .9)));   // (the hit's bloom reads at a wide shot's distance)
           vec3 c = vec3(1., .5, .17) * core + vec3(1., .86, .6) * heart * .7 + vec3(1., .46, .14) * glow;
           gl_FragColor = vec4(c * vI, 1.);
         }`,
@@ -412,18 +441,19 @@ export default {
         for (let j = i * FPC; j < (i + 1) * FPC; j++){ shift(fPos, fPos0, j, x - x0, y - y0, z - z0); fSz.array[j] = fSz0[j] * k; }
         shift(hPos, hPos0, i, x - x0, y - y0, z - z0); hSz.array[i] = hSz0[i] * k;
       });
-      const pr = placePrickets(obs, PRICKETS, { floor: F });
+      const pr = placePrickets(obs, PRICKETS, { floor: F, h: 4, r: 1.6 });
       pr.forEach((p, j) => {
         const [x, z0] = PRICKETS[j], k = p ? 1 : 0, dz = p ? p[1] - z0 : 0;
-        stands.setMatrixAt(j, trs(x, F + 2.2, z0 + dz, 0, 0, 0, k, 4.4 * k || 1e-6, k));
+        const hm = trs(x, F, z0 + dz, 0, 0, 0, k || 1e-6, k || 1e-6, k || 1e-6);
+        stands.setMatrixAt(j, hm); pTapers.setMatrixAt(j, hm);
         warm.setMatrixAt(j, trs(x, F + .06, z0 + dz, 0, 0, 0, 14 * k || 1e-6, 1, 14 * k || 1e-6));
         for (let f = NC * FPC + j * FPP; f < NC * FPC + (j + 1) * FPP; f++){ shift(fPos, fPos0, f, 0, 0, dz); fSz.array[f] = fSz0[f] * k; }
         shift(hPos, hPos0, NC + j, 0, 0, dz); hSz.array[NC + j] = hSz0[NC + j] * k;
       });
       for (const a of [fPos, fSz, hPos, hSz]) a.needsUpdate = true;
-      for (const im of [rings, chains, stands, warm]){ im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere(); }
+      for (const im of [rings, chains, stands, pTapers, warm]){ im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere(); }
       // the candles, and a pulse per machine that has them
-      const avoid = pr.filter(Boolean).map(([x, z]) => ({ x, z, r: .6 }));
+      const avoid = pr.filter(Boolean).map(([x, z]) => ({ x, z, r: 1.6 }));
       const list = placeCandles(anchors, plan, obs, { room: STAGE_RECT, avoid, floor: F });
       list.forEach((c, i) => {
         sticks.setMatrixAt(i, trs(c.x, F, c.z));
@@ -433,9 +463,10 @@ export default {
       sticks.count = tapers.count = flameGeo.instanceCount = list.length;
       for (const im of [sticks, tapers]){ im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere(); }
       aWick.needsUpdate = aSlot.needsUpdate = true;
-      pulses.length = 0; U.fill(0);
-      for (const c of list) if (!pulses[c.slot]){ const a = anchors.find(q => q.key === c.key);
-        pulses[c.slot] = makePulse(a.cue || [], { P: a.P, start: a.start, decay: .7 }); }
+      pulses.length = flashes.length = 0; U.fill(0); UF.fill(0);
+      for (const c of list) if (!pulses[c.slot]){ const a = anchors.find(q => q.key === c.key), cc = candleCue(a.cue || [], a.P);
+        pulses[c.slot] = makePulse(cc.cue, { P: a.P, start: a.start, decay: cc.decay, lead: .25 });
+        flashes[c.slot] = makePulse(cc.cue, { P: a.P, start: a.start, decay: cc.flash, lead: .01 }); }
     }
 
     const glassBase = glassMat.color.clone();
@@ -448,7 +479,8 @@ export default {
       update(dt, songTime, camera, energy = 0){
         flames.material.uniforms.uTime.value = songTime; halos.material.uniforms.uTime.value = songTime;
         flameMat.uniforms.uTime.value = songTime;
-        for (let i = 0; i < pulses.length; i++){ const p = pulses[i]; U[i] = p ? Math.min(1, p.at(songTime) + .3 * p.next(songTime)) : 0; }
+        for (let i = 0; i < pulses.length; i++){ const p = pulses[i];
+          U[i] = p ? Math.min(1, p.at(songTime) + .15 * p.next(songTime)) : 0; UF[i] = p ? flashes[i].at(songTime) : 0; }
         motes.material.uniforms.uTime.value = songTime;
         // the glass "breathes" with the music: lead strikes / kicks lift it a touch
         const b = 1 + .35 * energy;

@@ -79,13 +79,16 @@ export function makeStrikeClock(cue, { P, start = -Infinity } = {}){
   };
 }
 
-/* the status beacon's CUE light: a soft 2 Hz pulse over the last CUE_T before a machine comes back in
-   after a rest (≥ REST since its last strike) — a pure fn of (age, eta), 1 exactly at the entrance */
-export const CUE = { REST: 2.4, T: 1.6, HZ: 2 };
-export function cueLight(age, eta){
+/* the status beacon's CUE light: ONE soft rise (no blinking — a section re-entering together must never
+   strobe in phase) over the last CUE.T before a machine comes back in after a rest (≥ REST since its last
+   strike), 1 exactly at the entrance — a pure fn of (age, eta, t). A FIRST entrance (no strike yet: age is
+   NONE) cues only when its whole rise lies after songTime 0: the count-in stays dark, whatever the song */
+export const CUE = { REST: 2.4, T: 1.6 };
+export function cueLight(age, eta, t = Infinity){
   if (!(age >= CUE.REST) || !(eta < CUE.T) || eta < 0) return 0;
+  if (age >= NONE && t + eta - CUE.T < 0) return 0;
   const ramp = 1 - eta / CUE.T;
-  return ramp * (.5 + .5 * Math.cos(2 * Math.PI * CUE.HZ * eta));
+  return ramp * ramp;
 }
 
 /* every machine's lights at songTime t (per plan pulse slot i, into vec4 uniforms): S[4i..] = the
@@ -104,7 +107,7 @@ export function makeDeckLights(plan){
         clocks[i].read(t, r, 0);
         const o = 4 * i;
         S[o] = r[0]; S[o + 1] = r[1]; S[o + 2] = r[2]; S[o + 3] = r[3];
-        B[o] = glows[i].at(t); B[o + 1] = cueLight(r[0], r[4]); B[o + 2] = 0; B[o + 3] = 0;
+        B[o] = glows[i].at(t); B[o + 1] = cueLight(r[0], r[4], t); B[o + 2] = 0; B[o + 3] = 0;
       }
     },
   };

@@ -520,9 +520,20 @@ export default {
       new THREE.MeshStandardMaterial({ map: crate.map, emissive: 0x4fc8ff, emissiveMap: crate.emi, emissiveIntensity: .9,
         metalness: .45, roughness: .5, envMap, envMapIntensity: .6 }), SPOTS.cargo.length);
     hatches.name = 'starship:hatches'; cargo.name = 'starship:cargo';
+    // (the bounds: the STANDING instances only — the parked ones would stretch the sphere 100 u under the
+    // deck and the mesh would never be frustum-culled)
+    const _bb = new THREE.Box3(), _ib = new THREE.Box3(), _sp = new THREE.Sphere();
     const setSpots = (im, spots, vis) => {
-      spots.forEach((p, i) => im.setMatrixAt(i, vis[i] ? trs(p.x, F + p.y, p.z, 0, p.yaw, 0, 2 * p.hw, p.h, 2 * p.hd) : HIDE));
-      im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere();
+      _bb.makeEmpty();
+      if (!im.geometry.boundingBox) im.geometry.computeBoundingBox();
+      spots.forEach((p, i) => {
+        const m = vis[i] ? trs(p.x, F + p.y, p.z, 0, p.yaw, 0, 2 * p.hw, p.h, 2 * p.hd) : HIDE;
+        im.setMatrixAt(i, m);
+        if (vis[i]) _bb.union(_ib.copy(im.geometry.boundingBox).applyMatrix4(m));
+      });
+      im.instanceMatrix.needsUpdate = true;
+      if (_bb.isEmpty()) _sp.set(new THREE.Vector3(0, F, 0), 0); else _bb.getBoundingSphere(_sp);
+      (im.boundingSphere ||= new THREE.Sphere()).copy(_sp);
     };
     setSpots(hatches, SPOTS.hatches, SPOTS.hatches.map(() => false)); setSpots(cargo, SPOTS.cargo, SPOTS.cargo.map(() => true));
     group.add(hatches, cargo);

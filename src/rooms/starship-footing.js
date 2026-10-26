@@ -104,7 +104,7 @@ function prism(k, spec, slot, u, v, r, y0, y1, n = 12){
 function ram(k, spec, u, v, y0, y1, r = .3, plate = true){
   const H = y1 - y0; if (H < .3) return;
   const g = (rr, y, hgt) => k.box('steel', u - rr, u + rr, y, y + hgt, v - rr, v + rr, SIDES | PY);
-  if (plate){ k.box('hazard', u - r - .22, u + r + .22, y0 - .03, y0 + .05, v - r - .22, v + r + .22, NOBOT); y0 += .05; }
+  if (plate){ k.box('hazard', u - r - .22, u + r + .22, y0, y0 + .06, v - r - .22, v + r + .22, NOBOT); y0 += .06; }
   const h = y1 - y0, l1 = h * .44, l2 = h * .3;
   prism(k, spec, 'steel', u, v, r, y0, y0 + l1, 10);
   g(r + .07, y0 + l1, .14);                                       // gland 1
@@ -198,9 +198,9 @@ function stair(k, r, T, acc){
   }
   boxSide('deck', aL, acc.a1, 0, ow, T - .16, T - .004, ALL);
   boxSide('hazard', aL - .06, aL, 0, ow, T - .16, T, ALL);
-  for (const o of [.12, ow - .12]) k.bar('steel', W2(acc.a0 + .1, o, F), W2(aL + .15, o, T - .12), .07, .26);   // stringers
+  for (const o of [.12, ow - .12]) k.bar('steel', W2(acc.a0 + .25, o, F + .14), W2(aL + .15, o, T - .12), .07, .26);   // stringers (their heels on the floor, never through it)
   for (const a of [aL + .12, acc.a1 - .12]) k.bar('steel', W2(a, ow - .12, F), W2(a, ow - .12, T - .16), .12, .12, ALL);
-  for (const a of [aL + .12, acc.a1 - .12]){ const [u, , v] = W2(a, ow - .12, F); k.box('hazard', u - .1, u + .1, F - .02, F + .04, v - .1, v + .1, NOBOT); }
+  for (const a of [aL + .12, acc.a1 - .12]){ const [u, , v] = W2(a, ow - .12, F); k.box('hazard', u - .1, u + .1, F, F + .05, v - .1, v + .1, NOBOT); }
   const o = ow - .06, y0 = F + rise + HAND, y1 = T + HAND;
   k.bar('chrome', W2(acc.a0 + .12, o, y0), W2(aL, o, y1), .06, .06, ALL);
   k.bar('chrome', W2(aL, o, y1), W2(acc.a1 - .04, o, y1), .06, .06, ALL);
@@ -218,10 +218,18 @@ function landings(r, F){ const nf = r.access?.flights || Math.max(1, Math.ceil((
 function plate(k, p){
   const F = k.floor, kerb = !!p.fixed, T = kerb ? F + FOOT.KERB : p.top, hw = p.hw, hd = p.hd, I = SHIP.INSET;
   const c0 = kerb ? SHIP.KCH0 : SHIP.FCH0, c1 = kerb ? SHIP.KCH1 : SHIP.FCH1, L = Math.min(SHIP.LIP, c1);
-  k.box('hazard', -hw + .02, hw - .02, F - .04, T - c0, -hd + .02, hd - .02, SIDES);
+  k.box('hazard', -hw + .02, hw - .02, F, T - c0, -hd + .02, hd - .02, SIDES);
   k.box('deck', -hw + I, hw - I, T - c0, T - L, -hd + I, hd - I, SIDES);                 // the light channel
   k.box('steel', -hw, hw, T - L, T, -hd, hd, SIDES);                                       // the lip
-  if (kerb){ k.box('steel', -hw, hw, T - .01, T, -hd, hd, PY); return; }
+  if (kerb){                                                                              // a launch pad set into the hull
+    const e = SHIP.EDGE, b = .16;
+    k.box('steel', -hw, hw, T - .01, T, hd - e, hd, PY); k.box('steel', -hw, hw, T - .01, T, -hd, -hd + e, PY);
+    k.box('steel', -hw, -hw + e, T - .01, T, -hd + e, hd - e, PY); k.box('steel', hw - e, hw, T - .01, T, -hd + e, hd - e, PY);
+    k.box('hazard', -hw + e, hw - e, T - .01, T, hd - e - b, hd - e, PY); k.box('hazard', -hw + e, hw - e, T - .01, T, -hd + e, -hd + e + b, PY);
+    k.box('hazard', -hw + e, -hw + e + b, T - .01, T, -hd + e + b, hd - e - b, PY); k.box('hazard', hw - e - b, hw - e, T - .01, T, -hd + e + b, hd - e - b, PY);
+    k.box('deck', -hw + e + b, hw - e - b, T - .01, T, -hd + e + b, hd - e - b, PY);
+    return;
+  }
   // on top: a hazard border round the machine (a steel edge strip outside it), the plate inside — and a
   // recessed tie-down ring in each corner
   const b = Math.min(SHIP.BORDER, Math.min(hw, hd) * .3), e = SHIP.EDGE, R = b * .42, bp = beaconPocket(p);
@@ -262,7 +270,7 @@ function scissors(k, r, yB){
   const at = (a, y, o) => long ? [a, y, o] : [o, y, a];
   const sill = .2, yLo = F + sill + .08, yHi = yB - .08, rise = yHi - yLo;
   // the base sill (a steel frame, hazard sides) and the deck's carrier rails
-  k.box('hazard', -r.hw + .3, r.hw - .3, F - .02, F + sill, -r.hd + .3, r.hd - .3, SIDES);
+  k.box('hazard', -r.hw + .3, r.hw - .3, F, F + sill, -r.hd + .3, r.hd - .3, SIDES);
   k.box('steel', -r.hw + .3, r.hw - .3, F + sill - .02, F + sill, -r.hd + .3, r.hd - .3, PY);
   for (const s of [-1, 1]) k.bar('steel', at(-A, yHi + .02, s * O), at(A, yHi + .02, s * O), .14, .12, ALL);
   const n = Math.max(1, Math.min(4, Math.round(2 * A / Math.max(3.2, rise * 1.6)))), seg = 2 * A / n;      // (tandem units: long, shallow arms)
@@ -288,7 +296,7 @@ function scissors(k, r, yB){
 /* squat rams under a deck that hardly rises (h ≤ 1.25): a ring of short cylinders in a steel sill */
 function jacks(k, r, yB){
   const F = k.floor, hu = r.hw - .55, hv = r.hd - .55, P = ring(hu, hv, 3.4), H = yB - F;
-  k.box('hazard', -r.hw + .3, r.hw - .3, F - .02, F + .1, -r.hd + .3, r.hd - .3, SIDES);
+  k.box('hazard', -r.hw + .3, r.hw - .3, F, F + .1, -r.hd + .3, r.hd - .3, SIDES);
   k.box('steel', -r.hw + .3, r.hw - .3, F + .08, F + .1, -r.hd + .3, r.hd - .3, PY);
   for (const [u, v] of P){
     const y0 = F + .1;
@@ -307,17 +315,19 @@ function rams(k, p){
   access(k, p, T, p.access);
 }
 function columns(k, r, yB){
-  const F = k.floor, hu = r.hw - .6, hv = r.hd - .6, P = ring(hu, hv, 5.2), H = yB - F;
-  const R = Math.min(.36, .24 + H * .012);
-  for (const [u, v] of P) ram(k, r, u, v, F, yB - .3, R);
+  const loft = !!r.keys, F = k.floor, hu = r.hw - .6, hv = r.hd - .6, P = ring(hu, hv, loft ? 7.6 : 5.2), H = yB - F;
+  const R = Math.min(loft ? .4 : .36, (loft ? .28 : .24) + H * .012), BD = loft ? .45 : .3;
+  const corner = q => Math.abs(Math.abs(q[0]) - hu) < 1e-6 && Math.abs(Math.abs(q[1]) - hv) < 1e-6;
+  for (const [u, v] of P) ram(k, r, u, v, F, yB - BD, R);
   // the frame under the deck: a box beam from head to head, knee braces down to each ram's upper stage
   for (let i = 0; i < P.length; i++){
     const a = P[i], b = P[(i + 1) % P.length];
-    k.bar('steel', [a[0], yB - .15, a[1]], [b[0], yB - .15, b[1]], .22, .3, ALL);
+    k.bar('steel', [a[0], yB - BD / 2, a[1]], [b[0], yB - BD / 2, b[1]], loft ? .26 : .22, BD, ALL);
     if (H < 2.4) continue;
-    const L = Math.hypot(b[0] - a[0], b[1] - a[1]), dx = (b[0] - a[0]) / L, dz = (b[1] - a[1]) / L, kb = Math.min(1.1, L * .22);
-    k.bar('steel', [a[0] + dx * .2, yB - 1.2 - kb * .2, a[1] + dz * .2], [a[0] + dx * kb, yB - .3, a[1] + dz * kb], .09, .09, ALL);
-    k.bar('steel', [b[0] - dx * .2, yB - 1.2 - kb * .2, b[1] - dz * .2], [b[0] - dx * kb, yB - .3, b[1] - dz * kb], .09, .09, ALL);
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]), dx = (b[0] - a[0]) / L, dz = (b[1] - a[1]) / L, kb = Math.min(loft ? 1.5 : 1.1, L * .22);
+    const y0 = yB - BD - .9 - kb * .2;
+    if (!loft || corner(a)) k.bar('steel', [a[0] + dx * .2, y0, a[1] + dz * .2], [a[0] + dx * kb, yB - BD, a[1] + dz * kb], .1, .1, ALL);
+    if (!loft || corner(b)) k.bar('steel', [b[0] - dx * .2, y0, b[1] - dz * .2], [b[0] - dx * kb, yB - BD, b[1] - dz * kb], .1, .1, ALL);
   }
 }
 /* HIGH: a gantry tower */
@@ -328,46 +338,96 @@ function gantry(k, p){
   const [s, g0, g1] = gapOf(p.access); rails(k, p, T, s, g0, g1);
   access(k, p, T, p.access);
 }
-/* the open steel LATTICE under a deck (underside yB): posts round the ring, girts at every panel line,
-   every panel X-braced, grated service decks ringing it at the ladder's landings, an umbilical clamped up
-   the front-left post on swing arms */
-function lattice(k, r, yB, levels = null){
-  const F = k.floor, hu = r.hw - .55, hv = r.hd - .55, P = ring(hu, hv, 4.4), H = yB - F;
-  const lv = levels ?? landings(r, F);
-  const nP = Math.max(1, Math.round((H - .4) / 3.3)), dy = (H - .4) / nP;
-  const ys = Array.from({ length: nP + 1 }, (_, i) => F + .3 + i * dy);
+/* the UMBILICAL TOWER under a deck (underside yB): a few heavy box columns (at the corners, and between
+   them only where a face spans more than COL_SPAN), each standing on a hydraulic jack — the mid band's ram,
+   so the tower reads as the rams grown tall — with a painted band over it; a base frame on the jack heads,
+   girts only at the service levels and under the deck, every bay braced by ONE diagonal (a Warren zigzag:
+   the faces read as a few big panels, never a mesh); a grated SERVICE WALKWAY ringing the tower at each
+   ladder landing (railed, open where the ladder's rest landing meets it); and the UMBILICAL — a chrome hose
+   up the front face, held on hazard-painted swing arms near the top, bent onto the deck. */
+const TOWER = { SPAN: 8, CW: .24, PANEL: 2.6, GIRT_MAX: 8.5, WALK_IN: .3 };
+function lattice(k, r, yB, levels = null, acc = r.access){
+  const F = k.floor, hu = r.hw - .55, hv = r.hd - .55, H = yB - F, CW = TOWER.CW;
+  const P = ring(hu, hv, TOWER.SPAN);
+  const base = Math.max(1.6, Math.min(3.4, H * .2));            // (the jacks' height)
+  const lv = (levels ?? landings(r, F)).filter(y => y > F + base + 1.2 && y < yB - 1.6);
+  // the girt levels: the base frame, every service level, the deck's beam — split where a bay runs too tall
+  const ys = [F + base + .1];
+  for (const y of [...lv, yB - .17]){
+    const y0 = ys[ys.length - 1], n = Math.max(1, Math.ceil((y - y0) / TOWER.GIRT_MAX - 1e-9));
+    for (let i = 1; i <= n; i++) ys.push(y0 + (y - y0) * i / n);
+  }
   for (const [u, v] of P){
-    k.box('steel', u - .15, u + .15, F, yB, v - .15, v + .15, SIDES);
-    k.box('hazard', u - .42, u + .42, F - .02, F + .06, v - .42, v + .42, NOBOT);            // foot plate
+    ram(k, r, u, v, F, F + base, .32);
+    k.box('steel', u - CW, u + CW, F + base, yB - .02, v - CW, v + CW, SIDES);
+    k.box('hazard', u - CW - .025, u + CW + .025, F + base, F + base + .6, v - CW - .025, v + CW + .025, SIDES);   // the painted band
   }
   for (let i = 0; i < P.length; i++){
-    const a = P[i], b = P[(i + 1) % P.length];
-    for (let j = 0; j <= nP; j++) k.bar('steel', [a[0], ys[j], a[1]], [b[0], ys[j], b[1]], j === nP ? .2 : .12, j === nP ? .26 : .12, ALL);
-    for (let j = 0; j < nP; j++){
-      k.bar('steel', [a[0], ys[j], a[1]], [b[0], ys[j + 1], b[1]], .07, .045);
-      k.bar('steel', [b[0], ys[j], b[1]], [a[0], ys[j + 1], a[1]], .07, .045);
+    const a = P[i], b = P[(i + 1) % P.length], w = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    for (let j = 0; j < ys.length; j++){
+      const top = j === ys.length - 1;
+      k.bar('steel', [a[0], ys[j], a[1]], [b[0], ys[j], b[1]], top ? .24 : .17, top ? .34 : .2, ALL);
+    }
+    for (let j = 0; j + 1 < ys.length; j++){                      // ONE diagonal per panel, zigzagging up the bay
+      const h = ys[j + 1] - ys[j], m = Math.max(1, Math.round(h / Math.max(TOWER.PANEL, w * .9)));
+      for (let q = 0; q < m; q++){
+        const y0 = ys[j] + h * q / m, y1 = ys[j] + h * (q + 1) / m, flip = (i + j + q) % 2;
+        const p0 = flip ? a : b, p1 = flip ? b : a;
+        k.bar('steel', [p0[0], y0 + .1, p0[1]], [p1[0], y1 - .1, p1[1]], .13, .09, ALL);
+      }
     }
   }
-  // service decks: a grated walkway between the lattice and the support's edge, at each landing
-  const wo = Math.min(.42, r.hw - hu - .08, r.hd - hv - .08);
-  if (wo > .2) for (const y of lv){
-    if (y > yB - 1.6) continue;
-    k.box('grate', -hu - wo, hu + wo, y - .05, y, hv + .15, hv + .15 + wo - .15, PY | NY);
-    k.box('grate', -hu - wo, hu + wo, y - .05, y, -hv - .15 - wo + .15, -hv - .15, PY | NY);
-    k.box('grate', hu + .15, hu + .15 + wo - .15, y - .05, y, -hv - .15, hv + .15, PY | NY);
-    k.box('grate', -hu - .15 - wo + .15, -hu - .15, y - .05, y, -hv - .15, hv + .15, PY | NY);
-    for (const [a, b] of [[[-hu - wo + .04, hv + wo - .04], [hu + wo - .04, hv + wo - .04]], [[-hu - wo + .04, -hv - wo + .04], [hu + wo - .04, -hv - wo + .04]]])
-      k.bar('hazard', [a[0], y + .06, a[1]], [b[0], y + .06, b[1]], .02, .12, ALL);        // toe boards
-  }
-  // the umbilical: a fat hose up the front-left post, clamped at every girt, swung onto the deck at the top
-  const cu = -hu + .42, cv = hv + .32;
-  if (H > 3) {
-    k.bar('deck', [cu, F + .05, cv], [cu, yB - .5, cv], .2, .2, ALL);
-    for (let j = 1; j < nP; j++){
-      k.bar('steel', [-hu, ys[j], hv], [cu, ys[j], cv], .08, .08, ALL);                      // a swing arm out to it
-      k.box('steel', cu - .16, cu + .16, ys[j] - .09, ys[j] + .09, cv - .16, cv + .16, ALL); // its clamp
+  // the service walkways: a grated ring between the tower's columns and the support's edge, railed outside
+  const gu = r.hw - .04, gv = r.hd - .04, iu = hu - TOWER.WALK_IN, iv = hv - TOWER.WALK_IN;
+  const [gs, g0, g1] = acc?.kind === 'ladder' ? [acc.side, acc.a0, acc.a1] : [null, 0, 0];
+  for (const y of lv){
+    for (const [u0, u1, v0, v1] of [[-gu, gu, iv, gv], [-gu, gu, -gv, -iv], [iu, gu, -iv, iv], [-gu, -iu, -iv, iv]]){
+      k.box('grate', u0, u1, y - .05, y, v0, v1, PY | NY);
     }
-    k.bar('deck', [cu, yB - .5, cv], [cu + .9, yB - .12, cv - .2], .2, .2, ALL);
+    // the walkway's edge channel (steel, under the grating's rim) and its toe line
+    k.box('steel', -gu, gu, y - .2, y - .05, gv - .06, gv, ALL); k.box('steel', -gu, gu, y - .2, y - .05, -gv, -gv + .06, ALL);
+    k.box('steel', gu - .06, gu, y - .2, y - .05, -gv + .06, gv - .06, ALL); k.box('steel', -gu, -gu + .06, y - .2, y - .05, -gv + .06, gv - .06, ALL);
+    walkRails(k, gu - .05, gv - .05, y, gs, g0, g1);
+  }
+  // the umbilical: a chrome hose up the front face from its floor connector, held off the tower by
+  // swing arms (hazard paint, chunky clamps) near the top, bent in onto the deck
+  if (H > 4 && hu > 1.4){
+    const cu = -hu + Math.min(1.7, hu * .6), cv = hv + .3, R = .17, yT = yB - .55;
+    k.box('steel', cu - .38, cu + .38, F, F + .55, cv - .3, cv + .22, NOBOT);                  // the connector box
+    k.box('hazard', cu - .39, cu + .39, F + .4, F + .55, cv - .31, cv + .23, SIDES | PY);
+    prism(k, r, 'chrome', cu, cv, R, F + .55, yT, 8);
+    k.bar('chrome', [cu, yT - .05, cv], [cu + .85, yB - .12, cv - .3], .3, .3, ALL);
+    const arms = [yB - 1.3, yB - 1.3 - Math.min(3.2, (H - 3) * .3)];
+    if (H > 12) arms.push(arms[1] - Math.min(3.2, (H - 3) * .3));
+    for (const y of arms){
+      if (y < F + base + .8) continue;
+      k.box('hazard', -hu, cu + .12, y - .14, y + .14, cv - .13, cv + .13, ALL);                  // the arm
+      k.box('steel', -hu - .02, -hu + .32, y - .3, y + .3, cv - .2, cv + .2, ALL);                // its hinge on the column
+      k.box('steel', cu - .3, cu + .3, y - .22, y + .22, cv - .26, cv + .23, ALL);               // the clamp
+    }
+  }
+}
+/* a walkway's rail ring at deck height y: chrome top rail on steel stanchions, a thin hazard toe line —
+   open over [g0, g1] on side gs (where the ladder's rest landing meets it) */
+function walkRails(k, hu, hv, y, gs, g0, g1){
+  const runs = [['-v', [-hu, -hv], [hu, -hv]], ['+u', [hu, -hv], [hu, hv]], ['+v', [hu, hv], [-hu, hv]], ['-u', [-hu, hv], [-hu, -hv]]];
+  const RH = 1.1;
+  for (const [side, p, q] of runs){
+    const segs = [];
+    if (side === gs){
+      const al = pt => side[1] === 'u' ? pt[1] : pt[0], cut = x => side[1] === 'u' ? [p[0], x] : [x, p[1]];
+      const lo = Math.min(al(p), al(q)), hi = Math.max(al(p), al(q));
+      if (g0 - .05 > lo + .3) segs.push([cut(lo), cut(g0 - .05)]);
+      if (g1 + .05 < hi - .3) segs.push([cut(g1 + .05), cut(hi)]);
+    } else segs.push([p, q]);
+    for (const [a, b] of segs){
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]); if (L < .2) continue;
+      const n = Math.max(1, Math.ceil(L / 2.6));
+      for (let i = 0; i <= n; i++){ const t = i / n, u = a[0] + (b[0] - a[0]) * t, v = a[1] + (b[1] - a[1]) * t;
+        k.box('steel', u - .04, u + .04, y, y + RH - .02, v - .04, v + .04, SIDES | PY); }
+      k.bar('chrome', [a[0], y + RH - .035, a[1]], [b[0], y + RH - .035, b[1]], .065, .065, ALL);
+      k.bar('hazard', [a[0], y + .05, a[1]], [b[0], y + .05, b[1]], .02, .07, ALL);
+    }
   }
 }
 /* the LOFT: an upper catwalk */
@@ -383,8 +443,12 @@ function catwalk(k, L){
   if (railed(L.band)){ const [s, g0, g1] = gapOf(L.access); rails(k, L, T, s, g0, g1); }
   access(k, L, T, L.access);
 }
-/* an OPEN stand: a telescoping ram under every foot (slid off what hangs along its shallower side, never off
-   its foot), head + foot ties and X-braced tiers only where they keep out of what hangs (footing3d.js open) */
+/* an OPEN stand: under every foot (slid off what hangs along its shallower side, never off its foot) a
+   telescoping ram while it rises ≤ OPEN_RAM — past that no ram telescopes so far: a slim box-lattice LEG
+   (four chords, one diagonal per panel, a ram-housing foot) — head + foot ties and braced tiers (one
+   diagonal each) only where they keep out of what hangs (footing3d.js open); its ladder lands on a grated
+   landing at the stand's head, run in to the nearest leg */
+const OPEN_RAM = 6.5;
 function open(k, p){
   const F = k.floor, T = p.top, H = T - F;
   const feet = p.feet?.length ? p.feet : [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => [a * (p.hw - .6), b * (p.hd - .6), .3]);
@@ -402,7 +466,8 @@ function open(k, p){
     if (!at) continue;
     const [u, v] = at;
     hull.push([u, v]);
-    ram(k, p, u, v, F, T, s);
+    if (H <= OPEN_RAM) ram(k, p, u, v, F, T, s);
+    else leg(k, p, u, v, F, T, s + .06);
   }
   const segHits = (a, b, R, g) => {
     if (!R) return false;
@@ -423,34 +488,72 @@ function open(k, p){
     k.bar('steel', [a[0], T - .24, a[1]], [b[0], T - .24, b[1]], .16, .24, ALL);
     k.bar('steel', [a[0], F + .22, a[1]], [b[0], F + .22, b[1]], .13, .13, ALL);
     if (H <= 1.4) continue;
-    const near = segHits(a, b, p.hang, 1);
+    const near = segHits(a, b, p.hang, 1), tall = H > OPEN_RAM;
     for (let t = 0; t < nT; t++){
       if (near && yT[t + 1] > clearY) break;
-      if (t) k.bar('steel', [a[0], yT[t], a[1]], [b[0], yT[t], b[1]], .11, .11, ALL);
-      k.bar('steel', [a[0], yT[t], a[1]], [b[0], yT[t + 1], b[1]], .075, .05);
-      k.bar('steel', [b[0], yT[t], b[1]], [a[0], yT[t + 1], a[1]], .075, .05);
+      if (t) k.bar('steel', [a[0], yT[t], a[1]], [b[0], yT[t], b[1]], tall ? .15 : .11, tall ? .15 : .11, ALL);
+      const [p0, p1] = (i + t) % 2 ? [a, b] : [b, a];
+      k.bar('steel', [p0[0], yT[t] + .08, p0[1]], [p1[0], yT[t + 1] - .08, p1[1]], tall ? .12 : .09, tall ? .09 : .06, ALL);
     }
   }
   access(k, p, T, p.access);
+  if (p.access?.kind === 'ladder' && hull.length) ladderHead(k, p, T, p.access, hull);
+}
+/* a slim box-lattice LEG at (u, v) from the floor to y1: a ram-housing foot, four chords, one diagonal per
+   panel on each face (a Warren zigzag), a head block under the stand's foot */
+function leg(k, spec, u, v, F, y1, s){
+  const c = s - .06, yF = F + 1.1, pane = 2 * c * 1.7;
+  ram(k, spec, u, v, F, yF, s + .04);                              // its foot: the ram housing it grew out of
+  for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) k.box('steel', u + a * c - .06, u + a * c + .06, yF, y1 - .2, v + b * c - .06, v + b * c + .06, SIDES);
+  const n = Math.max(1, Math.round((y1 - .2 - yF) / pane)), dy = (y1 - .2 - yF) / n;
+  const faces = [[[-c, -c], [c, -c]], [[c, -c], [c, c]], [[c, c], [-c, c]], [[-c, c], [-c, -c]]];
+  for (let f = 0; f < 4; f++){
+    const [a, b] = faces[f];
+    for (let j = 0; j < n; j++){
+      const y0 = yF + j * dy, [p0, p1] = (j + f) % 2 ? [a, b] : [b, a];
+      k.bar('steel', [u + p0[0], y0 + .04, v + p0[1]], [u + p1[0], y0 + dy - .04, v + p1[1]], .06, .05, ALL);
+      if (j % 3 === 0) k.bar('steel', [u + a[0], y0, v + a[1]], [u + b[0], y0, v + b[1]], .07, .07, ALL);
+    }
+  }
+  k.box('steel', u - s - .06, u + s + .06, y1 - .2, y1, v - s - .06, v + s + .06, ALL);   // the head block
+  k.box('hazard', u - c - .08, u + c + .08, yF + .08, yF + .5, v - c - .08, v + c + .08, SIDES);   // the painted band over the foot
+}
+/* the open stand's LADDER HEAD: a grated landing at the top of the climb (in the ladder's own envelope,
+   railed), run in under the stand's head to the nearest leg (inside the pad: no rail, no higher than its top) */
+function ladderHead(k, p, T, acc, hull){
+  const S = onSide(p, acc.side), along = acc.side[1] === 'u' ? 1 : 0, sg = acc.side[0] === '+' ? 1 : -1;
+  const half = along ? p.hw : p.hd;
+  // the nearest leg, in (along a, out o) — o < 0 inside the pad
+  let best = null;
+  for (const [u, v] of hull){ const a = along ? v : u, o = sg * (along ? u : v) - half, d = Math.hypot(a - (acc.a0 + acc.a1) / 2, o); if (!best || d < best.d) best = { a, o, d }; }
+  const box = (slot, a0, a1, o0, o1, y0, y1, faces) => { const P = S(a0, o0), Q = S(a1, o1);
+    k.box(slot, Math.min(P[0], Q[0]), Math.max(P[0], Q[0]), y0, y1, Math.min(P[1], Q[1]), Math.max(P[1], Q[1]), faces); };
+  const y = T - .3, ow = .24;                                       // (the ladder climbs at .34 out: the landing is its inner side)
+  const a0 = Math.max(-half + .05, Math.min(acc.a0 + .05, best.a - .35)), a1 = Math.min(half - .05, Math.max(acc.a1 - .05, best.a + .35));
+  box('grate', acc.a0 + .05, acc.a1 - .05, 0, ow, y - .05, y, PY | NY);               // the landing, outside the pad
+  box('grate', a0, a1, Math.min(best.o, -.05), 0, y - .05, y, PY | NY);              // run in under the head to the leg
+  for (const e of [a0 + .04, a1 - .04]) box('steel', e - .04, e + .04, Math.min(best.o, -.05), 0, y - .2, y - .05, ALL);   // its stringers
+  box('steel', acc.a0 + .05, acc.a1 - .05, ow - .06, ow, y - .2, y - .05, ALL);
 }
 
 /* ---------------- THE RUNNING LIGHTS + STATUS BEACONS ----------------
    One additive draw for every machine, built with the footing it lives in: lamps laid out from the plan
    (starship-deck.js lampLayout), each vertex reading its machine's pulse slot — uS: the seconds since its
    latest two strikes + their weights (the chase: two heads race from the plate's front-centre round to
-   the back), uB: its beacon (x: playing — a slow afterglow, y: the cue light before an entrance). The
+   the back), uB: its beacon (x: playing — a slow afterglow, which also lifts the whole channel's resting
+   glow, so a playing machine's plate edge reads ON from the wide; y: the cue light before an entrance). The
    material is the ROOM's (one per room, its uniforms written from the room's update — starship.js). */
 const MAXS = FOOT.MAX_PULSE;
-export const LAMP = { lap: .5, decay: .55, wid: .9, tail: 2.4, base: .13, gain: 2.1, strip: .32, beacon: 1.5 };
+export const LAMP = { lap: .5, decay: .55, wid: .9, tail: 2.4, base: .13, play: 1.4, gain: 2.1, strip: .32, beacon: 1.5 };
 export function lampMaterial(){
   return new THREE.ShaderMaterial({
     uniforms: { uS: { value: new Float32Array(4 * MAXS).fill(1e4) }, uB: { value: new Float32Array(4 * MAXS) },
       uLap: { value: LAMP.lap }, uDecay: { value: LAMP.decay }, uWid: { value: LAMP.wid }, uTail: { value: LAMP.tail },
-      uBase: { value: LAMP.base }, uGain: { value: LAMP.gain }, uStrip: { value: LAMP.strip }, uBeacon: { value: LAMP.beacon } },
+      uBase: { value: LAMP.base }, uPlay: { value: LAMP.play }, uGain: { value: LAMP.gain }, uStrip: { value: LAMP.strip }, uBeacon: { value: LAMP.beacon } },
     vertexShader: /* glsl */`
       attribute vec3 aCol; attribute float aSlot, aD, aHalf, aKind;
       uniform vec4 uS[${MAXS}]; uniform vec4 uB[${MAXS}];
-      uniform float uLap, uDecay, uWid, uTail, uBase, uGain, uStrip, uBeacon;
+      uniform float uLap, uDecay, uWid, uTail, uBase, uPlay, uGain, uStrip, uBeacon;
       varying vec3 vC;
       float head(float age, float w, float d, float hp){
         float x = d - age / uLap * hp;                       // ahead of the head (+) / its tail (−)
@@ -460,7 +563,7 @@ export function lampMaterial(){
       void main(){
         int i = int(max(aSlot, 0.) + .5);
         float L = uStrip;
-        if (aKind < .5){ vec4 s = uS[i]; L = uBase + uGain * max(head(s.x, s.y, aD, aHalf), head(s.z, s.w, aD, aHalf)); }
+        if (aKind < .5){ vec4 s = uS[i]; L = uBase * (1. + uPlay * uB[i].x) + uGain * max(head(s.x, s.y, aD, aHalf), head(s.z, s.w, aD, aHalf)); }   // (a playing machine's channel glows ON)
         else if (aKind < 1.5){ vec4 b = uB[i]; L = uBeacon * (.16 + .84 * b.x) + .9 * b.y; }
         vC = aCol * L;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.);

@@ -148,19 +148,23 @@ describe('starship footing: ship hardware, drawn', () => {
     for (const m of M) expect(m.userData.footing, m.name).toBe(true);
     f.dispose();
   });
-  it('everything it draws — lights too — stays inside the plan\'s envelopes', () => {
-    const f = buildShip(), B = ENV.map(e => e.box);
+  it('everything it draws — lights too — stays inside the plan\'s envelopes (the crowd; a tall open stand + its ladder; every band lifted)', () => {
+    const tt = u => ({ ...st('turntable', 0, 12, 14.22, 14.12, -1.29 - FL + u), y: -.93 + u, ground: -.93, lift: u, low: -5.1 + u,
+      feet: [[-5.5, -4.5, .7], [5.5, -4.5, .7], [-5.5, 4.5, .7], [5.5, 4.5, .7]], hang: [-6.25, 4.35, 4.8, 5.7] });
+    const plans = [PLAN, ...[2, 9, 20].map(u => planFooting([tt(u), st('bells', -18, 12, 10.9, 6.85, .4 + u * .6), st('marimba', 22, 12, 14, 6, .4 + u)], { floor: FL, room: ROOMB }))];
+    for (const plan of plans){
+    const f = buildShip(plan), B = footingBoxes(plan).map(e => e.box);
     for (const m of meshesOf(f)){
       const p = m.geometry.attributes.position.array;
       let worst = 0, at = null;
       for (let i = 0; i < p.length; i += 3){
-        if (p[i + 1] < FL - .2){ worst = Infinity; at = [p[i], p[i + 1], p[i + 2]]; break; }
-        const d = outside(B, p[i], Math.max(p[i + 1], FL), p[i + 2]);
+        const d = outside(B, p[i], p[i + 1], p[i + 2]);                       // (the envelopes start AT the floor: nothing under it)
         if (d > worst){ worst = d; at = [p[i], p[i + 1], p[i + 2]]; }
       }
-      expect(worst, `${m.name}: ${worst.toFixed(3)} u out at ${at && at.map(v => v.toFixed(2))}`).toBeLessThanOrEqual(.035);
+      expect(worst, `${m.name}: ${worst.toFixed(3)} u out at ${at && at.map(v => v.toFixed(2))}`).toBeLessThanOrEqual(.005);
     }
     f.dispose();
+    }
   });
   it('every face looks out (winding agrees with its normal)', () => {
     const f = buildShip();
@@ -303,14 +307,21 @@ describe('starship deck lights: a pure fn of songTime', () => {
     expect(cueLight(CUE.REST + 1, 0)).toBeCloseTo(1, 12);
     expect(cueLight(CUE.REST - .01, .2)).toBe(0);                                 // (no rest: no cue)
     expect(cueLight(CUE.REST + 1, CUE.T + .01)).toBe(0);                          // (not yet)
-    expect(cueLight(1e4, .3)).toBeGreaterThan(0);                                  // (a first entrance counts)
-    for (let e = 0; e < CUE.T; e += .01){ const v = cueLight(5, e); expect(v).toBeGreaterThanOrEqual(0); expect(v).toBeLessThanOrEqual(1); }
+    expect(cueLight(1e4, .3, 20)).toBeGreaterThan(0);                              // (a first entrance counts…)
+    expect(cueLight(1e4, .3, -.2)).toBe(0);                                        // (…but never lights the count-in)
+    expect(cueLight(1e4, .3, 1.29)).toBe(0); expect(cueLight(1e4, .3, 1.31)).toBeGreaterThan(0);
+    // one soft rise, never a blink: monotone up to the entrance
+    let prev = -1;
+    for (let e = CUE.T; e >= 0; e -= .01){ const v = cueLight(5, e); expect(v).toBeGreaterThanOrEqual(prev - 1e-12); expect(v).toBeLessThanOrEqual(1); prev = v; }
   });
   it('every slot\'s lights, written per frame: the count-in dark, scrub-exact, never NaN', () => {
     const D = makeDeckLights(PLAN), S = new Float32Array(4 * FOOT.MAX_PULSE).fill(1e4), B = new Float32Array(4 * FOOT.MAX_PULSE);
     expect(D.n).toBe(PLAN.pulses.length);
     D.write(-1.2, S, B);
-    for (let i = 0; i < D.n; i++){ expect(S[4 * i + 1]).toBe(0); expect(S[4 * i + 3]).toBe(0); expect(B[4 * i]).toBe(0); }
+    for (const t of [-2.4, -1.2, -.61, -.3, -.01]){
+      D.write(t, S, B);
+      for (let i = 0; i < D.n; i++){ expect(S[4 * i + 1]).toBe(0); expect(S[4 * i + 3]).toBe(0); expect(B[4 * i]).toBe(0); expect(B[4 * i + 1], `cue ${i} at ${t}`).toBe(0); }
+    }
     D.write(7.3, S, B); const a = [...S, ...B];
     D.write(2.2, S, B); D.write(7.3, S, B); expect([...S, ...B]).toEqual(a);
     expect(a.every(Number.isFinite)).toBe(true);

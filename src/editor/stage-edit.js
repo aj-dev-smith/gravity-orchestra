@@ -390,7 +390,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     shown = v;
     knobEl.hidden = chipEl.hidden = !v;
     poleSvg.style.display = v ? '' : 'none';
-    if (!v){ shadow.visible = shadowLine.visible = drops.visible = false; tipEl.hidden = true; keepOut.fill(NaN); }
+    if (!v){ shadow.visible = shadowLine.visible = drops.visible = false; tipEl.hidden = true; keepOut.fill(NaN, 0, 8); }
   }
   /* the readout, re-read only when the machine's height, the user's word or the footing plan changed */
   function syncRead(p, h){
@@ -466,8 +466,8 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   }
   let knobW = 0, knobH = 0, tipW = 0, tipH = 0;
   /* where the handle sits on the screen (CSS px: [x0, y0, x1, y1] — the knob, the first-time tip, the selection's
-     own tag; NaN = none): a neighbour's name tag steps out of its way (update) */
-  const keepOut = new Float64Array(12).fill(NaN);
+     own tag, the top bar; NaN = none): a name tag steps out of its way (update) */
+  const keepOut = new Float64Array(16).fill(NaN);
   const labOff = () => (knobW ||= knobEl.offsetWidth) ? knobW / 2 + 9 : 24;   // (the knob's width, measured once it shows)
   /* the readout, written only when it changes (the chip + the dock) */
   function setRead(r){
@@ -1157,6 +1157,9 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     const W = dom.clientWidth, H0 = dom.clientHeight;
     // (the SELECTION's tag first: once placed it is in the way too — a neighbour's tag steps off it)
     keepOut[8] = keepOut[10] = NaN;
+    const br = bar.hidden ? null : bar.getBoundingClientRect();     // (read before this frame's tag writes)
+    if (br && br.height && br.top < H0 / 2){ keepOut[12] = br.left; keepOut[13] = br.top; keepOut[14] = br.right; keepOut[15] = br.bottom; }
+    else keepOut[12] = keepOut[14] = NaN;
     if (sel) tagAt(sel, W, H0);
     for (const p of pieces) if (p !== sel) tagAt(p, W, H0);
     if (sel) paintHeight();
@@ -1175,28 +1178,35 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     const hw = (p.tagW ||= p.el.offsetWidth) / 2 + 4;
     let x = hw * 2 < W ? Math.min(W - hw, Math.max(hw, (_v.x + 1) / 2 * W)) : (_v.x + 1) / 2 * W, y = (1 - _v.y) / 2 * H0;
     const th = (p.tagH ||= p.el.offsetHeight || 18) + 2;
-    if (sel && shown){ stepAside(x, y, hw, th, W, H0); x = _sa[0]; y = _sa[1]; }
+    stepAside(x, y, hw, th, W, H0); x = _sa[0]; y = _sa[1];
     if (p === sel){ keepOut[8] = x - hw; keepOut[9] = y - th; keepOut[10] = x + hw; keepOut[11] = y; }
     p.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`;
   }
 
   /* a name tag (centre x, bottom y, half width, height) moved the least way that clears the handle (the knob,
      the tip: keepOut) and stays on the screen: a step left / right / up / down past one of them — or, when that
-     lands on the other, a second step past that one. Into _sa (a tag in the clear costs a few compares) */
-  const _sa = [0, 0];
+     lands on the other, a second step past that one. Into _sa (no garbage; a tag in the clear costs a few compares) */
+  const _sa = [0, 0], _st = { x: 0, y: 0, hw: 0, th: 0, W: 0, H: 0, best: 0 };
+  function keptOut(cx, cy, hw, th){
+    for (let i = 0; i < 16; i += 4) if (keepOut[i] === keepOut[i] && cx - hw < keepOut[i + 2] && cx + hw > keepOut[i] && cy - th < keepOut[i + 3] && cy > keepOut[i + 1]) return i;
+    return -1;
+  }
+  function stepTry(cx, cy, depth){
+    const S = _st, o = keptOut(cx, cy, S.hw, S.th);
+    if (o < 0){
+      const d = Math.abs(cx - S.x) + Math.abs(cy - S.y);
+      if (d < S.best && cx >= S.hw && cx <= S.W - S.hw && cy >= S.th && cy <= S.H){ S.best = d; _sa[0] = cx; _sa[1] = cy; }
+      return;
+    }
+    if (!depth) return;
+    stepTry(keepOut[o] - 3 - S.hw, cy, depth - 1); stepTry(keepOut[o + 2] + 3 + S.hw, cy, depth - 1);
+    stepTry(cx, keepOut[o + 1] - 3, depth - 1); stepTry(cx, keepOut[o + 3] + 3 + S.th, depth - 1);
+  }
   function stepAside(x, y, hw, th, W, H0){
     _sa[0] = x; _sa[1] = y;
-    const hits = (cx, cy) => { for (let i = 0; i < 12; i += 4) if (keepOut[i] === keepOut[i] && cx - hw < keepOut[i + 2] && cx + hw > keepOut[i] && cy - th < keepOut[i + 3] && cy > keepOut[i + 1]) return i; return -1; };
-    if (hits(x, y) < 0) return;
-    let best = Infinity;
-    const steps = (cx, cy, depth) => {
-      const o = hits(cx, cy);
-      if (o < 0){ const d = Math.abs(cx - x) + Math.abs(cy - y); if (d < best && cx >= hw && cx <= W - hw && cy >= th && cy <= H0){ best = d; _sa[0] = cx; _sa[1] = cy; } return; }
-      if (!depth) return;
-      steps(keepOut[o] - 3 - hw, cy, depth - 1); steps(keepOut[o + 2] + 3 + hw, cy, depth - 1);
-      steps(cx, keepOut[o + 1] - 3, depth - 1); steps(cx, keepOut[o + 3] + 3 + th, depth - 1);
-    };
-    steps(x, y, 2);
+    if (keptOut(x, y, hw, th) < 0) return;
+    const S = _st; S.x = x; S.y = y; S.hw = hw; S.th = th; S.W = W; S.H = H0; S.best = Infinity;
+    stepTry(x, y, 2);
   }
   function syncUndo(n, r = 0){
     const b = bar.querySelector('[data-a=undo]'); b.disabled = !n; b.title = n ? `undo the last change (⌘Z / Ctrl+Z) · ${n} step${n === 1 ? '' : 's'}` : 'nothing to undo';

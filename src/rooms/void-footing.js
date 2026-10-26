@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { FOOT, railed } from './footing.js';
-import { newBuf, quad } from './footing3d.js';
+import { quad } from './footing3d.js';
 import { GLYPHS, hash2, glyphOf } from './void-isles.js';
 /* ============================================================
    THE VOID's FOOTING — what the machines stand on, in the Void's own idiom (a rooms/footing3d.js
@@ -26,7 +26,7 @@ import { GLYPHS, hash2, glyphOf } from './void-isles.js';
    room's `rune` material IS the footing's edge material): runes carved round its deck's fascia /
    its terrace, faint on a stack's stones, a ring round an open stand's feet.
 
-   Cost: everything is written into the kit's merged slot buffers (footing3d newBuf / quad) —
+   Cost: everything is written into the kit's merged slot buffers (footing3d kit.slot / quad) —
    'base' = ROCK, 'deck' = dressed STONE, 'glow' = crystal, 'haze' = soft light, + the kit's edge
    (the runes): ≤ 5 draws for a whole song's footing, whatever it holds. Everything stays inside
    footingBoxes(plan) (test/room-void.test.js): the shot solve, the director's glide test and XR
@@ -203,8 +203,8 @@ function crystal(kit, b, u, y, v, r, L, dir = UP, k = 0){
 
 /* ---- the slots a form writes into (lazy: a slot it never touches never learns about its support) ---- */
 function slotsOf(kit, spec){
-  const unit = spec.loft || spec.id || spec.key, got = {};
-  const get = name => got[name] || (got[name] = (() => { const b = kit._bufs[name] || (kit._bufs[name] = newBuf()); (b.units ||= new Set()).add(unit); return b; })());
+  const got = {};                                                        // (kit.frame(spec) is set: kit.slot registers each to its support)
+  const get = name => got[name] || (got[name] = kit.slot(name));
   return { get rock(){ return get('base'); }, get stone(){ return get('deck'); }, get glow(){ return get('glow'); }, get haze(){ return get('haze'); }, edge: kit._edge };
 }
 const colOf = (spec, k = 1) => _col.set(spec.color ?? '#8fa6c8').multiplyScalar(k).clone();
@@ -547,7 +547,6 @@ function openStand(kit, S, p){
 
 /* ---- the STYLE (rooms/footing3d.js): the room hands over its materials ---- */
 export function voidFootingStyle(M){
-  const NONE = new THREE.Group(); NONE.name = 'void-footing';           // (handled: every form writes into the merged slots)
   const raised = (p, kit, S) => {
     const T = p.top, D = deckDepth(p, false), F = kit.floor, H = T - F;
     if (p.band === 'low'){ terrace(kit, S, p, T); access(kit, S, p, T, p.access, true); return; }
@@ -567,11 +566,11 @@ export function voidFootingStyle(M){
   return {
     key: 'void',
     mats: () => ({ base: M.rock, deck: M.stone, steel: M.rock, glow: M.glow, haze: M.haze, edge: M.rune }),
-    edge: () => NONE,                                                   // (its light is the forms' own runes)
-    flush(p, kit){ dais(kit, slotsOf(kit, p), p, p.fixed ? kit.floor + FOOT.KERB : p.top); return NONE; },
-    low(p, kit){ const S = slotsOf(kit, p); p.open ? openStand(kit, S, p) : raised(p, kit, S); return NONE; },
-    mid(p, kit){ const S = slotsOf(kit, p); p.open ? openStand(kit, S, p) : raised(p, kit, S); return NONE; },
-    high(p, kit){ const S = slotsOf(kit, p); p.open ? openStand(kit, S, p) : raised(p, kit, S); return NONE; },
+    edge: () => true,                                                   // (its light is the forms' own runes)
+    flush(p, kit){ dais(kit, slotsOf(kit, p), p, p.fixed ? kit.floor + FOOT.KERB : p.top); return true; },
+    low(p, kit){ const S = slotsOf(kit, p); p.open ? openStand(kit, S, p) : raised(p, kit, S); return true; },
+    mid(p, kit){ const S = slotsOf(kit, p); p.open ? openStand(kit, S, p) : raised(p, kit, S); return true; },
+    high(p, kit){ const S = slotsOf(kit, p); p.open ? openStand(kit, S, p) : raised(p, kit, S); return true; },
     /* a FLOATING RIDGE: the deck on a rock keel, carried by the band's support spaced along it */
     loft(L, kit){
       const S = slotsOf(kit, L), F = kit.floor, T = L.top, D = deckDepth(L, true), members = kit.plan.pads.filter(p => p.loft === L.id);
@@ -610,7 +609,7 @@ export function voidFootingStyle(M){
         const runs = along ? [[[m0, -e], [m1, -e]], [[m1, e], [m0, e]]] : [[[e, m0], [e, m1]], [[-e, m1], [-e, m0]]];
         for (const run of runs) fasciaRunes(kit, S, run, yR, hR, colOf(m), m.pulse, 0, 0, false);
       }
-      return NONE;
+      return true;
     },
   };
 }

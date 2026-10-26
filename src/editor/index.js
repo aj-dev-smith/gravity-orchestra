@@ -54,7 +54,8 @@ const store = (() => { try { return window.localStorage; } catch (e){ return nul
  *   floorY           the room floor's world y (the grid + the belt's footprint lie on it)
  *   lift(key)        the HEIGHT the user gave a machine (undefined: the layout decides)
  *   height(key)      its height now { lift, user, deck, bottom, top, floor, ceil, open } (null: none to give)
- *   liftLive(key, u) set it live, mid-gesture (u undefined: forget the user's) · liftSettle() the gesture is over
+ *   liftLive(key, u, {fresh}) set it live, mid-gesture (u undefined: forget the user's — fresh: back to the
+ *                    SOLVED stage, an undo to the empty layout) · liftSettle() the gesture is over
  *   footing()        the live footing plan (rooms/footing.js) · fixed() what can't move here, and why
  */
 export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
@@ -233,8 +234,8 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     liftAuto(key, entry, all){
       history.push(curId, layout());
       saveLayout(store, curId, placed(key, { ...entry, lift: null }, all));
-      // live: the room solve's own height for where it stands (a station moved since it was solved: only
-      // a fresh solve can say — the world is rebuilt)
+      // live: the room solve asked again where it stands now, every machine pinned as the stored layout now
+      // pins them — the height a reload would give (main's autoLiftOf); none to give: the world is rebuilt
       if (host.liftLive(key, undefined)){ host.liftSettle(); stage.refresh(); } else host.rebuild(true);
       syncButtons();
     },
@@ -253,7 +254,9 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     saveLayout(store, curId, prev);
     // a HEIGHT step comes back live (the machines move, the room re-anchors — no rebuild, the music runs on);
     // anything else, or a height only a fresh solve can give back, rebuilds holding songTime
-    if (lifts && lifts.every(l => host.liftLive?.(l.key, l.lift))){ if (lifts.length) host.liftSettle(); stage.refresh(); syncButtons(); }
+    // (back to the empty layout: the SOLVED stage — an AUTO there is the build's own solve, not a pinned one)
+    const fresh = !Object.keys(prev).length;
+    if (lifts && lifts.every(l => host.liftLive?.(l.key, l.lift, { fresh }))){ if (lifts.length) host.liftSettle(); stage.refresh(); syncButtons(); }
     else host.rebuild(true);
     return true;
   }

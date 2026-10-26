@@ -5,6 +5,7 @@ import { makePulse } from '../src/rooms/pulse.js';
 import { STAGE } from '../src/rooms/common.js';
 import { voidFootingStyle, makeVoidMats } from '../src/rooms/void-footing.js';
 import { voidIslands, runeSpots, crystalSpots, crystalClearance, machinesOf, outOf, rectDist, sepGap, grown, ISLE, CRYSTAL } from '../src/rooms/void-isles.js';
+import { islandGeometry, runeGeometry, runeSlots, litOf, crystalGeometry, fillCrystals, CRYSTAL_MAX, QUIET, GROUND } from '../src/rooms/void-ground.js';
 
 /* THE VOID (src/rooms/void.js + void-footing.js + void-isles.js): what its machines stand on — stone that
    grows with height, written into the footing kit's merged slots, never outside the plan's envelopes —
@@ -220,5 +221,46 @@ describe('the Void\'s ground (void-isles.js): islands, runes, crystals', () => {
     const ms = machinesOf(CROWD), g1 = ms.findIndex(a => a.key === 'g1');
     for (const c of C.filter(c => c.slot === g1)) expect(ms[g1].bottom - c.y).toBeLessThan(3.5);
     expect(crystalSpots(voidIslands(CROWD, PLAN), CROWD, PLAN)).toEqual(C);     // deterministic
+  });
+});
+
+describe('the Void\'s islands as built (void-ground.js): the floor contract, the runes\' light, the crystals', () => {
+  const I = voidIslands(CROWD, PLAN), G = islandGeometry(I, { floor: FL }), lit = litOf(CROWD, I);
+  const verts = g => { const p = g.attributes.position.array, out = []; for (let i = 0; i < p.length; i += 3) out.push([p[i], p[i + 1], p[i + 2]]); return out; };
+  it('an island\'s top IS the floor (STAGE.FLOOR: the machines\' ground) — nothing of it rises above, its stone and rock stay inside its outline', () => {
+    const top = FL + .003 * Math.max(...I.map(i => i.group));
+    for (const v of verts(G.stone)) expect(v[1]).toBeLessThanOrEqual(top + 1e-6);
+    for (const v of verts(G.rock)) expect(v[1]).toBeLessThanOrEqual(top - GROUND.FASC + 1e-6);
+    // every vertex lies inside (or on) some island's outline
+    for (const v of [...verts(G.stone), ...verts(G.rock)]) expect(Math.min(...I.map(i => outOf(i.hull, v[0], v[2])))).toBeLessThan(1e-4);
+    // a landmass is one height; each island's top is a whole platform (its area ≥ its hull's inset)
+    for (const i of I) expect(i.group).toBeGreaterThanOrEqual(0);
+  });
+  it('who lights the room: every standing machine (runeSpots\' slots), then the hung machine that stands on an island (the organ) — the last slot stays dark', () => {
+    const ms = machinesOf(CROWD);
+    expect(lit.slice(0, ms.length)).toEqual(ms);
+    expect(lit.map(a => a.key)).toContain('organ');
+    expect(lit.length).toBeLessThan(FOOT.MAX_PULSE);
+    const R = runeSpots(I, CROWD), S = runeSlots(R, I, CROWD, lit);
+    S.forEach((s, k) => {
+      const isl = I[R[k].isle];
+      if (R[k].slot >= 0) expect(s).toBe(R[k].slot);
+      else expect(lit[s]?.key ?? 'quiet').toBe(isl.keys.find(key => lit.some(a => a.kind === 'hung' && a.key === key)) ?? 'quiet');
+    });
+    const { geometry } = runeGeometry(I, CROWD, lit, { floor: FL });
+    expect(geometry.attributes.aPulse.count).toBeGreaterThan(0);
+    for (const v of geometry.attributes.aPulse.array) expect(v === QUIET || (v >= 0 && v < lit.length)).toBe(true);
+  });
+  it('the crystals: one instanced draw, each tied to its machine\'s slot (or breathing only, hung under an island)', () => {
+    const g = crystalGeometry(), { spots, count } = fillCrystals(g, I, CROWD, PLAN, lit, G.glints);
+    expect(count).toBe(Math.min(CRYSTAL_MAX, spots.length + G.glints.length));
+    expect(g.instanceCount).toBe(count);
+    const A = g.attributes.iA.array, B = g.attributes.iB.array;
+    for (let i = 0; i < count; i++){
+      const mobile = B[i * 4 + 1];
+      if (mobile) expect(A[i * 4 + 1]).toBeLessThan(lit.length); else expect(A[i * 4 + 1]).toBe(QUIET);
+    }
+    // the glints hang UNDER their islands (below the platform's slab)
+    for (const q of G.glints) expect(q.y).toBeLessThan(FL - GROUND.FASC);
   });
 });

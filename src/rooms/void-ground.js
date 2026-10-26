@@ -27,12 +27,12 @@ export const GROUND = {
   RUNE_Y: .3, RUNE_H: .28,
   LEDGE_IN: .28,       // the rock ledge's outline pulls in by up to this (rough), and drops by up to…
   LEDGE_DY: .16,
-  SEG: 1.1,            // the rock's outline: a point at least this often along the hull
+  SEG: 1.5,            // the rock's outline: a point at least this often along the hull
   DEPTH: [4, 13],      // how far a keel hangs under the platform (by the island's width)
   GLINT: 5,            // crystals hanging under an island, at most
 };
 /* the rock under the ledge: [t (0 → the keel), s (scale of the ledge's outline)] */
-const PROFILE = [[0, 1], [.05, .97], [.16, .9], [.32, .76], [.5, .57], [.66, .4], [.8, .25], [.91, .12], [1, .02]];
+const PROFILE = [[0, 1], [.05, .97], [.2, .87], [.42, .66], [.62, .44], [.8, .24], [.92, .1], [1, .02]];
 const UP = [0, 1, 0], DOWN = [0, -1, 0];
 
 /** a convex CCW (x, z) polygon offset INWARD by d (mitred, the miter capped) */
@@ -242,7 +242,7 @@ export function makeCrystalMat(U){
         vec4 mv = modelViewMatrix * vec4(iPos + q + vec3(0., bob, 0.), 1.);
         vN = normalize(normalMatrix * turn(normal, ct, st, cs, sn));
         vC = iCol;
-        vG = .62 + .22 * sin(uTime * .5 + ph * 6.2832) + 1.5 * p;
+        vG = .62 + .22 * sin(uTime * .5 + ph * 6.2832) + .9 * p;
         vFog = -mv.z; vV = normalize(-mv.xyz);
         gl_Position = projectionMatrix * mv;
       }`,

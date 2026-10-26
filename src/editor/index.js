@@ -54,7 +54,8 @@ const store = (() => { try { return window.localStorage; } catch (e){ return nul
  *   floorY           the room floor's world y (the grid + the belt's footprint lie on it)
  *   lift(key)        the HEIGHT the user gave a machine (undefined: the layout decides)
  *   height(key)      its height now { lift, user, deck, bottom, top, floor, ceil, open } (null: none to give)
- *   liftLive(key, u) set it live, mid-gesture (u undefined: forget the user's) · liftSettle() the gesture is over
+ *   liftLive(key, u, {fresh}) set it live, mid-gesture (u undefined: forget the user's — fresh: back to the
+ *                    SOLVED stage, an undo to the empty layout) · liftSettle() the gesture is over
  *   footing()        the live footing plan (rooms/footing.js) · fixed() what can't move here, and why
  */
 export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
@@ -204,7 +205,7 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
                    strain: strain.map(w => `${labels[w.key] || w.key} is straining: ${w.msg}`),
                    strained: id => strained.has(machineOf(m[id])) });
   }
-  function openPanel(v = !panel.open){ panel.show(v); status = ''; renderPanel(); syncButtons(); }
+  function openPanel(v = !panel.open){ if (v && stage?.on) stage.toggle(false); panel.show(v); status = ''; renderPanel(); syncButtons(); }
   const veilUp = () => { const o = document.getElementById('overlay'); return !!o && !o.classList.contains('gone'); };
 
   /* ---- stage edit ---- */
@@ -217,10 +218,17 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     place(key, entry, all){
       history.push(curId, layout());                 // (undo: the layout as it was before this move)
       saveLayout(store, curId, placed(key, entry, all));
+      // a machine whose height the LAYOUT decides (no user lift) takes the height the room solve gives its new
+      // spot — what a reload would (stations.js: one the user parks behind the belt goes up on the gallery;
+      // one brought out from there comes down) — live, before the room re-anchors
+      if (key !== 'drums' && host.lift?.(key) === undefined) host.liftLive?.(key, undefined);
       host.restage({ director: false });             // (the director catches up on the way out: leave)
       stage.refresh();
     },
     leave(){ host.directorNow?.(); },
+    // one tool at a time: the MAP panel covered a third of the 3/4 view (desktop) and sat on the height dock
+    // (a phone's bottom sheet) — entering stage edit closes it; opening it leaves stage edit (openPanel)
+    enter(){ if (panel.open) openPanel(false); },
     /* HEIGHT (the handle — height.js): a gesture opens ONE undo step (liftBegin: the layout as it was),
        writes as it goes (liftWrite — cheap: the machine already moved live, only the stored layout
        follows) and settles once, at its end (liftSettle: the kit rebuilt at its deck, the room
@@ -233,13 +241,13 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     liftAuto(key, entry, all){
       history.push(curId, layout());
       saveLayout(store, curId, placed(key, { ...entry, lift: null }, all));
-      // live: the room solve's own height for where it stands (a station moved since it was solved: only
-      // a fresh solve can say — the world is rebuilt)
+      // live: the room solve asked again where it stands now, every machine pinned as the stored layout now
+      // pins them — the height a reload would give (main's autoLiftOf); none to give: the world is rebuilt
       if (host.liftLive(key, undefined)){ host.liftSettle(); stage.refresh(); } else host.rebuild(true);
       syncButtons();
     },
     resetLayout(){ stage.cancel(); history.push(curId, layout()); saveLayout(store, curId, {}); ignoreSongStage.add(curId); host.rebuild(true); },
-    undo,
+    undo, redo,
   } });
   /* undo the last stage move (or reset, or height gesture): back to the layout before it — a rebuild
      holding songTime (each station is re-placed from its slot; an empty layout = the solved stage
@@ -248,14 +256,29 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     stage.finish();                                  // (a gesture still running / settling ends first: it is the step undone)
     const prev = history.pop(curId);
     if (!prev) return false;
-    const cur = layout(), lifts = liftOnlyUndo(prev, cur);
-    if (!Object.keys(prev).length) ignoreSongStage.add(curId); else ignoreSongStage.delete(curId);
-    saveLayout(store, curId, prev);
-    // a HEIGHT step comes back live (the machines move, the room re-anchors — no rebuild, the music runs on);
-    // anything else, or a height only a fresh solve can give back, rebuilds holding songTime
-    if (lifts && lifts.every(l => host.liftLive?.(l.key, l.lift))){ if (lifts.length) host.liftSettle(); stage.refresh(); syncButtons(); }
-    else host.rebuild(true);
+    history.stash(curId, layout());                  // (redo: the layout this undo leaves)
+    goToLayout(prev);
     return true;
+  }
+  /* REDO (⌘⇧Z / Ctrl+Y, ↷): the last undone step again — until a new edit starts another branch */
+  function redo(){
+    stage.finish();                                  // (a gesture still open ends first: a new edit — nothing to redo)
+    const next = history.unstash(curId);
+    if (!next) return false;
+    history.keep(curId, layout());
+    goToLayout(next);
+    return true;
+  }
+  /* the stage to layout `to` (an undo's or a redo's): a HEIGHT-only step comes back live (the machines move, the
+     room re-anchors — no rebuild, the music runs on); anything else, or a height only a fresh solve can give,
+     rebuilds holding songTime. (To the empty layout: the SOLVED stage — an AUTO there is the build's own solve,
+     not a pinned one; live only while every machine still stands where that solve put it — host.solvedLayout.) */
+  function goToLayout(to){
+    const fresh = !Object.keys(to).length, cur = layout(), lifts = liftOnlyUndo(to, cur, 2e-3, fresh ? host.solvedLayout?.() : null);
+    if (fresh) ignoreSongStage.add(curId); else ignoreSongStage.delete(curId);
+    saveLayout(store, curId, to);
+    if (lifts && lifts.every(l => host.liftLive?.(l.key, l.lift, { fresh }))){ if (lifts.length) host.liftSettle(); stage.refresh(); syncButtons(); }
+    else host.rebuild(true);
   }
 
   /* ---- the HUD pills: MAP · EDIT (next to SHARE LINK) ---- */
@@ -278,14 +301,16 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     mapBtn.title = cm ? 'instrument map — re-mapped (AUTO in the panel puts it back)' : 'instrument map — who plays what';
     editBtn.title = cs ? 'move, turn and raise the machines (E) — this song’s stage is hand-placed' : 'move, turn and raise the machines (E)';
     if (share) share.hidden = !(curKey === 'imported' || curKey === 'shared' || cm || cs);
-    stage.syncUndo(history.size(curId));
+    stage.syncUndo(history.size(curId), history.redoSize(curId));
   }
   addEventListener('keydown', e => {
     if (e.key === 'Escape' && panel.open && !stage.on) openPanel(false);
     // ⌘Z / Ctrl+Z: undo the last stage move (while stage edit is open; never inside a text field)
-    if (stage.on && (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !/^(input|textarea)$/i.test(e.target?.tagName || '')){
-      e.preventDefault(); e.stopPropagation(); undo();
-    }
+    // ⌘⇧Z / Ctrl+Shift+Z / Ctrl+Y: redo it
+    if (!stage.on || !(e.metaKey || e.ctrlKey) || /^(input|textarea)$/i.test(e.target?.tagName || '')) return;
+    const k = e.key.toLowerCase();
+    if (k === 'z' && !e.shiftKey){ e.preventDefault(); e.stopPropagation(); undo(); }
+    else if ((k === 'z' && e.shiftKey) || (k === 'y' && e.ctrlKey && !e.metaKey)){ e.preventDefault(); e.stopPropagation(); redo(); }
   }, { capture: true });
   injectStyles();
   /* the import's panel opens on its own — but never over the play veil: the first tap on a ?midi= boot
@@ -328,7 +353,7 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
       const S = song(key), L = layout();
       return Object.keys(L).length ? { ...S, stage: encodeLayout(L) } : S;
     },
-    openMap: openPanel, toggleEdit: v => stage.toggle(v), undo,
+    openMap: openPanel, toggleEdit: v => stage.toggle(v), undo, redo,
     get stage(){ return stage; }, get panel(){ return panel; },
     get id(){ return curId; },
   };
@@ -404,6 +429,7 @@ function injectStyles(){
   .se-btns button{background:rgba(7,6,14,.6);border:1px solid rgba(90,97,120,.45);color:var(--dim);font:inherit;font-size:10px;letter-spacing:.14em;
     padding:4px 10px;border-radius:999px;cursor:pointer}
   .se-btns button:hover{color:var(--ink)}
+  .se-btns button[hidden]{display:none}
   .se-btns button.on{color:var(--amber);border-color:rgba(255,183,100,.5)}
   .se-btns button.done{color:var(--amber);border-color:var(--amber)}
   .se-btns button:disabled{opacity:.35;cursor:default}

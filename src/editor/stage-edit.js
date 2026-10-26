@@ -62,6 +62,7 @@
      machine is selected.
    ============================================================ */
 import { snap, snapYaw, conflicts, describeConflicts, footprint, boxCorners, bounds, inPoly } from './placement.js';
+import { GALLERY_DROP } from '../instruments/stations.js';
 import { readout, dragLift, stepLift, loftTargets, liftMax, rayPlaneY, makeSettle, bandName, TICK_U, fmtMeters } from './height.js';
 
 const C = { idle: 0x6c7aa0, hover: 0xcfd6e6, sel: 0xffb764, bad: 0xff4d5e, belt: 0x3d6dff };
@@ -71,6 +72,8 @@ const SETTLE_MS = 700;                               // a burst of height taps /
                                                      //  (past an OS key-repeat delay, ~.5 s: a held PgUp is ONE gesture)
 const deg = d => d * Math.PI / 180;
 const VIEW3D = { el: deg(31), az: deg(38), fov: 42, maxFov: 70, ease: .55 };   // the 3/4 view: ~RCT's dimetric tilt, a longer lens
+const GRAB_HEAD = 8;                                 // a knob grabbed in the PLAN: the 3/4 swing frames at least this much raise (u ≈ 5.4 m) over the machine's top
+const GRAB_OVER = 1;                                 //  …or, when it is more, the raise to the rear GALLERY's deck / the highest LOFT it could join, + this
 
 export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {} }){
   let on = false, pieces = [], sel = null, hover = null, drag = null, snapOn = true, info = null;
@@ -135,7 +138,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   const bar = document.createElement('div'); bar.className = 'se-bar'; bar.hidden = true;
   bar.innerHTML = `<b>STAGE EDIT</b><span class="se-hint"></span>
     <span class="se-btns">
-    <button data-a="undo" title="undo the last change (⌘Z / Ctrl+Z)">↶<i> UNDO</i></button>
+    <button data-a="undo" title="undo the last change (⌘Z / Ctrl+Z)">↶<i> UNDO</i></button><button data-a="redo" title="redo (⌘⇧Z / Ctrl+Y)" hidden>↷<i> REDO</i></button>
     <button data-a="snap" class="on" title="snap to the ½-unit grid / 15° (hold Shift to place freely)">⌗<i> SNAP</i></button>
     <span class="se-view" role="group" aria-label="view"><button data-a="plan" class="on" title="straight down over the whole stage">PLAN</button><button data-a="3d" title="an elevated 3/4 view — height reads">3D</button></span>
     <button data-a="reset" title="forget this song's layout — back to the solved stage">⟲<i> RESET LAYOUT</i></button>
@@ -146,6 +149,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     const b = e.target.closest('button'), a = b?.dataset.a;
     if (!a) return;
     if (a === 'undo') host.undo();                     // (the selection stays: a height step comes back live, under it)
+    else if (a === 'redo') host.redo?.();
     else if (a === 'snap'){ snapOn = !snapOn; b.classList.toggle('on', snapOn); }
     else if (a === 'plan') setView('plan');
     else if (a === '3d') setView('3d');
@@ -286,11 +290,20 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     paintDock();
     hint();
   }
+  /* a machine standing on the floor right behind the belt (FLOOR on a gallery machine leaves it there): the
+     belt's wall hides it from every seat — the hint says so (the user's word stands; nothing moves it) */
+  function hidden(p){
+    const w = wallBox(), h = liftable(p) ? H(p) : null;
+    if (!w || !h || h.lift > .05) return false;
+    const [x0, x1, z0, z1] = bounds(fpOf(p));
+    return z1 <= w[2] + .5 && x0 >= w[0] - .5 && x1 <= w[1] + .5;
+  }
   function hint(){
     if (!sel){ hintEl.textContent = pieces.length ? 'click a machine to pick it up · drag empty space to orbit' : 'nothing to move — this song has only the belt'; hintEl.className = 'se-hint'; return; }
     const bad = describeConflicts(sel.bad, k => pieces.find(p => p.key === k)?.label || k);
     const turnHint = coarse() ? ' · the ring turns it' : ' · Q / E or the ring to turn';   // (no keys on a phone)
-    hintEl.textContent = bad ? `${sel.label}: ${bad}` : `${sel.label} · drag to move${sel.canRotate ? turnHint : ''}${liftable(sel) ? ' · ▲▼ height' : ''}`;
+    hintEl.textContent = bad ? `${sel.label}: ${bad}` : hidden(sel) ? `${sel.label} · hidden behind the belt — drag it forward or ▲ raise it`
+      : `${sel.label} · drag to move${sel.canRotate ? turnHint : ''}${liftable(sel) ? ' · ▲▼ height' : ''}`;
     hintEl.className = 'se-hint' + (bad ? ' bad' : '');
   }
 
@@ -379,7 +392,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     shown = v;
     knobEl.hidden = chipEl.hidden = !v;
     poleSvg.style.display = v ? '' : 'none';
-    if (!v){ shadow.visible = shadowLine.visible = drops.visible = false; tipEl.hidden = true; }
+    if (!v){ shadow.visible = shadowLine.visible = drops.visible = false; tipEl.hidden = true; keepOut.fill(NaN, 0, 8); }
   }
   /* the readout, re-read only when the machine's height, the user's word or the footing plan changed */
   function syncRead(p, h){
@@ -437,6 +450,8 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     // the knob, where it stands; the readout beside it (away from the screen edge; above a finger; inside
     // the free band — never under the bar or the dock). In the PLAN the dock + the tags say the height.
     knobEl.style.transform = `translate(${_k.x.toFixed(1)}px, ${_k.y.toFixed(1)}px) translate(-50%, -50%)`;
+    const kw = (knobW || 30) / 2 + 6, kh = (knobH ||= knobEl.offsetHeight || 40) / 2 + 6;
+    keepOut[0] = _k.x - kw; keepOut[1] = _k.y - kh; keepOut[2] = _k.x + kw; keepOut[3] = _k.y + kh;
     const B = bandPx || freeBand();
     knobIn = !_k.behind && _k.x > B.x0 - 20 && _k.x < B.x1 + 20 && _k.y > B.y0 - 24 && _k.y < B.y1 + 24;
     chipEl.classList.toggle('plan', view === 'plan');
@@ -446,10 +461,15 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     chipEl.style.transform = `translate(${(_k.x + (right ? 26 : -26)).toFixed(1)}px, ${cy.toFixed(1)}px) translate(${right ? '0' : '-100%'}, -50%)`;
     if (!tipSeen && !tipEl.hidden){                 // (under the chip — over it when the knob is low: the dock is there)
       const low = cy > innerHeight * .62;
-      tipEl.style.transform = `translate(${(_k.x + (right ? 26 : -26)).toFixed(1)}px, ${(low ? cy - 30 : cy + 30).toFixed(1)}px) translate(${right ? '0' : '-100%'}, ${low ? '-100%' : '0'})`;
-    }
+      const tx = _k.x + (right ? 26 : -26), ty = low ? cy - 30 : cy + 30;
+      tipEl.style.transform = `translate(${tx.toFixed(1)}px, ${ty.toFixed(1)}px) translate(${right ? '0' : '-100%'}, ${low ? '-100%' : '0'})`;
+      keepOut[4] = right ? tx : tx - tipW; keepOut[5] = low ? ty - tipH : ty; keepOut[6] = keepOut[4] + tipW; keepOut[7] = keepOut[5] + tipH;
+    } else keepOut[4] = keepOut[6] = NaN;
   }
-  let knobW = 0;
+  let knobW = 0, knobH = 0, tipW = 0, tipH = 0;
+  /* where the handle sits on the screen (CSS px: [x0, y0, x1, y1] — the knob, the first-time tip, the selection's
+     own tag, the top bar; NaN = none): a name tag steps out of its way (update) */
+  const keepOut = new Float64Array(16).fill(NaN);
   const labOff = () => (knobW ||= knobEl.offsetWidth) ? knobW / 2 + 9 : 24;   // (the knob's width, measured once it shows)
   /* the readout, written only when it changes (the chip + the dock) */
   function setRead(r){
@@ -660,7 +680,8 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     if (p) info = null;
     if (p !== sel){ unread(); if (sel) sel.poleI = null; }
     sel = p;
-    if (p && !tipSeen && liftable(p)){ tipEl.hidden = false; tipEl.querySelector('span').textContent = coarse() ? 'drag ▲▼ to raise or lower it' : 'drag ▲▼ to raise · PgUp / PgDn · Home = floor'; }
+    if (p && !tipSeen && liftable(p)){ tipEl.hidden = false; tipEl.querySelector('span').textContent = coarse() ? 'drag ▲▼ to raise or lower it' : 'drag ▲▼ to raise · PgUp / PgDn · Home = floor';
+      tipW = tipEl.offsetWidth; tipH = tipEl.offsetHeight; }
     else tipEl.hidden = true;
     paint();
   }
@@ -675,7 +696,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     settle.flush(); if (turn._t) turnDone();
     const p = sel, h = H(p);
     if (!h) return;
-    drag = { piece: p, mode: 'lift', id: e.pointerId, touch: e.pointerType === 'touch', px: e.clientX, py: e.clientY, lx: e.clientX, ly: e.clientY,
+    drag = { piece: p, mode: 'lift', id: e.pointerId, touch: e.pointerType === 'touch', px: e.clientX, py: e.clientY, lx: e.clientX, ly: e.clientY, gx: e.clientX, gy: e.clientY,
              free: e.shiftKey || !snapOn, y0: null, lift0: h.lift, cur: h.lift, opened: false, at: null, max: maxOf(p, h), targets: targetsOf(p, h),
              magnet: null, hand: false, cs: new Float64Array(20) };
     try { knobEl.setPointerCapture(e.pointerId); } catch (_){}
@@ -714,12 +735,14 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       const y = dragY(d);
       if (y === null) return;
       d.lift0 = d.cur;
-      // after the swing the knob stands under the hand: the knob then FOLLOWS the pointer (y0 = the knob's own
-      // height — what the pointer did during the swing counts); grabbed in place (3D): relative — no jump
-      proj(d.at.x, H(d.piece).bottom, d.at.z, _k);
-      d.y0 = d.hand && !d.screen && Math.abs(_k.x - d.lx) < 90 && Math.abs(_k.y - d.ly) < 90 ? H(d.piece).bottom : y;
+      // after the swing (a PLAN grab) the knob stands under the grab pixel — or below it, leaving headroom
+      // (underHand): the drag runs from the GRAB pixel, so the knob follows the pointer's motion and what the
+      // pointer did during the swing counts. Grabbed in place (3D): from where the pointer is — no jump
+      let y0 = y;
+      if (d.hand){ rayAtXY(d.gx, d.gy); const g = dragY(d); if (g !== null) y0 = g; }
+      d.y0 = y0;
       d.lx = d.px; d.ly = d.py;
-      if (d.y0 === y) return;
+      if (!d.hand) return;
     } else if (camMoved(d)){                            // the eye moved under the drag: re-anchor at the pointer's LAST
       d.screen = undefined;                             //  spot (this frame's own move still counts)
       rayAtXY(d.lx, d.ly);
@@ -848,6 +871,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       prevMode = cam.mode; prevMax = cam.orbit.maxDistance; prevPolar = cam.orbit.maxPolarAngle;
       cam.mode = 'free';
       cam.orbit.maxDistance = 110; cam.orbit.maxPolarAngle = Math.PI * .47;   // stay above the floor plane
+      host.enter?.();                                   // (the instrument MAP closes: one tool on the screen at a time)
       haze(true); refresh(); setViewBtns('plan'); view = 'plan'; overview({ ease: true });
     } else {
       if (drag) endDrag(true);
@@ -976,7 +1000,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   /* the 3/4 VIEW (RCT's isometric feel): elevated, from the audience side at an angle, a longer lens — framing
      the selection with headroom to raise it (no selection: the whole stage). The eye stays inside the room;
      when the angle that fits leaves it, the next angle is tried, then a wider lens. */
-  function pose3D(p){
+  function pose3D(p, { head = 0 } = {}){
     const list = p ? [p] : pieces;
     const wall = wallBox();
     if (!list.length && !wall) return null;
@@ -984,7 +1008,8 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     const add = (poly, y0, y1) => { for (const [x, z] of poly){ pts.push(new THREE.Vector3(x, y0, z), new THREE.Vector3(x, y1, z)); } };
     // (the selection: from the floor to over its top, with room to raise it — its pole + knob stay in frame)
     // (+ a margin round the selection: its neighbours in view — what it might share a loft with)
-    for (const q of list){ const h = H(q); add(p ? grown(fpOf(q), 2.5) : fpOf(q), floor, p ? Math.max(topOf(q) + 2.5, (h ? h.bottom : baseOf(q)) + 6) : topOf(q) + .5); }
+    // (head: a grab's raise — the machine's top that far up stays in frame too)
+    for (const q of list){ const h = H(q); add(p ? grown(fpOf(q), 2.5) : fpOf(q), floor, p ? Math.max(topOf(q) + Math.max(2.5, head), (h ? h.bottom : baseOf(q)) + 6) : topOf(q) + .5); }
     if (p) add(grown(fpOf(p), 1.6), floor, (H(p)?.bottom ?? baseOf(p)) + .5);   // (the pole + its knob, at any corner)
     if (!p && wall) add(boxCorners(wall), floor, floor + 4);
     const [x0, x1, z0, z1] = bounds(pts.map(v => [v.x, v.z]));
@@ -1032,13 +1057,27 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     if (!on) return;
     view = v; setViewBtns(v); paint();
     if (v === 'plan') overview({ ease: true });
-    else { const t = pose3D(sel); if (t){ if (hand && sel) underHand(t, sel, hand); goTo({ ...t, lift: null }, true, dur); } }
+    else { const head = hand && sel ? headOf(sel) : 0, t = pose3D(sel, { head }); if (t){ if (hand && sel) underHand(t, sel, hand, head); goTo({ ...t, lift: null }, true, dur); } }
+  }
+  /* the raise a grab's swing frames over the machine's top: enough to reach the rear GALLERY's deck (the belt's
+     top housing − GALLERY_DROP — the big raise people make) or the highest LOFT it could join, at least
+     GRAB_HEAD — never more than is left to its ceiling */
+  function headOf(p){
+    const h = H(p); if (!h) return 0;
+    let want = GRAB_HEAD;
+    const w = host.wall?.();
+    if (w && !w.isEmpty()) want = Math.max(want, w.max.y - GALLERY_DROP - h.bottom + GRAB_OVER);
+    for (const t of targetsOf(p, h)) want = Math.max(want, t.lift - h.lift + GRAB_OVER);
+    return Math.max(0, Math.min(want, maxOf(p, h) - h.lift));
   }
   /* the 3/4 pose `t`, slid across the screen so the selection's height KNOB lands on `hand` (the pixel it was
      grabbed at): the eye + aim move in the view plane (the eye kept in the room); the pole's corner is chosen
-     for that eye and locked for the drag */
-  const _h = {};
-  function underHand(t, p, hand){
+     for that eye and locked for the drag. HEADROOM: a grab high on the screen would carry the machine's top
+     under the bar as it rises (the camera never moves during the drag) — so the knob lands no higher than
+     leaves `head` u of raise over the machine's top inside the free band (straight under the hand, lower
+     when it must: the drag then follows the pointer's MOTION from the grab — liftFrame) */
+  const _h = {}, _ht = {};
+  function underHand(t, p, hand, head = 0){
     const c = cam.camera, fov0 = c.fov, pos0 = c.position.clone(), q0 = c.quaternion.clone();
     const pose = () => { c.fov = t.fov; c.updateProjectionMatrix(); c.position.copy(t.eye); c.lookAt(t.aim); c.updateMatrixWorld(true); };
     pose();
@@ -1046,6 +1085,45 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     p.poleI = null; const at = poleOf(p);
     proj(at.x, y, at.z, _h);
     if (!_h.behind){
+      const c0 = pivotOf(p), B = freeBand();
+      proj(c0.x, topOf(p) + head, c0.z, _ht);          // (the top of the raise, at this pose: a slide in the view plane keeps its span)
+      let span = _ht.behind ? 0 : Math.max(0, _h.y - _ht.y);
+      // the raise doesn't fit over the grab pixel: a WIDER LENS first (the eye stays put, the knob still lands
+      // under the hand), up to VIEW3D.maxFov — what is still over after that lowers the knob instead
+      const room = hand.y - B.y0 - 12;
+      if (span > room && room > 40 && t.fov < VIEW3D.maxFov){
+        const f = Math.min(VIEW3D.maxFov, 2 * THREE.MathUtils.radToDeg(Math.atan(Math.tan(THREE.MathUtils.degToRad(t.fov / 2)) * span / room)));
+        if (f > t.fov + .5){
+          t.fov = f; pose(); p.poleI = null; const a2 = poleOf(p); at.x = a2.x; at.z = a2.z;
+          proj(at.x, y, at.z, _h); proj(c0.x, topOf(p) + head, c0.z, _ht);
+          span = _h.behind || _ht.behind ? 0 : Math.max(0, _h.y - _ht.y);
+        }
+      }
+      // (…and sideways: the machine's whole footprint, at its base and at the raise's top, inside the band — a
+      //  phone's narrow frame put half of it off the edge)
+      let lo = 0, hi = 0;
+      const sides = () => { lo = 0; hi = 0;
+        for (const [qx, qz] of fpOf(p)) for (const qy of [y, topOf(p) + head]){ proj(qx, qy, qz, _ht); if (!_ht.behind){ lo = Math.min(lo, _ht.x - _h.x); hi = Math.max(hi, _ht.x - _h.x); } } };
+      sides();
+      // (a footprint WIDER than the band — a phone's frame, a horn rank at the widest lens: the eye steps BACK
+      //  along its line through the knob (the knob keeps its pixel; everything shrinks ~1/k), as far as the room lets it)
+      const wB = B.x1 - B.x0 - 16;
+      if (hi - lo > wB && wB > 40){
+        const k = Math.min(3, (hi - lo) / wB * 1.06), lim = host.roomBox || {};
+        const back = _e.set(at.x, y, at.z), eye = t.eye.clone().sub(back).multiplyScalar(k).add(back);
+        if (Number.isFinite(lim.y1)) eye.y = Math.min(eye.y, lim.y1);
+        if (Number.isFinite(lim.z1)) eye.z = Math.min(eye.z, lim.z1);
+        if (Number.isFinite(lim.x1)) eye.x = Math.max(-lim.x1, Math.min(lim.x1, eye.x));
+        t.aim.add(back.copy(eye).sub(t.eye)); t.eye.copy(eye); pose();
+        proj(at.x, y, at.z, _h); proj(c0.x, topOf(p) + head, c0.z, _ht);
+        span = _h.behind || _ht.behind ? 0 : Math.max(0, _h.y - _ht.y);
+        sides();
+      }
+      const xa = B.x0 + 8 - lo, xb = B.x1 - 8 - hi;
+      // (still too wide — the room's wall stopped the step back: the KNOB stays under the finger, kept in the
+      //  band — centring a frame that is overfull either way only put the handle 400 px from the hand)
+      hand = { x: xa <= xb ? Math.min(Math.max(hand.x, xa), xb) : Math.min(Math.max(hand.x, B.x0 + 24), B.x1 - 24),
+               y: Math.min(Math.max(hand.y, B.y0 + 12 + span), Math.max(hand.y, B.y1 - 40)) };
       _r.setFromMatrixColumn(c.matrixWorld, 0); _u.setFromMatrixColumn(c.matrixWorld, 1); _p.setFromMatrixColumn(c.matrixWorld, 2);
       const depth = Math.max(1, -_e.set(at.x, y, at.z).sub(c.position).dot(_p));
       const wpp = 2 * depth * Math.tan(THREE.MathUtils.degToRad(t.fov / 2)) / Math.max(1, dom.clientHeight);
@@ -1056,7 +1134,8 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       if (Number.isFinite(lim.x1)) eye.x = Math.max(-lim.x1, Math.min(lim.x1, eye.x));
       eye.y = Math.max(eye.y, floor + 1.5);
       t.aim.add(_e.copy(eye).sub(t.eye)); t.eye.copy(eye);
-      pose(); p.poleI = null; poleOf(p);                // (the corner, for the eye it will land at)
+      // (the corner stays the one just slid under the hand — locked for the drag: poleOf keeps it while a lift
+      //  runs. Re-choosing it for the landed eye moved the knob a corner away: 315 px off the pointer)
     }
     c.fov = fov0; c.updateProjectionMatrix(); c.position.copy(pos0); c.quaternion.copy(q0); c.updateMatrixWorld(true);
   }
@@ -1106,23 +1185,63 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     if (queued) applyQueued();
     if (pendingHover && !drag) hoverPick();
     const W = dom.clientWidth, H0 = dom.clientHeight;
-    for (const p of pieces){
-      const c = pivotOf(p);
-      _v.set(c.x, topOf(p) + .8, c.z).project(cam.camera);
-      const vis = _v.z < 1 && Math.abs(_v.x) < 1.1 && Math.abs(_v.y) < 1.1;
-      p.el.style.display = vis ? '' : 'none';
-      if (!vis) continue;
-      // a tag never hangs off the screen edge (a phone's overview puts the corner machines right
-      // at it): its centre is held half its own width in from either side (width measured once)
-      const hw = (p.tagW ||= p.el.offsetWidth) / 2 + 4;
-      const x = hw * 2 < W ? Math.min(W - hw, Math.max(hw, (_v.x + 1) / 2 * W)) : (_v.x + 1) / 2 * W;
-      p.el.style.transform = `translate(${x.toFixed(1)}px, ${((1 - _v.y) / 2 * H0).toFixed(1)}px) translate(-50%, -100%)`;
-    }
+    // (the SELECTION's tag first: once placed it is in the way too — a neighbour's tag steps off it)
+    keepOut[8] = keepOut[10] = NaN;
+    const br = bar.hidden ? null : bar.getBoundingClientRect();     // (read before this frame's tag writes)
+    if (br && br.height && br.top < H0 / 2){ keepOut[12] = br.left; keepOut[13] = br.top; keepOut[14] = br.right; keepOut[15] = br.bottom; }
+    else keepOut[12] = keepOut[14] = NaN;
+    if (sel) tagAt(sel, W, H0);
+    for (const p of pieces) if (p !== sel) tagAt(p, W, H0);
     if (sel) paintHeight();
     bandPx = null;
   }
+  /* a machine's name tag over its top — on the screen, out of the handle's way (and, for a neighbour, out of
+     the selection's tag's) */
+  function tagAt(p, W, H0){
+    const c = pivotOf(p);
+    _v.set(c.x, topOf(p) + .8, c.z).project(cam.camera);
+    const vis = _v.z < 1 && Math.abs(_v.x) < 1.1 && Math.abs(_v.y) < 1.1;
+    p.el.style.display = vis ? '' : 'none';
+    if (!vis) return;
+    // a tag never hangs off the screen edge (a phone's overview puts the corner machines right
+    // at it): its centre is held half its own width in from either side (width measured once)
+    const hw = (p.tagW ||= p.el.offsetWidth) / 2 + 4;
+    let x = hw * 2 < W ? Math.min(W - hw, Math.max(hw, (_v.x + 1) / 2 * W)) : (_v.x + 1) / 2 * W, y = (1 - _v.y) / 2 * H0;
+    const th = (p.tagH ||= p.el.offsetHeight || 18) + 2;
+    stepAside(x, y, hw, th, W, H0); x = _sa[0]; y = _sa[1];
+    if (p === sel){ keepOut[8] = x - hw; keepOut[9] = y - th; keepOut[10] = x + hw; keepOut[11] = y; }
+    p.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`;
+  }
 
-  function syncUndo(n){ const b = bar.querySelector('[data-a=undo]'); b.disabled = !n; b.title = n ? `undo the last change (⌘Z / Ctrl+Z) · ${n} step${n === 1 ? '' : 's'}` : 'nothing to undo'; }
+  /* a name tag (centre x, bottom y, half width, height) moved the least way that clears the handle (the knob,
+     the tip: keepOut) and stays on the screen: a step left / right / up / down past one of them — or, when that
+     lands on the other, a second step past that one. Into _sa (no garbage; a tag in the clear costs a few compares) */
+  const _sa = [0, 0], _st = { x: 0, y: 0, hw: 0, th: 0, W: 0, H: 0, best: 0 };
+  function keptOut(cx, cy, hw, th){
+    for (let i = 0; i < 16; i += 4) if (keepOut[i] === keepOut[i] && cx - hw < keepOut[i + 2] && cx + hw > keepOut[i] && cy - th < keepOut[i + 3] && cy > keepOut[i + 1]) return i;
+    return -1;
+  }
+  function stepTry(cx, cy, depth){
+    const S = _st, o = keptOut(cx, cy, S.hw, S.th);
+    if (o < 0){
+      const d = Math.abs(cx - S.x) + Math.abs(cy - S.y);
+      if (d < S.best && cx >= S.hw && cx <= S.W - S.hw && cy >= S.th && cy <= S.H){ S.best = d; _sa[0] = cx; _sa[1] = cy; }
+      return;
+    }
+    if (!depth) return;
+    stepTry(keepOut[o] - 3 - S.hw, cy, depth - 1); stepTry(keepOut[o + 2] + 3 + S.hw, cy, depth - 1);
+    stepTry(cx, keepOut[o + 1] - 3, depth - 1); stepTry(cx, keepOut[o + 3] + 3 + S.th, depth - 1);
+  }
+  function stepAside(x, y, hw, th, W, H0){
+    _sa[0] = x; _sa[1] = y;
+    if (keptOut(x, y, hw, th) < 0) return;
+    const S = _st; S.x = x; S.y = y; S.hw = hw; S.th = th; S.W = W; S.H = H0; S.best = Infinity;
+    stepTry(x, y, 2);
+  }
+  function syncUndo(n, r = 0){
+    const b = bar.querySelector('[data-a=undo]'); b.disabled = !n; b.title = n ? `undo the last change (⌘Z / Ctrl+Z) · ${n} step${n === 1 ? '' : 's'}` : 'nothing to undo';
+    const f = bar.querySelector('[data-a=redo]'); f.hidden = !r; f.title = `redo (⌘⇧Z / Ctrl+Y) · ${r} step${r === 1 ? '' : 's'}`;   // (shown only while there is one to redo)
+  }
 
   return { toggle, refresh, update, overview, measureAll, syncUndo, get on(){ return on; }, get selected(){ return sel?.key || null; },
            /* height: a pending burst of taps settles now (before an undo, a song change) */

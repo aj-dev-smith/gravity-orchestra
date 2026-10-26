@@ -235,9 +235,19 @@ describe('height — a height step undoes LIVE (placement.js liftOnlyUndo)', () 
     expect(P.liftOnlyUndo(prev, cur)).toEqual([{ key: 'marimba', lift: 1 }, { key: 'horns', lift: undefined }]);
     expect(P.liftOnlyUndo(cur, cur)).toEqual([]);
   });
-  it('the solved stage ({}): every machine back to AUTO where it stands', () => {
-    expect(P.liftOnlyUndo({}, cur)).toEqual([{ key: 'marimba', lift: undefined }, { key: 'horns', lift: undefined }, { key: 'drums', lift: undefined }]);
+  it('the solved stage ({}): every machine back to AUTO — only while each still stands where that solve put it', () => {
+    const base = { marimba: { x: -17.5, z: -12.5, yaw: 1.309 }, horns: { x: 15.5, z: -20.5, yaw: -.15 }, drums: { x: 19, z: 19, yaw: 0 } };
+    expect(P.liftOnlyUndo({}, cur, 2e-3, base)).toEqual([{ key: 'marimba', lift: undefined }, { key: 'horns', lift: undefined }, { key: 'drums', lift: undefined }]);
     expect(P.liftOnlyUndo({}, {})).toEqual([]);
+  });
+  it('undoing a session’s FIRST edit when it was a MOVE / TURN ({} ← pinned with one machine moved) → null, never live', () => {
+    const base = { marimba: { x: -17.5, z: -12.5, yaw: 1.309 }, horns: { x: 15.5, z: -20.5, yaw: -.15 }, drums: { x: 19, z: 19, yaw: 0 } };
+    const moved = { ...cur, marimba: { x: -16.5, z: -4, yaw: 1.309 } }, turned = { ...cur, horns: { ...cur.horns, yaw: .6 } };
+    expect(P.liftOnlyUndo({}, moved, 2e-3, base)).toBeNull();
+    expect(P.liftOnlyUndo({}, turned, 2e-3, base)).toBeNull();
+    expect(P.liftOnlyUndo({}, cur)).toBeNull();                                   // (no solved stage to compare with: rebuild)
+    const { drums, ...less } = base;
+    expect(P.liftOnlyUndo({}, cur, 2e-3, less)).toBeNull();                       // (a machine the solve never placed)
   });
   it('a move, a turn, a machine pinned or unpinned → null (the stage is rebuilt)', () => {
     expect(P.liftOnlyUndo({ ...cur, marimba: { ...cur.marimba, x: -17 } }, cur)).toBeNull();

@@ -285,6 +285,21 @@ describe('stage edit — oriented footprints, undo, share ids (polish pass)', ()
     expect(h.size('a')).toBe(3);
     h.push('b', {}); expect(h.size('a')).toBe(0);               // another song: a fresh stack
   });
+  it('redo: an undo remembers what it left; a redo takes it back; a new edit drops the branch', () => {
+    const h = P.makeHistory(), A = {}, B = { bells: { x: 1, z: 2, yaw: 0 } }, C = { bells: { x: 3, z: 2, yaw: 0, lift: 2 } };
+    h.push('a', A); h.push('a', B);                              // (edits: A → B → C)
+    expect(h.redoSize('a')).toBe(0);
+    expect(h.pop('a')).toEqual(B); h.stash('a', C);              // undo: C → B
+    expect(h.pop('a')).toEqual(A); h.stash('a', B);              // undo: B → A
+    expect(h.redoSize('a')).toBe(2); expect(h.size('a')).toBe(0);
+    expect(h.unstash('a')).toEqual(B); h.keep('a', A);           // redo: A → B (the branch stays)
+    expect(h.size('a')).toBe(1); expect(h.redoSize('a')).toBe(1);
+    expect(h.unstash('b')).toBe(null);                           // (another song: nothing)
+    h.push('a', B);                                              // a NEW edit from B: C can't come back
+    expect(h.redoSize('a')).toBe(0); expect(h.unstash('a')).toBe(null);
+    expect(h.size('a')).toBe(2);
+    h.stash('b', A); expect(h.size('a')).toBe(0); expect(h.redoSize('b')).toBe(1);   // (a song change: fresh stacks)
+  });
   it('share-link edit slots are keyed by content, not label', async () => {
     const { fnv1a } = await import('../src/editor/index.js');
     const a = { ...SONGS['fur-elise'], stage: { musicbox: [3, 4] } }, b = { ...SONGS['fur-elise'], stage: { musicbox: [-3, 4] } };

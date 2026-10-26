@@ -728,11 +728,13 @@ function buildWorld(keyName){
   if (items.length && !wallBox.isEmpty()){
     // THE STAR (the song's signature machine — the one the director will name) stands front and centre
     const star = stageStar(S) ?? soloStar(items);
-    const solved = layoutStations(items,
-      [wallBox.min.x, wallBox.max.x, wallBox.min.z, wallBox.max.z],
+    const args = [[wallBox.min.x, wallBox.max.x, wallBox.min.z, wallBox.max.z],
       { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 },
-      { cx: stageView.cx, bandY: STAGE_Y - 1.5, eyeY: 20, wallTop: wallBox.max.y, hung: hungBoxes, star, loftGap: FOOT.LOFT_GAP });   // (band − 1.5: the pads rising INTO the band read too)
-    lastLayout = { items: items.map(({ key, x, z, box, top, deck }) => ({ key, x, z, box, top, y0: bots[key], deck })), wall: wallBox.clone(), solved, cx: stageView.cx, bandY: STAGE_Y - 1.5, hung: hungBoxes, star };
+      { cx: stageView.cx, bandY: STAGE_Y - 1.5, eyeY: 20, wallTop: wallBox.max.y, hung: hungBoxes, star, loftGap: FOOT.LOFT_GAP }];   // (band − 1.5: the pads rising INTO the band read too)
+    const solved = layoutStations(items, ...args);
+    // (args + free: stage edit's AUTO re-asks this solve for a machine where it stands now — autoLiftOf)
+    lastLayout = { items: items.map(({ key, x, z, box, top, deck }) => ({ key, x, z, box, top, y0: bots[key], deck })), wall: wallBox.clone(), solved, cx: stageView.cx, bandY: STAGE_Y - 1.5, hung: hungBoxes, star,
+      args, free: items.every(it => !it.pin && it.lift === undefined) };
     items.forEach(it => {
       const { x, y, z, lift } = solved[it.key];
       if (it.rig){
@@ -1462,13 +1464,36 @@ if (soloI && SONGS['solo-' + soloKey]) sel.value = 'solo-' + soloKey;
 /* the director, while stage edit is open: nothing frames a shot (the eye is free), so a move / a height
    gesture re-anchors the room only and marks this build's edit STALE — re-solved once, on the way out */
 let edStale = null;                                     // the build (curBuild) whose director is behind its stage
-/* the height the ROOM SOLVE gave a floor station (its gallery raise, or 0) — while it still stands where
-   that solve put it (moved since: null — only a fresh solve can say) */
-function autoLiftOf(r){
-  const s = lastLayout?.solved?.[r.I.key], p = r.station.position;
-  if (!s || Math.abs(s.x - p.x) > 1e-3 || Math.abs(s.z - p.z) > 1e-3) return null;
+/* the height the ROOM SOLVE gives a floor station when the user's height is forgotten (AUTO) — exactly
+   what a reload of the stored layout would decide (stations.js layoutStations, the build's own args):
+   · fresh (the stage goes back to the SOLVED one: an undo to the empty layout) — the build's own solve,
+     valid only when that solve was free (nothing pinned, no user height) and the station still stands
+     where it put it; else null (only a rebuild can say);
+   · else the layout is PINNED (stage edit's first edit pins every machine where it stands): re-asked with
+     every machine pinned where it stands now, each keeping the user's height it has — but this one's.
+     A pinned machine's height is the solve's word on its own spot (behind the belt: the gallery), so this
+     is the reload's answer, not the build's (which, built with this machine on the floor, said 0). */
+function autoLiftOf(r, { fresh = false } = {}){
+  const L = lastLayout; if (!L?.solved) return null;
+  const key = r.I.key, p = r.station.position;
+  if (fresh){
+    const s = L.solved[key];
+    if (!L.free || !s || Math.abs(s.x - p.x) > 1e-3 || Math.abs(s.z - p.z) > 1e-3) return null;
+    return s.y === undefined ? (s.lift || 0) : Math.max(0, s.y - r.ground);   // (s.lift: a tiered riser — stations.js)
+  }
+  if (!L.args) return null;
+  const items = [], rel = (o, ox, oz) => { const b = visBox(o); return b.isEmpty() ? null : { box: [b.min.x - ox, b.max.x - ox, b.min.z - oz, b.max.z - oz], top: b.max.y }; };
+  for (const q of instLive){ if (q.slot.hang) continue;
+    const at = q.station.position, m = rel(q.station, at.x, at.z); if (!m) continue;
+    const u = q === r ? undefined : q.slot.lift;
+    items.push({ key: q.I.key, x: at.x, z: at.z, ...m, deck: at.y, pin: true, ...(Number.isFinite(u) ? { lift: u } : {}) }); }
+  if (drumGroup && curBuild?.S.drums){ const k = kitPivotNow(), m = rel(drumGroup, k.x, k.z);
+    if (m) items.push({ key: 'drums', x: k.x, z: k.z, ...m, deck: kitSlot.y, pin: true }); }
+  const s = layoutStations(items, ...L.args)[key];
+  if (!s) return null;
   return s.y === undefined ? (s.lift || 0) : Math.max(0, s.y - r.ground);   // (s.lift: a tiered riser — stations.js)
 }
+const kitPivotNow = () => ({ x: (curBuild?.view.cx ?? 0) + kitSlot.x + (drumGroup?.position.x || 0), z: kitSlot.z + (drumGroup?.position.z || 0) });
 const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: SONGS,
   machines: INSTRUMENTS.map(I => ({ key: I.key, label: I.label, color: I.color })),
   host: {
@@ -1512,7 +1537,7 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
        per frame: its strikes report their contact plus the group's offset (drumStrike), so they stay where
        the drums are — and liftSettle rebuilds it at its deck. The room re-anchors + re-plans its footing
        now; the director re-solves once, when stage edit closes. */
-    liftLive(key, u){
+    liftLive(key, u, o){
       const set = Number.isFinite(u) ? clampLift(u) : undefined;
       if (set === undefined) delete devLift[key];       // (AUTO: a page-wide ?lift= / __dev.lift for it goes too)
       if (key === 'drums'){
@@ -1525,7 +1550,7 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
       } else {
         const r = instLive.find(q => q.I.key === key && !q.slot.hang);
         if (!r) return false;
-        const to = set !== undefined ? set : autoLiftOf(r);
+        const to = set !== undefined ? set : autoLiftOf(r, o);
         if (to === null) return false;
         r.slot.lift = set;
         r.setLift(to);
@@ -1549,7 +1574,18 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
                  box: b ? new THREE.Box3(new THREE.Vector3(b[0], b[2], b[4]), new THREE.Vector3(b[1], b[3], b[5])) : null };
       }),
     ],
-    kitPivot: () => ({ x: (curBuild?.view.cx ?? 0) + kitSlot.x + (drumGroup?.position.x || 0), z: kitSlot.z + (drumGroup?.position.z || 0) }),
+    kitPivot: kitPivotNow,
+    /* where the build's SOLVED stage stands, in the layout's frame ({ key: { x (− cx), z, yaw } }) — only for a
+       FREE build (nothing pinned, no user height: what the empty layout rebuilds to); else null. Stage edit's
+       undo back to the empty layout is live only when every machine still stands there (placement.js liftOnlyUndo) */
+    solvedLayout(){
+      const L = lastLayout; if (!L?.free || !L.solved) return null;
+      const out = {};
+      for (const it of L.items){ const s = L.solved[it.key]; if (!s) return null;
+        const r = it.key === 'drums' ? null : instLive.find(q => q.I.key === it.key && !q.slot.hang);
+        out[it.key] = { x: s.x - L.cx, z: s.z, yaw: r ? (r.slot.yaw ?? 0) : 0 }; }
+      return out;
+    },
     visBox: o => visBox(o),
     room: { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 },
     roomBox: { y1: ROOM.CEIL - 2, z1: ROOM.FRONT - 2, x1: ROOM.HW - 2 },

@@ -3,7 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { STAGE, rng, canvasTex, radialTex, glowPoints, glowMat, beamMat, instanced, trs } from './common.js';
 import { solveArenaCues, lastFire, JETS, CANNONS, JET_BURN } from './arena-cues.js';
 import { ARM_AT } from '../transport.js';
-import { arenaFooting } from './arena-footing.js';
+import { arenaFooting, vuCue, VU as VUK } from './arena-footing.js';
 import { makePulse } from './pulse.js';
 import { planArenaProps, JET_HOME, CO2_HOME, RIG, AMP, ampColumns, PYRO } from './arena-props.js';
 /* ============================================================
@@ -183,6 +183,7 @@ function trussSegGeo(){
   return mergeGeometries(parts);
 }
 /* a par can: barrel + yoke + clamp, pointing down its local −y */
+const PAR_K = .55;                       // (a PAR64 is ≈ .3 m across: the can was modelled hall-sized for the old −22 floor)
 function parGeo(){
   return mergeGeometries([
     new THREE.CylinderGeometry(.62, .55, 1.7, 14, 1, true).translate(0, .1, 0),
@@ -190,7 +191,7 @@ function parGeo(){
     new THREE.CylinderGeometry(.55, .3, .4, 14).translate(0, 1.15, 0),               // the lamp housing's tail
     new THREE.BoxGeometry(.08, 1.6, .2).translate(.72, .5, 0), new THREE.BoxGeometry(.08, 1.6, .2).translate(-.72, .5, 0),
     new THREE.BoxGeometry(1.52, .1, .2).translate(0, 1.3, 0),                          // the yoke
-  ].map(g => g.index ? g.toNonIndexed() : g));
+  ].map(g => (g.index ? g.toNonIndexed() : g).scale(PAR_K, PAR_K, PAR_K)));
 }
 
 /* static repeats that never change colour: ONE merged mesh (a draw call, and one shell-sized box
@@ -346,8 +347,13 @@ function co2Mat(){
         float n = fbm(vec2(vUv.x * 9., vUv.y * 3.5 - a * 5. - uTime * .2));
         float m = fbm(vec2(vUv.x * 3., vUv.y * 1.4 - a * 2.));
         float body = smoothstep(.2, 1.15, n * .8 + m * .6 + .1 - .3 * clamp(vUv.y, 0., 1.));
-        float alpha = body * pow(clamp(vFace, 0., 1.), 1.1) * smoothstep(0., .1, vUv.y) * (1. - smoothstep(.7, 1., vUv.y))
-                    * clamp(a / .04, 0., 1.) * clamp(1. - max(0., a - .45) / 1.1, 0., 1.) * .55;
+        // a jet of fog, not a cone: the silhouette melts (a steep facing falloff), wisps stream along it, and
+        // as it ages the cloud erodes into holes from the crown down
+        float wisp = fbm(vec2(vUv.x * 22. + 5., vUv.y * 2.2 - a * 3.));
+        float age = clamp((a - .25) / 1.1, 0., 1.);
+        float erode = smoothstep(.18 + .5 * age + .25 * vUv.y * age, .75, n * .6 + wisp * .55);
+        float alpha = body * erode * pow(clamp(vFace, 0., 1.), 2.2) * smoothstep(0., .14, vUv.y) * (1. - smoothstep(.55, 1., vUv.y))
+                    * clamp(a / .04, 0., 1.) * clamp(1. - max(0., a - .45) / 1.1, 0., 1.) * .42;
         gl_FragColor = vec4(vec3(.86, .93, 1.) * 1.15, alpha);
       }`,
     transparent: true, depthWrite: false, side: THREE.DoubleSide,
@@ -396,7 +402,7 @@ export default {
 
     // ---- THE BACKLINE flanking the blinder wall: walls of REAL 4×12 cabs (76 cm cubes) three high, a head
     //      on each column with a red power jewel — a column anything stands in is taken down (place) ----
-    const ampMat = new THREE.MeshStandardMaterial({ map: ampTex(), roughness: .8, metalness: .05, color: 0xdadae2 });
+    const ampMat = new THREE.MeshStandardMaterial({ map: ampTex(), roughness: .62, metalness: .12, color: 0xe6e6ee, envMap, envMapIntensity: .55 });
     const tolex = new THREE.MeshStandardMaterial({ color: 0x0b0b0e, roughness: .7, metalness: .2, envMap, envMapIntensity: .3 });
     const AMPS = ampColumns(), headY = F + AMP.ROWS * AMP.CAB + AMP.HEAD / 2;
     const cabAt = (a, r, k = 1) => trs(a.x, F + AMP.CAB * (r + .5), a.z, 0, 0, 0, AMP.CAB * k, AMP.CAB * k, AMP.DEEP * k);
@@ -446,7 +452,7 @@ export default {
     const aim = (x, z, tx, ty, tz, col, kind) => PARS.push({ src: V(x, RIG_Y - 1.4, z), tgt: V(tx, ty, tz), col, kind });
     for (let i = 0; i < 10; i++){                             // FRONT span: the amber wash, raking upstage onto the machines
       const x = -40.5 + i * 9;
-      aim(x, SPAN_Z[2], x * .78 + (R() - .5) * 4, -8, -6 + (i % 3) * 6, i % 5 === 2 ? WHITE : AMBER, 'wash');
+      aim(x, SPAN_Z[2], x * .78 + (R() - .5) * 4, F + .5, -6 + (i % 3) * 6, i % 5 === 2 ? WHITE : AMBER, 'wash');
     }
     for (let i = 0; i < 8; i++){                              // MID span: alternating amber / red specials, straight-ish down
       const x = -35 + i * 10;
@@ -471,16 +477,16 @@ export default {
       beams.setMatrixAt(i, trs(p.src.x, p.src.y, p.src.z, e.x, e.y, e.z, 1, len, 1));
       beams.setColorAt(i, p.base);
       parM.push(trs(p.src.x, p.src.y, p.src.z, e.x, e.y, e.z));
-      const lp = p.src.clone().addScaledVector(d, .85);
+      const lp = p.src.clone().addScaledVector(d, .85 * PAR_K);
       lensM.push(trs(lp.x, lp.y, lp.z, e.x, e.y, e.z));
       lensCol.push(new THREE.Color(p.col));
-      hP.push(lp.x, lp.y, lp.z); const c = new THREE.Color(p.col); hC.push(c.r * .5, c.g * .5, c.b * .5); hS.push(4.2); hPh.push(R());
+      hP.push(lp.x, lp.y, lp.z); const c = new THREE.Color(p.col); hC.push(c.r * .5, c.g * .5, c.b * .5); hS.push(3); hPh.push(R());
     });
     beams.frustumCulled = false; beams.instanceColor.setUsage(THREE.DynamicDrawUsage); group.add(beams);
     // where each beam lands on the deck: an elliptical pool (stretched by the rake), tracking its can — a lit
     // footprint with an edge (an even disc, a soft rim), not a cloud: the deck between the pools stays black
     const pools = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
-      glowMat(radialTex(128, [[0, .62], [.5, .54], [.78, .34], [.92, .1], [1, 0]]), 0xffffff, .14, { side: THREE.FrontSide }), PARS.length);
+      glowMat(radialTex(128, [[0, .6], [.35, .5], [.6, .28], [.84, .08], [1, 0]]), 0xffffff, .14, { side: THREE.FrontSide }), PARS.length);
     PARS.forEach((p, i) => {
       const d = p.tgt.clone().sub(p.src).normalize(), k = (F - p.src.y) / d.y;
       const hit = p.src.clone().addScaledVector(d, k), along = Math.hypot(d.x, d.z);
@@ -491,7 +497,7 @@ export default {
     pools.frustumCulled = false; pools.instanceColor.setUsage(THREE.DynamicDrawUsage); group.add(pools);
     const parBody = new THREE.MeshStandardMaterial({ color: 0x141418, metalness: .7, roughness: .4, envMap, envMapIntensity: .6 });
     group.add(merged(parGeo(), parBody, parM));
-    const lenses = new THREE.InstancedMesh(new THREE.CircleGeometry(.52, 18).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }), lensM.length);
+    const lenses = new THREE.InstancedMesh(new THREE.CircleGeometry(.52 * PAR_K, 18).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }), lensM.length);
     lensM.forEach((m, i) => { lenses.setMatrixAt(i, m); lenses.setColorAt(i, lensCol[i].clone().multiplyScalar(3)); });
     lenses.instanceColor.setUsage(THREE.DynamicDrawUsage); group.add(lenses);
     const halos = glowPoints(hP, { colors: hC, sizes: hS, phases: hPh, map: radialTex(64, [[0, .9], [.15, .4], [.5, .06], [1, 0]]), flicker: .05, rate: 2 });
@@ -499,17 +505,19 @@ export default {
 
     // ---- the BLINDER WALL: 4 rows × 9 four-lamp modules (dim filament glow at rest; a white-hot slam on cue) ----
     const blM = [], bP = [], bC = [], bS = [], bPh = [], modM = [];
-    BW.rows.forEach((y, r) => { for (let c = 0; c < 9; c++){
-      const x = BW.x0 + c * (BW.x1 - BW.x0) / 8;
-      modM.push(trs(x, y - 1.9, BW.z + .4, 0, 0, 0, 3.3, 3.3, .9));
-      for (const [dx, dy] of [[-.8, -.8], [.8, -.8], [-.8, .8], [.8, .8]]){
-        blM.push(trs(x + dx, y - 1.9 + dy, BW.z + .9));
-        bP.push(x + dx, y - 1.9 + dy, BW.z + 1.1); bC.push(1, .62, .3); bS.push(3.2); bPh.push(R());
+    // (a real 4-lite molefay module ≈ 1.1 m — 1.7 u — hung in a dense row under each truss: the wall still
+    //  reads as a wall from the house, and as lamps, not 2 m discs, from the deck)
+    BW.rows.forEach((y, r) => { for (let c = 0; c < 17; c++){
+      const x = BW.x0 + c * (BW.x1 - BW.x0) / 16;
+      modM.push(trs(x, y - 1.65, BW.z + .4, 0, 0, 0, 1.7, 1.7, .7));
+      for (const [dx, dy] of [[-.42, -.42], [.42, -.42], [-.42, .42], [.42, .42]]){
+        blM.push(trs(x + dx, y - 1.65 + dy, BW.z + .76));
+        bP.push(x + dx, y - 1.65 + dy, BW.z + .95); bC.push(1, .62, .3); bS.push(1.8); bPh.push(R());
       }
     } });
     group.add(merged(new THREE.BoxGeometry(1, 1, 1), tolex, modM));
     const blindMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    group.add(merged(new THREE.CircleGeometry(.62, 16), blindMat, blM));
+    group.add(merged(new THREE.CircleGeometry(.32, 16), blindMat, blM));
     const blindGlow = glowPoints(bP, { colors: bC, sizes: bS, phases: bPh, map: radialTex(64, [[0, 1], [.2, .45], [.55, .06], [1, 0]]), flicker: .08, rate: 5 });
     group.add(blindGlow);
     // a broad warm bloom of the whole wall when it slams (opacity driven)
@@ -664,8 +672,9 @@ export default {
     function place(anchors = [], plan = null){
       VU.length = 0; GHOST.length = 0;
       for (const s of plan?.pulses || []){
-        VU.push(makePulse(s.cue, { P: s.P, start: s.start, decay: .35 }));
-        GHOST.push(makePulse(s.cue, { P: s.P, start: s.start, decay: 1.1 }));
+        const c = vuCue(s.cue, s.P);                            // (scaled to the machine's own norm: accents reach the top)
+        VU.push(makePulse(c, { P: s.P, start: s.start, decay: VUK.DECAY }));
+        GHOST.push(makePulse(c, { P: s.P, start: s.start, decay: VUK.HOLD }));
       }
       vuU.uVU.value.fill(0); vuU.uGhost.value.fill(0);
       rig = planArenaProps(anchors, plan, { floor: F });
@@ -743,12 +752,15 @@ export default {
         for (let i = 0; i < PARS.length; i++){
           const p = PARS[i];
           const ph = p.kind === 'back' ? bt / 8 - i / 11 : p.kind === 'wash' ? bt / 16 + i / 10 : bt / 4 + i * .37;
-          let k = .62 + .38 * (.5 + .5 * Math.cos(6.2832 * ph));
+          const ch = .5 + .5 * Math.cos(6.2832 * ph);
+          let k = .62 + .38 * ch;
           if (p.kind === 'wash' || p.kind === 'mid') k *= 1 + .5 * warm;
           k *= 1 + .9 * B * (p.kind === 'back' ? 1 : .4);
           beams.setColorAt(i, _c.copy(p.base).multiplyScalar(k * BEAM_K[p.kind]));
           lenses.setColorAt(i, _c.copy(p.base).multiplyScalar(1.4 + 2.6 * k));
-          pools.setColorAt(i, _c.copy(p.base).multiplyScalar(p.kind === 'mid' ? 0 : k * (p.kind === 'back' ? .32 : 1)));
+          // (a pool follows its own beam's chase: only the beams at the top of it lay a strong pool — the
+          //  deck between reads as a wash, not a field of dots)
+          pools.setColorAt(i, _c.copy(p.base).multiplyScalar(p.kind === 'mid' ? 0 : (.3 + .7 * ch * ch) * (k / (.62 + .38 * ch)) * (p.kind === 'back' ? .32 : 1)));
         }
         beams.instanceColor.needsUpdate = true; lenses.instanceColor.needsUpdate = true; pools.instanceColor.needsUpdate = true;
         beams.material.uniforms.uGain.value = beamBase * (1 + .45 * energy);

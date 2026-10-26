@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { planFooting, footingBoxes, FOOT } from '../src/rooms/footing.js';
 import { buildFooting, makeFootingMats } from '../src/rooms/footing3d.js';
-import { arenaFooting, ARENA_FOOT, vuCode } from '../src/rooms/arena-footing.js';
+import { arenaFooting, ARENA_FOOT, vuCode, vuCue, VU } from '../src/rooms/arena-footing.js';
+import { makePulse } from '../src/rooms/pulse.js';
 import { STAGE } from '../src/rooms/common.js';
 
 /* THE METAL ARENA'S FOOTING (src/rooms/arena-footing.js): real staging gear — Litedecks, drum risers
@@ -55,8 +56,8 @@ describe('arena footing: real staging gear, drawn into the kit', () => {
       const p = m.geometry.attributes.position.array;
       let worst = 0, at = null;
       for (let i = 0; i < p.length; i += 3){
-        const x = p[i], y = Math.max(p[i + 1], FL), z = p[i + 2];
-        if (p[i + 1] < FL - .2){ worst = Infinity; at = [x, p[i + 1], z]; break; }
+        // (under the floor counts too — only the skirts' deliberate 1 cm shadow line below it is allowed)
+        const x = p[i], y = p[i + 1] >= FL - .015 ? Math.max(p[i + 1], FL) : p[i + 1], z = p[i + 2];
         let d = Infinity;
         for (const b of B) d = Math.min(d, Math.hypot(Math.max(b[0] - x, 0, x - b[1]), Math.max(b[2] - y, 0, y - b[3]), Math.max(b[4] - z, 0, z - b[5])));
         if (d > worst){ worst = d; at = [x, y, z]; }
@@ -175,5 +176,49 @@ describe('arena footing: real staging gear, drawn into the kit', () => {
     for (let k = 0; k < 7; k++){ const f = build(PLAN, style); ms.push(f.ms); f.dispose(); }
     ms.sort((a, b) => a - b);
     expect(ms[3], `median ${ms[3].toFixed(2)} ms`).toBeLessThan(25);
+  });
+  it('an OPEN stand gets the arena\'s own form: truss legs, its VU — and nothing in what hangs', () => {
+    for (const lift of [0, 1.4, 8]){
+      const tt = CROWD.find(a => a.key === 'tt'), y = tt.y + lift;
+      const A = [{ ...tt, y, bottom: y, low: tt.low + lift, lift }], plan = planFooting(A, { floor: FL, room: ROOMB }), p = plan.pads[0];
+      expect(p.open).toBe(true);
+      const f = build(plan), M = meshes(f);
+      // (its light: VU segments of its own slot — on the head beams and the floor ring)
+      const code = named(f, 'edge').geometry.attributes.aPulse.array;
+      expect([...code].some(v => v >= 0 && Math.floor(v + 1e-4) === p.pulse && v - p.pulse > .005), `lift ${lift}: its VU`).toBe(true);
+      // what hangs (local rect HANG, from hangY up to the stand) holds no footing part but the floor ring under it
+      const [u0, u1, v0, v1] = p.hang, c = Math.cos(p.yaw), sn = Math.sin(p.yaw);
+      for (const m of M){
+        if (m.name === 'footing:edge') continue;
+        const q = m.geometry.attributes.position.array, I = m.geometry.index.array;
+        for (let t = 0; t < I.length; t += 3){                                         // a triangle's centroid
+          let x = 0, yy = 0, z = 0; for (let j = 0; j < 3; j++){ x += q[3 * I[t + j]] / 3; yy += q[3 * I[t + j] + 1] / 3; z += q[3 * I[t + j] + 2] / 3; }
+          const dx = x - p.x, dz = z - p.z, u = c * dx - sn * dz, v = sn * dx + c * dz;
+          const inside = u > u0 + .02 && u < u1 - .02 && v > v0 + .02 && v < v1 - .02 && yy > p.hangY + .02 && yy < p.top - .02;
+          expect(inside, `lift ${lift}: ${m.name} at ${[x, yy, z].map(n => n.toFixed(2))} is in what hangs`).toBe(false);
+        }
+      }
+      f.dispose();
+    }
+  });
+  it('the meter reads against the machine\'s own norm: a dense groove ripples low, its accents and entries reach the top', () => {
+    const P = 16, groove = [];
+    for (let i = 0; i < 96; i++) groove.push({ t: i / 8, w: i % 8 === 0 ? 1 : .55 + .1 * (i % 3) });   // a dense run, a downbeat accent
+    groove.push({ t: 14.5, w: .6 });                                                 // an entry after a 2.5 s rest
+    const c = vuCue(groove, P), byT = new Map(c.map(e => [e.t, e.w]));
+    expect(c).toHaveLength(groove.length);
+    expect(byT.get(0)).toBeGreaterThan(.95);                                       // (the loudest: top)
+    expect(byT.get(1 / 8)).toBeLessThan(.5);                                       // (the groove: low)
+    expect(byT.get(14.5)).toBeGreaterThan(.9);                                     // (an entry after a rest)
+    for (const e of c){ expect(e.w).toBeGreaterThanOrEqual(VU.FLOOR - 1e-9); expect(e.w).toBeLessThanOrEqual(1 + 1e-9); }
+    // the fill over a loop: never pegged, mostly in the lower half, the accents reach the top
+    const pf = makePulse(c, { P, start: -.6, decay: VU.DECAY }), xs = Array.from({ length: 1600 }, (_, i) => pf.at(P + i * P / 1600));
+    expect(xs.filter(x => x > .9).length / xs.length).toBeLessThan(.08);
+    expect(xs.reduce((a, b) => a + b, 0) / xs.length).toBeLessThan(.45);
+    expect(Math.max(...xs)).toBeGreaterThan(.95);
+    // a flat-velocity machine sits mid-scale; pure (the same in, the same out)
+    expect(vuCue([{ t: 1, w: 1 }, { t: 2, w: 1 }, { t: 3, w: 1 }, { t: 4, w: 1 }], 4).every(e => e.w > .3 && e.w < .7)).toBe(true);
+    expect(vuCue(groove, P)).toEqual(c);
+    expect(vuCue([], P)).toEqual([]);
   });
 });

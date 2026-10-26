@@ -66,8 +66,8 @@ const kitDepth = r => Math.max(r.keys || r.band === 'high' ? .38 : .32, (r.well 
 const slabDepth = r => Math.max(kitDepth(r), A.FRAME + A.VALANCE);
 
 /* (along a, out o) on one side of a rect → local [u, v] (the kit's convention: ±u sides run along v) */
-const onSide = (r, side) => { const k = side[0] === '+' ? 1 : -1;
-  return side[1] === 'u' ? (a, o) => [k * (r.hw + o), a] : (a, o) => [a, k * (r.hd + o)]; };
+const onSide = (r, side) => { const k = side[0] === '+' ? 1 : -1, cu = r.cu || 0, cv = r.cv || 0;
+  return side[1] === 'u' ? (a, o) => [cu + k * (r.hw + o), cv + a] : (a, o) => [cu + a, cv + k * (r.hd + o)]; };
 const sideHalf = (r, side) => side[1] === 'u' ? r.hd : r.hw;
 /* a rect's local (u, v) → world (x, z) (the kit's frame: local +u runs along world (cos, −sin) of its yaw) */
 const toW = (r, u, v) => { const c = Math.cos(r.yaw || 0), s = Math.sin(r.yaw || 0); return [r.x + c * u + s * v, r.z - s * u + c * v]; };
@@ -169,8 +169,9 @@ function vuEdgeMat(){
           int i = int(s + .5);
           if (f < .005) L = uBase + uGain * uPulse[i];
           else {
-            float on = step(f, uVU[i]), ghost = step(f, uGhost[i]) * (1. - on);
-            L = uSegOff + uSegOn * (on + .28 * ghost);
+            // lit up to the level; the PEAK HOLD is a marker — only the segments just under the held peak
+            float on = step(f, uVU[i]), ghost = step(f, uGhost[i]) * step(uGhost[i] - ${VU.MARK.toFixed(3)}, f) * (1. - on);
+            L = uSegOff + uSegOn * (on + .45 * ghost);
           }
         }
         vC = aColor * L;
@@ -189,6 +190,31 @@ function vuEdgeMat(){
 /** a VU segment's aPulse: its slot + its threshold (centre-out: the middle segments light first) */
 export const vuCode = (slot, i, n) => slot + (.03 + .94 * Math.abs(2 * (i + .5) / n - 1));
 const NOSING = '#e9eef6';
+
+/** THE METER'S SCALE — a machine's strikes re-weighted against its OWN norm (what the director calls
+    "above its own norm"), so a busy machine's groove ripples low on its meter and only its accents and
+    entrances reach the top (a dense run must never peg the ring full). Each strike's height:
+      accent  its velocity's rank among the machine's own strikes (a flat-velocity machine sits mid-scale)
+      entry   how long it rested before it (twice its usual gap ≈ a third up, eight times ≈ the top)
+    h = VU.FLOOR + (1 − VU.FLOOR) · max(rank^1.6, entry). Pure; the cue keeps its times. */
+export const VU = { FLOOR: .16, DECAY: .24, HOLD: 1.2, MARK: .14 };
+export function vuCue(cue, P){
+  const n = Array.isArray(cue) ? cue.length : 0;
+  if (!n || !(P > 0)) return [];
+  const ev = cue.map(c => ({ t: (((+c.t || 0) % P) + P) % P, w: Math.max(0, Math.min(1, c.w ?? 1)) })).sort((a, b) => a.t - b.t);
+  const ws = ev.map(e => e.w).sort((a, b) => a - b), flat = ws[n - 1] - ws[0] < .02;
+  const rank = w => {                                                     // mid-rank of w in [0, 1]
+    if (flat || n < 2) return .5;
+    let lo = 0, hi = 0; for (const x of ws){ if (x < w - 1e-9) lo++; if (x <= w + 1e-9) hi++; }
+    return ((lo + hi - 1) / 2) / (n - 1);
+  };
+  const gap = ev.map((e, i) => i ? e.t - ev[i - 1].t : e.t + P - ev[n - 1].t);
+  const gs = gap.filter(g => g > 1e-4).sort((a, b) => a - b), med = gs.length ? gs[gs.length >> 1] : P;
+  return ev.map((e, i) => {
+    const entry = gap[i] > 1e-4 ? Math.max(0, Math.min(1, Math.log2(gap[i] / med) / 3)) : 0;
+    return { t: e.t, w: VU.FLOOR + (1 - VU.FLOOR) * Math.max(rank(e.w) ** 1.6, entry) };
+  });
+}
 
 /* ============================================================ the style ============================ */
 export function arenaFooting({ envMap = null, alu = null } = {}){
@@ -227,8 +253,9 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
   function faceEdge(k, r, side, a0, a1, y0, y1, o0, o1, color, code){
     const K = side[0] === '+' ? 1 : -1, out = side[1] === 'u' ? (K > 0 ? PX : NX) : (K > 0 ? PZ : NZ), inward = side[1] === 'u' ? (K > 0 ? NX : PX) : (K > 0 ? NZ : PZ);
     const faces = ALL & ~inward & ~NY | out;
-    if (side[1] === 'u'){ const p = K * (r.hw + o0), q = K * (r.hw + o1); k.edge(Math.min(p, q), Math.max(p, q), y0, y1, a0, a1, color, code, faces); }
-    else { const p = K * (r.hd + o0), q = K * (r.hd + o1); k.edge(a0, a1, y0, y1, Math.min(p, q), Math.max(p, q), color, code, faces); }
+    const cu = r.cu || 0, cv = r.cv || 0;
+    if (side[1] === 'u'){ const p = cu + K * (r.hw + o0), q = cu + K * (r.hw + o1); k.edge(Math.min(p, q), Math.max(p, q), y0, y1, cv + a0, cv + a1, color, code, faces); }
+    else { const p = cv + K * (r.hd + o0), q = cv + K * (r.hd + o1); k.edge(cu + a0, cu + a1, y0, y1, Math.min(p, q), Math.max(p, q), color, code, faces); }
   }
   /* an LED line round a deck's face (y0..y1), standing just proud of the skirt (plain pulse) */
   function ledLine(k, r, y0, y1, color, slot){
@@ -238,7 +265,7 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
      nearest it (a loft's members share its ring: a meter each, on the stretch that is theirs) and every
      run of one machine's segments fills from its own centre out; the span its stair / ladder climbs is
      left dark */
-  function vuRing(k, r, y0, y1, owners, acc){
+  function vuRing(k, r, y0, y1, owners, acc, oo = [-A.LIP - .004, -A.LIP + .016]){
     if (!(y1 - y0 > .04) || !owners.length) return;
     for (const side of ['+v', '-v', '+u', '-u']){
       const half = sideHalf(r, side) - .2; if (!(half > .3)) continue;
@@ -256,7 +283,7 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
       for (let i = 0; i < n;){
         if (!seg[i]){ i++; continue; }
         let j = i; while (j + 1 < n && seg[j + 1] && seg[j + 1].o === seg[i].o) j++;
-        for (let t = i; t <= j; t++) faceEdge(k, r, side, seg[t].a0, seg[t].a1, y0, y1, -A.LIP - .004, -A.LIP + .016, seg[t].o.color, vuCode(seg[t].o.pulse, t - i, j - i + 1));
+        for (let t = i; t <= j; t++) faceEdge(k, r, side, seg[t].a0, seg[t].a1, y0, y1, oo[0], oo[1], seg[t].o.color, vuCode(seg[t].o.pulse, t - i, j - i + 1));
         i = j + 1;
       }
     }
@@ -301,7 +328,7 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
     } else {
       boxSide('steel', aL, acc.a1, 0, ow, T - .16, T - .02, ALL);                                   // the landing deck
       tapeSide(aL + .01, aL + .07, .1, ow - .1, T - .02);
-      for (const o of [.12, ow - .12]) k.bar('galv', P(acc.a0 + .1, o, F), P(aL + .15, o, T - .1), .07, .26);   // stringers
+      for (const o of [.12, ow - .12]) k.bar('galv', P(acc.a0 + .1, o, F + .14), P(aL + .15, o, T - .1), .07, .26);   // stringers
       for (const a of [aL + .1, acc.a1 - .1]){                                                    // landing posts on base plates
         k.bar('galv', P(a, ow - .1, F + .06), P(a, ow - .1, T - .16), .075, .075, ALL);
         boxSide('galv', a - .1, a + .1, ow - .2, ow, F, F + .06, NOBOT);
@@ -334,6 +361,7 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
     const inGap = (side, a) => gap && gap[0] === side && a > gap[1] - .1 && a < gap[2] + .1;
     for (let i = 0; i <= nu; i++) for (let j = 0; j <= nv; j++){
       const u = U[i], v = V[j], ring = i === 0 || i === nu || j === 0 || j === nv;
+      if (!ring && (i % 2 || j % 2)) continue;                    // (inside: a standard every other bay — the transoms span it)
       const open = (j === nv && inGap('+v', u)) || (j === 0 && inGap('-v', u)) || (i === nu && inGap('+u', v)) || (i === 0 && inGap('-u', v));
       const top = ring && !open ? T + RAIL : yB;
       k.box('galv', u - S / 2, u + S / 2, yJ, top, v - S / 2, v + S / 2, top > T ? SIDES | PY : SIDES);
@@ -341,11 +369,13 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
       k.box('galv', u - .14, u + .14, F + .05, F + .08, v - .14, v + .14, NOBOT);                            // its plate
       k.box('wood', Math.max(-r.hw + .02, u - .24), Math.min(r.hw - .02, u + .24), F - .01, F + .05,
         Math.max(-r.hd + .02, v - .46), Math.min(r.hd - .02, v + .46), NOBOT);                               // a timber sole board
-      for (const y of LV) k.box('galv', u - .1, u + .1, y - .022, y + .022, v - .1, v + .1, ALL);            // a rosette at each node
+      for (const y of ring ? LV : LV.slice(-1)) k.box('galv', u - .1, u + .1, y - .022, y + .022, v - .1, v + .1, ALL);   // a rosette at each node
     }
+    // ledgers: every lift round the outer ring; inside, only the top lift (the bearers under the deck)
+    const yTop = LV[LV.length - 1];
     for (const y of LV){
-      for (const v of V) for (let i = 0; i < nu; i++) k.bar('galv', [U[i], y, v], [U[i + 1], y, v], .062, .062);
-      for (const u of U) for (let j = 0; j < nv; j++) k.bar('galv', [u, y, V[j]], [u, y, V[j + 1]], .062, .062);
+      V.forEach((v, j) => { if (y === yTop || j === 0 || j === nv) for (let i = 0; i < nu; i++) k.bar('galv', [U[i], y, v], [U[i + 1], y, v], .062, .062); });
+      U.forEach((u, i) => { if (y === yTop || i === 0 || i === nu) for (let j = 0; j < nv; j++) k.bar('galv', [u, y, V[j]], [u, y, V[j + 1]], .062, .062); });
     }
     // diagonals: every outer face, alternate bays, alternate hands per lift (a single lift: jack → ledger)
     const lifts = LV.length > 1 ? LV.slice(0, -1).map((y, l) => [y, LV[l + 1]]) : [[yJ, LV[0]]];
@@ -381,6 +411,112 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
     }
   }
 
+  /* AN OPEN STAND (the turntable: its resonator rank hangs below what it rests on) — a box-truss LEG under
+     every foot (the rig's own truss, on a black ballast plate with glow-tape spike marks), a truss HEAD BEAM
+     between legs wherever it keeps out of what hangs, X-braced tiers below what hangs, the machine's VU on
+     each head beam's outer face and as an LED floor ring round the whole stand (what hangs included: the
+     audience side reads lit). A service ladder (footing.js: lifted off its own legs) is bracketed to the
+     leg it climbs beside. Everything inside the pad's rect, nothing through HANG down to hangY. */
+  function openStand(p, k){
+    const F = k.floor, T = p.top, H = T - F, HG = p.hang, D = k.DIM, s = D.COL / 2, BW = D.BEAM_W / 2;
+    const feet = p.feet?.length ? p.feet : [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => [a * (p.hw - .9), b * (p.hd - .9), .5]);
+    const cu = feet.reduce((q, f) => q + f[0], 0) / feet.length, cv = feet.reduce((q, f) => q + f[1], 0) / feet.length;
+    // (a leg slides off what hangs along its shallower side — never further than its foot reaches; and stays in the rect)
+    const clip = (u, v, r) => {
+      u = Math.max(-p.hw + s + .35, Math.min(p.hw - s - .35, u)); v = Math.max(-p.hd + s + .35, Math.min(p.hd - s - .35, v));
+      if (!HG) return [u, v];
+      const x0 = HG[0] - .08, x1 = HG[1] + .08, z0 = HG[2] - .08, z1 = HG[3] + .08;
+      if (u + s <= x0 || u - s >= x1 || v + s <= z0 || v - s >= z1) return [u, v];
+      const [du, dv] = [[x0 - u - s, 0], [x1 - u + s, 0], [0, z0 - v - s], [0, z1 - v + s]].sort((a, b) => Math.abs(a[0] + a[1]) - Math.abs(b[0] + b[1]))[0];
+      return Math.abs(du + dv) <= Math.max(r, .9) ? [u + du, v + dv] : null;
+    };
+    const legs = [];
+    for (const [fu, fv, rr = .5] of feet.slice().sort((f, g) => Math.atan2(f[1] - cv, f[0] - cu) - Math.atan2(g[1] - cv, g[0] - cu))){
+      const at = clip(fu, fv, rr); if (!at) continue;
+      const [u, v] = at; legs.push(at);
+      k.forms.column(u, v, F + .05, T);
+      const b = s + .3;
+      k.box('deck', u - b, u + b, F, F + .05, v - b, v + b, NOBOT);                     // the ballast plate
+      for (const su of [-1, 1]) for (const sv of [-1, 1]){                              // glow-tape Ls at its corners
+        const cu0 = u + su * (b + .1), cv0 = v + sv * (b + .1), L = .3, W = .06;
+        k.edge(Math.min(cu0, cu0 - su * L), Math.max(cu0, cu0 - su * L), F + .003, F + .015, cv0 - W / 2, cv0 + W / 2, p.color, A.TAPE, PY | SIDES);
+        k.edge(cu0 - W / 2, cu0 + W / 2, F + .003, F + .015, Math.min(cv0, cv0 - sv * L), Math.max(cv0, cv0 - sv * L), p.color, A.TAPE, PY | SIDES);
+      }
+    }
+    // head beams + braced tiers on every face that keeps out of what hangs
+    const yT = T - .07, yBeam = yT - D.BEAM, clearY = Number.isFinite(p.hangY) ? p.hangY - .3 : -Infinity;
+    const y0 = F + .4, y1 = yBeam - .15, nT = Math.max(1, Math.ceil((y1 - y0) / D.OPEN_TIER));
+    const tiers = Array.from({ length: nT + 1 }, (_, t) => y0 + (y1 - y0) * t / nT);
+    if (legs.length > 1) for (let i = 0; i < legs.length; i++){
+      if (legs.length === 2 && i) break;
+      const a = legs[i], b = legs[(i + 1) % legs.length];
+      if (hits(a, b, HG, BW + .1)) continue;
+      k.forms.beam(a, b, yT);
+      // its VU: LED segments along the beam's outer face (an axis-aligned beam — the stand's own frame)
+      const ax = Math.abs(a[1] - b[1]) < 1e-6 ? 'u' : Math.abs(a[0] - b[0]) < 1e-6 ? 'v' : null;
+      if (ax){
+        const lo = Math.min(a[ax === 'u' ? 0 : 1], b[ax === 'u' ? 0 : 1]) + s + .3, hi = Math.max(a[ax === 'u' ? 0 : 1], b[ax === 'u' ? 0 : 1]) - s - .3;
+        const c = ax === 'u' ? a[1] : a[0], out = Math.sign(c - (ax === 'u' ? cv : cu)) || 1, n = Math.max(2, Math.round((hi - lo) / A.SEG)), pitch = (hi - lo) / n;
+        const o0 = c + out * (BW + .02), o1 = c + out * (BW + .045), ym = (yT + yBeam) / 2;
+        if (hi - lo > .8) for (let j = 0; j < n; j++){
+          const s0 = lo + j * pitch + .04, s1 = s0 + pitch - .08, code = vuCode(p.pulse, j, n);
+          if (ax === 'u') k.edge(s0, s1, ym - .09, ym + .09, Math.min(o0, o1), Math.max(o0, o1), p.color, code, PY | SIDES);
+          else k.edge(Math.min(o0, o1), Math.max(o0, o1), ym - .09, ym + .09, s0, s1, p.color, code, PY | SIDES);
+        }
+      }
+      if (H < 1.8) continue;
+      const near = hits(a, b, HG, 1), L = Math.hypot(b[0] - a[0], b[1] - a[1]), dx = (b[0] - a[0]) / L, dz = (b[1] - a[1]) / L;
+      const A0 = [a[0] + dx * s, a[1] + dz * s], B0 = [b[0] - dx * s, b[1] - dz * s];
+      for (let t = 0; t < nT; t++){
+        if (near && tiers[t + 1] > clearY) break;                                       // (a brace never crosses what hangs)
+        const ya = tiers[t], yb = tiers[t + 1], np = Math.max(1, Math.round(L / Math.max(yb - ya, 3)));
+        if (t) k.bar('steel', [A0[0], ya, A0[1]], [B0[0], ya, B0[1]], .11, .11, ALL);
+        for (let j = 0; j < np; j++){
+          const P0 = [A0[0] + (B0[0] - A0[0]) * j / np, A0[1] + (B0[1] - A0[1]) * j / np], P1 = [A0[0] + (B0[0] - A0[0]) * (j + 1) / np, A0[1] + (B0[1] - A0[1]) * (j + 1) / np];
+          k.bar('steel', [P0[0], ya, P0[1]], [P1[0], yb, P1[1]], .08, .05);
+          k.bar('steel', [P1[0], ya, P1[1]], [P0[0], yb, P0[1]], .08, .05);
+        }
+      }
+    }
+    // the LED floor ring round the whole stand (its feet and what hangs over the floor)
+    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    for (const [u, v] of legs.length ? legs : feet){ u0 = Math.min(u0, u - s - .55); u1 = Math.max(u1, u + s + .55); v0 = Math.min(v0, v - s - .55); v1 = Math.max(v1, v + s + .55); }
+    if (HG){ u0 = Math.min(u0, HG[0] - .45); u1 = Math.max(u1, HG[1] + .45); v0 = Math.min(v0, HG[2] - .45); v1 = Math.max(v1, HG[3] + .45); }
+    u0 = Math.max(u0, -p.hw + .05); u1 = Math.min(u1, p.hw - .05); v0 = Math.max(v0, -p.hd + .05); v1 = Math.min(v1, p.hd - .05);
+    const ringR = { x: p.x, z: p.z, yaw: p.yaw, hw: (u1 - u0) / 2, hd: (v1 - v0) / 2, cu: (u0 + u1) / 2, cv: (v0 + v1) / 2 };
+    vuRing(k, ringR, F + .004, F + .03, [p], null, [-.15, -.02]);
+    // a service ladder, bracketed to the leg beside it
+    const acc = p.access;
+    if (acc){
+      k.forms.ladder(p, T, acc);
+      const alongU = acc.side[1] === 'v', K = acc.side[0] === '+' ? 1 : -1;
+      let best = null;
+      for (const g of legs){
+        const a = alongU ? g[0] : g[1], lo = Math.max(acc.a0 + .1, a - s + .05), hi = Math.min(acc.a1 - .1, a + s - .05);
+        if (hi > lo && (!best || Math.abs((alongU ? g[1] : g[0]) - K * (alongU ? p.hd : p.hw)) < best.d)) best = { g, at: (lo + hi) / 2, d: Math.abs((alongU ? g[1] : g[0]) - K * (alongU ? p.hd : p.hw)) };
+      }
+      if (best) for (const y of [...landings(p, F), T - 1.1]){
+        if (y < F + 1.5) continue;
+        const face = K * ((alongU ? p.hd : p.hw) - .02), leg = (alongU ? best.g[1] : best.g[0]) + K * s;
+        const A1 = alongU ? [best.at, y, face] : [face, y, best.at], B1 = alongU ? [best.at, y, leg] : [leg, y, best.at];
+        if (!hits([A1[0], A1[2]], [B1[0], B1[2]], HG, .06) || y < clearY) k.bar('steel', A1, B1, .09, .09, ALL);
+      }
+    }
+    return NONE;
+  }
+  /* does the segment p → q (local u, v) cross the rect R = [u0, u1, v0, v1] grown by g? */
+  function hits(p, q, R, g){
+    if (!R) return false;
+    let t0 = 0, t1 = 1;
+    const d = [q[0] - p[0], q[1] - p[1]], lo = [R[0] - g, R[2] - g], hi = [R[1] + g, R[3] + g];
+    for (let i = 0; i < 2; i++){
+      if (Math.abs(d[i]) < 1e-12){ if (p[i] < lo[i] || p[i] > hi[i]) return false; continue; }
+      let a = (lo[i] - p[i]) / d[i], b = (hi[i] - p[i]) / d[i]; if (a > b) [a, b] = [b, a];
+      t0 = Math.max(t0, a); t1 = Math.min(t1, b); if (t0 > t1) return false;
+    }
+    return true;
+  }
+
   /* ---------------- the forms, by band ---------------- */
   const style = {
     key: 'arena',
@@ -389,6 +525,7 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
     /* a loft member's light is its loft's (spikes on the shared deck, its stretch of the fascia) */
     edge(p){ return p.loft ? NONE : null; },
     flush(p, k){
+      if (p.open) return openStand(p, k);
       const F = k.floor;
       if (p.fixed){                                                     // the belt's kerb: a low deck its posts stand in
         const T = F + FOOT.KERB, fr = deckTop(k, p, T, F);
@@ -404,7 +541,7 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
       return NONE;
     },
     low(p, k){
-      if (p.open) return null;
+      if (p.open) return openStand(p, k);
       const F = k.floor, T = p.top, fr = deckTop(k, p, T, F);
       k.box('skirt', -p.hw + A.LIP, p.hw - A.LIP, F - .01, T - fr, -p.hd + A.LIP, p.hd - A.LIP, SIDES);
       const fh = Math.max(.14, Math.min(A.FASCIA, (T - F - fr) * .42));
@@ -414,20 +551,20 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
       return NONE;
     },
     mid(p, k){
-      if (p.open) return null;
+      if (p.open) return openStand(p, k);
       const F = k.floor, T = p.top, s = slab(k, p, T, F);
       layher(k, p, T, s.y0, F, gapOf(p.access));
-      vuRing(k, p, s.y0 + .1, T - s.fr - .08, [p], null);
+      vuRing(k, p, s.y0 + .1, T - s.fr - .08, [p], p.access);
       spikes(k, p, T, p.color);
       access(k, p, T, F, 'scaffold');
       return NONE;
     },
     high(p, k){
-      if (p.open) return null;
+      if (p.open) return openStand(p, k);
       const F = k.floor, T = p.top, s = slab(k, p, T, F);
       k.forms.trussFrame(p, s.y0, landings(p, F));                       // (the kit's box truss: 'steel' = the rig's aluminium)
       const g = gapOf(p.access); k.forms.rails(p, T, g?.[0] ?? null, g?.[1] ?? 0, g?.[2] ?? 0);
-      vuRing(k, p, s.y0 + .1, T - s.fr - .08, [p], null);
+      vuRing(k, p, s.y0 + .1, T - s.fr - .08, [p], p.access);
       spikes(k, p, T, p.color);
       access(k, p, T, F, 'scaffold');
       return NONE;
@@ -451,7 +588,7 @@ export function arenaFooting({ envMap = null, alu = null } = {}){
       // the members share the ring (each its own meter on the stretch nearest it) + spike marks on the deck
       const yTop = T - fr - (L.band === 'low' ? .07 : .08);
       const yBot = L.band === 'low' ? Math.max(y0, yTop - Math.max(.14, Math.min(A.FASCIA, (T - F - fr) * .42))) : y0;
-      vuRing(k, L, yBot, yTop, members, L.band === 'low' ? L.access : null);
+      vuRing(k, L, yBot, yTop, members, L.access);
       for (const m of members){ k.frame(m); spikes(k, m, Math.max(T, m.top), m.color); k.frame(L); }
       return NONE;
     },

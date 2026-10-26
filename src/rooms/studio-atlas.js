@@ -25,7 +25,8 @@ export const LAYOUT = {
   strap: [768, 128, 64, 256], cable: [832, 128, 64, 64], chrome: [832, 192, 64, 64], red: [832, 256, 64, 64],
   wood: [896, 128, 128, 256],
   stencils: [1024, 128, 1024, 512],                      // 2 × 8 cells of 512 × 64: case stencils
-  names: [0, 384, 1024, 576],                            // 2 × 9 cells of 512 × 64: every machine's name
+  names: [0, 384, 1024, 640],                            // 2 × 10 cells of 512 × 64: every machine's name (18 used,
+                                                         //  2 spare — a 21st name throws in atlasUV, test/room-studio)
   skirt: [1024, 640, 512, 256],                          // pleated black stage skirting (a riser's sides)
 };
 export const ATLAS_SIZE = [SW, SH];
@@ -51,6 +52,9 @@ function atlasUV(aspects = {}){
   const cell = (r, i, cols) => [r[0] + (i % cols) * 512, r[1] + Math.floor(i / cols) * 64, 512, 64];
   const text = (c, aspect) => { const w = Math.min(c[2], aspect * c[3]); return { ...uvRect([c[0] + (c[2] - w) / 2, c[1], w, c[3]], 1), aspect: w / c[3], px: c }; };
   R.name = {};
+  const fits = (r, n, cols) => Math.ceil(n / cols) * 64 <= r[3] && cols * 512 <= r[2];
+  if (!fits(LAYOUT.names, Object.keys(NAMES).length, NAME_COLS) || !fits(LAYOUT.stencils, STENCILS.length, STENCIL_COLS))
+    throw new Error('studio atlas: more names / stencils than their LAYOUT region holds — grow it');
   Object.keys(NAMES).forEach((k, i) => { R.name[k] = text(cell(LAYOUT.names, i, NAME_COLS), aspects['n:' + k] || 6); });
   R.stencil = STENCILS.map((s, i) => text(cell(LAYOUT.stencils, i, STENCIL_COLS), aspects['s:' + i] || 6));
   return R;

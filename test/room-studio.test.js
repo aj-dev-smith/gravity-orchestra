@@ -6,6 +6,7 @@ import { makePulse } from '../src/rooms/pulse.js';
 import { STAGE } from '../src/rooms/common.js';
 import { studioFooting, openSpot, segCode, TALLY_CODE, STRIP_CODE } from '../src/rooms/studio-footing.js';
 import { makeMeter, VU } from '../src/rooms/studio-vu.js';
+import { LAYOUT, ATLAS_SIZE, NAMES, STENCILS, atlasUV } from '../src/rooms/studio-atlas.js';
 import { micStands, obstacles, boxGap, clearOf, micBox, PROP_CLEAR, MIC } from '../src/rooms/studio-props.js';
 
 /* MIDNIGHT STUDIO (src/rooms/studio*.js): what its machines stand on (a footing style — rug risers,
@@ -284,5 +285,26 @@ describe('the mic stands (studio-props.js): pure, and clear of everything', () =
     expect(clearOf([0, 1, 0, 1, 0, 1], [[2.5, 3, 0, 1, 0, 1]])).toBe(true);
     expect(clearOf([0, 1, 0, 1, 0, 1], [[1.5, 3, 0, 1, 0, 1]])).toBe(false);
     expect(MIC.TOP).toBeLessThan(4);                                                    // (a boom stand: ≈ 1.9 m)
+  });
+});
+
+describe('the studio atlas layout', () => {
+  const inside = (c, r) => c[0] >= r[0] && c[1] >= r[1] && c[0] + c[2] <= r[0] + r[2] && c[1] + c[3] <= r[1] + r[3];
+  it('every region lies on the canvas and no two overlap', () => {
+    const [W, H] = ATLAS_SIZE, regs = Object.entries(LAYOUT);
+    for (const [k, r] of regs) expect(inside(r, [0, 0, W, H]), k).toBe(true);
+    for (let i = 0; i < regs.length; i++) for (let j = i + 1; j < regs.length; j++){
+      const [a, A] = regs[i], [b, B] = regs[j];
+      const hit = A[0] < B[0] + B[2] && B[0] < A[0] + A[2] && A[1] < B[1] + B[3] && B[1] < A[1] + A[3];
+      expect(hit, a + ' × ' + b).toBe(false);
+    }
+  });
+  it('every name and stencil cell lies inside its own region, its uv in [0, 1]', () => {
+    const R = atlasUV();
+    expect(Object.keys(R.name).length).toBe(Object.keys(NAMES).length);
+    expect(R.stencil.length).toBe(STENCILS.length);
+    for (const [k, c] of Object.entries(R.name)) expect(inside(c.px, LAYOUT.names), 'name ' + k).toBe(true);
+    R.stencil.forEach((c, i) => expect(inside(c.px, LAYOUT.stencils), 'stencil ' + i).toBe(true));
+    for (const c of [...Object.values(R.name), ...R.stencil]) for (const v of [c.s0, c.s1, c.t0, c.t1]) { expect(v).toBeGreaterThanOrEqual(0); expect(v).toBeLessThanOrEqual(1); }
   });
 });

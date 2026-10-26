@@ -4,8 +4,8 @@ import { planFooting, footingBoxes, FOOT } from '../src/rooms/footing.js';
 import { buildFooting, makeFootingMats } from '../src/rooms/footing3d.js';
 import { STAGE } from '../src/rooms/common.js';
 import { gridFootStyle } from '../src/rooms/grid-footing.js';
-import { RIPPLE, strikeAges, rippleSlots, accentsOf, packColor, rippleExtra, makeRipples } from '../src/rooms/grid-floor.js';
-import { PLOT, labelLines, labelSize, clearOf, placeLabels } from '../src/rooms/grid-plot.js';
+import { RIPPLE, strikeAges, rippleSlots, accentsOf, packColor, rippleExtra, makeRipples, annulus } from '../src/rooms/grid-floor.js';
+import { PLOT, labelLines, labelSize, clearOf, placeLabels, plotFade } from '../src/rooms/grid-plot.js';
 import { layoutStations } from '../src/instruments/stations.js';
 import fs from 'node:fs';
 
@@ -86,7 +86,7 @@ describe('Greybox footing: the plan, drawn in the room\'s own language', () => {
     const f = build(), M = meshes(f);
     expect(M.map(m => m.name).sort()).toEqual(['footing:deck', 'footing:edge', 'footing:gglass', 'footing:gline', 'footing:glace'].sort());
     for (const m of M) expect(m.userData.footing, m.name).toBe(true);
-    expect(f.group.children.filter(c => !c.isMesh).length).toBeLessThanOrEqual(1);       // (the hooks' one shared empty group)
+    expect(f.group.children.filter(c => !c.isMesh).length).toBe(0);       // (the hooks return true: no empty claim groups)
     f.dispose();
   });
   it('everything it draws stays inside the plan\'s envelopes (a nosing\'s hair; feet buried in the floor)', () => {
@@ -97,12 +97,12 @@ describe('Greybox footing: the plan, drawn in the room\'s own language', () => {
     }
     f.dispose();
   });
-  it('the catalog (every staged song, re-planned): everything drawn inside its envelopes, ≤ 6 children', () => {
+  it('the catalog (every staged song, re-planned): everything drawn inside its envelopes, ≤ 5 draws', () => {
     const s = gridFootStyle(), mats = makeFootingMats();
     for (const { song, anchors, plan } of catalog()){
       s.known(anchors);
       const env = footingBoxes(plan), f = buildFooting(plan, s, { boxes: env, mats }), B = env.map(e => e.box);
-      expect(f.group.children.length, song).toBeLessThanOrEqual(6);
+      expect(f.group.children.length, song).toBeLessThanOrEqual(5);
       for (const m of meshes(f)){
         const { worst, at } = worstOut(m, B);
         expect(worst, `${song} ${m.name}: ${worst.toFixed(3)} u out at ${at && at.map(v => v.toFixed(2))}`).toBeLessThanOrEqual(.035);
@@ -265,28 +265,60 @@ describe('Greybox floor: a strike rings out across the grid', () => {
       expect(Math.abs(r / 255 - lin.r)).toBeLessThan(.003); expect(Math.abs(g / 255 - lin.g)).toBeLessThan(.003); expect(Math.abs(b / 255 - lin.b)).toBeLessThan(.003);
     }
   });
-  it('the live side: place writes the pool once, update is a pure fn of songTime (silent in the count-in)', () => {
+  it('the live side: update is a pure fn of songTime (silent in the count-in), only LIT machines reach the shader', () => {
     const X = rippleExtra(), R = makeRipples(X.uniforms), U = X.uniforms;
     R.place([anchor('a', 3, 4, 6, 4), anchor('b', -9, 2, 4, 4, { cue: [{ t: 7, w: 1 }] })], null);
-    expect(U.rN.value).toBe(2);
-    expect(Array.from(U.rA.value.slice(0, 8))).toEqual([3, 4, 3, 2, -9, 2, 2, 2]);
-    const snap = () => [Array.from(U.rS.value.slice(0, 8)), Array.from(U.rB.value.slice(0, 8))];
+    expect(U.rN.value).toBe(0);                                                                // (nothing lit until a frame says so)
+    const snap = () => [U.rN.value, Array.from(U.rA.value.slice(0, 8)), Array.from(U.rS.value.slice(0, 8)), Array.from(U.rB.value.slice(0, 8)), Array.from(U.rR.value.slice(0, 4))];
     R.update(-1.5);
-    expect(U.rS.value[1]).toBe(0); expect(U.rS.value[5]).toBe(0); expect(U.rB.value[2]).toBe(0); expect(U.rB.value[6]).toBe(0);
+    expect(U.rN.value).toBe(0);                                                                // the count-in: the floor is dark, the shader walks nothing
     R.update(9.1); const at = snap();
     R.update(33.3); R.update(-2); R.update(9.1);
     expect(snap()).toEqual(at);
+    expect(U.rN.value).toBe(2);
+    expect(Array.from(U.rA.value.slice(0, 8))).toEqual([3, 4, 3, 2, -9, 2, 2, 2]);              // a, then b: anchor order among the lit
     expect(U.rS.value[0]).toBeCloseTo(.1 * RIPPLE.SPEED, 4);                                   // a just struck: its ring leaving its edge…
     expect(U.rS.value[1]).toBeCloseTo(.8 * Math.exp(-.1 / RIPPLE.FADE), 5);                     // …at its weight (a calm machine: gain 1), fading
     expect(U.rB.value[2]).toBeGreaterThan(.5);                                                 // …and its cells lit
     expect(U.rS.value[4]).toBeCloseTo(2.1 * RIPPLE.SPEED, 4); expect(U.rS.value[5]).toBeLessThan(.04);   // b's ring, 2.1 s out: nearly gone
+    // the annulus the shader culls by: a's cells are lit (inner 0); b's ring is out past its rect, its middle skipped
+    expect(U.rR.value[1]).toBe(0);
+    const [o2, i2] = annulus(2, 2, [2.1 * RIPPLE.SPEED, U.rS.value[5]], U.rB.value[6]);
+    expect(U.rR.value[2]).toBeCloseTo(o2, 3); expect(U.rR.value[3]).toBeCloseTo(i2, 3);
+    // a machine gone dark leaves the pool: late in the loop only what still glows is handed over
+    R.update(19.9);
+    expect(U.rN.value).toBeLessThan(2);
     const GL = X.head + X.body;
     for (const u of Object.keys(U)) expect(GL.includes(u), u).toBe(true);                    // every uniform is declared + read
+  });
+  it('annulus: every point a ring or the cells can light lies inside it (an independent brute-force check)', () => {
+    const rr = (x, z, hw, hd) => { const ex = Math.abs(x) - hw, ez = Math.abs(z) - hd; return Math.hypot(Math.max(ex, 0), Math.max(ez, 0)) + Math.min(Math.max(ex, ez), 0); };
+    for (const [hw, hd, r0, l0, r1, l1, glow] of [[3, 2, 4, 1, 12, .3, 0], [5, 1, .5, 1, 0, 0, .8], [2, 2, 9, .5, 0, 0, 0], [4, 3, 0, 0, 0, 0, .4]]){
+      const [o2, i2] = annulus(hw, hd, [r0, l0, r1, l1], glow);
+      for (let x = -30; x <= 30; x += .37) for (let z = -30; z <= 30; z += .41){
+        const d2 = x * x + z * z; if (d2 <= o2 && d2 >= i2) continue;
+        const dist = rr(x, z, hw, hd), cx = (Math.floor(x * .5) + .5) * 2, cz = (Math.floor(z * .5) + .5) * 2;
+        const ring = (l0 * Math.exp(-(((dist - r0) / RIPPLE.WIDTH) ** 2)) + l1 * Math.exp(-(((dist - r1) / RIPPLE.WIDTH) ** 2)));
+        const cell = glow * (rr(cx, cz, hw, hd) < RIPPLE.REACH ? 1 : 0);
+        expect(ring, `${x},${z}`).toBeLessThan(2e-4); expect(cell, `${x},${z}`).toBe(0);
+      }
+    }
+    expect(annulus(2, 2, [5, 0, 9, 0], 0)).toBe(null);                                        // nothing lit: not handed over
   });
 });
 
 /* THE STAGE PLOT (grid-plot.js): the room's props — names on the floor, never in anything's way */
 describe('Greybox stage plot: each machine named on the floor, clear of everything', () => {
+  it('the print is chalk for a WALKER: low + near eyes read it, the director\'s eyes never do', () => {
+    const M = 1.478;                                              // u per metre (xrplan U_PER_M)
+    expect(plotFade(4, 1.7 * M)).toBeCloseTo(1, 6);               // standing beside it
+    expect(plotFade(9, 1.7 * M)).toBeGreaterThan(.3);             // a few strides off: still reads
+    expect(plotFade(13, 1.7 * M)).toBe(0);                        // across the room: gone
+    expect(plotFade(4, 8)).toBe(0);                               // an eye 5.4 m up (the director's lowest crane): gone
+    expect(plotFade(4, 30)).toBe(0);                              // the stage wide / EDIT STAGE plan: its tags name them
+    expect(plotFade(4, 1.7 * M, -.95)).toBe(0);                   // under the HUD's button row
+    for (let d = 0; d < 20; d += .5) expect(plotFade(d + .5, 3)).toBeLessThanOrEqual(plotFade(d, 3) + 1e-12);   // monotone in distance
+  });
   /* an independent check (not the SAT under test): the gap between two convex polygons */
   const corners = R => { const c = Math.cos(R.yaw || 0), s = Math.sin(R.yaw || 0);
     return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => [R.x + c * u * R.hw + s * v * R.hd, R.z - s * u * R.hw + c * v * R.hd]); };

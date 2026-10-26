@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { FOOT, railed } from './footing.js';
+import { gapOf, landings, onSide } from './footing3d.js';
 import { gridPatch, LINE } from './grid-shade.js';
 /* ============================================================
    GREYBOX FOOTING — what the machines stand on in ROOM ZERO (a rooms/footing3d.js STYLE: grid.js
@@ -11,9 +12,9 @@ import { gridPatch, LINE } from './grid-shade.js';
      flush  a graphite slab; its top edge is the machine's light (the kit's edge: one draw for all)
      low    a stepped riser — tiers inset within the pad's margin (never on the stair's side, never
             smaller than the machine), each tier's nosing lit — climbed by solid stepped slabs
-     mid    a graphite deck on slim legs, X-braced in light, behind a smoked-glass balustrade capped
+     mid    a graphite deck on slim legs, zig-zag braced in light, behind a smoked-glass balustrade capped
             by a light rail; floating treads on a spine stair, or a ladder of light rungs
-     high   a lattice tower drawn in light: graphite chords laced with light, light ties + braces at
+     high   a lattice tower drawn in light: graphite chords laced with light, light ties + zig-zag braces at
             every landing level, a caged ladder of light rungs resting on thin lit landings
      loft   a smoked-glass mezzanine on a graphite frame (its joists seen through the glass) over the
             band's structure, a light-line balustrade
@@ -58,9 +59,6 @@ function ring(hu, hv, span){
   for (let i = 0; i < nv; i++) out.push([-hu, hv - 2 * hv * i / nv]);
   return out;
 }
-/* (along a, out o) on one side of a rect → local [u, v] */
-const onSide = (r, side) => { const k = side[0] === '+' ? 1 : -1;
-  return side[1] === 'u' ? (a, o) => [k * (r.hw + o), a] : (a, o) => [a, k * (r.hd + o)]; };
 /* does the segment p → q (local u, v) cross the rect [u0, u1, v0, v1] grown by g? */
 function segHits(p, q, R, g){
   if (!R) return false;
@@ -73,13 +71,8 @@ function segHits(p, q, R, g){
   }
   return true;
 }
-/* where a deck's rails open for its access: the along-range on its side */
-const gapOf = acc => !acc ? [null, 0, 0] : acc.kind === 'stair' ? [acc.side, acc.a1 - acc.out, acc.a1] : (() => {
-  const mid = (acc.a0 + acc.a1) / 2, off = acc.flights > 1 ? ((acc.flights - 1) % 2 ? .45 : -.45) : 0;
-  return [acc.side, mid + off - GDIM.LAD_HALF - .15, mid + off + GDIM.LAD_HALF + .15]; })();
-/* the landing levels of a support's ladder (ties + braces meet them): every LAND_DY of its climb */
-function landings(r, F){ const nf = r.access?.flights || Math.max(1, Math.ceil((r.top - F) / FOOT.LAND_DY)), out = [];
-  for (let f = 1; f < nf; f++) out.push(F + (r.top - F) * f / nf); return out; }
+/* (gapOf — where a deck's rails open for its access — and landings — a ladder's landing levels — are the kit's
+   own rules, imported from rooms/footing3d.js so the Greybox's decks meet the kit's ladders exactly) */
 
 /* a lit rim: light bars along the top edges of a slab u0..u1 × v0..v1 whose top is y (a hair proud) —
    `skip`: a side left dark (where a stair lands, or a tier above stands flush) */
@@ -91,9 +84,28 @@ function rim(k, slot, u0, u1, v0, v1, y, t = GDIM.NOSE, skip = null){
   if (skip !== '+u') k.box(slot, u1 + o - t, u1 + o, y0, y1, v0 - o + t, v1 + o - t, NOBOT);
 }
 
+/* a WARREN run of light braces between ends a and b ([u, v]), y0 → y1 in n panels: ONE diagonal per panel,
+   alternating — a zig-zag, not an X. The panels count from the run's −u (or −v) end whichever way the
+   run was walked, so a tower's far face zigs exactly like its near one: seen THROUGH the tower the two
+   lie parallel instead of crossing into a moiré of diamonds (the X-braced towers outshone the machines
+   from eye level and filled the director's station shots behind them). */
+function warren(k, slot, a, b, y0, y1, n, w = GDIM.LACE){
+  const flip = Math.abs(b[0] - a[0]) >= Math.abs(b[1] - a[1]) ? b[0] < a[0] : b[1] < a[1];
+  const [p0, p1] = flip ? [b, a] : [a, b], at = j => [p0[0] + (p1[0] - p0[0]) * j / n, p0[1] + (p1[1] - p0[1]) * j / n];
+  for (let j = 0; j < n; j++){
+    const p = at(j), q = at(j + 1), [ya, yb] = j % 2 ? [y1, y0] : [y0, y1];
+    k.bar(slot, [p[0], ya, p[1]], [q[0], yb, q[1]], w, w);
+  }
+}
+
 /* ---- the forms (each in its spec's frame: the kit sets it) ---- */
 function makeForms(k, marginOf){
   const F = F_OF(k);
+  /* does the local direction (du, dv) face the BACK wall (world −z, away from the audience)? A face
+     that does is only ever seen THROUGH its tower or loft, behind the machines: it keeps its ties
+     and verticals but no lace — from a three-quarter view its zig-zag crossed the near face's into
+     a diamond lattice busier than the horns and riff on the gallery above it */
+  const backward = (du, dv) => { const o = k.w(0, 0), q = k.w(du, dv), L = Math.hypot(du, dv) || 1; return (q[1] - o[1]) / L < -.5; };
   /* a box on one side of a rect: along a0..a1, out o0..o1 */
   const sideBox = (r, side) => { const S = onSide(r, side);
     return (slot, a0, a1, o0, o1, y0, y1, faces = ALL) => { const p = S(a0, o0), q = S(a1, o1);
@@ -162,7 +174,7 @@ function makeForms(k, marginOf){
     k.bar('glace', [a[0], T + .07, a[1]], [b[0], T + .07, b[1]], .035, .035, ALL);
   }
   /* slim graphite LEGS under a deck (bottom at yB): a beam round their heads, light ties at the foot and
-     at each tier, every bay X-braced in light */
+     at each tier, every bay braced in light (one diagonal a tier, zig-zagging: warren) */
   function legs(r, yB){
     const hu = r.hw - GDIM.LEG_IN, hv = r.hd - GDIM.LEG_IN, P = ring(hu, hv, GDIM.LEG_SPAN), L = GDIM.LEG, H = yB - F;
     for (const [u, v] of P){
@@ -180,8 +192,7 @@ function makeForms(k, marginOf){
       for (let j = 0; j < n; j++){
         const y0 = yTie + (yBeam - yTie) * j / n, y1 = yTie + (yBeam - yTie) * (j + 1) / n;
         if (j) k.bar('glace', [a[0], y0, a[1]], [b[0], y0, b[1]], .045, .045);
-        k.bar('glace', [a[0], y0, a[1]], [b[0], y1, b[1]], GDIM.LACE, GDIM.LACE);
-        k.bar('glace', [b[0], y0, b[1]], [a[0], y1, a[1]], GDIM.LACE, GDIM.LACE);
+        warren(k, 'glace', a, b, j % 2 ? y1 : y0, j % 2 ? y0 : y1, 1);       // (one diagonal a tier, zig-zagging up the bay)
       }
     }
   }
@@ -198,7 +209,7 @@ function makeForms(k, marginOf){
     const n = Math.max(1, Math.round((Hc - .14) / GDIM.PITCH)), dy = (Hc - .14) / n;
     const ol = Math.hypot(o[0], o[1]) || 1, N = [[0, -1], [1, 0], [0, 1], [-1, 0]];     // face f's outward normal (C[f] → C[f+1])
     for (let f = 0; f < 4; f++){
-      if ((N[f][0] * o[0] + N[f][1] * o[1]) / ol < .3) continue;
+      if ((N[f][0] * o[0] + N[f][1] * o[1]) / ol < .3 || backward(N[f][0], N[f][1])) continue;
       const A = C[f], B = C[(f + 1) % 4];
       for (let j = 0; j < n; j++){
         const ya = y0 + .07 + j * dy, [p, q] = (j + f) % 2 ? [A, B] : [B, A];
@@ -219,8 +230,8 @@ function makeForms(k, marginOf){
       k.bar('glace', P(sa, o, y0), P(sa + ds, o, y1), GDIM.LACE, GDIM.LACE);
     }
   }
-  /* lattice columns round a deck (bottom at yB), beams between their heads, light ties + X-braces in
-     panels at every landing level */
+  /* lattice columns round a deck (bottom at yB), beams between their heads, light ties + Warren braces
+     (one diagonal a panel) in panels at every landing level */
   function trussFrame(r, yB, levels){
     const hu = r.hw - GDIM.COL_IN, hv = r.hd - GDIM.COL_IN, P = ring(hu, hv, GDIM.COL_SPAN), yH = yB - GDIM.BEAM;
     for (const [u, v] of P) column(u, v, F, yH, [u / Math.max(hu, 1e-3), v / Math.max(hv, 1e-3)]);
@@ -229,16 +240,13 @@ function makeForms(k, marginOf){
       beam(a, b, yB);
       const L = Math.hypot(b[0] - a[0], b[1] - a[1]), dx = (b[0] - a[0]) / L, dz = (b[1] - a[1]) / L, s = GDIM.COL / 2;
       const A = [a[0] + dx * s, a[1] + dz * s], B = [b[0] - dx * s, b[1] - dz * s];
+      const back = backward(dz, -dx);                       // (the ring runs counter-clockwise: (dz, −dx) points out)
       let yPrev = F + .4;
       for (const y of [...levels.filter(y => y > F + 2 && y < yH - 1.5), yH - .05]){
         if (y < yH - .2) k.bar('glace', [A[0], y, A[1]], [B[0], y, B[1]], GDIM.LINE, GDIM.LINE);
         const n = Math.max(1, Math.round(L / Math.max(y - yPrev, 3))), at = j => [A[0] + (B[0] - A[0]) * j / n, A[1] + (B[1] - A[1]) * j / n];
-        for (let j = 0; j < n; j++){
-          const p = at(j), q = at(j + 1);
-          k.bar('glace', [p[0], yPrev, p[1]], [q[0], y, q[1]], GDIM.LACE, GDIM.LACE);
-          k.bar('glace', [q[0], yPrev, q[1]], [p[0], y, p[1]], GDIM.LACE, GDIM.LACE);
-          if (j) k.bar('deck', [p[0], yPrev, p[1]], [p[0], y, p[1]], .08, .08);
-        }
+        if (!back) warren(k, 'glace', A, B, yPrev, y, n);
+        for (let j = 1; j < n; j++){ const p = at(j); k.bar('deck', [p[0], yPrev, p[1]], [p[0], y, p[1]], .08, .08); }
         yPrev = y;
       }
     }
@@ -360,7 +368,7 @@ function makeForms(k, marginOf){
     access(p, p.top, p.access, false);
   }
 
-  /* MID: a graphite deck on slim legs, X-braced in light, behind a glass balustrade */
+  /* MID: a graphite deck on slim legs, zig-zag braced in light, behind a glass balustrade */
   function mid(p){
     const D = deckDepth(p);
     deck(p, p.top, D, p.color, p.pulse);
@@ -421,7 +429,6 @@ function makeForms(k, marginOf){
    footing) — a riser's tiers step in only as far as the pad's MARGIN round its machine; unknown → 0. */
 export function gridFootStyle(){
   let made = null, anchors = new Map();
-  const shared = new THREE.Group(); shared.name = 'footing:grid';          // (what every hook returns: one empty child)
   const marginOf = p => {
     const a = p._a || anchors.get(p.key);                                // (the planner keeps each pad's anchor: no ordering)
     if (!a || !(a.w > 0) || !(a.d > 0)) return 0;
@@ -431,10 +438,10 @@ export function gridFootStyle(){
   const forms = k => { let f = cache.get(k); if (!f){ f = makeForms(k, marginOf); cache.set(k, f); } return f; };
   const hook = name => (spec, k) => {
     const f = forms(k);
-    if (name !== 'loft' && spec.open){ f.open(spec); return shared; }   // (an open stand arrives under its band's hook)
+    if (name !== 'loft' && spec.open){ f.open(spec); return true; }     // (an open stand arrives under its band's hook)
     if (name === 'loft') f.loft(spec, k.plan.pads.filter(p => p.loft === spec.id));
     else f[name](spec);
-    return shared;
+    return true;                                                         // (handled: everything went into the kit's merged slots)
   };
   return {
     key: 'grid',

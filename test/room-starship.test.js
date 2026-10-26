@@ -166,7 +166,7 @@ describe('starship footing: ship hardware, drawn', () => {
     f.dispose();
     }
   });
-  it('every face looks out (winding agrees with its normal)', () => {
+  it('every face looks out (winding agrees with its normal — the MEAN of its vertex normals: a ram\'s are smooth)', () => {
     const f = buildShip();
     for (const m of meshesOf(f)){
       const g = m.geometry, p = g.attributes.position.array, n = g.attributes.normal?.array, I = g.index.array;
@@ -176,10 +176,30 @@ describe('starship footing: ship hardware, drawn', () => {
         const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
         const ux = p[b] - p[a], uy = p[b + 1] - p[a + 1], uz = p[b + 2] - p[a + 2], vx = p[c] - p[a], vy = p[c + 1] - p[a + 1], vz = p[c + 2] - p[a + 2];
         const cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx, L = Math.hypot(cx, cy, cz);
-        if (L > 1e-9 && (cx * n[a] + cy * n[a + 1] + cz * n[a + 2]) / L < .99) bad++;
+        const mx = n[a] + n[b] + n[c], my = n[a + 1] + n[b + 1] + n[c + 1], mz = n[a + 2] + n[b + 2] + n[c + 2], M = Math.hypot(mx, my, mz);
+        if (L > 1e-9 && (cx * mx + cy * my + cz * mz) / (L * M) < .99) bad++;
       }
       expect(bad, m.name).toBe(0);
     }
+    f.dispose();
+  });
+  it('the rams are turned, not faceted: a side seam\'s coincident vertices share one normal', () => {
+    const f = buildShip();
+    let smooth = 0, faceted = 0;
+    for (const m of meshesOf(f).filter(m => m.name === 'footing:chrome' || m.name === 'footing:steel')){
+      const p = m.geometry.attributes.position.array, n = m.geometry.attributes.normal.array, at = new Map();
+      for (let i = 0; i < p.length; i += 3){
+        if (Math.abs(n[i + 1]) > 1e-6) continue;                                // (vertical sides only: the prisms)
+        const key = `${p[i].toFixed(4)},${p[i + 1].toFixed(4)},${p[i + 2].toFixed(4)}`;
+        (at.get(key) || at.set(key, []).get(key)).push(i);
+      }
+      for (const g of at.values()) for (let a = 0; a < g.length; a++) for (let b = a + 1; b < g.length; b++){
+        const d = n[g[a]] * n[g[b]] + n[g[a] + 2] * n[g[b] + 2];
+        if (d > .9999) smooth++; else if (d > Math.cos(Math.PI / 4)) faceted++;   // (a box's corner is 90°: neither)
+      }
+    }
+    expect(smooth).toBeGreaterThan(100);
+    expect(faceted).toBe(0);
     f.dispose();
   });
   it('the lights face out of their channels and read real slots (their machines\')', () => {

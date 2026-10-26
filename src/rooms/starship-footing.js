@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { FOOT, railed, sideNormal } from './footing.js';
-import { newBuf, quad } from './footing3d.js';
+import { quad, ring, onSide, gapOf, landings } from './footing3d.js';
 import { SHIP, lampLayout, beaconPocket } from './starship-deck.js';
 /* ============================================================
    STARSHIP FOOTING — what the machines stand on, as SHIP HARDWARE (a room style for
@@ -31,8 +31,6 @@ const PY = 1, NY = 2, PX = 4, NX = 8, PZ = 16, NZ = 32, ALL = 63, NOBOT = ALL & 
 const RAIL_H = FOOT.RAIL, HAND = 1.3;
 /* a raised support's deck depth (footing3d.js deckDepth): its band's slab, or deeper over a machine's WELL */
 const deckDepth = r => Math.max(r.keys || r.band === 'high' ? .38 : .32, (r.well || 0) + .04);
-/* one shared, empty answer for a hook that drew into the merged slots (it adds no draw) */
-const DREW = new THREE.Group(); DREW.name = 'starship:footing';
 
 /* ---------------- materials (made once per room, on first use) ---------------- */
 function tex(w, h, draw, repeat = 1){
@@ -78,11 +76,11 @@ function grateTex(){
 export function shipMats(envMap = null){
   const hz = hazardTex(), dm = diamondTex(), gr = grateTex();
   const m = {
-    steel: new THREE.MeshStandardMaterial({ color: 0xa4a7ac, metalness: .45, roughness: .42, envMap, envMapIntensity: .5 }),
+    steel: new THREE.MeshStandardMaterial({ color: 0x87817a, metalness: .35, roughness: .5, envMap, envMapIntensity: .4 }),
     deck: new THREE.MeshStandardMaterial({ color: 0x9c9fa5, map: dm, bumpMap: dm, bumpScale: 1.2, metalness: .5, roughness: .46, envMap, envMapIntensity: .5 }),
     hazard: new THREE.MeshStandardMaterial({ color: 0xffffff, map: hz, metalness: .2, roughness: .62, envMap, envMapIntensity: .35 }),
     chrome: new THREE.MeshStandardMaterial({ color: 0xe2e7ef, metalness: .92, roughness: .14, envMap, envMapIntensity: 1.3 }),
-    grate: new THREE.MeshStandardMaterial({ color: 0x969aa1, alphaMap: gr, alphaTest: .5, side: THREE.DoubleSide, metalness: .5, roughness: .45, envMap, envMapIntensity: .5 }),
+    grate: new THREE.MeshStandardMaterial({ color: 0x8a857e, alphaMap: gr, alphaTest: .5, side: THREE.DoubleSide, metalness: .5, roughness: .45, envMap, envMapIntensity: .5 }),
   };
   if (hz) hz.colorSpace = THREE.SRGBColorSpace;
   if (dm) dm.colorSpace = THREE.SRGBColorSpace;
@@ -92,24 +90,48 @@ export function shipMats(envMap = null){
 
 /* ---------------- shared bits (all in the current frame: the pad's / loft's) ---------------- */
 /* a vertical n-gon's sides at local (u, v), corner radius r, y0 → y1 (no caps: a gland block / a plate covers each end).
-   Each side is the face a frame-turned k.box(−s, s, y0, y1, a − .01, a, PZ) would write — written straight into
-   the slot's merged buffer (one quad a side, the same vertices, normals and uvs), without turning the kit's
-   frame n times: the rams' prisms were a third of a tall footing's build. */
+   Each side is one quad written straight into the slot's merged buffer (kit.slot), without turning the kit's frame
+   n times: the rams' prisms were a third of a tall footing's build. Its normals are SMOOTH (each edge's vertices
+   take the radial direction there), so a ram reads as a turned cylinder up close, not a faceted column — the
+   same vertex count. */
 const _Q = new Float32Array(12);
-function slotBuf(k, slot, spec){
-  const b = k._bufs[slot] || (k._bufs[slot] = newBuf());
-  (b.units ||= new Set()).add(spec.loft || spec.id || spec.key);
-  return b;
+function smooth(b, n0x, n0y, n0z, n1x, n1y, n1z){                 // the last quad: verts 0, 3 → n0; 1, 2 → n1
+  const o = (b.nv - 4) * 3, N = b.n;
+  N[o] = N[o + 9] = n0x; N[o + 1] = N[o + 10] = n0y; N[o + 2] = N[o + 11] = n0z;
+  N[o + 3] = N[o + 6] = n1x; N[o + 4] = N[o + 7] = n1y; N[o + 5] = N[o + 8] = n1z;
 }
-function prism(k, spec, slot, u, v, r, y0, y1, n = 12){
+function prism(k, spec, slot, u, v, r, y0, y1, n = 16){
   if (!(y1 > y0)) return;
-  const [x, z] = k.w(u, v), a = r * Math.cos(Math.PI / n), s = r * Math.sin(Math.PI / n), yaw = spec.yaw || 0, b = slotBuf(k, slot, spec);
+  const [x, z] = k.w(u, v), h = Math.PI / n, a = r * Math.cos(h), s = r * Math.sin(h), yaw = spec.yaw || 0, b = k.slot(slot);
   for (let i = 0; i < n; i++){
-    const t = yaw + (i + .5) * 2 * Math.PI / n, C = Math.cos(t), S = Math.sin(t);
+    const t = yaw + (i + .5) * 2 * h, C = Math.cos(t), S = Math.sin(t);
     const fx = x + S * a, fz = z + C * a, ux = C * s, uz = -S * s;            // the face's centre line, its half-width along u
     _Q[0] = fx - ux; _Q[1] = y0; _Q[2] = fz - uz;  _Q[3] = fx + ux; _Q[4] = y0; _Q[5] = fz + uz;
     _Q[6] = fx + ux; _Q[7] = y1; _Q[8] = fz + uz;  _Q[9] = fx - ux; _Q[10] = y1; _Q[11] = fz - uz;
     quad(b, _Q, S, 0, C, null, 0);
+    smooth(b, Math.sin(t - h), 0, Math.cos(t - h), Math.sin(t + h), 0, Math.cos(t + h));
+  }
+}
+/* a round TUBE from a to b ([u, y, v] in the frame), radius r, n smooth sides, open ends (a clevis block caps
+   each: the caller's) — a scissor lift's ram barrel and rod */
+function tube(k, slot, A, B, r, n = 12){
+  const [ax, az] = k.w(A[0], A[2]), [bx, bz] = k.w(B[0], B[2]), ay = A[1], by = B[1];
+  let ex = bx - ax, ey = by - ay, ez = bz - az; const L = Math.hypot(ex, ey, ez); if (L < 1e-6) return;
+  ex /= L; ey /= L; ez /= L;
+  // p1 ⟂ e (level when it can be), p2 = e × p1; a side's direction d(t) = sin t·p2 + cos t·p1 (outward winding)
+  let p1x = -ez, p1y = 0, p1z = ex, pl = Math.hypot(p1x, p1z); if (pl < 1e-4){ p1x = 1; p1z = 0; pl = 1; }
+  p1x /= pl; p1z /= pl;
+  const p2x = ey * p1z - ez * p1y, p2y = ez * p1x - ex * p1z, p2z = ex * p1y - ey * p1x;
+  const b = k.slot(slot), h = Math.PI / n;
+  const D = t => { const S = Math.sin(t), C = Math.cos(t); return [S * p2x + C * p1x, S * p2y + C * p1y, S * p2z + C * p1z]; };
+  for (let i = 0; i < n; i++){
+    const t = (i + .5) * 2 * h, d0 = D(t - h), d1 = D(t + h), dc = D(t);
+    _Q[0] = ax + r * d0[0]; _Q[1] = ay + r * d0[1]; _Q[2] = az + r * d0[2];
+    _Q[3] = ax + r * d1[0]; _Q[4] = ay + r * d1[1]; _Q[5] = az + r * d1[2];
+    _Q[6] = bx + r * d1[0]; _Q[7] = by + r * d1[1]; _Q[8] = bz + r * d1[2];
+    _Q[9] = bx + r * d0[0]; _Q[10] = by + r * d0[1]; _Q[11] = bz + r * d0[2];
+    quad(b, _Q, dc[0], dc[1], dc[2], null, 0);
+    smooth(b, d0[0], d0[1], d0[2], d1[0], d1[1], d1[2]);
   }
 }
 /* a telescoping hydraulic RAM at (u, v) from y0 up to y1: a painted housing, two chrome stages, a gland
@@ -119,11 +141,11 @@ function ram(k, spec, u, v, y0, y1, r = .3, plate = true){
   const g = (rr, y, hgt) => k.box('steel', u - rr, u + rr, y, y + hgt, v - rr, v + rr, SIDES | PY);
   if (plate){ k.box('hazard', u - r - .22, u + r + .22, y0, y0 + .06, v - r - .22, v + r + .22, NOBOT); y0 += .06; }
   const h = y1 - y0, l1 = h * .44, l2 = h * .3;
-  prism(k, spec, 'steel', u, v, r, y0, y0 + l1, 10);
+  prism(k, spec, 'steel', u, v, r, y0, y0 + l1);
   g(r + .07, y0 + l1, .14);                                       // gland 1
-  prism(k, spec, 'chrome', u, v, r * .72, y0 + l1 + .14, y0 + l1 + l2, 12);
+  prism(k, spec, 'chrome', u, v, r * .72, y0 + l1 + .14, y0 + l1 + l2);
   g(r * .72 + .05, y0 + l1 + l2, .1);                             // gland 2
-  prism(k, spec, 'chrome', u, v, r * .5, y0 + l1 + l2 + .1, y1 - .08, 12);
+  prism(k, spec, 'chrome', u, v, r * .5, y0 + l1 + l2 + .1, y1 - .08);
   k.box('steel', u - r - .1, u + r + .1, y1 - .08, y1, v - r - .1, v + r + .1, ALL);   // head plate
 }
 /* the deck slab of a raised support: a steel lip round its top edge, a diamond-plate (or grated) top, the
@@ -154,22 +176,6 @@ function pit(k, cu, cv, h, T, depth){
   k.box('steel', cu + h, cu + h + .01, T - depth + .02, T, cv - h, cv + h, NX); k.box('steel', cu - h - .01, cu - h, T - depth + .02, T, cv - h, cv + h, PX);
   k.box('steel', cu - h, cu + h, T - depth + .02, T, cv + h, cv + h + .01, NZ); k.box('steel', cu - h, cu + h, T - depth + .02, T, cv - h - .01, cv - h, PZ);
 }
-/* points round a rect's perimeter (±hu, ±hv), corners included, at most `span` apart — in order */
-function ring(hu, hv, span){
-  const nu = Math.max(1, Math.ceil(2 * hu / span - 1e-9)), nv = Math.max(1, Math.ceil(2 * hv / span - 1e-9)), out = [];
-  for (let i = 0; i < nu; i++) out.push([-hu + 2 * hu * i / nu, -hv]);
-  for (let i = 0; i < nv; i++) out.push([hu, -hv + 2 * hv * i / nv]);
-  for (let i = 0; i < nu; i++) out.push([hu - 2 * hu * i / nu, hv]);
-  for (let i = 0; i < nv; i++) out.push([-hu, hv - 2 * hv * i / nv]);
-  return out;
-}
-const onSide = (r, side) => { const s = side[0] === '+' ? 1 : -1;
-  return side[1] === 'u' ? (a, o) => [s * (r.hw + o), a] : (a, o) => [a, s * (r.hd + o)]; };
-/* where the deck's rails open for the access (footing3d.js gapOf) */
-const gapOf = acc => !acc ? [null, 0, 0] : acc.kind === 'stair' ? [acc.side, acc.a1 - acc.out, acc.a1] : (() => {
-  const mid = (acc.a0 + acc.a1) / 2, off = acc.flights > 1 ? ((acc.flights - 1) % 2 ? .45 : -.45) : 0;
-  return [acc.side, mid + off - .33 - .15, mid + off + .33 + .15]; })();
-
 /* the SHIP'S RAILS round a deck at T (inset .1): steel stanchions, a chrome top rail, a steel mid rail,
    a hazard toe board — open over [g0, g1] on the access side */
 function rails(k, r, T, gapSide = null, g0 = 0, g1 = 0){
@@ -222,10 +228,6 @@ function stair(k, r, T, acc){
   k.bar('steel', W2(acc.a1 - .04, .1, T), W2(acc.a1 - .04, .1, y1 - .02), .06, .06, SIDES);
 }
 function access(k, r, T, acc){ if (!acc) return; acc.kind === 'stair' ? stair(k, r, T, acc) : k.forms.ladder(r, T, acc); }
-/* the landing levels of a support's ladder (footing3d.js landings) */
-function landings(r, F){ const nf = r.access?.flights || Math.max(1, Math.ceil((r.top - F) / FOOT.LAND_DY)), out = [];
-  for (let f = 1; f < nf; f++) out.push(F + (r.top - F) * f / nf); return out; }
-
 /* ---------------- the forms ---------------- */
 /* FLUSH: a deck plate let into the hull. (The belt's kerb: the same, FOOT.KERB tall, no border.) */
 function plate(k, p){
@@ -284,7 +286,7 @@ function scissors(k, r, yB){
   const sill = .2, yLo = F + sill + .08, yHi = yB - .08, rise = yHi - yLo;
   // the base sill (a steel frame, hazard sides) and the deck's carrier rails
   k.box('hazard', -r.hw + .3, r.hw - .3, F, F + sill, -r.hd + .3, r.hd - .3, SIDES);
-  k.box('steel', -r.hw + .3, r.hw - .3, F + sill - .02, F + sill, -r.hd + .3, r.hd - .3, PY);
+  k.box('deck', -r.hw + .3, r.hw - .3, F + sill - .02, F + sill, -r.hd + .3, r.hd - .3, PY);
   for (const s of [-1, 1]) k.bar('steel', at(-A, yHi + .02, s * O), at(A, yHi + .02, s * O), .14, .12, ALL);
   const n = Math.max(1, Math.min(4, Math.round(2 * A / Math.max(3.2, rise * 1.6)))), seg = 2 * A / n;      // (tandem units: long, shallow arms)
   for (let i = 0; i < n; i++){
@@ -299,8 +301,10 @@ function scissors(k, r, yB){
     // its ram: from the sill under a0 up to the centre tube (painted barrel, chrome rod)
     const p0 = at(a0 + seg * .12, F + sill + .1, 0), p1 = at(am, ym, 0);
     const mid = (f) => [p0[0] + (p1[0] - p0[0]) * f, p0[1] + (p1[1] - p0[1]) * f, p0[2] + (p1[2] - p0[2]) * f];
-    k.bar('steel', p0, mid(.58), .17, .17, ALL);
-    k.bar('chrome', mid(.5), p1, .08, .08, ALL);
+    tube(k, 'steel', p0, mid(.58), .095);
+    tube(k, 'chrome', mid(.5), p1, .045, 10);
+    k.bar('steel', mid(-.04), mid(.03), .2, .2, ALL);                                  // the clevis at its foot
+    k.bar('steel', mid(.55), mid(.6), .21, .21, ALL);                                  // the gland at the barrel's head
   }
   for (let i = 0; i <= n; i++){ const a = -A + i * seg;                                 // the cross tubes at the arms' ends
     k.bar('steel', at(a, yLo, -O - .07), at(a, yLo, O + .07), .08, .08, ALL);
@@ -313,9 +317,9 @@ function jacks(k, r, yB){
   k.box('steel', -r.hw + .3, r.hw - .3, F + .08, F + .1, -r.hd + .3, r.hd - .3, PY);
   for (const [u, v] of P){
     const y0 = F + .1;
-    prism(k, r, 'steel', u, v, .26, y0, y0 + H * .45, 10);
+    prism(k, r, 'steel', u, v, .26, y0, y0 + H * .45);
     k.box('steel', u - .32, u + .32, y0 + H * .45, y0 + H * .45 + .08, v - .32, v + .32, SIDES | PY);
-    prism(k, r, 'chrome', u, v, .18, y0 + H * .45 + .08, yB - .05, 12);
+    prism(k, r, 'chrome', u, v, .18, y0 + H * .45 + .08, yB - .05);
     k.box('steel', u - .36, u + .36, yB - .05, yB, v - .36, v + .36, ALL);
   }
 }
@@ -408,8 +412,9 @@ function lattice(k, r, yB, levels = null, acc = r.access){
     const cu = -hu + Math.min(1.7, hu * .6), cv = hv + .3, R = .17, yT = yB - .55;
     k.box('steel', cu - .38, cu + .38, F, F + .55, cv - .3, cv + .22, NOBOT);                  // the connector box
     k.box('hazard', cu - .39, cu + .39, F + .4, F + .55, cv - .31, cv + .23, SIDES | PY);
-    prism(k, r, 'chrome', cu, cv, R, F + .55, yT, 8);
-    k.bar('chrome', [cu, yT - .05, cv], [cu + .85, yB - .12, cv - .3], .3, .3, ALL);
+    prism(k, r, 'chrome', cu, cv, R, F + .55, yT, 12);
+    tube(k, 'chrome', [cu, yT - .12, cv], [cu + .85, yB - .12, cv - .3], R);                    // (round, like the hose it bends from)
+    k.box('steel', cu - .24, cu + .24, yT - .2, yT + .02, cv - .24, cv + .24, ALL);               // the elbow's coupling
     const arms = [yB - 1.3, yB - 1.3 - Math.min(3.2, (H - 3) * .3)];
     if (H > 12) arms.push(arms[1] - Math.min(3.2, (H - 3) * .3));
     for (const y of arms){
@@ -675,7 +680,7 @@ export function shipFooting({ lamps = null } = {}){
         mesh.name = 'footing:lamps'; mesh.renderOrder = 2; mesh.matrixAutoUpdate = false;
       }
     }
-    return mesh || DREW;
+    return mesh || true;                                         // (no lamps: drawn into the slots, nothing to add)
   };
   return {
     key: 'starship',

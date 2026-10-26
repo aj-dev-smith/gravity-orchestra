@@ -257,8 +257,10 @@ describe('Greybox floor: a strike rings out across the grid', () => {
     R.update(9.1); const at = snap();
     R.update(33.3); R.update(-2); R.update(9.1);
     expect(snap()).toEqual(at);
-    expect(U.rS.value[0]).toBeCloseTo(.1, 5); expect(U.rB.value[2]).toBeGreaterThan(.5);   // a just struck: its ring + its cells
-    expect(U.rS.value[4]).toBeCloseTo(2.1, 5);
+    expect(U.rS.value[0]).toBeCloseTo(.1 * RIPPLE.SPEED, 4);                                   // a just struck: its ring leaving its edge…
+    expect(U.rS.value[1]).toBeCloseTo(.8 * Math.exp(-.1 / RIPPLE.FADE), 5);                     // …at its weight (a calm machine: gain 1), fading
+    expect(U.rB.value[2]).toBeGreaterThan(.5);                                                 // …and its cells lit
+    expect(U.rS.value[4]).toBeCloseTo(2.1 * RIPPLE.SPEED, 4); expect(U.rS.value[5]).toBeLessThan(.04);   // b's ring, 2.1 s out: nearly gone
     const GL = X.head + X.body;
     for (const u of Object.keys(U)) expect(GL.includes(u), u).toBe(true);                    // every uniform is declared + read
   });

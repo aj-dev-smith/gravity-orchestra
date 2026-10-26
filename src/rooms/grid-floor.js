@@ -7,9 +7,11 @@ import { makePulse } from './pulse.js';
    cells hugging that machine glow with its afterglow (rooms/pulse.js). Its colour is the machine's.
 
    All of it is a pure function of songTime: per machine the AGES of its last two strikes (seconds
-   since — strikeAges, PURE, scrub-exact, nothing before `start`: the count-in is dark) and its pulse
-   envelope, written each frame into three uniform arrays (RIPPLE.N slots — a constant pool) that the
-   floor's shader reads. No allocation in update, no lights, nothing rebuilt per frame.
+   since — strikeAges, PURE, scrub-exact, nothing before `start`: the count-in is dark) → each ring's
+   radius (SPEED · age) and light (its weight, fading exp(−age / FADE)), and its pulse envelope, written
+   each frame into three uniform arrays (RIPPLE.N slots — a constant pool) that the floor's shader
+   reads: per fragment only a distance and two gaussians per lit machine. No allocation in update, no
+   lights, nothing rebuilt per frame.
    ============================================================ */
 
 export const RIPPLE = {
@@ -94,7 +96,7 @@ export function rippleExtra(){
   const uniforms = {
     rA: { value: new Float32Array(4 * N) },        // x, z, hw, hd            (place)
     rB: { value: new Float32Array(4 * N) },        // cos, sin, glow, colour  (glow: per frame)
-    rS: { value: new Float32Array(4 * N) },        // age0, w0·gain, age1, w1·gain  (per frame)
+    rS: { value: new Float32Array(4 * N) },        // radius0, light0, radius1, light1  (per frame)
     rN: { value: 0 },
     rK: { value: new THREE.Vector4(RIPPLE.SPEED, RIPPLE.WIDTH, RIPPLE.FADE, RIPPLE.REACH) },
     rG: { value: new THREE.Vector4(1.3, .04, .7, .035) },   // ring on lines, ring fill, cells on lines, cell fill
@@ -111,13 +113,12 @@ export function rippleExtra(){
       for (int i = 0; i < ${N}; i++){
         if (i >= rN) break;
         vec4 A = rA[i], B = rB[i], S = rS[i];
-        float a0 = S.y * exp(-S.x / rK.z), a1 = S.w * exp(-S.z / rK.z);
-        if (a0 < .004 && a1 < .004 && B.z < .004) continue;     // (this machine is dark: skip it)
+        if (S.y < .004 && S.w < .004 && B.z < .004) continue;   // (this machine is dark: skip it)
         vec2 d = p - A.xy, dc = cc - A.xy;
         vec2 q = vec2(B.x * d.x - B.y * d.y, B.y * d.x + B.x * d.y), qc = vec2(B.x * dc.x - B.y * dc.y, B.y * dc.x + B.x * dc.y);
         float dist = rRect(q, A.zw), dcell = rRect(qc, A.zw);
-        float x0 = (dist - rK.x * S.x) / rK.y, x1 = (dist - rK.x * S.z) / rK.y;
-        float ring = (a0 * exp(-x0 * x0) + a1 * exp(-x1 * x1)) * smoothstep(-.1, .4, dist);
+        float x0 = (dist - S.x) / rK.y, x1 = (dist - S.z) / rK.y;
+        float ring = (S.y * exp(-x0 * x0) + S.w * exp(-x1 * x1)) * smoothstep(-.1, .4, dist);
         float cell = B.z * (1. - smoothstep(0., rK.w, dcell));   // (per CELL: its centre's distance — the grid's own steps)
         add += rCol(B.w) * (ring * (lineM * rG.x + rG.y) + cell * (lineM * rG.z + rG.w));
       }
@@ -129,7 +130,7 @@ export function rippleExtra(){
 /* The live side: slots for the current anchors (place) → uniforms (update). */
 export function makeRipples(U){
   let slots = [], ages = [], pulses = [];
-  const A = U.rA.value, B = U.rB.value, S = U.rS.value;
+  const A = U.rA.value, B = U.rB.value, S = U.rS.value, T = new Float64Array(4);
   return {
     get slots(){ return slots; },
     place(anchors, plan){
@@ -140,16 +141,17 @@ export function makeRipples(U){
       slots.forEach((s, i) => {
         A[4 * i] = s.x; A[4 * i + 1] = s.z; A[4 * i + 2] = s.hw; A[4 * i + 3] = s.hd;
         B[4 * i] = Math.cos(s.yaw); B[4 * i + 1] = Math.sin(s.yaw); B[4 * i + 3] = packColor(s.color);
-        S[4 * i] = S[4 * i + 2] = RIPPLE.AGE_NONE;
+        S[4 * i] = S[4 * i + 2] = RIPPLE.AGE_NONE * RIPPLE.SPEED;
       });
       U.rN.value = slots.length;
     },
     /* per frame: a pure fn of songTime (scrub-exact), allocation-free */
     update(songTime){
       for (let i = 0; i < slots.length; i++){
-        ages[i](songTime, S, 4 * i);
-        const g = slots[i].gain;
-        S[4 * i + 1] *= g; S[4 * i + 3] *= g;
+        ages[i](songTime, T, 0);
+        const g = slots[i].gain, o = 4 * i;
+        S[o] = RIPPLE.SPEED * T[0]; S[o + 1] = T[1] * g * Math.exp(-T[0] / RIPPLE.FADE);
+        S[o + 2] = RIPPLE.SPEED * T[2]; S[o + 3] = T[3] * g * Math.exp(-T[2] / RIPPLE.FADE);
         const v = pulses[i].at(songTime) + .35 * pulses[i].next(songTime);
         B[4 * i + 2] = (v > 1 ? 1 : v) * g * g;                 // (a busy machine's cells barely ever go dark: they hold softer)
       }

@@ -395,6 +395,8 @@ export default {
     const tapers = new THREE.InstancedMesh(new THREE.CylinderGeometry(.085, .1, .8, 10).translate(0, .4, 0), wax, PROPS.POOL);
     sticks.count = tapers.count = 0;
     sticks.userData.perLayout = tapers.userData.perLayout = true;   // (solids that move with the layout: a fixture recorded for one song's layout is not every song's)
+    const owners = [];                                               // (…each beside its own machine: userData.owners[i] — the staging audit skips that pair)
+    sticks.userData.owners = tapers.userData.owners = owners;
     group.add(sticks, tapers);
     const WICK = 2.69 + .8;                                          // (the flame stands on the taper)
     const fq = new THREE.PlaneGeometry(1, 1).translate(0, .5, 0);
@@ -474,6 +476,7 @@ export default {
         aWick.setXYZ(i, c.x, F + WICK, c.z); aSlot.setX(i, c.slot);
       });
       sticks.count = tapers.count = flameGeo.instanceCount = list.length;
+      owners.length = 0; for (const c of list) owners.push(c.key);   // (whose each stick is: the staging audit never tests it against its own machine)
       for (const im of [sticks, tapers]){ im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere(); }
       aWick.needsUpdate = aSlot.needsUpdate = true;
       pulses.length = flashes.length = 0; U.fill(0); UF.fill(0);

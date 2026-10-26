@@ -119,6 +119,20 @@ function oakTex(){
   t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4;
   return t;
 }
+/* the limestone's TOPS: the kit maps a top face (x, z) onto the same 4 u tile as a wall, so the .5 u courses lay
+   out on a plinth's top as long pale boards — a stone plinth read as timber decking. On an up-facing face the
+   courses open to ~1.5 u: FLAGSTONES (the same texture and draw; a shader tweak, constant per material) */
+function flagTops(m){
+  m.onBeforeCompile = sh => {
+    sh.vertexShader = 'varying float vUp;\n' + sh.vertexShader.replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n  vUp = objectNormal.y;');
+    sh.fragmentShader = 'varying float vUp;\n' + sh.fragmentShader.replace('#include <map_fragment>', `#ifdef USE_MAP
+      vec2 fuv = vUp > .5 ? vec2(vMapUv.x + .37, vMapUv.y * .34 + .19) : vMapUv;
+      diffuseColor *= texture2D( map, fuv );
+    #endif`);
+  };
+  m.customProgramCacheKey = () => 'cathedral:flag-tops';
+  return m;
+}
 /* the light: additive, unlit, fog-free — a brass line at rest; on its machine's strike it brightens and its
    machine's own hue warms into it (uPulse: one slot per pad, written by the footing's update) */
 function brassEdgeMat(){
@@ -772,7 +786,7 @@ export function cathedralFooting(){
       tex = [ashlarTex(), oakTex()];
       made = {
         // pale warm limestone (its colour is in the map: ≈ .55 albedo — it must not go black in a dim room)
-        base: new THREE.MeshStandardMaterial({ map: tex[0], roughness: .86, metalness: 0, envMap: env, envMapIntensity: .3 }),
+        base: flagTops(new THREE.MeshStandardMaterial({ map: tex[0], roughness: .86, metalness: 0, envMap: env, envMapIntensity: .3 })),
         // dark oak, a waxed sheen
         deck: new THREE.MeshStandardMaterial({ map: tex[1], roughness: .55, metalness: 0, envMap: env, envMapIntensity: .55 }),
         // wrought iron (brackets; any kit form that falls back)

@@ -89,6 +89,15 @@ describe('cathedral footing: stone and oak, drawn inside the plan', () => {
       f.dispose();
     }
   });
+  it('the limestone\'s TOPS are flagstones (the courses open on an up-facing face), not boards — same map, same draw', () => {
+    const base = cathedralFooting().mats(null, {}).base;
+    expect(base.customProgramCacheKey()).toBe('cathedral:flag-tops');
+    const sh = { vertexShader: THREE.ShaderLib.standard.vertexShader, fragmentShader: THREE.ShaderLib.standard.fragmentShader };
+    base.onBeforeCompile(sh);
+    expect(sh.vertexShader).toContain('vUp = objectNormal.y');
+    expect(sh.fragmentShader).not.toContain('#include <map_fragment>');
+    expect(sh.fragmentShader).toMatch(/vUp > \.5 \? vec2\(vMapUv\.x \+ \.37, vMapUv\.y \* \.34/);
+  });
   it('every face looks out: its winding agrees with its normal', () => {
     const f = build();
     for (const m of meshes(f)){

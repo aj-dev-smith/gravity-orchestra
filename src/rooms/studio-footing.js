@@ -731,10 +731,12 @@ export function studioFooting(){
         for (const dv of [-.11, 0, .1]) W.bar([a0 + .05, ty - .04, tv + dv], [a1 - .05, ty - .04, tv + dv], .07, .07, cab);
         let a = a0 + .6 + Rn() * 1.5;
         while (a < a1 - 2){
-          const b = Math.min(a1 - .4, a + 1.8 + Rn() * 2.6), sag = .6 + Rn() * 1.1, n = 10;
+          // (6 straight runs a loop — 18 u overhead a 6 cm cable reads as a curve; the joints between runs
+          //  are inside the next run, so only the two ends are capped)
+          const b = Math.min(a1 - .4, a + 1.8 + Rn() * 2.6), sag = .6 + Rn() * 1.1, n = 6;
           let prev = null;
           for (let i = 0; i <= n; i++){ const t = i / n, pt = [lerp(a, b, t), ty - .06 - sag * 4 * t * (1 - t), tv + .08];
-            if (prev) W.bar(prev, pt, .06, .06, cab, ALL); prev = pt; }
+            if (prev) W.bar(prev, pt, .06, .06, cab, SIDES | (i === 1 ? NY : 0) | (i === n ? PY : 0)); prev = pt; }
           a = b + 1.2 + Rn() * 2.4;
         }
       }

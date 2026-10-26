@@ -235,7 +235,7 @@ The Void drops the flush pad's own edge strip (the island rim is the line).
 
 ## Test and audit commands
 
-    npm test                                  # 63 files / 2883 tests, ~1.5 min
+    npm test                                  # 63 files / 2891 tests, ~1.5 min
     npx vitest run test/footing.test.js test/footing3d.test.js test/pulse.test.js \
       test/stations.test.js test/editor-height.test.js test/editor.test.js \
       test/room-grid.test.js test/room-cathedral.test.js test/room-studio.test.js \

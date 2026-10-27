@@ -337,6 +337,7 @@ export default {
           const col = new THREE.Mesh(new THREE.CylinderGeometry(.17, .17, .16, 14), chrome);  // the clamp under the rim
           col.position.set(x, yC - .1, z); group.add(fz(col));
         }
+        group.userData.base = yB;                            // (the tripod's foot: what it stands on — test/footing.test.js)
       }
 
       freeze(group);

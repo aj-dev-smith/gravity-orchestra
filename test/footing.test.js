@@ -86,6 +86,39 @@ describe('footing: every FLOOR machine rests on its own base when built supportl
   }
 });
 
+/* A HUNG machine TAKEN DOWN (stage edit: dragged off the belt — main builds it `standing`, floorY 0, ceilY 0)
+   stands on its own base like any floor machine: no columns to the floor, no ceiling rods or cables, no floor
+   marks — the room's footing holds it. The organ loft and the court stand on their decks; the chandelier on a
+   TRIPOD of its own whose feet are the lowest thing it has (its plates hang free above them). */
+describe('footing: a HUNG machine taken down stands on its own base (standing: no columns, rods or floor marks)', () => {
+  const ROLL_T = 2.6;
+  for (const I of INSTRUMENTS){
+    if (!STATIONS[I.key]?.hang) continue;
+    it(`${I.key}: standing, its lowest solid part is its base; hung, it reached the floor or the ceiling`, () => {
+      const beat = 60 / I.demo.bpm, P = ROLL_T + I.demo.beats * beat + 1.2;
+      const M = I.make({ envMap: null, glowTex: null, THREE });
+      const up = (t, started) => M.update(t, P, 0, { started, skipStrikes: true, onStrike(){} });
+      const box = g => { g.updateMatrixWorld(true); return new THREE.Box3().setFromObject(g); };
+      const hungG = M.build(I.demo.part, { rollT: ROLL_T, beat, P, start: -.6, station: STATIONS[I.key], floorY: -20, ceilY: 30, loopBeats: I.demo.beats });
+      const hung = box(hungG);
+      const group = M.build(I.demo.part, { rollT: ROLL_T, beat, P, start: -.6, station: { ...STATIONS[I.key], hang: false, unhung: true }, floorY: 0, ceilY: 0, standing: true, loopBeats: I.demo.beats });
+      const low = solidLow(group, up, P), all = box(group);
+      expect(Number.isFinite(low), `${I.key} has solid parts`).toBe(true);
+      expect(all.min.y, `${I.key}: nothing below its base (no column, no floor ring)`).toBeGreaterThanOrEqual(low - .3);
+      expect(all.max.y, `${I.key}: no higher than it was`).toBeLessThanOrEqual(hung.max.y + 1e-6);
+      if (hung.max.y > 29) expect(all.max.y, `${I.key}: no rods / cables up to the ceiling`).toBeLessThan(25);
+      if (Number.isFinite(group.userData.base)){
+        // (the tripod: its feet ARE its lowest part — nothing hangs below them, nothing floats over them)
+        expect(low, `${I.key} low ${low.toFixed(2)} vs its feet ${group.userData.base.toFixed(2)}`).toBeCloseTo(group.userData.base, 1);
+      } else {
+        expect(low, `${I.key} low ${low.toFixed(2)}`).toBeGreaterThanOrEqual(-.6);
+        expect(low, `${I.key} low ${low.toFixed(2)}`).toBeLessThanOrEqual(.05);
+      }
+      expect(hung.min.y < -19 || hung.max.y > 29, `${I.key}: hung, it reached the floor or the ceiling`).toBe(true);
+    }, 30000);
+  }
+});
+
 /* THE KIT stands on its deck slab's underside (KIT_STAND) in every song — its ground never depends on
    the groove. Its pistons stroke briefly below the slab (a kick's wind-up retracts the head, its rod
    slides down through the deck): main measures its low where each one bottoms out (lowTimes) — a
@@ -263,6 +296,16 @@ describe('footing: the planner (planFooting)', () => {
     expect(p.lofts[0].access).toMatchObject({ kind: 'ladder', side: '-u' });
     for (const k of ['bass', 'bells', 'bowwheel', 'dulcimer', 'marimba', 'drums']) expect(padOf(p, k).band, k).toBe('flush');
     expect(padOf(p, 'organ')).toBe(undefined);           // (hung: an obstacle, never a pad)
+  });
+  it('a HUNG machine taken down is a standing anchor like any: a pad by its height band (FINALE\'s organ on a tower) — hung, none', () => {
+    const organ = FINALE.find(a => a.key === 'organ');
+    const down = st('organ', 30, -24, 13.16, 4.64, 18 - FL);                   // (taken down behind the right wing, at the height it hung)
+    const p = plan([...FINALE.filter(a => a !== organ), down]), q = padOf(p, 'organ');
+    expect(q.band).toBe('high'); expect(q.loft).toBe(null);
+    expect(q.top).toBeCloseTo(18, 9);
+    expect(padOf(plan(FINALE), 'organ')).toBe(undefined);                     // (hanging: an obstacle, never a pad)
+    const floor = plan([...FINALE.filter(a => a !== organ), st('organ', 30, -24, 13.16, 4.64)]);
+    expect(padOf(floor, 'organ').band).toBe('flush');                          // (FLOOR: on a plinth)
   });
   it('every stair / ladder stays clear of every other machine, pad, loft, access and the room\'s walls', () => {
     const cases = [FINALE,

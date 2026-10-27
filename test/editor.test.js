@@ -185,11 +185,13 @@ describe('stage placement', () => {
     expect(P.dropEntry(L, 'organ')).toEqual({ ricochet: L.ricochet, bass: L.bass });
     expect(L.organ).toBeDefined();                                             // (pure)
   });
-  it('the RE-HANG magnet: over the belt\'s top, or near the spot it hangs at — else it stands where it is dropped', () => {
+  it('the RE-HANG magnet: over the belt\'s top, or (a hanging one) a NUDGE from the spot it hangs at — else it stands where it is dropped', () => {
     const wall = [-10.9, 10.9, -4.1, 1.7], home = { x: 0, z: -13.65 };          // (the organ loft hangs BEHIND the belt)
     expect(P.rehangs({ x: 0, z: -1 }, wall, home)).toBe(true);                 // over the belt
     expect(P.rehangs({ x: 11.2, z: 1.9 }, wall, home)).toBe(true);             // (its edge, within the pad)
-    expect(P.rehangs({ x: 2, z: -15 }, wall, home)).toBe(true);                // near home
+    expect(P.rehangs({ x: .5, z: -14.2 }, wall, home)).toBe(true);             // a nudge from home (a hanging one)
+    expect(P.rehangs({ x: 2, z: -15 }, wall, home)).toBe(false);               // a real move: it stands, even close to home
+    expect(P.rehangs({ x: 0, z: -13.65 }, wall, null)).toBe(false);            // a STANDING one (no home) may stand where it hung
     expect(P.rehangs({ x: 0, z: -13.65 + P.REHANG_R + .1 }, null, home)).toBe(false);
     expect(P.rehangs({ x: 25, z: -10 }, wall, home)).toBe(false);              // off it: stands
     expect(P.rehangs({ x: 0, z: 12 }, wall, null)).toBe(false);

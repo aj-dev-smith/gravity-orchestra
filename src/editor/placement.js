@@ -78,10 +78,12 @@ export function standSlot(base, placed){
 export function dropEntry(L0, key){
   const L = { ...L0 }; delete L[key]; return L;
 }
-export const REHANG_R = 3.5;                  // a hung machine dropped within this of the spot it hangs at re-hangs there
+export const REHANG_R = 1;                    // a HANGING machine nudged less than this from where it hangs stays hung (a nudge, not a move)
 /** Does a hung machine dropped with its footprint centred at `at` ({ x, z }) RE-HANG? — over the belt's top
-    (`wall` [x0, x1, z0, z1], grown by `pad`), or within REHANG_R of `home` (where the stage hangs it: the organ
-    loft hangs BEHIND the belt, the court over the left wing). The magnet; else it stands where it is dropped. */
+    (`wall` [x0, x1, z0, z1], grown by `pad`), or — `home`, given only for one HANGING now — within REHANG_R
+    of where it hangs (a nudge). The magnet; else it stands where it is dropped. A STANDING one is passed no
+    home: it may stand anywhere off the belt's top, right where it used to hang included (the organ on a
+    tower behind the belt, where its loft hung). */
 export function rehangs(at, wall, home = null, { pad = .5, r = REHANG_R } = {}){
   if (!at) return false;
   if (wall && at.x >= wall[0] - pad && at.x <= wall[1] + pad && at.z >= wall[2] - pad && at.z <= wall[3] + pad) return true;

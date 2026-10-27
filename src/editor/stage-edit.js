@@ -275,9 +275,10 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   /** the piece's footprint where it stands now: 4 world XZ corners, turned with it */
   const fpOf = p => { const c = pivotOf(p); return footprint(p.rel, c.x, c.z, yawOf(p)); };
   const wallBox = () => { const wb = host.wall(); return wb && !wb.isEmpty() ? [wb.min.x, wb.max.x, wb.min.z, wb.max.z] : null; };
-  /* a HUNG machine (rehang: born hung) re-hangs where it is now: over the belt's top, or on the spot it hangs
-     at (placement.js rehangs — the magnet) */
-  const hangsAt = p => !!p?.rehang && rehangs(pivotOf(p), wallBox(), host.hangHome?.(p.key) || null);
+  /* a HUNG machine (rehang: born hung) re-hangs where it is now: over the belt's top, or — one hanging now —
+     a nudge from the spot it hangs at (placement.js rehangs — the magnet). A standing one may stand anywhere
+     else, right where it used to hang included */
+  const hangsAt = p => !!p?.rehang && rehangs(pivotOf(p), wallBox(), p.hung ? host.hangHome?.(p.key) || null : null);
   const moving = p => !!drag && drag.piece === p && drag.mode === 'move';
   /* overhead: a machine hanging now (and staying hung) — nothing conflicts with it, it conflicts with nothing */
   const overhead = p => !!p.rehang && (p.hung ? !moving(p) || hangsAt(p) : moving(p) && hangsAt(p));
@@ -326,23 +327,35 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     const sig = `${back}|${bad}|${p.hung}|${up}`;
     if (sig !== mag.sig){
       mag.sig = sig;
-      mag.val.textContent = back ? 'HANGS FROM THE BELT' : 'STANDS HERE';
+      // (a hanging one dropped where it can't stand is refused — it goes back up: commit)
+      mag.val.textContent = back ? 'HANGS FROM THE BELT' : bad ? (p.hung ? "CAN'T STAND HERE" : 'OVERLAPS') : 'STANDS HERE';
       mag.sub.textContent = back ? (p.hung ? 'RELEASE · IT STAYS HUNG' : 'RELEASE · IT HANGS AS BUILT')
-        : bad ? 'NOT HERE · ' + describeConflicts(p.bad, k => pieces.find(q => q.key === k)?.label || k).toUpperCase()
+        : bad ? (p.hung ? 'RELEASE · IT STAYS HUNG · ' : '') + describeConflicts(p.bad, k => pieces.find(q => q.key === k)?.label || k).toUpperCase()
         : p.hung ? `RELEASE · ON SUPPORTS${Number.isFinite(up) && up > .05 ? ` · ${fmtMeters(up)} UP` : ''}`
         : 'DROP ON THE BELT TO HANG IT';
       magEl.classList.toggle('hang', back); magEl.classList.toggle('bad', !back && bad);
       mag.w = 0;                                            // (its width changes with the words: re-measured)
     }
-    const c = pivotOf(p);
-    proj(c.x, p.hung ? tagY(p) + 1 : topOf(p) + 1.2, c.z, _m);
-    if (_m.behind){ magEl.hidden = true; return; }
+    /* placed by the footprint's projected EXTENT (and the machine's top, for a standing one): above it, else
+       below it — never ON it (a hung machine's body is up by the plan camera or off-screen, so on a phone the
+       footprint under the finger is the only sign of where it lands) */
+    const c = pivotOf(p), fy = baseOf(p) + .06;
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, n = 0;
+    const take = (x, y, z) => { proj(x, y, z, _m); if (_m.behind) return; n++; x0 = Math.min(x0, _m.x); x1 = Math.max(x1, _m.x); y0 = Math.min(y0, _m.y); y1 = Math.max(y1, _m.y); };
+    for (const [x, z] of fpOf(p)) take(x, fy, z);
+    take(c.x, fy, c.z);
+    if (!p.hung) take(c.x, topOf(p) + 1.2, c.z);
+    if (!n){ magEl.hidden = true; return; }
     magEl.hidden = false;
-    // (over the machine; never under the bar or off the screen's edge — under the footprint instead, then)
     const W = innerWidth, mw = (mag.w ||= magEl.offsetWidth || 220) / 2 + 8, mh = (mag.h ||= magEl.offsetHeight || 40);
-    const br = bar.hidden ? null : bar.getBoundingClientRect(), top = (br && br.top < innerHeight / 2 ? br.bottom : 0) + 8 + mh;
-    const x = Math.max(mw, Math.min(W - mw, _m.x)), y = Math.min(innerHeight - 8, Math.max(top, _m.y - 30));
-    magEl.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`;
+    const br = bar.hidden ? null : bar.getBoundingClientRect(), top = (br && br.top < innerHeight / 2 ? br.bottom : 0) + 8;
+    const dk = dock.hidden ? null : dock.getBoundingClientRect(), bot = (dk && dk.top > innerHeight / 2 ? dk.top : innerHeight) - 8;
+    const gap = coarse() ? 28 : 14;                          // (a finger covers more than a cursor)
+    // (bottom edge of the chip — translate(-50%, -100%)): above the footprint, else below it, else the freer side
+    let y = y0 - gap;
+    if (y - mh < top) y = y1 + gap + mh <= bot ? y1 + gap + mh : (y0 - top > bot - y1 ? top + mh : bot);
+    const x = Math.max(mw, Math.min(W - mw, (x0 + x1) / 2));
+    magEl.style.transform = `translate(${x.toFixed(1)}px, ${Math.min(bot, Math.max(top + mh, y)).toFixed(1)}px) translate(-50%, -100%)`;
   }
   const _m = {};
   /* a machine standing on the floor right behind the belt (FLOOR on a gallery machine leaves it there): the
@@ -357,7 +370,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     if (!sel){ hintEl.textContent = pieces.length ? 'click a machine to pick it up · drag empty space to orbit' : 'nothing to move — this song has only the belt'; hintEl.className = 'se-hint'; return; }
     const bad = describeConflicts(sel.bad, k => pieces.find(p => p.key === k)?.label || k);
     const turnHint = coarse() ? ' · the ring turns it' : ' · Q / E or the ring to turn';   // (no keys on a phone)
-    hintEl.textContent = bad ? `${sel.label}: ${bad}` : moving(sel) && sel.rehang ? (hangsAt(sel) ? `${sel.label} · release to hang it from the belt` : `${sel.label} · release to stand it here`)
+    hintEl.textContent = bad ? `${sel.label}: ${bad}${moving(sel) && sel.hung ? ' — release: it stays hung' : ''}` : moving(sel) && sel.rehang ? (hangsAt(sel) ? `${sel.label} · release to hang it from the belt` : `${sel.label} · release to stand it here`)
       : sel.hung ? `${sel.label} · hangs from the belt — drag it off to stand it in the room`
       : hidden(sel) ? `${sel.label} · hidden behind the belt — drag it forward or ▲ raise it`
       : `${sel.label} · drag to move${sel.canRotate ? turnHint : ''}${liftable(sel) ? ' · ▲▼ height' : ''}${sel.rehang ? ' · onto the belt: re-hang' : ''}`;
@@ -552,7 +565,9 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       dock.classList.add('fixed'); D.name.textContent = info.label; dock.style.setProperty('--c', info.color || '#cfd6e6');
       D.why.textContent = info.why; return;
     }
-    dock.classList.remove('fixed'); D.why.textContent = p.hung ? 'hangs from the belt · drag it off to stand it' : '';
+    dock.classList.remove('fixed');
+    D.why.textContent = !p.hung ? '' : !moving(p) ? 'hangs from the belt · drag it off to stand it'
+      : hangsAt(p) ? 'release · it stays hung' : p.bad.length ? "release · it can't stand there — it stays hung" : 'release · it stands here';
     dock.classList.toggle('hungsel', !!p.hung);
     D.name.textContent = p.label; dock.style.setProperty('--c', p.color || '#cfd6e6');
     D.ccw.disabled = D.cw.disabled = !p.canRotate;
@@ -740,7 +755,13 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     if (!p) return;
     if (p.rehang && d){
       const back = hangsAt(p);
-      if (p.hung && back){ setPivot(p, d.c0.x, d.c0.z); check(); paint(); return; }
+      // (hanging, dropped back where it hangs — or where it can't stand: it goes back up, nothing saved)
+      if (p.hung && (back || p.bad.length)){
+        const why = back ? '' : describeConflicts(p.bad, k => pieces.find(q => q.key === k)?.label || k);
+        setPivot(p, d.c0.x, d.c0.z); check(); paint();
+        if (why){ hintEl.textContent = `${p.label} can't stand there — ${why} · it stays hung`; hintEl.className = 'se-hint bad'; }
+        return;
+      }
       if (p.hung){ host.place(p.key, { ...entryOf(p), lift: host.unhangLift?.(p.key) ?? null }, allNow(), { rebuild: true }); onChange(); return; }
       if (back){ host.rehang(p.key); onChange(); return; }
     }

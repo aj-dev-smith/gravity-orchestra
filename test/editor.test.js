@@ -168,6 +168,35 @@ describe('instrument map — rules', () => {
 });
 
 describe('stage placement', () => {
+  it('a HUNG machine (the organ loft, the chandelier, the court) hangs as built unless the layout has an entry: then it STANDS, pinned', () => {
+    const organ = { x: 0, y: 16, z: -12.5, yaw: 0, w: 20, d: 6, hang: true }, court = { x: -24, y: 16, z: -4, yaw: .45, w: 20, d: 16, hang: true };
+    expect(P.standSlot(organ, undefined)).toBe(organ);                          // (an old layout / share link: no entry — exactly as before)
+    expect(P.standSlot(organ, { x: 25, z: -10, yaw: 0, lift: 22.8 })).toEqual({ ...organ, x: 25, z: -10, yaw: 0, pin: true, lift: 22.8, hang: false, unhung: true });
+    expect(P.standSlot(court, { x: -20, z: 12, yaw: .45 })).toMatchObject({ x: -20, z: 12, yaw: .45, hang: false, unhung: true, pin: true });
+    expect(P.standSlot(court, { x: -20, z: 12, yaw: .45 }).lift).toBeUndefined();   // (no lift: the layout decides — AUTO)
+    // a floor machine: standSlot is placeSlot
+    const bass = { x: -20, y: 0, z: 3.6, yaw: 1.15, w: 12, d: 8 };
+    expect(P.standSlot(bass, { x: 1, z: 2, yaw: 0 })).toEqual(P.placeSlot(bass, { x: 1, z: 2, yaw: 0 }));
+    // the entry round-trips a share link like any machine's
+    const L = P.sanitizeLayout({ organ: [25, -10, 0, 22.823], ricochet: [0, -19, 0, 4], bass: [1, 2] });
+    expect(P.sanitizeLayout(P.encodeLayout(L))).toEqual(L);
+    expect(P.encodeLayout(L).organ).toEqual([25, -10, 0, 22.823]);
+    // dropped back on the belt: its entry goes (the rest of the layout stays)
+    expect(P.dropEntry(L, 'organ')).toEqual({ ricochet: L.ricochet, bass: L.bass });
+    expect(L.organ).toBeDefined();                                             // (pure)
+  });
+  it('the RE-HANG magnet: over the belt\'s top, or (a hanging one) a NUDGE from the spot it hangs at — else it stands where it is dropped', () => {
+    const wall = [-10.9, 10.9, -4.1, 1.7], home = { x: 0, z: -13.65 };          // (the organ loft hangs BEHIND the belt)
+    expect(P.rehangs({ x: 0, z: -1 }, wall, home)).toBe(true);                 // over the belt
+    expect(P.rehangs({ x: 11.2, z: 1.9 }, wall, home)).toBe(true);             // (its edge, within the pad)
+    expect(P.rehangs({ x: .5, z: -14.2 }, wall, home)).toBe(true);             // a nudge from home (a hanging one)
+    expect(P.rehangs({ x: 2, z: -15 }, wall, home)).toBe(false);               // a real move: it stands, even close to home
+    expect(P.rehangs({ x: 0, z: -13.65 }, wall, null)).toBe(false);            // a STANDING one (no home) may stand where it hung
+    expect(P.rehangs({ x: 0, z: -13.65 + P.REHANG_R + .1 }, null, home)).toBe(false);
+    expect(P.rehangs({ x: 25, z: -10 }, wall, home)).toBe(false);              // off it: stands
+    expect(P.rehangs({ x: 0, z: 12 }, wall, null)).toBe(false);
+    expect(P.rehangs(null, wall, home)).toBe(false);
+  });
   it('snaps to the ½-unit grid and 15°', () => {
     expect(P.snap(3.26)).toBe(3.5); expect(P.snap(-0.2)).toBe(0);
     expect(P.snapYaw(.3)).toBeCloseTo(Math.PI / 12, 9);

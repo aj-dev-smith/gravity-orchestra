@@ -340,7 +340,7 @@ export function makeJugglerShop({ envMap, floorY, rig }){   // rig: per role {r,
           if (onStrike) for (const k of eventsIn(V.strikeT, a, u, P)) onStrike(strikeHit(V, vi, k));
           if (onDock) for (const i of eventsIn(V.dockT, a, u, P)){
             const d = V.docks[i], c = carriageAt(V, d.c, t);
-            onDock({ role: V.role, r: V.r, pos: _v.set(c.x, c.y, c.z).add(root.position).clone(), glow: balls.find(B => B.V === V)?.glow });
+            onDock({ role: V.role, r: V.r, pos: toRoom(_v.set(c.x, c.y, c.z)).clone(), glow: balls.find(B => B.V === V)?.glow });
           }
         });
       }
@@ -461,7 +461,7 @@ export function makeJugglerShop({ envMap, floorY, rig }){   // rig: per role {r,
         } else api.st[vi] = { dt: 9, next: p.F ?? 9, prog: 0 };
         // focus: the voice's balls in play; between them, where its next note will land
         if (s[3]) api.focus[vi].set(s[0] / s[3], s[1] / s[3], s[2] / s[3]); else api.focus[vi].set(p.x, 0, p.z);
-        api.focus[vi].add(root.position);
+        toRoom(api.focus[vi]);
         // the lamp rides the ball that strikes next (eased — a light that teleported would flicker the plates)
         const want = nx ? _v.set(nx.q.x, nx.q.y, nx.q.z) : _v.set(p.x, 0, p.z);
         if (!L.init){ L.at.copy(want); L.init = true; } else L.at.lerp(want, 1 - Math.exp(-(dt || 0) / .05));
@@ -475,10 +475,14 @@ export function makeJugglerShop({ envMap, floorY, rig }){   // rig: per role {r,
     function strikeHit(V, vi, k){
       const p = V.plates[k], L = plateLook[vi][k], R = balls.find(B => B.V === V && B.b === p.ball);
       return { role: V.role, deep: V.deep, note: p.note, vel: p.vel ?? 1, look: L.look, hue: L.hue, amp: L.amp, dt: V.notes[k].dt,
-               pos: new THREE.Vector3(p.x, 0, p.z).add(root.position),                       // the ball's centre at contact
-               surf: new THREE.Vector3(p.x - p.n.x * V.r, -p.n.y * V.r, p.z - p.n.z * V.r).add(root.position),   // the plate's face
-               quat: L.q, glow: R?.glow, k, ball: p.ball };
+               pos: toRoom(new THREE.Vector3(p.x, 0, p.z)),                       // the ball's centre at contact
+               surf: toRoom(new THREE.Vector3(p.x - p.n.x * V.r, -p.n.y * V.r, p.z - p.n.z * V.r)),   // the plate's face
+               quat: root.rotation.y ? L.q.clone().premultiply(root.quaternion) : L.q, glow: R?.glow, k, ball: p.ball };
     }
+    /* a point in the machine's own (band) frame → the room: the machine may stand anywhere, turned (stage
+       edit moves the belt — main's stage pose — a rigid render-time move of this group). Unturned it is
+       the plain offset it always was (bit for bit) */
+    function toRoom(v){ if (root.rotation.y) v.applyAxisAngle(YAXIS, root.rotation.y); return v.add(root.position); }
 
     function xr(on){ for (const L of lamps) L.lamp.visible = !on; }
     function dispose(){

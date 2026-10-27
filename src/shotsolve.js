@@ -252,10 +252,15 @@ const F_Y = [3.4, 6, 9, 12, 15, 18];
     What must stay SEEN is the belt's strike BAND: targets across the bays' front at the band's
     heights; every one inside the frame (fov 55°, the class's aspect) is cast to from the eye.
     Returns { off: [ox, oy, oz], rays } — rays = the worst blocked share over the samples, ×15. */
-function followKit({ wall, boxes, stageY, backs = [1, 1.6], room, blocked = null, portrait = false }){
+function followKit({ wall, boxes, stageY, backs = [1, 1.6], room, blocked = null, portrait = false, pose = null }){
+  // pose ({ x, z, yaw } — the belt moved / turned in stage edit, src/stagepose.js): `wall` is then the belt's box in
+  // its OWN frame, and the foci, the band and every offset are set in the room by it (boxes, blocked, room: world).
+  // The offset found is the belt's own (camera.js turns it with the belt). No pose = exactly as before.
+  const P = pose && (pose.x || pose.z || pose.yaw) ? pose : null, pc = P ? Math.cos(P.yaw || 0) : 1, ps = P ? Math.sin(P.yaw || 0) : 0;
+  const W = q => P ? [P.x + q[0] * pc + q[2] * ps, q[1], P.z - q[0] * ps + q[2] * pc] : q;
   const zc = (wall[4] + wall[5]) / 2, foci = [], band = [];
-  for (let i = 0; i < 3; i++) foci.push([wall[0] + 2 + (wall[1] - wall[0] - 4) * i / 2, stageY + .6, zc]);
-  for (let i = 0; i < 7; i++) for (const dy of [-2, 1, 4]) band.push([wall[0] + 1 + (wall[1] - wall[0] - 2) * i / 6, stageY + dy, zc]);
+  for (let i = 0; i < 3; i++) foci.push(W([wall[0] + 2 + (wall[1] - wall[0] - 4) * i / 2, stageY + .6, zc]));
+  for (let i = 0; i < 7; i++) for (const dy of [-2, 1, 4]) band.push(W([wall[0] + 1 + (wall[1] - wall[0] - 2) * i / 6, stageY + dy, zc]));
   blocked ??= (e, d, far) => boxes.some(b => rayBox(e, d, b) < far);
   const inRoom = e => !room || (e[0] >= room.x0 && e[0] <= room.x1 && e[1] >= room.y0 && e[1] <= room.y1 && e[2] >= room.z0 && e[2] <= room.z1);
   const aspect = portrait ? .46 : 1.5, tv = Math.tan(55 * Math.PI / 360), th = tv * aspect;
@@ -269,7 +274,8 @@ function followKit({ wall, boxes, stageY, backs = [1, 1.6], room, blocked = null
     }
     return n ? Math.round(b / n * 15) : 15;
   };
-  const eyes = (ox, oy, oz) => { const out = []; for (const f of foci) for (const k of backs) out.push([[f[0] + ox * k, stageY + oy, f[2] + oz * k], f]); return out; };
+  const eyes = (ox0, oy, oz0) => { const ox = P ? ox0 * pc + oz0 * ps : ox0, oz = P ? -ox0 * ps + oz0 * pc : oz0;
+    const out = []; for (const f of foci) for (const k of backs) out.push([[f[0] + ox * k, stageY + oy, f[2] + oz * k], f]); return out; };
   return { seenBand, eyes, inRoom };
 }
 /** a follow offset's score under these opts: { rays: worst blocked band share ×15, out: eyes outside the room, graze: eyes within `air` of a machine } */
@@ -283,8 +289,8 @@ export function followScore(opts, off){
   }
   return { rays, out, graze };
 }
-export function solveFollow({ wall, boxes, stageY, backs = [1, 1.6], room, base = FOLLOW_BASE, blocked = null, air = .8, portrait = false, prefer = null }){
-  const { seenBand, eyes, inRoom } = followKit({ wall, boxes, stageY, backs, room, blocked, portrait });
+export function solveFollow({ wall, boxes, stageY, backs = [1, 1.6], room, base = FOLLOW_BASE, blocked = null, air = .8, portrait = false, prefer = null, pose = null }){
+  const { seenBand, eyes, inRoom } = followKit({ wall, boxes, stageY, backs, room, blocked, portrait, pose });
   const cands = [];
   for (const a of F_AZ) for (const oy of F_Y) cands.push({ a, oy, dev: Math.abs(a) / 60 + (oy - base[1]) / 10 });
   cands.sort((p, q) => p.dev - q.dev);                       // the classic offset first, then the nearest

@@ -12,6 +12,11 @@
    in the room solve: it stays exactly where the user put it, and the
    auto-placed rest step around it.
 
+   THE BELT has an entry too once the user moves it: `belt: { x, z, yaw }` — its group's place in the ROOM
+   (src/stagepose.js: the stage pose — no entry, as every layout before it had none, = where it always stood).
+   The machines nobody pinned stand round the belt wherever it goes (the room solve runs in its frame); a
+   pinned one stays exactly where the user put it, in the room.
+
    Persisted per song (localStorage) and carried in share links as
    song.stage = { key: [x, z, yaw?, lift?] } (compact, sanitized on the way
    in — share links are untrusted input; old 2- / 3-element entries read as
@@ -25,6 +30,7 @@ export const YAW_SNAP = Math.PI / 12;         // 15°
 export const BOUND = 90;                      // |x|, |z| sanity bound (the largest room is far smaller)
 const KEY_RE = /^[a-z][a-z0-9_-]{0,31}$/i;
 
+export const BELT = 'belt';                   // the belt's layout key (its stage pose — src/stagepose.js)
 export const snap = (v, s = SNAP) => Math.round(v / s) * s + 0;
 /** wrap to (−π, π], then snap */
 export function snapYaw(y, s = YAW_SNAP){
@@ -62,6 +68,34 @@ export function placeSlot(base, placed){
   if (!placed) return base;
   const lift = Number.isFinite(placed.lift) && placed.lift >= 0 ? { lift: placed.lift } : {};
   return { ...base, x: placed.x, z: placed.z, yaw: Number.isFinite(placed.yaw) ? placed.yaw : base.yaw, pin: true, ...lift };
+}
+
+/* ---- HUNG machines (stations.js `hang`: the organ loft, the ricochet chandelier, the volley court) ----
+   With no layout entry a hung station hangs exactly where the stage hangs it (off the belt's top housing
+   — an old layout / share link has no entry for it: it loads as it always did). With one, the user has
+   taken it DOWN: it STANDS in the room like any floor machine — pinned at x/z/yaw, at its lift (u above
+   its ground; the room builds its support by height band, rooms/footing.js). `unhung` tells main to build
+   it as a standing machine (no columns / ceiling rods / floor marks: the room's footing holds it). */
+export function standSlot(base, placed){
+  if (!base?.hang || !placed) return placeSlot(base, placed);
+  return { ...placeSlot(base, placed), hang: false, unhung: true };
+}
+/** the layout without `key`'s entry (a hung machine dropped back on the belt: it re-hangs as built). Pure */
+export function dropEntry(L0, key){
+  const L = { ...L0 }; delete L[key]; return L;
+}
+export const REHANG_R = 1;                    // a HANGING machine nudged less than this from where it hangs stays hung (a nudge, not a move)
+/** Does a hung machine dropped with its footprint centred at `at` ({ x, z }) RE-HANG? — over the belt's top
+    (`wall` [x0, x1, z0, z1], grown by `pad`), or — `home`, given only for one HANGING now — within REHANG_R
+    of where it hangs (a nudge). The magnet; else it stands where it is dropped. A STANDING one is passed no
+    home: it may stand anywhere off the belt's top, right where it used to hang included (the organ on a
+    tower behind the belt, where its loft hung). */
+export function rehangs(at, wall, home = null, { pad = .5, r = REHANG_R } = {}){
+  if (!at) return false;
+  // (wall: the belt's box [x0, x1, z0, z1] — or its TURNED footprint, 4 corners: a belt stage edit turned)
+  if (wall && (Array.isArray(wall[0]) ? inRectPoly([at.x, at.z], wall, pad)
+    : at.x >= wall[0] - pad && at.x <= wall[1] + pad && at.z >= wall[2] - pad && at.z <= wall[3] + pad)) return true;
+  return !!home && Math.hypot(at.x - home.x, at.z - home.z) <= r;
 }
 
 /* ---- footprints ----
@@ -113,6 +147,13 @@ export function inPoly([px, pz], poly){
   }
   return true;
 }
+/** is the point inside a footprint rectangle (4 corners, boxCorners / footprint order) grown by `pad` */
+export function inRectPoly([px, pz], poly, pad = 0){
+  const [a, b, , d] = poly, ux = b[0] - a[0], uz = b[1] - a[1], vx = d[0] - a[0], vz = d[1] - a[1];
+  const lu = Math.hypot(ux, uz) || 1e-9, lv = Math.hypot(vx, vz) || 1e-9;
+  const u = ((px - a[0]) * ux + (pz - a[1]) * uz) / lu, v = ((px - a[0]) * vx + (pz - a[1]) * vz) / lv;
+  return u >= -pad && u <= lu + pad && v >= -pad && v <= lv + pad;
+}
 const asPoly = f => Array.isArray(f?.[0]) ? f : boxCorners(f);
 
 /** What's wrong with putting footprint `fp` here: [{ key, kind: 'overlap' | 'belt' | 'room' }].
@@ -143,12 +184,35 @@ export function describeConflicts(cs, label = k => k){
 export function placeEntry(L0, key, entry, all = [], { cx = 0, liftOf = () => undefined } = {}){
   const L = { ...L0 };
   const held = (k, e) => { const u = liftOf(k) ?? L[k]?.lift; return Number.isFinite(u) ? { ...e, lift: u } : e; };
-  if (!Object.keys(L).length)
+  // (moving the BELT pins nobody: the band re-seats round it where it now stands — a belt has no height)
+  if (key === BELT){ const { x, z, yaw = 0 } = entry; L[key] = { x, z, yaw }; return L; }
+  // (the FIRST edit — of a machine: a belt entry alone pinned nobody, so the stage still stands as the room
+  //  solve seated it round the belt; a reload re-solves anything unpinned, so pin it all now, as it stands)
+  if (!Object.keys(L).some(k => k !== BELT))
     for (const p of all) L[p.key] = held(p.key, { x: p.x - cx, z: p.z, yaw: p.yaw });
   let e;
   if (!('lift' in entry)) e = held(key, entry);
   else { e = { ...entry }; if (!Number.isFinite(entry.lift)) delete e.lift; }
   L[key] = e;
+  return L;
+}
+
+/** THE WHOLE STAGE moves (stage edit: the belt dragged with Alt / BAND COMES): every PINNED machine rides the
+    belt's rigid move T0 → T1 (stage poses, src/stagepose.js) — its place relative to the belt is kept, as the
+    unpinned ones keep theirs through the room solve. Entries are the layout's (x relative to cx, z, yaw world);
+    the kit's yaw stays out (it faces the stage's audience: it turns with the stage anyway); heights are kept.
+    The belt's own entry is not touched (placeEntry writes it). Pure: L0 is not touched. */
+export function carryEntries(L0, T0, T1, { cx = 0 } = {}){
+  const L = { ...L0 };
+  const c0 = Math.cos(T0.yaw || 0), s0 = Math.sin(T0.yaw || 0), c1 = Math.cos(T1.yaw || 0), s1 = Math.sin(T1.yaw || 0);
+  for (const k of Object.keys(L)){
+    if (k === BELT) continue;
+    const e = L[k], dx = e.x + cx - (T0.x || 0), dz = e.z - (T0.z || 0);
+    const lx = dx * c0 - dz * s0, lz = dx * s0 + dz * c0;                    // (into the old stage frame…)
+    const n = { ...e, x: (T1.x || 0) + lx * c1 + lz * s1 - cx, z: (T1.z || 0) - lx * s1 + lz * c1 };   // (…and out of the new)
+    if (k !== 'drums' && Number.isFinite(e.yaw)) n.yaw = Math.atan2(Math.sin(e.yaw + (T1.yaw || 0) - (T0.yaw || 0)), Math.cos(e.yaw + (T1.yaw || 0) - (T0.yaw || 0)));
+    L[k] = n;
+  }
   return L;
 }
 

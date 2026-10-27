@@ -415,6 +415,22 @@ describe('floor first: the band on the floor, the star front and centre (station
     const pinned = layoutStations(R['mop.mid'].items.map(it => it.key === 'riff' ? { ...it, pin: true, lift: 0 } : it), R['mop.mid'].wall, ROOM, { ...ENV, wallTop: R['mop.mid'].top });
     expect(pinned.riff.y).toBeUndefined();
   });
+  it('a HUNG machine taken down is just another pinned item: it stays where the user stood it, nobody overlaps it, and the spot it hung at is free', () => {
+    // (Starship Groove: the organ loft taken down to the front-left floor — it stands; nothing hangs behind the belt now)
+    const organ = it_('organ', -14, 24, [-6.6, 6.6, -2.3, 2.3], 3, -5.1, { pin: true, lift: 0 });
+    const r = { ...R.finale, hung: [], items: [...R.finale.items, organ] }, solved = solve(r);
+    expect(solved.organ).toEqual({ x: -14, z: 24 });
+    const o = world(solved, organ);
+    for (const it of r.items) if (it !== organ) expect(clear(world(solved, it), o), `${it.key} clear of the organ`).toBe(true);
+    // …and nobody overlaps anybody (the gallery may now stand where the loft hung: no hung footprint)
+    for (const a of r.items) for (const b of r.items) if (a !== b && (solved[a.key].y !== undefined) === (solved[b.key].y !== undefined))
+      expect(clear(world(solved, a), world(solved, b)), `${a.key} × ${b.key}`).toBe(true);
+    expect(solve(r)).toEqual(solved);                                          // (deterministic)
+    // not taken down (no entry — the default): the loft still hangs there, and every raised machine keeps out of it
+    const def = solve(R.finale), loft = R.finale.hung[0];
+    expect(R.finale.items.some(it => def[it.key].y !== undefined), "the default raises someone").toBe(true);
+    for (const it of R.finale.items) if (def[it.key].y !== undefined) expect(clear(world(def, it), loft), `${it.key} clear of the hung loft`).toBe(true);
+  });
   it('a solo never climbs: a band machine ALONE is its own star (front and centre); beside the kit it takes its FIRST seat', () => {
     for (const k of BAND_KEYS) for (const kit of [false, true]){
       const items = [{ key: k, x: STATIONS[k].x, z: STATIONS[k].z, box: boxOf(STATIONS[k]) }, ...(kit ? [{ key: 'drums', ...KIT }] : [])];

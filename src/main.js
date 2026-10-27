@@ -23,7 +23,7 @@ import { makeRoomHost, ROOMS } from './rooms/index.js';
 import { groundOf, clampLift, FOOT } from './rooms/footing.js';
 import { footingDraws } from './rooms/footing3d.js';
 import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
-import { stationFor, layoutStations, soloStar, loneTurn, kitRiseAt, HANG_CLEAR, hangPlace } from './instruments/stations.js';
+import { STATIONS, stationFor, layoutStations, soloStar, loneTurn, kitRiseAt, HANG_CLEAR, hangPlace } from './instruments/stations.js';
 import { eventTimes, wrapP } from './instruments/clock.js';
 import { splitBucket } from './instruments/sustain.js';
 import { nextVoiceEpoch, voiceEpoch, sweepVoiceCaches } from './instruments/voicecache.js';
@@ -38,6 +38,7 @@ import { mergeStatic, watchFrozen, pruneFrozen, frozenStats } from './mergestati
 import { installRayBVH, rayBVHStats } from './raybvh.js';
 if (!/[?&]nobvh(=|&|$)/.test(location.search)) installRayBVH();   // PERF (raybvh.js): the build's shot solves raycast big meshes through a BVH — same hits (?nobvh: A/B)
 import { makeEditor } from './editor/index.js';
+import { IDENTITY, isIdentity, toWorld, toStage, dirToWorld, poseToStage, poseToWorld, box6ToWorld, stageRoom, clampPose } from './stagepose.js';
 import { planEdit, shotAt, signatureOf } from './directorplan.js';
 import { RIDE, ridePose, rideMoments, rideWindowAt } from './ridecam.js';
 import { makeFollow, solveShots as solveShotsIn, resolveRoom, solidBox, roomSolids, glowy } from './shotrig.js';
@@ -62,6 +63,13 @@ let drumGroup = null;                                   // the drum machine's gr
    src/jugglebelt.js draws it) */
 let jug = null, jplan = null;                           // the belt machine + its plan, this song
 let stageWall = new THREE.Box3();                       // the belt machines' world box this song (staging + the wide fit)
+/* THE STAGE POSE (src/stagepose.js): where the belt stands — stage edit moves and turns it (a layout's `belt`
+   entry). Everything is built and SOLVED in the STAGE frame (the belt's own, where every staging rule was
+   written: the wings, the audience at +z, the star front and centre) and then set in the room by this rigid
+   render-time move. Identity (no entry: every old layout + share link) = the stage as it always stood. */
+let stagePose = IDENTITY;
+let stageWallL = new THREE.Box3();                      // …the belt's box in the STAGE frame (the solve, the wide's band, the follow solve)
+let beltLivePose = null;                                // stage edit dragging the belt: its followers + the room catch up once a frame
 let curBuild = null;                                    // this song's staging inputs (stage edit re-anchors from them: restage)
 let lastLayout = null, lastWide = null, lastShots = [], devMarbles = [], lastSolve = null;                                  // dev: the last room solve (__dev.layout)
 let kitSlot = KIT_SOLO;                                 // where the drum machine stands this song (marbledrums.js; + y: its deck)
@@ -72,6 +80,9 @@ let kitLoc = null;                                      // the kit's solid box o
    page (a layout entry's own lift wins) */
 const devLift = Object.fromEntries((new URLSearchParams(location.search).get('lift') || '').split(',')
   .map(e => e.split(':')).filter(([k, v]) => k && v !== undefined && Number.isFinite(+v)).map(([k, v]) => [k, clampLift(+v)]));
+/* dev: ?belt=x,z,yaw — the belt's stage pose for every song of this page that has no belt entry of its own (audits) */
+const devBelt = (() => { const v = (new URLSearchParams(location.search).get('belt') || '').split(',').map(Number);
+  return v.length >= 2 && v.slice(0, 3).every(Number.isFinite) ? { x: v[0], z: v[1], yaw: v[2] || 0 } : null; })();
 let lastAnchors = [];                                   // what the room was last told stands where (placeRoom; __dev.anchors)
 const kitLift = () => clampLift(Number.isFinite(kitSlot.lift) ? kitSlot.lift : kitSlot.rise);   // the kit's height: the user's lift, else the room solve's DRUM RISER (stations.js)
 const kitDeck = () => groundOf(KIT_STAND, ROOM.FLOOR) + kitLift();   // the kit's deck: its slab on the floor's plinth, or lifted
@@ -123,7 +134,7 @@ scene.fog = new THREE.FogExp2(0x07060e, 0.026);
    + WASD/QE fly controls, and the per-frame framing. main just feeds it the live
    marbles each frame and the tracks on each song change. */
 const cam = makeCameraRig({ stageY: STAGE_Y, fixedZMax: FIXED_ZMAX,
-                            dom: renderer.domElement, camsEl: document.getElementById('cams'), pathBlocked, ridePose: rideCam });
+                            dom: renderer.domElement, camsEl: document.getElementById('cams'), pathBlocked, ridePose: rideCam, eyeGuard: guardEye });
 /* does the straight line a → b pass through any drawn machine part? (the director asks once
    per cut: a glide that would dolly through geometry becomes a hard cut) */
 function pathBlocked(a, b){
@@ -149,6 +160,12 @@ key.position.set(-6, 10, 4); scene.add(key);
 const beltFill = new THREE.DirectionalLight(0xaab8e0, .35);
 beltFill.position.set(0, STAGE_Y + 2, 14);
 beltFill.target.position.set(0, STAGE_Y, -3); scene.add(beltFill, beltFill.target);
+/* …and when the belt moves (the stage pose), the fill moves with it (a light MOVED, none added) */
+function aimBeltFill(){
+  const a = toWorld(stagePose, 0, 14), b = toWorld(stagePose, 0, -3);
+  beltFill.position.set(a.x, STAGE_Y + 2, a.z); beltFill.target.position.set(b.x, STAGE_Y, b.z);
+  beltFill.updateMatrixWorld(); beltFill.target.updateMatrixWorld();
+}
 
 /* --- one-shot procedural environment map → real chrome --- */
 function makeEnv(){
@@ -247,6 +264,7 @@ const drumKit = makeMarbleDrums({ envMap, glowTex });
    See src/instruments/README.md for the contract. ---- */
 const instRigs = INSTRUMENTS.map(I => ({ I, inst: I.make({ envMap, glowTex, THREE }), station: null }));
 let instLive = [];                                      // rigs with a part in the current song
+const hangHomes = new Map();                            // `${song id}|${key}` → where that hung station hung (world x/z): stage edit's re-hang magnet
 const STRIKE_LIGHTS = 4;                                // shared pool, CONSTANT size → no shader recompiles (each point light is
                                                         // shaded in EVERY lit fragment: 4 round-robin ~.2 s flashes are plenty)
 const strikeLights = Array.from({ length: STRIKE_LIGHTS }, () => {
@@ -500,6 +518,7 @@ function mountJuggler(L, t){
   if (L.solved && L.warnings.length) console.warn('cascade juggler:\n  ' + L.warnings.join('\n  '));
   jug = jugShop.build(L, { hueOf });
   jug.group.position.set(0, STAGE_Y + UP.y, 0);           // its band frame: y 0 = a ball's centre at a strike
+  jug.group.position.x = stagePose.x; jug.group.position.z = stagePose.z; jug.group.rotation.y = stagePose.yaw;   // (where stage edit stood it)
   jug.frame.visible = machinesOn;
   world.add(jug.group);
   tracks.forEach(tr => { tr.stage = jug.group; tr.machine.group = jug.frame; });
@@ -562,9 +581,68 @@ function jugglerSolved(L, solved){
   jugCache.put(L.key, packSolve(solved, L));
   noteEl.textContent = '';
   mountJuggler(L, songTime);
+  if (editor.stage?.on) editor.stage.refresh();          // (stage edit holds the belt's group: this is a new one)
   if (curBuild) syncDirector(curBuild.S, curBuild.view);
   fadeMats = collectFadeMats(world); fadeWarm = 3;
   singlePassFlats(scene);
+}
+
+/* ---- THE STAGE POSE at work (src/stagepose.js) ---- */
+/* the room a floor machine (and the belt) may stand in — the smallest room's, STAGE (world) */
+const stageRoomRect = () => ({ x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 });
+/* an object's rigid pose (x, z, turn) moved by T: dir +1 the stage frame → the room, −1 back */
+function moveRigid(o, T, dir){
+  const p = dir > 0 ? toWorld(T, o.position.x, o.position.z) : toStage(T, o.position.x, o.position.z);
+  o.position.x = p.x; o.position.z = p.z; o.rotation.y += dir * T.yaw; o.updateMatrixWorld(true);
+}
+/* run fn with `o` in the STAGE frame (measured where the solve would see it), put back exactly after */
+function inStageFrame(o, fn){
+  if (isIdentity(stagePose)) return fn();
+  const x = o.position.x, z = o.position.z, yaw = o.rotation.y;
+  moveRigid(o, stagePose, -1);
+  try { return fn(); } finally { o.position.x = x; o.position.z = z; o.rotation.y = yaw; o.updateMatrixWorld(true); }
+}
+/* the belt's world box, from its stage-frame box and the pose (turned: the box around the turned box) */
+function syncStageWall(){
+  if (stageWallL.isEmpty() || isIdentity(stagePose)){ stageWall.copy(stageWallL); return; }
+  const L = stageWallL, b = box6ToWorld(stagePose, [L.min.x, L.max.x, L.min.y, L.max.y, L.min.z, L.max.z]);
+  stageWall.min.set(b[0], b[2], b[4]); stageWall.max.set(b[1], b[3], b[5]);
+}
+/* the build's stage is set in the room: every machine built + solved in the stage frame moves by T */
+function applyPose(T){
+  stagePose = isIdentity(T) ? IDENTITY : T;
+  if (!isIdentity(T)) for (const o of [jug?.group, drumGroup, ...instLive.map(r => r.station)]) if (o) moveRigid(o, T, +1);
+  syncStageWall(); aimBeltFill();
+}
+/* a stage-frame point (a Vector3) → the room, in place */
+function stageV(v){ if (!isIdentity(stagePose)){ const p = toWorld(stagePose, v.x, v.z); v.x = p.x; v.z = p.z; } return v; }
+/* the machines that FOLLOW the belt when it moves: every one the user hasn't pinned (the room solve seats
+   them round the belt — the stage frame), and a hung one still hanging off it */
+const beltFollowers = (pinned = k => k === 'drums' ? !!kitSlot.pin : !!instLive.find(r => r.I.key === k)?.slot.pin) =>
+  [...instLive.filter(r => !pinned(r.I.key)).map(r => r.station), ...(drumGroup && !pinned('drums') ? [drumGroup] : [])];
+let beltPinned = undefined;                             // (stage edit's word on who is placed: its layout's)
+/* stage edit dragged / turned the belt (host.beltLive moved its group at once): its followers ride the same
+   rigid move and the room re-anchors — once a frame (animate). The release rebuilds (the band re-seats) */
+function followBelt(){
+  const T0 = stagePose, T1 = beltLivePose; beltLivePose = null;
+  if (!T1 || (T0.x === T1.x && T0.z === T1.z && T0.yaw === T1.yaw)) return;
+  const fol = beltFollowers(beltPinned);
+  for (const o of fol){
+    const w = poseToWorld(T1, poseToStage(T0, { x: o.position.x, z: o.position.z, yaw: o.rotation.y }));
+    o.position.x = w.x; o.position.z = w.z; o.rotation.y = w.yaw; o.updateMatrixWorld(true);
+  }
+  // a PLACED kit stays where it stands — but it faces the stage's audience (the rebuild turns it with the stage):
+  // it turns in place now, about its pivot, so what the drag shows is what the release keeps
+  const dy = T1.yaw - T0.yaw;
+  if (drumGroup && dy && !fol.includes(drumGroup)){
+    const k = kitPivotNow(), c = Math.cos(dy), s = Math.sin(dy), ox = drumGroup.position.x - k.x, oz = drumGroup.position.z - k.z;
+    drumGroup.position.x = k.x + ox * c + oz * s; drumGroup.position.z = k.z - ox * s + oz * c;
+    drumGroup.rotation.y += dy; drumGroup.updateMatrixWorld(true);
+  }
+  stagePose = isIdentity(T1) ? IDENTITY : T1;
+  if (curBuild) curBuild.view.pose = stagePose;
+  syncStageWall(); aimBeltFill();
+  if (curBuild) placeRoom();
 }
 
 function buildWorld(keyName){
@@ -594,8 +672,21 @@ function buildWorld(keyName){
   //      belt's edges, overlapping footprints are pushed apart) and moved into place — a
   //      rigid translation of solved worlds, render-time only. ----
   // THE BELT: the JUGGLER — ONE machine, every voice's balls (src/juggle.js plans, src/jugglebelt.js draws)
-  const wallBox = stageWall.makeEmpty();
+  stagePose = IDENTITY; beltLivePose = null;             // (built in the STAGE frame; set in the room below — applyPose)
+  stageWall.makeEmpty();
+  const wallBox = stageWallL.makeEmpty();
   const { stageView, wallW } = buildJuggler(S, wallBox);
+  // THE STAGE POSE (stage edit moved / turned the belt: src/stagepose.js) — kept inside the room. The room the
+  // solve below sees is the room in the STAGE frame (stageRoom: exact for a move, conservative for a turn)
+  const ROOM_RECT = stageRoomRect(), wall4 = wallBox.isEmpty() ? null : [wallBox.min.x, wallBox.max.x, wallBox.min.z, wallBox.max.z];
+  const want = editor.beltPose?.() ?? IDENTITY;
+  const T = wall4 ? clampPose(isIdentity(want) && devBelt ? devBelt : want, wall4, ROOM_RECT) : IDENTITY;
+  const roomS = stageRoom(ROOM_RECT, T, wall4 || undefined);
+  // (turned: the room is a turned rect in the stage frame — the solve tests footprints against it whole)
+  const roomPoly = T.yaw ? [[ROOM_RECT.x0, ROOM_RECT.z0], [ROOM_RECT.x1, ROOM_RECT.z0], [ROOM_RECT.x1, ROOM_RECT.z1], [ROOM_RECT.x0, ROOM_RECT.z1]]
+    .map(([x, z]) => { const q = toStage(T, x, z); return [q.x, q.z]; }) : null;
+  // (a user's pin is in the ROOM: into the stage frame, like everything this build solves)
+  const inStage = st => st.pin && !isIdentity(T) ? { ...st, ...poseToStage(T, st) } : st;
   const full = !!(S.parts && Object.keys(S.parts).some(k => S.parts[k]?.length));
   const P0 = ROLL_T + LOOP_T, loopBeats = S.melody.reduce((a, n) => a + n[1], 0);
 
@@ -608,6 +699,7 @@ function buildWorld(keyName){
   // entry's lift). Its pistons stroke deeper than the slab, briefly: into the WELL its base keeps
   // (the solid box below is measured where each one bottoms out).
   kitSlot = { ...editor.kitSlot(full ? KIT_ROOM : KIT_SOLO) };  // (a user-placed kit — stage edit — is pinned there)
+  if (kitSlot.pin && !isIdentity(T)){ const k = toStage(T, stageView.cx + kitSlot.x, kitSlot.z); kitSlot.x = k.x - stageView.cx; kitSlot.z = k.z; }
   if (!Number.isFinite(kitSlot.lift) && devLift.drums !== undefined) kitSlot.lift = devLift.drums;
   kitSlot.y = kitDeck();
   // (posed once at the count-in instant: an un-posed ball parked at the origin would make the
@@ -631,12 +723,16 @@ function buildWorld(keyName){
   instRigs.forEach((rig, i) => {
     const part = S.parts?.[rig.I.key];
     if (!part || !part.length) return;
-    const st = editor.slot(rig.I.key, stationFor(rig.I.key, i));   // a user-placed station (stage edit): pinned x/z/yaw
+    const st = inStage(editor.slot(rig.I.key, stationFor(rig.I.key, i)));   // a user-placed station (stage edit): pinned x/z/yaw
     const station = new THREE.Group(); station.name = rig.I.key;   // (names: perf/debug probes)
     // a HUNG station (the ricochet chandelier) is a crown over the belt: centred on the wall,
     // its LOWEST part (plate, stem, the knot's wire) HANG_CLEAR above the belt's top housing —
     // never across the strike band, never reading as resting on the housing
     const hung = st.hang && !wallBox.isEmpty();
+    // …unless the user took it DOWN (stage edit: a layout entry — editor/placement.js standSlot): then it is a
+    // floor machine like any other — built standing (no columns to the floor, no ceiling rods or floor marks:
+    // `standing`, ceilY 0), set in the room at its ground + lift, the room's footing under it
+    const unhung = !!st.unhung;
     // a FLOOR machine is built at deck 0 with NO supports (floorY 0: every plugin's legs / riser /
     // pedestal is gated on it) and then SET IN THE ROOM below — on the floor's plinth at its ground,
     // or lifted (rooms/footing.js): a rigid move, so a height change never rebuilds it
@@ -645,7 +741,7 @@ function buildWorld(keyName){
     station.position.set(stageView.cx + st.x, y, z);
     station.rotation.y = st.yaw;
     const buildAt = () => rig.inst.build(part, { rollT: ROLL_T, beat: BEAT, P: P0, start: ARM_AT,
-      station: st, floorY: hung ? ROOM.FLOOR - y : 0, ceilY: ROOM.CEIL - y, loopBeats });
+      station: st, floorY: hung ? ROOM.FLOOR - y : 0, ceilY: unhung ? 0 : ROOM.CEIL - y, loopBeats, ...(unhung ? { standing: true } : {}) });
     let body = buildAt();
     station.add(body);
     world.add(station);
@@ -665,9 +761,10 @@ function buildWorld(keyName){
       if (!b.isEmpty() && Math.abs(st.x) > 4){
         const at = hangPlace(st, [b.min.x - p.x, b.max.x - p.x, b.min.z - p.z, b.max.z - p.z],
           [wallBox.min.x, wallBox.max.x, wallBox.min.z, wallBox.max.z],
-          { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 }, { cx: stageView.cx });
+          roomS, { cx: stageView.cx });
         station.position.x = at.x; station.position.z = at.z; station.updateMatrixWorld(true);
       }
+      hangHomes.set(`${editor.id}|${rig.I.key}`, toWorld(T, station.position.x, station.position.z));   // (stage edit's re-hang magnet: in the room)
     }
     rig.station = station; rig.slot = { ...st, y };
     // its HEIGHT (rooms/footing.js): ground = where it sits on the floor's plinth (its lowest solid
@@ -682,6 +779,9 @@ function buildWorld(keyName){
       rig.ground = groundOf(rig.low, ROOM.FLOOR);
       const set = Number.isFinite(st.lift) ? st.lift : devLift[rig.I.key];   // (a user's height: the gallery solve leaves it alone)
       if (set !== undefined) rig.slot.lift = clampLift(set);
+      // (a machine taken down from the belt keeps the height it hung at — under the ceiling: its standing
+      //  build's top may reach higher than the hung one's measure guessed)
+      if (unhung && rig.loc && Number.isFinite(rig.slot.lift)) rig.slot.lift = Math.max(0, Math.min(rig.slot.lift, ROOM.CEIL - 1 - rig.ground - rig.loc.max.y));
       rig.setLift(clampLift(rig.slot.lift));
     }
     rig.cue = eventTimes(part, { rollT: ROLL_T, beat: BEAT }).map(e => ({ t: e.t, w: e.vel, id: String(e.note) }));   // (id: what it played — the director reads a hook's variety)
@@ -729,8 +829,8 @@ function buildWorld(keyName){
     // THE STAR (the song's signature machine — the one the director will name) stands front and centre
     const star = stageStar(S) ?? soloStar(items);
     const args = [[wallBox.min.x, wallBox.max.x, wallBox.min.z, wallBox.max.z],
-      { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 },
-      { cx: stageView.cx, bandY: STAGE_Y - 1.5, eyeY: 20, wallTop: wallBox.max.y, hung: hungBoxes, star, loftGap: FOOT.LOFT_GAP }];   // (band − 1.5: the pads rising INTO the band read too)
+      roomS,
+      { cx: stageView.cx, bandY: STAGE_Y - 1.5, eyeY: 20, wallTop: wallBox.max.y, hung: hungBoxes, star, loftGap: FOOT.LOFT_GAP, ...(roomPoly ? { roomPoly } : {}) }];   // (band − 1.5: the pads rising INTO the band read too)
     const solved = layoutStations(items, ...args);
     // (args + free: stage edit's AUTO re-asks this solve for a machine where it stands now — autoLiftOf)
     lastLayout = { items: items.map(({ key, x, z, box, top, deck }) => ({ key, x, z, box, top, y0: bots[key], deck })), wall: wallBox.clone(), solved, cx: stageView.cx, bandY: STAGE_Y - 1.5, hung: hungBoxes, star,
@@ -752,6 +852,10 @@ function buildWorld(keyName){
       }
     });
   }
+
+  // …and the whole stage is set in the room: the belt, the kit and every station by the stage pose (a rigid move)
+  applyPose(T);
+  stageView.pose = stagePose;                           // (the FIXED / follow cams frame the belt where it stands)
 
   // PERF: bake each station's provably-still parts into one mesh per material (mergestatic.js —
   // posed across the whole loop first: a part that ever moves or blinks is left alone).
@@ -890,16 +994,21 @@ function placeRoom(){
   const { S, view } = curBuild, P = ROLL_T + LOOP_T, run = { P, start: ARM_AT };
   const out = [];
   if (!stageWall.isEmpty()){
-    const w = stageWall;
-    out.push({ key: 'belt', kind: 'belt', label: 'Belt', color: '#ffaa55', x: (w.min.x + w.max.x) / 2, z: (w.min.z + w.max.z) / 2, yaw: 0,   // (the lead ball's glow)
-      w: w.max.x - w.min.x, d: w.max.z - w.min.z, y: ROOM.FLOOR, ground: ROOM.FLOOR, lift: 0, bottom: ROOM.FLOOR, low: w.min.y,
+    // (its footprint: the stage-frame box, turned with the belt — the room's footing turns its kerb with it)
+    const w = stageWall, L = stageWallL, c = toWorld(stagePose, (L.min.x + L.max.x) / 2, (L.min.z + L.max.z) / 2);
+    out.push({ key: 'belt', kind: 'belt', label: 'Belt', color: '#ffaa55', x: c.x, z: c.z, yaw: stagePose.yaw,   // (the lead ball's glow)
+      w: L.max.x - L.min.x, d: L.max.z - L.min.z, y: ROOM.FLOOR, ground: ROOM.FLOOR, lift: 0, bottom: ROOM.FLOOR, low: w.min.y,
       box: [w.min.x, w.max.x, w.min.y, w.max.y, w.min.z, w.max.z], cue: loopCue(beltHits(), P), ...run, fixed: true });
   }
   if (S.drums && drumGroup){
-    const a = kitAnchor(view.cx, kitSlot), lift = kitLift(), K = kitOrigin();
-    out.push({ key: 'drums', kind: 'kit', label: 'Drum Machine', color: '#ff8a3d', x: a.x, z: a.z, yaw: 0, w: a.w, d: a.d,
+    // (the kit's slot is in the STAGE frame — it turns with the stage, facing its audience)
+    //  (…read off its GROUP's pose — the stage pose, but for a PLACED kit while the belt is dragged: it stays put,
+    //   turning in place — followBelt; the default stage: the identity, untouched)
+    const KP = isIdentity(stagePose) && !drumGroup.rotation.y ? stagePose : { x: drumGroup.position.x, z: drumGroup.position.z, yaw: drumGroup.rotation.y };
+    const a = kitAnchor(view.cx, kitSlot), lift = kitLift(), K = kitOrigin(), aw = toWorld(KP, a.x, a.z);
+    out.push({ key: 'drums', kind: 'kit', label: 'Drum Machine', color: '#ff8a3d', x: aw.x, z: aw.z, yaw: KP.yaw, w: a.w, d: a.d,
       y: kitSlot.y, ground: kitSlot.y - lift, lift, bottom: kitSlot.y + KIT_STAND, low: kitSlot.y + Math.min(KIT_STAND, kitLoc ? kitLoc.min.y : 0),
-      box: kitLoc ? [kitLoc.min.x + K.x, kitLoc.max.x + K.x, kitLoc.min.y + K.y, kitLoc.max.y + K.y, kitLoc.min.z + K.z, kitLoc.max.z + K.z] : null,
+      box: kitLoc ? box6ToWorld(KP, [kitLoc.min.x + K.x, kitLoc.max.x + K.x, kitLoc.min.y + K.y, kitLoc.max.y + K.y, kitLoc.min.z + K.z, kitLoc.max.z + K.z]) : null,
       cue: loopCue(kitHits(S), P), ...run, fixed: false });
   }
   for (const r of instLive){
@@ -960,7 +1069,10 @@ const kitHits = S => Object.values(S.drums || {}).flatMap(hits => hits.map(norma
 function restage({ director = true } = {}){            // (director: false — stage edit re-solves it once, on the way out)
   if (!curBuild) return;
   const { S, view, P0, buildKit, kitMerge } = curBuild;
-  const dx = drumGroup?.position.x || 0, dz = drumGroup?.position.z || 0;
+  // (a kit dragged live: its group's offset from where the stage pose stood it — in the STAGE frame)
+  //  (toStage of the group's origin IS that offset: the pose stood the group's origin at T)
+  const off = drumGroup ? toStage(stagePose, drumGroup.position.x, drumGroup.position.z) : { x: 0, z: 0 };
+  const dx = off.x, dz = off.z;
   // (a kit DRAGGED takes the DRUM RISER's rise where it now stands — on the right wing while the band plays,
   //  else none — exactly as the room solve will give its pinned spot on a reload: stations.js kitRiseAt)
   if (drumGroup && (dx || dz) && lastLayout) kitSlot = { ...kitSlot, rise: kitRiseAt(view.cx + kitSlot.x + dx, kitSlot.z + dz,
@@ -970,6 +1082,7 @@ function restage({ director = true } = {}){            // (director: false — s
     kitSlot = dx || dz ? { ...kitSlot, x: kitSlot.x + dx, z: kitSlot.z + dz, pin: true, y: deck } : { ...kitSlot, y: deck };
     world.remove(drumGroup); disposeTree(drumGroup);
     drumGroup = buildKit(); world.add(drumGroup);
+    if (!isIdentity(stagePose)) moveRigid(drumGroup, stagePose, +1);   // (built in the stage frame: set where the stage stands)
     if (kitMerge) kitMerge();                           // (the build's own bake: its strike sweep + rest pose)
     else if (!NO_MERGE){
       const times = Array.from({ length: 48 }, (_, k) => -LEAD_IN + (k + .37) / 48 * (P0 + LEAD_IN));
@@ -1022,7 +1135,8 @@ function juggleDock(d){
 /* A drum ball reaching its head: sparks + the percussion voice (the head ripple,
    flash, piston and strike light are the machine's own). The KICK hits the room:
    the cannonball landing shakes the camera and punches the exposure. */
-const _kc = new THREE.Vector3();
+const _kc = new THREE.Vector3(), _kY = new THREE.Vector3(0, 1, 0);
+const kitToRoom = v => { if (drumGroup.rotation.y) v.applyAxisAngle(_kY, drumGroup.rotation.y); return v.add(drumGroup.position); };
 function drumStrike(hit){
   // a CHOKE (the cymbal's magnet clamp grabbed it — marbledrums' timeline edge): cut its sound
   if (hit.choke){ if (audio.isReady()) try { audio.chokeDrum(hit.lane); } catch(e){} return; }
@@ -1030,7 +1144,8 @@ function drumStrike(hit){
   if (hit.lane === 'hat' && audio.isReady()) try { audio.chokeDrum('hatOpen'); } catch(e){}
   if (devStrikes){ const d = devStrikes.drums ||= { n: 0, ids: {}, unbaked: [], at: [] }; d.n++; d.ids[hit.lane] = (d.ids[hit.lane] || 0) + 1; if (d.at.length < 64) d.at.push(+songTime.toFixed(3)); }
   // (+ the kit group's offset: a kit moved live in stage edit rides it until it is rebuilt at its new slot)
-  const c = drumGroup ? _kc.copy(hit.drum.contact).add(drumGroup.position) : hit.drum.contact, v = hit.vel ?? 1;
+  //  (…and turned with the stage: a rigid move of its group — the stage pose)
+  const c = drumGroup ? kitToRoom(_kc.copy(hit.drum.contact)) : hit.drum.contact, v = hit.vel ?? 1;
   spawnBurst(c.clone().add(UP), new THREE.Color(hit.drum.style.ball),
              Math.round(5 + 7 * v), 3.0);
   if (hit.lane === 'kick'){
@@ -1072,7 +1187,8 @@ function syncDirector(S, view){
     // rail (a bloom streak at the old angle) out of the top-left of the frame
     // (the eye rides ABOVE the kit's magnet rail: from rail height the chrome bar slices the frame)
     const ky = kitSlot.y;                               // (its deck: on the floor's plinth, or lifted)
-    shots.push({ key: 'drums', owner: 'drums', color: '#ff8a3d', self: drumGroup, aim: new THREE.Vector3(kx, ky + 2.1, kz - 2.5), eye: new THREE.Vector3(kx + 1, ky + 10, kz + 12.5) });
+    // (in the STAGE frame — the kit turns with the stage — then set in the room)
+    shots.push({ key: 'drums', owner: 'drums', color: '#ff8a3d', self: drumGroup, aim: stageV(new THREE.Vector3(kx, ky + 2.1, kz - 2.5)), eye: stageV(new THREE.Vector3(kx + 1, ky + 10, kz + 12.5)) });
   }
   cues = stationCues(S);                                // (every station's + the kit's cue, a chord one moment)
   // ENSEMBLE MOMENTS (pure song data, solved up front): every instant where ≥ 2 voices
@@ -1143,14 +1259,15 @@ function syncDirector(S, view){
   // ITS side — it is the farthest machine in the hall, the one a fitted wide shrinks the most
   const star = full ? galleryStar(S, sig) : null;
   const wide = full
-    ? { ...searchWide(stageFrame(), star ? starDirs(star).concat(WIDE_DIRS) : galleryUp() || bandOn() ? GALLERY_DIRS.concat(WIDE_DIRS) : WIDE_DIRS, 1.6, .94, WIDE_UI, star, WIDE_LENSES), fitMax: 1,
+    ? { ...searchWide(stageFrame(), stageDirs(star ? starDirs(star).concat(WIDE_DIRS) : galleryUp() || bandOn() ? GALLERY_DIRS.concat(WIDE_DIRS) : WIDE_DIRS), 1.6, .94, WIDE_UI, star, WIDE_LENSES), fitMax: 1,
         // a phone held upright can't fit the room's width — so it frames the PROTAGONISTS (the
         // belt band → top housing, the chandelier, the turntable's record) down a diagonal, with
         // the title/song-select block's height kept clear at the top (PORTRAIT_INSET); the wings
         // enter from the frame edges as context
         //  (a floor STAR — stations.js — is a protagonist too: kept clear of the bottom button bar)
-        portrait: { ...searchWide(stageFrame(true), PORTRAIT_DIRS, .5, .92, { top: PORTRAIT_INSET, ...(lastLayout?.star ? { bottom: UI_BOTTOM } : {}) }), fov: WIDE_FOV, fitMax: 1 } }
-    : { aim: new THREE.Vector3(view.cx, 4, 2), eye: new THREE.Vector3(view.cx + 4, 15, 39) };
+        portrait: { ...searchWide(stageFrame(true), stageDirs(PORTRAIT_DIRS), .5, .92, { top: PORTRAIT_INSET, ...(lastLayout?.star ? { bottom: UI_BOTTOM } : {}) }), fov: WIDE_FOV, fitMax: 1 } }
+    : isIdentity(stagePose) ? { aim: new THREE.Vector3(view.cx, 4, 2), eye: new THREE.Vector3(view.cx + 4, 15, 39) }
+    : { aim: stageV(new THREE.Vector3(view.cx, 4, 2)), eye: clampEye(stageV(new THREE.Vector3(view.cx + 4, 15, 39))) };   // (a moved belt: kept in the room)
   lastWide = wide;
   // every station's eye is SOLVED from its designer's preferred framing (shotsolve.js); a narrow
   // (portrait) frame pulls each station shot back along its own line (camera.js) — fitMax caps
@@ -1190,9 +1307,11 @@ function rideCam(st, directed){
   const f = win && V.segs.filter(q => q.kind === 'flight' && q.t1 > w0 && q.t0 < w1).sort((a, b) => (b.t1 - b.t0) - (a.t1 - a.t0))[0];
   const b = f ? f.ball : busiestBall(V), oy = STAGE_Y + UP.y;
   const path = s => { const q = jBallAt(V, b, base + Math.min(P - 1e-3, Math.max(0, s - base))); return [q.x, q.y + oy, q.z]; };
+  // (the path is the plan's, in the belt's own frame — ridecam's comfort rules are written in it: in front of
+  //  the marble's plane, off the audience axis — so the pose is solved there and set in the room)
   const r = ridePose(path, st, win, RIDE, camera.aspect);
-  rideDbg = { raw: r, ball: path(st), tr: tr.role, win };
-  const eye = _rE.fromArray(r.eye), aim = _rA.fromArray(r.aim);
+  const eye = stageV(_rE.fromArray(r.eye)), aim = stageV(_rA.fromArray(r.aim));
+  rideDbg = { raw: r, ball: isIdentity(stagePose) ? path(st) : stageV(new THREE.Vector3(...path(st))).toArray(), tr: tr.role, win };
   // never inside a machine (step toward the marble until clear) nor out through the room
   const inBox = () => followRig.boxes.some(b => eye.x > b[0] - .6 && eye.x < b[1] + .6 && eye.y > b[2] - .6 && eye.y < b[3] + .6 && eye.z > b[4] - .6 && eye.z < b[5] + .6);
   for (let k = 0; k < 8 && inBox(); k++) eye.lerp(aim, .25);
@@ -1207,6 +1326,8 @@ function xrAnchors(){
   xrLitAge = 0;                                         // (a new world: re-collect its lights for xrRender)
   const box = o => { const b = visBox(o); return b.isEmpty() ? null : [b.min.x, b.max.x, b.min.y, b.max.y, b.min.z, b.max.z]; };
   const belts = tracks.filter((tr, i) => tracks.findIndex(q => q.machine.group === tr.machine.group) === i).map(tr => { const b = box(tr.machine.group) || box(tr.stage);
+    if (b && !isIdentity(stagePose) && !stageWallL.isEmpty()){   // (a moved belt: its pad in the belt's own frame, set by the pose)
+      const L = stageWallL; return { role: tr.role, x: (L.min.x + L.max.x) / 2, z0: L.min.z, z1: L.max.z, bandY: STAGE_Y, pose: stagePose }; }
     return b && { role: tr.role, x: (b[0] + b[1]) / 2, z0: b[4], z1: b[5], bandY: STAGE_Y }; }).filter(Boolean);
   const solids = [...instLive.map(r => box(r.station)), drumGroup && box(drumGroup), ...[...new Set(tracks.map(tr => tr.machine.group))].map(box),
     ...rooms.footBoxes.map(e => e.box)].filter(Boolean);   // (+ what they stand on: a pad never lands in a tower)
@@ -1222,10 +1343,20 @@ const eyeRoom = () => ({ x0: -ROOM.HW + 1.5, x1: ROOM.HW - 1.5, y0: ROOM.FLOOR +
 const followRig = makeFollow();
 let solvedRoom = null;
 function shotCtx(){
-  const w = stageWall;
+  const w = stageWallL;                                 // (the belt's box in its own frame: the follow solve runs there — pose)
   return { world, roomGroup: rooms.group, footGroup: rooms.footGroup, belts: new Set(tracks.map(t => t.stage)), stageY: STAGE_Y, room: eyeRoom(), camera, drawn,
-           wall: w.isEmpty() ? null : [w.min.x, w.max.x, w.min.y, w.max.y, w.min.z, w.max.z], follow: followRig };
+           wall: w.isEmpty() ? null : [w.min.x, w.max.x, w.min.y, w.max.y, w.min.z, w.max.z], follow: followRig,
+           ...(isIdentity(stagePose) ? {} : { pose: stagePose }) };
 }
+/* a MOVED belt's FIXED eye (camera.js eyeGuard — only off the default stage): never inside a machine or what it
+   stands on — stepped toward the aim until clear, as the ride cam's is (≈ 20 box tests a frame, no rays) */
+function guardEye(eye, aim){
+  const inside = b => eye.x > b[0] - .6 && eye.x < b[1] + .6 && eye.y > b[2] - .6 && eye.y < b[3] + .6 && eye.z > b[4] - .6 && eye.z < b[5] + .6;
+  const hit = () => followRig.boxes.some(inside) || rooms.footBoxes.some(e => inside(e.box));
+  for (let k = 0; k < 8 && hit(); k++) eye.lerp(aim, .25);
+}
+/* an eye kept inside the room (a moved belt's fixed framings may otherwise point through a wall) */
+function clampEye(v){ const r = eyeRoom(); v.set(Math.min(r.x1, Math.max(r.x0, v.x)), Math.min(r.y1, Math.max(r.y0, v.y)), Math.min(r.z1, Math.max(r.z0, v.z))); return v; }
 function solveShots(shots){
   solvedRoom = rooms.key;
   lastSolve = { ...solveShotsIn(shots, shotCtx()), follow: followRig };
@@ -1260,7 +1391,10 @@ function stageFrame(core = false){
   const front = 13;                                      // a footprint centred past this z is the front row
   const floorBox = (b, deckY, whole = false) => {
     const y0 = Math.max(b.min.y, deckY - 1.5), zc = (b.min.z + b.max.z) / 2;
-    add(b.min.x, b.max.x, y0, b.max.y, b.min.z, zc > front && !whole ? zc + FRONT_KEEP * (b.max.z - zc) : b.max.z);
+    // (a turned stage: its front row isn't the room's +z — held whole; a moved one: measured from the belt)
+    if (stagePose.yaw) whole = true;
+    const zs = isIdentity(stagePose) ? zc : toStage(stagePose, (b.min.x + b.max.x) / 2, zc).z;
+    add(b.min.x, b.max.x, y0, b.max.y, b.min.z, zs > front && !whole ? zc + FRONT_KEEP * (b.max.z - zc) : b.max.z);
   };
   instLive.forEach(r => {
     const b = visBox(r.station), p = r.station.position;
@@ -1293,7 +1427,8 @@ const GALLERY_DIRS = [[-.15, .26, .95], [-.08, .3, .95], [-.22, .3, .93], [-.15,
 const STAR_DIRS = [[-.2, .26, .94], [-.32, .26, .91], [-.44, .26, .86], [-.32, .34, .88]];
 const STAR_PULL = .6;
 //  (a star ON the belt's centre line — the floor star — swings from the house side, the left: the kit stands right)
-const starDirs = box => { const c = box[0] + box[1] - (stageWall.isEmpty() ? 0 : stageWall.min.x + stageWall.max.x), m = c > 2 ? -1 : 1;
+const starDirs = box => { const c = (isIdentity(stagePose) ? box[0] + box[1] : 2 * toStage(stagePose, (box[0] + box[1]) / 2, (box[4] + box[5]) / 2).x)
+    - (stageWallL.isEmpty() ? 0 : stageWallL.min.x + stageWallL.max.x), m = c > 2 ? -1 : 1;
   return STAR_DIRS.map(([x, y, z]) => dirOf(x * m, y, z)); };
 function galleryStar(S, sig){
   let key = sig ? cues.find(c => c.key === sig)?.owner : null;
@@ -1308,6 +1443,8 @@ function galleryStar(S, sig){
   const b = visBox(r.station);
   return b.isEmpty() ? null : [b.min.x, b.max.x, Math.max(b.min.y, r.station.position.y - 1.5), b.max.y, b.min.z, b.max.z];
 }
+/* a wide's candidate directions are written in the STAGE frame (the audience at +z): turned with the stage */
+const stageDirs = dirs => !stagePose.yaw ? dirs : dirs.map(d => { const w = dirToWorld(stagePose, d.x, d.z); return new THREE.Vector3(w.x, d.y, w.z); });
 const PORTRAIT_DIRS = [[.45, .36, .82], [.3, .4, .87], [.6, .33, .74], [.15, .42, .9], [-.2, .42, .89], [.45, .5, .76], [0, .5, .87], [-.4, .42, .82]].map(d => dirOf(...d));
 const PORTRAIT_INSET = .13;                             // the top of a phone frame belongs to the title + song select
 const WIDE_UI = { top: .03, bottom: UI_BOTTOM };      // a desktop wide is fitted ABOVE the button row (the front row's decks no longer run under it)
@@ -1316,8 +1453,11 @@ const _occRay = new THREE.Raycaster();
    the strike band other machines hide from the eye. First candidate that is clean wins. */
 function searchWide(pts, dirs, aspect, fill, ui, star = null, lenses = [WIDE_FOV]){
   const band = [];
-  if (!stageWall.isEmpty()) for (let i = 0; i <= 6; i++) for (const dy of [0, 2.5])
-    band.push(new THREE.Vector3(THREE.MathUtils.lerp(stageWall.min.x + 1.5, stageWall.max.x - 1.5, i / 6), STAGE_Y + dy, (stageWall.min.z + stageWall.max.z) / 2));
+  if (!stageWallL.isEmpty()) for (let i = 0; i <= 6; i++) for (const dy of [0, 2.5])
+    band.push(stageV(new THREE.Vector3(THREE.MathUtils.lerp(stageWallL.min.x + 1.5, stageWallL.max.x - 1.5, i / 6), STAGE_Y + dy, (stageWallL.min.z + stageWallL.max.z) / 2)));
+  // (an eye INSIDE a machine or what it stands on is never a wide — a moved belt can bring one into the line)
+  const solids = isIdentity(stagePose) ? [] : wideSolids();
+  const inSolid = e => solids.some(b => e.x > b[0] - .5 && e.x < b[1] + .5 && e.y > b[2] - .5 && e.y < b[3] + .5 && e.z > b[4] - .5 && e.z < b[5] + .5);
   const belt = new Set(tracks.map(t => t.stage)), foot = rooms.footGroup;
   const top = o => { while (o.parent && o.parent !== world) o = o.parent; return o; };
   const shown = o => { for (let p = o; p && p !== world; p = p.parent) if (!p.visible) return false; return true; };
@@ -1336,11 +1476,18 @@ function searchWide(pts, dirs, aspect, fill, ui, star = null, lenses = [WIDE_FOV
     }
     // (a gallery STAR: how big the song's star machine reads from here — a nearer angle on it wins)
     const sz = star ? screenSize(f.eye.toArray(), f.aim.toArray(), star, fov, aspect) : 0;
-    const score = (1 - f.k) * 3 + (band.length ? blocked / band.length : 0) * 2 + i * .02 + (fov - WIDE_FOV) * LENS_COST - sz * STAR_PULL;
+    const score = (1 - f.k) * 3 + (band.length ? blocked / band.length : 0) * 2 + i * .02 + (fov - WIDE_FOV) * LENS_COST - sz * STAR_PULL + (inSolid(f.eye) ? 10 : 0);
     tried.push([i, +score.toFixed(3), +f.k.toFixed(2), blocked, +sz.toFixed(3), fov]);   // (__dev.wide.tried: the search, for the audit)
     if (!best || score < best.score) best = { ...f, score, dir: i, blocked, star: +sz.toFixed(3), fov };
   });
   return { ...best, tried };
+}
+/* every machine's box + the envelopes of what they stand on (world) — the wide's eye keeps out of them */
+function wideSolids(){
+  const out = [], box = o => { const b = visBox(o); if (!b.isEmpty()) out.push([b.min.x, b.max.x, b.min.y, b.max.y, b.min.z, b.max.z]); };
+  instLive.forEach(r => box(r.station)); if (drumGroup) box(drumGroup); if (jug) box(jug.frame);
+  for (const e of rooms.footBoxes || []) out.push(e.box);
+  return out;
 }
 function fitShot(pts, dir, aspect, fill = .94, fov = camera.fov, ui = {}){
   // (the room box — the smallest room's walls, STAGE — with room for the director's slow orbit drift)
@@ -1475,25 +1622,41 @@ let edStale = null;                                     // the build (curBuild) 
      is the reload's answer, not the build's (which, built with this machine on the floor, said 0). */
 function autoLiftOf(r, { fresh = false } = {}){
   const L = lastLayout; if (!L?.solved) return null;
-  const key = r.I.key, p = r.station.position;
+  const key = r.I.key, p = toStage(stagePose, r.station.position.x, r.station.position.z);   // (the solve's frame: the stage's)
   if (fresh){
     const s = L.solved[key];
     if (!L.free || !s || Math.abs(s.x - p.x) > 1e-3 || Math.abs(s.z - p.z) > 1e-3) return null;
     return s.y === undefined ? (s.lift || 0) : Math.max(0, s.y - r.ground);   // (s.lift: a tiered riser — stations.js)
   }
   if (!L.args) return null;
+  // (every machine measured where it stands, in the STAGE frame — inStageFrame: put back exactly after)
   const items = [], rel = (o, ox, oz) => { const b = visBox(o); return b.isEmpty() ? null : { box: [b.min.x - ox, b.max.x - ox, b.min.z - oz, b.max.z - oz], top: b.max.y }; };
   for (const q of instLive){ if (q.slot.hang) continue;
-    const at = q.station.position, m = rel(q.station, at.x, at.z); if (!m) continue;
+    const it = inStageFrame(q.station, () => { const at = q.station.position, m = rel(q.station, at.x, at.z); return m && { x: at.x, z: at.z, ...m, deck: at.y }; });
+    if (!it) continue;
     const u = q === r ? undefined : q.slot.lift;
-    items.push({ key: q.I.key, x: at.x, z: at.z, ...m, deck: at.y, pin: true, ...(Number.isFinite(u) ? { lift: u } : {}) }); }
-  if (drumGroup && curBuild?.S.drums){ const k = kitPivotNow(), m = rel(drumGroup, k.x, k.z);
+    items.push({ key: q.I.key, ...it, pin: true, ...(Number.isFinite(u) ? { lift: u } : {}) }); }
+  if (drumGroup && curBuild?.S.drums){ const kw = kitPivotNow(), k = toStage(stagePose, kw.x, kw.z), m = inStageFrame(drumGroup, () => rel(drumGroup, k.x, k.z));
     if (m) items.push({ key: 'drums', x: k.x, z: k.z, ...m, deck: kitSlot.y, pin: true }); }
   const s = layoutStations(items, ...L.args)[key];
   if (!s) return null;
   return s.y === undefined ? (s.lift || 0) : Math.max(0, s.y - r.ground);   // (s.lift: a tiered riser — stations.js)
 }
-const kitPivotNow = () => ({ x: (curBuild?.view.cx ?? 0) + kitSlot.x + (drumGroup?.position.x || 0), z: kitSlot.z + (drumGroup?.position.z || 0) });
+/* a TURNED stage turns the kit with it (it faces the stage's audience): stage edit draws its footprint turned —
+   its box measured in the stage frame about its pivot (identity: stage edit measures it itself, as it always did) */
+function kitRel0(){
+  if (isIdentity(stagePose) || !drumGroup) return {};
+  const kw = kitPivotNow(), k = toStage(stagePose, kw.x, kw.z), b = inStageFrame(drumGroup, () => visBox(drumGroup));
+  return b.isEmpty() ? {} : { rel0: [b.min.x - k.x, b.max.x - k.x, b.min.z - k.z, b.max.z - k.z], top0: b.max.y, yawLive: true };
+}
+/* the kit's pivot in the ROOM: its slot (stage frame) set by the stage pose, + its group's live drag offset */
+// (the kit is BUILT round its slot, its group at the origin; every move since — the pose, a drag, a ride on the
+//  belt's move, a turn in place — moved the group rigidly: its pivot is the slot through the group's own pose)
+const kitPivotNow = () => {
+  const X = (curBuild?.view.cx ?? 0) + kitSlot.x;
+  if (!drumGroup?.rotation.y) return { x: X + (drumGroup?.position.x || 0), z: kitSlot.z + (drumGroup?.position.z || 0) };
+  return toWorld({ x: drumGroup.position.x, z: drumGroup.position.z, yaw: drumGroup.rotation.y }, X, kitSlot.z);
+};
 const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: SONGS,
   machines: INSTRUMENTS.map(I => ({ key: I.key, label: I.label, color: I.color })),
   host: {
@@ -1504,11 +1667,28 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
     /* leaving stage edit: the director catches up with every move / height made in it (once) */
     // (a frame after the editor has closed — the DONE tap answers at once; a rebuild in between re-solved it anyway)
     directorNow(){ const b = edStale; edStale = null; if (b) requestAnimationFrame(() => setTimeout(() => { if (b === curBuild && !editor.stage.on) syncDirector(b.S, b.view); else if (b === curBuild) edStale = b; }, 0)); },
+    // (a HUNG station is a piece too — it hangs: no height, no turn, overhead of everyone; dragged off the belt it
+    //  STANDS — rehang: it was born hung, so dropping it back on the belt hangs it again)
+    // THE BELT is a piece too (stage edit moves + turns it: the stage pose — its followers ride along live, and its
+    // release rebuilds holding songTime: the band re-seats round it). Its footprint: its own box, in its own frame
     pieces: () => [
-      ...instLive.filter(r => !r.slot.hang).map(r => ({ key: r.I.key, label: r.I.label, color: r.I.color, obj: r.station, kind: 'station', canRotate: true })),
+      ...instLive.map(r => ({ key: r.I.key, label: r.I.label, color: r.I.color, obj: r.station, kind: 'station', canRotate: !r.slot.hang, pin: !!r.slot.pin,
+        ...(STATIONS[r.I.key]?.hang ? { rehang: true, hung: !!r.slot.hang } : {}) })),
       ...(drumGroup && curBuild?.S.drums ? [{ key: 'drums', label: 'Drum Machine', color: '#ff8a3d', obj: drumGroup, kind: 'kit', canRotate: false,
-        deckY: kitSlot.y }] : []),
+        deckY: kitSlot.y, pin: !!kitSlot.pin, ...kitRel0() }] : []),
+      ...(jug && !stageWallL.isEmpty() ? [{ key: 'belt', label: 'Belt', color: '#ffaa55', obj: jug.group, kind: 'belt', canRotate: true, pin: true,
+        deckY: ROOM.FLOOR, rel0: [stageWallL.min.x, stageWallL.max.x, stageWallL.min.z, stageWallL.max.z], top0: stageWallL.max.y }] : []),
     ],
+    /* the belt dragged / turned, live (x, z, yaw: its group's — the stage pose): the group moves now, its
+       followers + the room once a frame (followBelt) */
+    beltLive(x, z, yaw, pinned, now = false){
+      if (!jug) return;
+      beltPinned = pinned;
+      jug.group.position.x = x; jug.group.position.z = z; jug.group.rotation.y = yaw; jug.group.updateMatrixWorld(true);
+      beltLivePose = { x, z, yaw };
+      if (now) followBelt();                            // (a drop sent back: everything goes back at once, not next frame)
+    },
+    stagePose: () => stagePose,
     wall: () => stageWall, cx: () => curBuild?.view.cx ?? 0,
     // the HEIGHT the user gave a machine (rooms/footing.js lift: a layout entry's, or __dev.lift / ?lift=) —
     // never the room solve's gallery raise (rig.lift): a stage move keeps it in the layout (src/editor)
@@ -1566,14 +1746,24 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
     },
     footing: () => rooms.footing,                         // the live plan: the readout's LOFT mates
     /* what can't be moved here — and why (stage edit says so when one is clicked) */
-    fixed: () => [
-      ...(stageWall.isEmpty() ? [] : [{ key: 'belt', label: 'Belt', color: '#ffaa55', box: stageWall, why: 'the belt stands on its own posts' }]),
-      ...instLive.filter(r => r.slot.hang).map(r => {          // (its meshes, else its solid box: a loft is mostly air)
-        const a = lastAnchors.find(q => q.key === r.I.key && q.kind === 'hung'), b = a?.box;
-        return { key: r.I.key, label: r.I.label, color: r.I.color, obj: r.station, why: 'hangs from the belt',
-                 box: b ? new THREE.Box3(new THREE.Vector3(b[0], b[2], b[4]), new THREE.Vector3(b[1], b[3], b[5])) : null };
-      }),
-    ],
+    fixed: () => [],                                      // (nothing, since the belt moves too)
+    /* where a HUNG station hangs this song (world x/z): as built, else (it stands now) where it hung on this
+       page, else its slot over the belt (stations.js) — stage edit's re-hang magnet */
+    hangHome(key){
+      const h = hangHomes.get(`${editor.id}|${key}`), b = STATIONS[key];   // (as built — not where a drag has it now)
+      if (h) return h;
+      if (!b?.hang || stageWallL.isEmpty()) return null;
+      return toWorld(stagePose, (curBuild?.view.cx ?? 0) + b.x, (stageWallL.min.z + stageWallL.max.z) / 2 + b.z);
+    },
+    /* the lift that keeps a HUNG station's deck where it hangs once it STANDS (taken down: it keeps its height
+       — rooms/footing.js groundOf over its underside: the lowest part that isn't a floor mark or a column) */
+    unhangLift(key){
+      const r = instLive.find(q => q.I.key === key && q.slot.hang);
+      if (!r) return undefined;
+      const low = hangLow(r.station);
+      if (!Number.isFinite(low)) return 0;
+      return clampLift(r.station.position.y - groundOf(low - r.station.position.y, ROOM.FLOOR));
+    },
     kitPivot: kitPivotNow,
     /* where the build's SOLVED stage stands, in the layout's frame ({ key: { x (− cx), z, yaw } }) — only for a
        FREE build (nothing pinned, no user height: what the empty layout rebuilds to); else null. Stage edit's
@@ -1583,7 +1773,8 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
       const out = {};
       for (const it of L.items){ const s = L.solved[it.key]; if (!s) return null;
         const r = it.key === 'drums' ? null : instLive.find(q => q.I.key === it.key && !q.slot.hang);
-        out[it.key] = { x: s.x - L.cx, z: s.z, yaw: r ? (r.slot.yaw ?? 0) : 0 }; }
+        const w = poseToWorld(stagePose, { x: s.x, z: s.z, yaw: r ? (r.slot.yaw ?? 0) : 0 });   // (the layout's frame: the room)
+        out[it.key] = { x: w.x - L.cx, z: w.z, yaw: r ? w.yaw : 0 }; }
       return out;
     },
     visBox: o => visBox(o),
@@ -1638,6 +1829,7 @@ if (!reduceMotion){ clock.start(); started = true; }
 
 function animate(){
   const frameT0 = performance.now();
+  if (beltLivePose) followBelt();                        // (stage edit dragging the belt: its followers + the room, once a frame)
   const dt = Math.min(clock.getDelta(), .05);
   // THE TRANSPORT (transport.js): a song never reaches its start before the belt's plan is in — a
   // juggle that isn't baked (an import, a share link, a MAP re-route) is solved while the count-in

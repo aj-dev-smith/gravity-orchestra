@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import * as THREE from 'three';
 import { IDENTITY, isIdentity, toWorld, toStage, dirToWorld, poseToWorld, poseToStage, box6ToWorld, boxToWorld, stageRoom, clampPose, poseOf } from '../src/stagepose.js';
-import { sanitizeLayout, encodeLayout, placeEntry, rehangs, footprint, inRectPoly, BELT } from '../src/editor/placement.js';
+import { sanitizeLayout, encodeLayout, placeEntry, carryEntries, rehangs, footprint, inRectPoly, BELT } from '../src/editor/placement.js';
 import { layoutStations, stationFor } from '../src/instruments/stations.js';
 import { solveFollow } from '../src/shotsolve.js';
 import { planAnchors } from '../src/xrplan.js';
@@ -94,9 +94,33 @@ describe('stage pose: the layout format (back-compatible)', () => {
     expect(Object.keys(L)).toEqual(['belt']);
     expect(L.belt).toEqual({ x: 12, z: 4, yaw: .5 });
     const L2 = placeEntry(L, 'marimba', { x: -22, z: 5, yaw: .5 }, all);
-    expect(L2.belt).toEqual(L.belt); expect(L2.marimba.x).toBe(-22); expect(L2.drums).toBeUndefined();   // (the layout was not empty: no pin-all)
+    // (a belt entry alone pinned nobody: the first MACHINE edit after it still pins the whole stage as it stands —
+    //  else a reload re-solves the rest round the newly pinned one and they jump)
+    expect(L2.belt).toEqual(L.belt); expect(L2.marimba.x).toBe(-22); expect(L2.drums).toEqual({ x: 18, z: 19, yaw: 0 });
+    expect(Object.keys(L2).sort()).toEqual(['belt', 'drums', 'marimba']);
+    const L2b = placeEntry(L2, 'drums', { x: 16, z: 19, yaw: 0 }, all.map(p => p.key === 'marimba' ? { ...p, x: 99 } : p));
+    expect(L2b.marimba.x).toBe(-22);                                                                     // (…and only the first)
     const L3 = placeEntry({}, 'marimba', { x: -22, z: 5, yaw: .5 }, all);                                 // (stage edit's `all` never holds the belt)
     expect(L3.belt).toBeUndefined(); expect(L3.drums).toEqual({ x: 18, z: 19, yaw: 0 });
+  });
+  it('the WHOLE STAGE move carries every placed machine rigidly with the belt (its place relative to the belt kept)', () => {
+    const T0 = { x: 0, z: 0, yaw: 0 }, T1 = { x: 12, z: 4, yaw: .5 };
+    const L = { belt: { x: 0, z: 0, yaw: 0 }, marimba: { x: -20, z: 5, yaw: .3, lift: 2 }, drums: { x: 18, z: 19 }, organ: { x: 3, z: -14, yaw: 0 } };
+    const C = carryEntries(L, T0, T1);
+    expect(C.belt).toEqual(L.belt);                                             // (the belt's own entry: placeEntry's)
+    for (const k of ['marimba', 'drums', 'organ']){
+      const w = toWorld(T1, L[k].x, L[k].z);
+      expect(C[k].x).toBeCloseTo(w.x, 9); expect(C[k].z).toBeCloseTo(w.z, 9);
+      expect(toStage(T1, C[k].x, C[k].z).x).toBeCloseTo(L[k].x, 9);            // (relative to the belt: unchanged)
+    }
+    expect(C.marimba.yaw).toBeCloseTo(.8, 9); expect(C.marimba.lift).toBe(2); expect(C.drums.yaw).toBeUndefined();
+    // (from a moved stage to another: the stage-frame place is kept; back again = where it was)
+    const T2 = { x: -8, z: -6, yaw: -1.2 }, D = carryEntries(C, T1, T2), back = carryEntries(D, T2, T0);
+    const a = toStage(T1, C.marimba.x, C.marimba.z), b = toStage(T2, D.marimba.x, D.marimba.z);
+    expect(b.x).toBeCloseTo(a.x, 9); expect(b.z).toBeCloseTo(a.z, 9);
+    for (const k of ['marimba', 'drums', 'organ']){ expect(back[k].x).toBeCloseTo(L[k].x, 9); expect(back[k].z).toBeCloseTo(L[k].z, 9); }
+    expect(back.marimba.yaw).toBeCloseTo(.3, 9);
+    expect(L.marimba).toEqual({ x: -20, z: 5, yaw: .3, lift: 2 });            // (pure)
   });
   it('a hung machine re-hangs over a TURNED belt\'s footprint (the magnet reads its corners)', () => {
     const fp = footprint([-12.6, 12.6, -4, 3], 12, 4, .52);

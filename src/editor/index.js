@@ -23,7 +23,7 @@ import { makeStageEdit } from './stage-edit.js';
 import { midiSources, midiSourcesIn, defaultMidiMapping, applyMidiMapping, songSources, defaultSongMapping, applySongMapping,
          setTarget, sameMapping, loadMapping, saveMapping, sanitizeMapping, targetsFor, machineOf } from './mapping.js';
 import { convertToSong } from '../midi/convert.js';
-import { placeSlot, standSlot, dropEntry, placeEntry, sanitizeLayout, encodeLayout, loadLayout, saveLayout, makeHistory, liftOnlyUndo, BELT } from './placement.js';
+import { placeSlot, standSlot, dropEntry, placeEntry, carryEntries, sanitizeLayout, encodeLayout, loadLayout, saveLayout, makeHistory, liftOnlyUndo, BELT } from './placement.js';
 import { poseOf } from '../stagepose.js';
 
 /** "bars 33–48 (0:41 of 3:27) — the chorus" — a phrase window in words */
@@ -223,10 +223,13 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     floorY: host.floorY, height: host.height, liftLive: host.liftLive, footing: host.footing, fixed: host.fixed,
     hangHome: host.hangHome, unhangLift: host.unhangLift, stagePose: host.stagePose,
     // (the belt's followers: the machines the user never placed — the LAYOUT says, not the build: a first edit pins them all)
-    pinned: k => k in layout(), beltLive: (x, z, yaw) => host.beltLive?.(x, z, yaw, k => k in layout()),
-    place(key, entry, all, { rebuild = false } = {}){
+    // (whole: the WHOLE STAGE moves — Alt / BAND COMES: the placed machines ride along too)
+    pinned: k => k in layout(), beltLive: (x, z, yaw, whole = false, now = false) => host.beltLive?.(x, z, yaw, whole ? () => false : k => k in layout(), now),
+    place(key, entry, all, { rebuild = false, carry = null } = {}){
       history.push(curId, layout());                 // (undo: the layout as it was before this move)
-      saveLayout(store, curId, placed(key, entry, all));
+      // (carry { T0, T1 }: a whole-stage belt move — every placed machine keeps its place relative to the belt)
+      const L1 = placed(key, entry, all);
+      saveLayout(store, curId, carry ? carryEntries(L1, carry.T0, carry.T1, { cx: host.cx() }) : L1);
       // a HUNG station taken down off the belt is BUILT standing (no columns / rods: the room's footing holds
       // it) — a rebuild holding songTime, like an undo
       if (rebuild){ host.rebuild(true); syncButtons(); return; }
@@ -498,6 +501,11 @@ function injectStyles(){
   .se-dock.fixed .sd-h,.se-dock.fixed .sd-more,.se-dock.fixed .sd-turn{display:none}
   .se-dock.nolift .sd-h,.se-dock.nolift .sd-more{display:none}
   .se-dock.hungsel .sd-why{display:block}
+  /* the belt's WHOLE STAGE toggle: only for the belt */
+  .sd-band{display:none;align-items:center;flex:none}
+  .se-dock.beltsel .sd-band{display:flex}
+  .se-dock.beltsel .sd-why{display:block}
+  .se-dock .sd-band button.on{border-color:rgba(255,183,100,.85);color:var(--amber);background:rgba(255,183,100,.14)}
   /* the MAGNET chip over a hung machine being dragged: HANGS FROM THE BELT (the belt's blue) / STANDS HERE */
   .se-chip.se-mag{z-index:9;align-items:center;border-color:rgba(255,183,100,.55)}
   .se-chip.se-mag i{letter-spacing:.2em}
@@ -555,7 +563,7 @@ function injectStyles(){
     .se-btns i{display:none}
     .se-dock{left:8px;right:8px;bottom:42px;transform:none;max-width:none;display:grid;grid-template-columns:minmax(0,1fr) auto;
       grid-template-areas:"name turn" "h more" "why why";gap:8px 8px;padding:8px 8px 8px 12px;border-radius:16px}
-    .sd-name{grid-area:name}.sd-turn{grid-area:turn}.sd-h{grid-area:h}.sd-more{grid-area:more}.sd-why{grid-area:why;white-space:normal}
+    .sd-name{grid-area:name}.sd-turn{grid-area:turn}.sd-h{grid-area:h}.sd-more{grid-area:more}.sd-band{grid-area:more}.sd-why{grid-area:why;white-space:normal}
     .sd-read{min-width:11ch}
     .se-dock .sd-step{padding:0}.se-dock .sd-step i{display:none}
     .se-dock.fixed{grid-template-areas:"name" "why";grid-template-columns:1fr}

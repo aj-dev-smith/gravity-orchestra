@@ -186,12 +186,33 @@ export function placeEntry(L0, key, entry, all = [], { cx = 0, liftOf = () => un
   const held = (k, e) => { const u = liftOf(k) ?? L[k]?.lift; return Number.isFinite(u) ? { ...e, lift: u } : e; };
   // (moving the BELT pins nobody: the band re-seats round it where it now stands — a belt has no height)
   if (key === BELT){ const { x, z, yaw = 0 } = entry; L[key] = { x, z, yaw }; return L; }
-  if (!Object.keys(L).length)
+  // (the FIRST edit — of a machine: a belt entry alone pinned nobody, so the stage still stands as the room
+  //  solve seated it round the belt; a reload re-solves anything unpinned, so pin it all now, as it stands)
+  if (!Object.keys(L).some(k => k !== BELT))
     for (const p of all) L[p.key] = held(p.key, { x: p.x - cx, z: p.z, yaw: p.yaw });
   let e;
   if (!('lift' in entry)) e = held(key, entry);
   else { e = { ...entry }; if (!Number.isFinite(entry.lift)) delete e.lift; }
   L[key] = e;
+  return L;
+}
+
+/** THE WHOLE STAGE moves (stage edit: the belt dragged with Alt / BAND COMES): every PINNED machine rides the
+    belt's rigid move T0 → T1 (stage poses, src/stagepose.js) — its place relative to the belt is kept, as the
+    unpinned ones keep theirs through the room solve. Entries are the layout's (x relative to cx, z, yaw world);
+    the kit's yaw stays out (it faces the stage's audience: it turns with the stage anyway); heights are kept.
+    The belt's own entry is not touched (placeEntry writes it). Pure: L0 is not touched. */
+export function carryEntries(L0, T0, T1, { cx = 0 } = {}){
+  const L = { ...L0 };
+  const c0 = Math.cos(T0.yaw || 0), s0 = Math.sin(T0.yaw || 0), c1 = Math.cos(T1.yaw || 0), s1 = Math.sin(T1.yaw || 0);
+  for (const k of Object.keys(L)){
+    if (k === BELT) continue;
+    const e = L[k], dx = e.x + cx - (T0.x || 0), dz = e.z - (T0.z || 0);
+    const lx = dx * c0 - dz * s0, lz = dx * s0 + dz * c0;                    // (into the old stage frame…)
+    const n = { ...e, x: (T1.x || 0) + lx * c1 + lz * s1 - cx, z: (T1.z || 0) - lx * s1 + lz * c1 };   // (…and out of the new)
+    if (k !== 'drums' && Number.isFinite(e.yaw)) n.yaw = Math.atan2(Math.sin(e.yaw + (T1.yaw || 0) - (T0.yaw || 0)), Math.cos(e.yaw + (T1.yaw || 0) - (T0.yaw || 0)));
+    L[k] = n;
+  }
   return L;
 }
 

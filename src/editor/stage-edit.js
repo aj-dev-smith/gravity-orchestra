@@ -77,7 +77,7 @@
      machine is selected.
    ============================================================ */
 import { snap, snapYaw, conflicts, describeConflicts, footprint, boxCorners, bounds, inPoly, rehangs, BELT } from './placement.js';
-import { toStage } from '../stagepose.js';
+import { toStage, toWorld } from '../stagepose.js';
 import { GALLERY_DROP } from '../instruments/stations.js';
 import { readout, dragLift, stepLift, loftTargets, liftMax, rayPlaneY, makeSettle, bandName, TICK_U, fmtMeters } from './height.js';
 
@@ -183,6 +183,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       <button data-a="up" class="sd-step" title="raise it ½ u ≈ 34 cm (PgUp or ] · Shift: 2 u)" aria-label="raise">▲<i> RAISE</i></button>
     </span>
     <span class="sd-more"><button data-a="floor" title="set it down on the floor (Home)">FLOOR</button><button data-a="auto" title="let the stage decide its height">AUTO</button></span>
+    <span class="sd-band"><button data-a="band" aria-pressed="false" title="the machines you placed come with the belt too (or hold Alt / Option while you drag)">WHOLE STAGE</button></span>
     <span class="sd-turn"><button data-a="ccw" title="turn left 15° (Q · Shift: 5°)" aria-label="turn left">↺</button><button data-a="cw" title="turn right 15° (E · Shift: 5°)" aria-label="turn right">↻</button></span>
 `;
   document.body.appendChild(dock);
@@ -190,7 +191,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     name: dock.querySelector('.sd-name b'), dot: dock.querySelector('.sd-name i'), val: dock.querySelector('.sd-read b'), band: dock.querySelector('.sd-read i'),
     loft: dock.querySelector('.sd-loft'), why: dock.querySelector('.sd-why'),
     up: dock.querySelector('[data-a=up]'), down: dock.querySelector('[data-a=down]'), floor: dock.querySelector('[data-a=floor]'), auto: dock.querySelector('[data-a=auto]'),
-    ccw: dock.querySelector('[data-a=ccw]'), cw: dock.querySelector('[data-a=cw]'),
+    ccw: dock.querySelector('[data-a=ccw]'), cw: dock.querySelector('[data-a=cw]'), whole: dock.querySelector('[data-a=band]'),
   };
   const readEl = dock.querySelector('.sd-read');
   dock.addEventListener('click', e => {
@@ -200,6 +201,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     else if (a === 'floor') liftSet(0);
     else if (a === 'auto') liftAuto();
     else if (a === 'ccw' || a === 'cw') turn(a === 'ccw' ? -1 : 1, e.shiftKey);
+    else if (a === 'band'){ settle.flush(); turnDone(); bandWith = !bandWith; check(); paint(); paintDock(); hint(); }
     if (e.detail) b.blur();
   });
 
@@ -264,7 +266,19 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   const beltOf = () => { for (const p of pieces) if (p.kind === 'belt') return p; return null; };
   const isBelt = p => p?.kind === 'belt';
   // (does a machine ride along when the belt moves — one the user never placed: no layout entry)
-  const follows = p => !isBelt(p) && !(host.pinned ? host.pinned(p.key) : p.pin);
+  const follows = p => !isBelt(p) && (wholeNow() || !(host.pinned ? host.pinned(p.key) : p.pin));
+  const pinnedP = p => !isBelt(p) && !!(host.pinned ? host.pinned(p.key) : p.pin);
+  /* THE WHOLE STAGE (the dock's WHOLE STAGE, or Alt held as a belt drag starts): the machines the user placed
+     ride the belt's move too — their place relative to the belt is kept (placement.js carryEntries) — instead of
+     staying where they stand in the room. (A turn by Q / E / the dock takes the dock's word.) */
+  let bandWith = false;
+  const wholeNow = () => drag && isBelt(drag.piece) ? !!drag.whole : bandWith;
+  /* the belt's pose: where its group stands (live) · the stage pose the followers were last moved to (main) */
+  const beltPoseOf = p => ({ x: p.obj.position.x, z: p.obj.position.z, yaw: p.obj.rotation.y });
+  /* a placed machine's footprint once it has ridden the belt's live move (main moves it once a frame: from the
+     pose it was last moved to, to where the belt is now — exact whatever frame this runs in) */
+  const carriedFp = (o, bp) => { const T0 = host.stagePose?.() || { x: 0, z: 0, yaw: 0 }, T1 = beltPoseOf(bp);
+    return fpOf(o).map(([x, z]) => { const q = toStage(T0, x, z), w = toWorld(T1, q.x, q.z); return [w.x, w.z]; }); };
   const drawBeltLine = () => { const bp = beltOf(), wb = host.wall();
     setRect(beltLine, beltFill, bp ? fpOf(bp) : boxCorners([wb.min.x, wb.max.x, wb.min.z, wb.max.z]), FLOOR_Y + .04, bp ? bp.obj.rotation.y : 0); };
   /* its HEIGHT now (main's anchors — live while a lift runs): { lift, user, deck, bottom, top, floor, ceil, open } */
@@ -307,8 +321,16 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     const wall = wallPoly(), floor = pieces.filter(o => !o.hung && !isBelt(o));
     // (the belt: against the room and the machines that stay put — the rest ride along with it)
     for (const p of pieces) p.bad = overhead(p) ? []
-      : isBelt(p) ? conflicts(fpOf(p), floor.filter(o => !follows(o)).map(o => ({ key: o.key, box: fpOf(o) })), null, host.room)
+      : isBelt(p) ? beltConflicts(p, floor)
       : conflicts(fpOf(p), floor.filter(o => o !== p).map(o => ({ key: o.key, box: fpOf(o) })), wall, host.room);
+  }
+  /* the belt against the room and the placed machines that stay put; with the WHOLE STAGE, every placed machine
+     it carries must stay inside the room too (an unplaced one re-seats: the room solve keeps it in) */
+  function beltConflicts(p, floor){
+    const cs = conflicts(fpOf(p), floor.filter(o => !follows(o)).map(o => ({ key: o.key, box: fpOf(o) })), null, host.room);
+    if (wholeNow() && host.room) for (const o of floor) if (pinnedP(o) && !cs.some(c => c.kind === 'room')
+      && conflicts(carriedFp(o, p), [], null, host.room).some(c => c.kind === 'room')) cs.push({ kind: 'room', key: o.key });
+    return cs;
   }
   function paint(){
     for (const p of pieces){
@@ -399,7 +421,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     const turnHint = coarse() ? ' · the ring turns it' : ' · Q / E or the ring to turn';   // (no keys on a phone)
     hintEl.textContent = bad ? `${sel.label}: ${bad}${moving(sel) && sel.hung ? ' — release: it stays hung' : ''}` : moving(sel) && sel.rehang ? (hangsAt(sel) ? `${sel.label} · release to hang it from the belt` : `${sel.label} · release to stand it here`)
       : sel.hung ? `${sel.label} · hangs from the belt — drag it off to stand it in the room`
-      : isBelt(sel) ? `Belt · drag to move${turnHint} · the machines you haven't placed come with it`
+      : isBelt(sel) ? (wholeNow() ? `Belt · the WHOLE STAGE moves with it${turnHint}` : `Belt · drag to move${turnHint} · the machines you haven't placed come with it${coarse() ? '' : ' (Alt: all of them)'}`)
       : hidden(sel) ? `${sel.label} · hidden behind the belt — drag it forward or ▲ raise it`
       : `${sel.label} · drag to move${sel.canRotate ? turnHint : ''}${liftable(sel) ? ' · ▲▼ height' : ''}${sel.rehang ? ' · onto the belt: re-hang' : ''}`;
     hintEl.className = 'se-hint' + (bad ? ' bad' : '');
@@ -594,7 +616,9 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       D.why.textContent = info.why; return;
     }
     dock.classList.remove('fixed');
-    D.why.textContent = isBelt(p) ? (p.bad.length ? 'release · it goes back' : 'the band moves with it') : !p.hung ? '' : !moving(p) ? 'hangs from the belt · drag it off to stand it'
+    dock.classList.toggle('beltsel', isBelt(p));
+    D.whole.setAttribute('aria-pressed', String(bandWith)); D.whole.classList.toggle('on', bandWith);
+    D.why.textContent = isBelt(p) ? (p.bad.length ? 'release · it goes back' : wholeNow() ? 'the whole stage moves with it' : 'the band you haven’t placed moves with it') : !p.hung ? '' : !moving(p) ? 'hangs from the belt · drag it off to stand it'
       : hangsAt(p) ? 'release · it stays hung' : p.bad.length ? "release · it can't stand there — it stays hung" : 'release · it stands here';
     dock.classList.toggle('hungsel', !!p.hung);
     D.name.textContent = p.label; dock.style.setProperty('--c', p.color || '#cfd6e6');
@@ -680,7 +704,8 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     plane.set(_v.set(0, 1, 0), -y);
     const at = ray.ray.intersectPlane(plane, new THREE.Vector3());
     if (!at) return;
-    drag = { piece: p, mode: hit.knob ? 'turn' : 'move', y, at0: at, c0: { ...c }, yaw0: p.obj.rotation.y, moved: false, id: e.pointerId };
+    drag = { piece: p, mode: hit.knob ? 'turn' : 'move', y, at0: at, c0: { ...c }, yaw0: p.obj.rotation.y, moved: false, id: e.pointerId,
+             whole: isBelt(p) && (bandWith || e.altKey) };
     try { dom.setPointerCapture(e.pointerId); } catch (_){ /* (synthetic events) */ }
     dom.style.cursor = 'grabbing';
   }, { capture: true });
@@ -753,14 +778,14 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   }
 
   function setPivot(p, x, z){
-    if (isBelt(p)){ host.beltLive?.(x, z, p.obj.rotation.y); return; }
+    if (isBelt(p)){ host.beltLive?.(x, z, p.obj.rotation.y, wholeNow()); beltDirty = true; return; }
     if (p.kind === 'kit'){ const k = host.kitPivot(); p.obj.position.x += x - k.x; p.obj.position.z += z - k.z; }
     else { p.obj.position.x = x; p.obj.position.z = z; }
     p.obj.updateMatrixWorld(true);
   }
   function setYaw(p, yaw){
     if (!p.canRotate || Math.abs(yaw - p.obj.rotation.y) < 1e-6) return;
-    if (isBelt(p)){ host.beltLive?.(p.obj.position.x, p.obj.position.z, yaw); return; }
+    if (isBelt(p)){ host.beltLive?.(p.obj.position.x, p.obj.position.z, yaw, wholeNow()); beltDirty = true; return; }
     p.obj.rotation.y = yaw; p.obj.updateMatrixWorld(true);   // (the local box turns with it: nothing to re-measure)
   }
   function turn(dir, free){
@@ -783,18 +808,22 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
      a hanging one dropped where it hangs goes back exactly (nothing to save) */
   function commit(p, d = null){
     if (!p) return;
+    const whole = isBelt(p) && (d ? !!d.whole : bandWith);
     // THE BELT: kept inside the room (dropped through a wall it goes back where it stood); else saved and the
     // stage rebuilt holding songTime — the band re-seats round it (an overlap with a placed machine is the
     // user's call, red like any other)
     if (isBelt(p)){
       const h = p.home;
-      if (p.bad.some(c => c.kind === 'room') && h){
-        host.beltLive?.(h.x, h.z, h.yaw); check(); paint();
-        hintEl.textContent = 'Belt: outside the room — it goes back'; hintEl.className = 'se-hint bad';
+      // (…and never dropped ON a machine the user placed: it goes back — move that one first, or the whole stage)
+      if (p.bad.length && h){
+        const room = p.bad.find(c => c.kind === 'room'), why = room ? (room.key ? `${labelOf(room.key)} would leave the room` : 'outside the room')
+          : describeConflicts(p.bad, labelOf);
+        host.beltLive?.(h.x, h.z, h.yaw, whole, true); check(); paint();   // (now: its followers go back with it, then the outlines)
+        hintEl.textContent = `Belt: ${why} — it goes back${room || whole ? '' : ' · move that first, or the WHOLE STAGE'}`; hintEl.className = 'se-hint bad';
         return;
       }
       if (h && Math.abs(h.x - p.obj.position.x) < 1e-6 && Math.abs(h.z - p.obj.position.z) < 1e-6 && Math.abs(h.yaw - p.obj.rotation.y) < 1e-6) return;
-      host.place(BELT, entryOf(p), allNow(), { rebuild: true }); onChange(); return;
+      host.place(BELT, entryOf(p), allNow(), { rebuild: true, ...(whole && h ? { carry: { T0: { x: h.x, z: h.z, yaw: h.yaw }, T1: beltPoseOf(p) } } : {}) }); onChange(); return;
     }
     if (p.rehang && d){
       const back = hangsAt(p);
@@ -1314,8 +1343,10 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   }
 
   /* per frame: the eye's glide, the knob's lift, keep the name tags + the handle over their machines */
+  let beltDirty = false;                               // (the belt moved: its followers move once a frame — main, before this)
   function update(){
     if (!on) return;
+    if (beltDirty){ beltDirty = false; check(); paint(); }   // (…so their outlines are drawn where they now stand)
     bandPx = sel ? freeBand() : null;                   // (read before this frame's DOM writes)
     easeFrame();
     liftFrame();

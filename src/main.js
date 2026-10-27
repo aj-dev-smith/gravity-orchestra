@@ -134,7 +134,7 @@ scene.fog = new THREE.FogExp2(0x07060e, 0.026);
    + WASD/QE fly controls, and the per-frame framing. main just feeds it the live
    marbles each frame and the tracks on each song change. */
 const cam = makeCameraRig({ stageY: STAGE_Y, fixedZMax: FIXED_ZMAX,
-                            dom: renderer.domElement, camsEl: document.getElementById('cams'), pathBlocked, ridePose: rideCam });
+                            dom: renderer.domElement, camsEl: document.getElementById('cams'), pathBlocked, ridePose: rideCam, eyeGuard: guardEye });
 /* does the straight line a → b pass through any drawn machine part? (the director asks once
    per cut: a glide that would dolly through geometry becomes a hard cut) */
 function pathBlocked(a, b){
@@ -626,9 +626,18 @@ let beltPinned = undefined;                             // (stage edit's word on
 function followBelt(){
   const T0 = stagePose, T1 = beltLivePose; beltLivePose = null;
   if (!T1 || (T0.x === T1.x && T0.z === T1.z && T0.yaw === T1.yaw)) return;
-  for (const o of beltFollowers(beltPinned)){
+  const fol = beltFollowers(beltPinned);
+  for (const o of fol){
     const w = poseToWorld(T1, poseToStage(T0, { x: o.position.x, z: o.position.z, yaw: o.rotation.y }));
     o.position.x = w.x; o.position.z = w.z; o.rotation.y = w.yaw; o.updateMatrixWorld(true);
+  }
+  // a PLACED kit stays where it stands — but it faces the stage's audience (the rebuild turns it with the stage):
+  // it turns in place now, about its pivot, so what the drag shows is what the release keeps
+  const dy = T1.yaw - T0.yaw;
+  if (drumGroup && dy && !fol.includes(drumGroup)){
+    const k = kitPivotNow(), c = Math.cos(dy), s = Math.sin(dy), ox = drumGroup.position.x - k.x, oz = drumGroup.position.z - k.z;
+    drumGroup.position.x = k.x + ox * c + oz * s; drumGroup.position.z = k.z - ox * s + oz * c;
+    drumGroup.rotation.y += dy; drumGroup.updateMatrixWorld(true);
   }
   stagePose = isIdentity(T1) ? IDENTITY : T1;
   if (curBuild) curBuild.view.pose = stagePose;
@@ -993,10 +1002,13 @@ function placeRoom(){
   }
   if (S.drums && drumGroup){
     // (the kit's slot is in the STAGE frame — it turns with the stage, facing its audience)
-    const a = kitAnchor(view.cx, kitSlot), lift = kitLift(), K = kitOrigin(), aw = toWorld(stagePose, a.x, a.z);
-    out.push({ key: 'drums', kind: 'kit', label: 'Drum Machine', color: '#ff8a3d', x: aw.x, z: aw.z, yaw: stagePose.yaw, w: a.w, d: a.d,
+    //  (…read off its GROUP's pose — the stage pose, but for a PLACED kit while the belt is dragged: it stays put,
+    //   turning in place — followBelt; the default stage: the identity, untouched)
+    const KP = isIdentity(stagePose) && !drumGroup.rotation.y ? stagePose : { x: drumGroup.position.x, z: drumGroup.position.z, yaw: drumGroup.rotation.y };
+    const a = kitAnchor(view.cx, kitSlot), lift = kitLift(), K = kitOrigin(), aw = toWorld(KP, a.x, a.z);
+    out.push({ key: 'drums', kind: 'kit', label: 'Drum Machine', color: '#ff8a3d', x: aw.x, z: aw.z, yaw: KP.yaw, w: a.w, d: a.d,
       y: kitSlot.y, ground: kitSlot.y - lift, lift, bottom: kitSlot.y + KIT_STAND, low: kitSlot.y + Math.min(KIT_STAND, kitLoc ? kitLoc.min.y : 0),
-      box: kitLoc ? box6ToWorld(stagePose, [kitLoc.min.x + K.x, kitLoc.max.x + K.x, kitLoc.min.y + K.y, kitLoc.max.y + K.y, kitLoc.min.z + K.z, kitLoc.max.z + K.z]) : null,
+      box: kitLoc ? box6ToWorld(KP, [kitLoc.min.x + K.x, kitLoc.max.x + K.x, kitLoc.min.y + K.y, kitLoc.max.y + K.y, kitLoc.min.z + K.z, kitLoc.max.z + K.z]) : null,
       cue: loopCue(kitHits(S), P), ...run, fixed: false });
   }
   for (const r of instLive){
@@ -1336,6 +1348,13 @@ function shotCtx(){
            wall: w.isEmpty() ? null : [w.min.x, w.max.x, w.min.y, w.max.y, w.min.z, w.max.z], follow: followRig,
            ...(isIdentity(stagePose) ? {} : { pose: stagePose }) };
 }
+/* a MOVED belt's FIXED eye (camera.js eyeGuard — only off the default stage): never inside a machine or what it
+   stands on — stepped toward the aim until clear, as the ride cam's is (≈ 20 box tests a frame, no rays) */
+function guardEye(eye, aim){
+  const inside = b => eye.x > b[0] - .6 && eye.x < b[1] + .6 && eye.y > b[2] - .6 && eye.y < b[3] + .6 && eye.z > b[4] - .6 && eye.z < b[5] + .6;
+  const hit = () => followRig.boxes.some(inside) || rooms.footBoxes.some(e => inside(e.box));
+  for (let k = 0; k < 8 && hit(); k++) eye.lerp(aim, .25);
+}
 /* an eye kept inside the room (a moved belt's fixed framings may otherwise point through a wall) */
 function clampEye(v){ const r = eyeRoom(); v.set(Math.min(r.x1, Math.max(r.x0, v.x)), Math.min(r.y1, Math.max(r.y0, v.y)), Math.min(r.z1, Math.max(r.z0, v.z))); return v; }
 function solveShots(shots){
@@ -1631,10 +1650,12 @@ function kitRel0(){
   return b.isEmpty() ? {} : { rel0: [b.min.x - k.x, b.max.x - k.x, b.min.z - k.z, b.max.z - k.z], top0: b.max.y, yawLive: true };
 }
 /* the kit's pivot in the ROOM: its slot (stage frame) set by the stage pose, + its group's live drag offset */
+// (the kit is BUILT round its slot, its group at the origin; every move since — the pose, a drag, a ride on the
+//  belt's move, a turn in place — moved the group rigidly: its pivot is the slot through the group's own pose)
 const kitPivotNow = () => {
-  if (isIdentity(stagePose)) return { x: (curBuild?.view.cx ?? 0) + kitSlot.x + (drumGroup?.position.x || 0), z: kitSlot.z + (drumGroup?.position.z || 0) };
-  const c = toWorld(stagePose, (curBuild?.view.cx ?? 0) + kitSlot.x, kitSlot.z);
-  return { x: c.x + (drumGroup ? drumGroup.position.x - stagePose.x : 0), z: c.z + (drumGroup ? drumGroup.position.z - stagePose.z : 0) };
+  const X = (curBuild?.view.cx ?? 0) + kitSlot.x;
+  if (!drumGroup?.rotation.y) return { x: X + (drumGroup?.position.x || 0), z: kitSlot.z + (drumGroup?.position.z || 0) };
+  return toWorld({ x: drumGroup.position.x, z: drumGroup.position.z, yaw: drumGroup.rotation.y }, X, kitSlot.z);
 };
 const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: SONGS,
   machines: INSTRUMENTS.map(I => ({ key: I.key, label: I.label, color: I.color })),
@@ -1660,11 +1681,12 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
     ],
     /* the belt dragged / turned, live (x, z, yaw: its group's — the stage pose): the group moves now, its
        followers + the room once a frame (followBelt) */
-    beltLive(x, z, yaw, pinned){
+    beltLive(x, z, yaw, pinned, now = false){
       if (!jug) return;
       beltPinned = pinned;
       jug.group.position.x = x; jug.group.position.z = z; jug.group.rotation.y = yaw; jug.group.updateMatrixWorld(true);
       beltLivePose = { x, z, yaw };
+      if (now) followBelt();                            // (a drop sent back: everything goes back at once, not next frame)
     },
     stagePose: () => stagePose,
     wall: () => stageWall, cx: () => curBuild?.view.cx ?? 0,

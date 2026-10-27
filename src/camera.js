@@ -56,7 +56,8 @@ const PAN_KEYS = {
 /* ridePose(songTime, directed) → {eye, aim, fov} (THREE.Vector3s) | null — main's RIDE solve
    (ridecam.js over one belt ball's path). directed: only inside a planned ride window (eased in/out);
    otherwise the manual RIDE mode's free-running pose on the lead. */
-export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = null, ridePose = null }){
+// (eyeGuard(eye, aim): optional — steps a MOVED belt's fixed eye out of any machine / support, in place)
+export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = null, ridePose = null, eyeGuard = null }){
   const BASE_FOV = 55;
   let freeFov = null;                                         // a lens override for the free eye (stage edit's plan view)
   const camera = new THREE.PerspectiveCamera(BASE_FOV, innerWidth/innerHeight, .1, 200);
@@ -312,7 +313,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
       // (a belt stage edit moved / turned: the same framing in the belt's own frame, set where it stands —
       //  and kept inside the room)
       const T = stageView.pose;
-      if (T && (T.x || T.z || T.yaw)){ toPose(ideal, T); toPose(aim, T); if (bounds) clampTo(ideal, bounds); }
+      if (T && (T.x || T.z || T.yaw)){ toPose(ideal, T); toPose(aim, T); if (bounds) clampTo(ideal, bounds); if (eyeGuard) eyeGuard(ideal, aim); }
     } else if (shot){
       // a STATION shot: its own eye → aim, with a slow orbit drift so a held shot breathes.
       // Aspect-aware like FIXED: a narrow (portrait) frame pulls the eye back along its

@@ -191,6 +191,9 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
 
   /* Called by buildWorld: re-frame for the new song and rebuild the button row.
      A mode that no longer maps to a track (e.g. 'alto' on a duo) falls back to auto. */
+  /* a belt-frame point → the room (the stage pose: x, z, turn about +y), in place */
+  function toPose(v, T){ const c = Math.cos(T.yaw || 0), s = Math.sin(T.yaw || 0), x = v.x, z = v.z; v.x = T.x + x*c + z*s; v.z = T.z - x*s + z*c; return v; }
+  function clampTo(v, b){ v.x = Math.min(b.x1, Math.max(b.x0, v.x)); v.y = Math.min(b.y1, Math.max(b.y0, v.y)); v.z = Math.min(b.z1, Math.max(b.z0, v.z)); return v; }
   function syncTracks(tracks, view){
     curTracks = tracks; stageView = view;
     if (!FIXED_OK.has(mode) && !tracks.some(t => t.role === mode)) mode = 'auto';
@@ -306,6 +309,10 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
       const z = THREE.MathUtils.clamp(zFit, 16, fixedZMax);   // fit the width, but never pull back into the fog
       ideal.set(stageView.cx + z*0.22, stageY + 5, z);         // gentle 3/4, slightly above the band
       aim.set(stageView.cx, stageY + 1.5, 0);
+      // (a belt stage edit moved / turned: the same framing in the belt's own frame, set where it stands —
+      //  and kept inside the room)
+      const T = stageView.pose;
+      if (T && (T.x || T.z || T.yaw)){ toPose(ideal, T); toPose(aim, T); if (bounds) clampTo(ideal, bounds); }
     } else if (shot){
       // a STATION shot: its own eye → aim, with a slow orbit drift so a held shot breathes.
       // Aspect-aware like FIXED: a narrow (portrait) frame pulls the eye back along its
@@ -344,7 +351,7 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
     const focus = _focus.set(0, 0, 0);
     let back = Math.max(1, 1.3 / Math.min(camera.aspect, 1.3));
     if (!marblePts.length){
-      focus.set(0, stageY, 0);                                // pre-start (or between balls): frame the band
+      focus.set(stageView.pose?.x || 0, stageY, stageView.pose?.z || 0);   // pre-start (or between balls): frame the band
     } else if (followed){
       focus.copy(followed.p);
       back *= .92;                                            // tight, personal chase
@@ -365,7 +372,11 @@ export function makeCameraRig({ stageY, fixedZMax, dom, camsEl, pathBlocked = nu
     // no other machine stands between the eye and the belt, per aspect class)
     const fo = room && follow ? ((camera.aspect < .9 && follow.portrait) || follow.land) : null;
     const ox = fo ? fo[0] : 4.5, oy = fo ? fo[1] : 3.4, oz = fo ? fo[2] : (room ? 13 : 9.5);
-    ideal.copy(focus); ideal.x += (ox + sway*2.2)*back; ideal.z += (oz - sway*1.4)*back;
+    // (the offset is in the BELT's frame — the solve's: turned with it when stage edit turned the belt)
+    const ex = (ox + sway*2.2)*back, ez = (oz - sway*1.4)*back, yaw = stageView.pose?.yaw || 0;
+    ideal.copy(focus);
+    if (yaw){ const c = Math.cos(yaw), s = Math.sin(yaw); ideal.x += ex*c + ez*s; ideal.z += -ex*s + ez*c; }
+    else { ideal.x += ex; ideal.z += ez; }
     const lift = room && marblePts.length ? Math.max(0, focus.y - stageY - 2.5) : 0;
     ideal.y = stageY + oy + lift*.4;                          // eye height: the band plane (+ a share of the lift)
     aim.copy(focus); aim.y = stageY + .6 + lift*.6;           // look at the band centre, not the bobbing marble

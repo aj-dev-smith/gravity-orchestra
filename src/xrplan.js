@@ -74,8 +74,10 @@ export function planAnchors({ shots = [], wide = null, belts = [], solids = [], 
   };
   if (wide?.eye) add('stage', 'STAGE', wide.eye, wide.aim, '#cfd6e6');
   for (const b of belts){
-    const aim = [b.x, b.bandY, (b.z0 + b.z1) / 2];
-    add(b.role, b.role === 'lead' ? 'BELT' : `BELT · ${b.role.toUpperCase()}`, [b.x, b.bandY + .6, b.z1 + BELT_BACK], aim, '#ffb764');
+    // (b.pose: the belt moved / turned in stage edit — its box is in its own frame, the pad set in the room by it)
+    const T = b.pose, W = q => !T ? q : [T.x + q[0] * Math.cos(T.yaw || 0) + q[2] * Math.sin(T.yaw || 0), q[1], T.z - q[0] * Math.sin(T.yaw || 0) + q[2] * Math.cos(T.yaw || 0)];
+    const aim = W([b.x, b.bandY, (b.z0 + b.z1) / 2]);
+    add(b.role, b.role === 'lead' ? 'BELT' : `BELT · ${b.role.toUpperCase()}`, W([b.x, b.bandY + .6, b.z1 + BELT_BACK]), aim, '#ffb764');
   }
   for (const s of shots) add(s.key, String(s.label || s.key).toUpperCase(), s.eye, s.aim, s.color);
   return out;

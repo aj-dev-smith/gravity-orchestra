@@ -23,7 +23,8 @@ import { makeStageEdit } from './stage-edit.js';
 import { midiSources, midiSourcesIn, defaultMidiMapping, applyMidiMapping, songSources, defaultSongMapping, applySongMapping,
          setTarget, sameMapping, loadMapping, saveMapping, sanitizeMapping, targetsFor, machineOf } from './mapping.js';
 import { convertToSong } from '../midi/convert.js';
-import { placeSlot, standSlot, dropEntry, placeEntry, sanitizeLayout, encodeLayout, loadLayout, saveLayout, makeHistory, liftOnlyUndo } from './placement.js';
+import { placeSlot, standSlot, dropEntry, placeEntry, sanitizeLayout, encodeLayout, loadLayout, saveLayout, makeHistory, liftOnlyUndo, BELT } from './placement.js';
+import { poseOf } from '../stagepose.js';
 
 /** "bars 33–48 (0:41 of 3:27) — the chorus" — a phrase window in words */
 export function loopText(p, short = false){
@@ -150,6 +151,8 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
   // (a HUNG station hangs as built — unless the layout has an entry for it: the user took it down, it STANDS)
   const slot = (key, base) => base.hang ? standSlot(base, layout()[key]) : placeSlot(base, layout()[key]);
   const kitSlot = base => placeSlot(base, layout().drums);   // (the kit faces the audience: main ignores its yaw)
+  // THE BELT's place in the room (src/stagepose.js — the stage pose; no entry: where it always stood)
+  const beltPose = () => poseOf(layout()[BELT]);
 
   /* ---- the map panel ---- */
   const panel = makeMapPanel({
@@ -218,7 +221,9 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
   const stage = makeStageEdit({ THREE, scene, cam, dom, onChange: syncButtons, host: {
     pieces: host.pieces, wall: host.wall, cx: host.cx, kitPivot: host.kitPivot, visBox: host.visBox, room: host.room, roomBox: host.roomBox, roomGroup: host.roomGroup,
     floorY: host.floorY, height: host.height, liftLive: host.liftLive, footing: host.footing, fixed: host.fixed,
-    hangHome: host.hangHome, unhangLift: host.unhangLift,
+    hangHome: host.hangHome, unhangLift: host.unhangLift, stagePose: host.stagePose,
+    // (the belt's followers: the machines the user never placed — the LAYOUT says, not the build: a first edit pins them all)
+    pinned: k => k in layout(), beltLive: (x, z, yaw) => host.beltLive?.(x, z, yaw, k => k in layout()),
     place(key, entry, all, { rebuild = false } = {}){
       history.push(curId, layout());                 // (undo: the layout as it was before this move)
       saveLayout(store, curId, placed(key, entry, all));
@@ -336,7 +341,7 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
   }
 
   return {
-    song, slot, kitSlot,
+    song, slot, kitSlot, beltPose,
     /** after every buildWorld: the editors re-read the room */
     built(){
       building = false;

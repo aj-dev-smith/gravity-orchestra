@@ -218,7 +218,7 @@ function followState(S, ctx, prev){
   const boxes = bk.filter(k => k.solid).map(k => k.solid).concat(S.solids.map(s => s.box));
   const blocked = (e, d, far) => S.anyHit(list, e, d, far);       // the real meshes of everything but the belt
   const solve = ctx.wall ? (portrait, prefer) => solveFollow({ wall: ctx.wall, boxes, stageY: ctx.stageY,
-    backs: portrait ? [2.4, 3.2] : [1, 1.6], room: ctx.room, blocked, portrait, prefer }) : null;
+    backs: portrait ? [2.4, 3.2] : [1, 1.6], room: ctx.room, blocked, portrait, prefer, pose: ctx.pose || null }) : null;
   return { boxes, blocked, solve, prev };
 }
 

@@ -289,9 +289,23 @@ export function soloStar(items){
     the rear GALLERY, or `lift` (u above its ground) for one on a RISER: the kit's DRUM RISER, a band
     machine's tiered riser (SEAT_RISE). Never touches
     yaw (a lone star's turn is main's, before it measures: loneTurn). */
-export function layoutStations(items, wall, room, { margin = MARGIN, ref = WING_REF, cx = (wall[0] + wall[1]) / 2, bandY = 4.2, eyeY = 20, wallTop = 15.7, hung = [], star = null, loftGap = 3 } = {}){
+/* is (x, z) inside the convex polygon [[x, z] …] (either winding) */
+function inConvex(poly, x, z){
+  let sign = 0;
+  for (let i = 0; i < poly.length; i++){
+    const [x0, z0] = poly[i], [x1, z1] = poly[(i + 1) % poly.length], c = (x1 - x0) * (z - z0) - (z1 - z0) * (x - x0);
+    if (Math.abs(c) < 1e-9) continue;
+    if (sign && Math.sign(c) !== sign) return false;
+    sign = Math.sign(c);
+  }
+  return true;
+}
+export function layoutStations(items, wall, room, { margin = MARGIN, ref = WING_REF, cx = (wall[0] + wall[1]) / 2, bandY = 4.2, eyeY = 20, wallTop = 15.7, hung = [], star = null, loftGap = 3, roomPoly = null } = {}){
   star ??= soloStar(items);
-  const env = { ref, cx, bandY, eyeY, galleryY: wallTop - GALLERY_DROP, hung, star, loftGap };
+  // (roomPoly: the room as the convex polygon it really is in this frame — a stage turned with the belt
+  //  (src/stagepose.js): `room` is then the rect inscribed in it, which keeps the slides + flushes; a
+  //  footprint anywhere inside the polygon is in the room)
+  const env = { ref, cx, bandY, eyeY, galleryY: wallTop - GALLERY_DROP, hung, star, loftGap, roomPoly };
   // FLOOR FIRST: everyone on the floor — at full air, then giving up air between the footprints'
   // bounding boxes (their corners are mostly empty) — never an overlap while one of those clears
   //  (the STAGECRAFT — the kit's DRUM RISER, the band's BALANCE — first; then, if a floor with it has no
@@ -321,7 +335,7 @@ export function layoutStations(items, wall, room, { margin = MARGIN, ref = WING_
   }
   return last.out;
 }
-function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, hung, up: open, star, loftGap, side = 0, craft = false }){
+function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, hung, up: open, star, loftGap, side = 0, craft = false, roomPoly = null }){
   const bandOn = craft && bandPlays(items.map(it => it.key));   // (the band plays: the kit's riser)
   // each station's FLOOR origins — the star's front-and-centre spot; a gallery-born slot's SEATS
   // (ranked: the first free one wins); else its slot — and its GALLERY spot (gx, gz: where it was built)
@@ -403,7 +417,8 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
     let w = 0; for (const o of machines) w = Math.max(w, hides(o, me), hides(me, o));
     return w;
   };
-  const inRoom = (b, dx, dz) => b[0] + dx >= room.x0 - 1e-9 && b[1] + dx <= room.x1 + 1e-9 && b[2] + dz >= room.z0 - 1e-9 && b[3] + dz <= room.z1 + 1e-9;
+  const inRoom = (b, dx, dz) => (b[0] + dx >= room.x0 - 1e-9 && b[1] + dx <= room.x1 + 1e-9 && b[2] + dz >= room.z0 - 1e-9 && b[3] + dz <= room.z1 + 1e-9)
+    || (!!roomPoly && inConvex(roomPoly, b[0] + dx, b[2] + dz) && inConvex(roomPoly, b[1] + dx, b[2] + dz) && inConvex(roomPoly, b[1] + dx, b[3] + dz) && inConvex(roomPoly, b[0] + dx, b[3] + dz));
   const fits = (s, b, dx, dz) => inRoom(b, dx, dz) && seen(b, dx, dz) && under(s, b, dx, dz) && clearStar(s, b, dx, dz);
   // the GALLERY: behind the belt's back face (centre), clear of every hung footprint; a station
   // that isn't gallery-born only climbs up where the belt would hide it from the floor

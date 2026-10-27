@@ -12,6 +12,11 @@
    in the room solve: it stays exactly where the user put it, and the
    auto-placed rest step around it.
 
+   THE BELT has an entry too once the user moves it: `belt: { x, z, yaw }` — its group's place in the ROOM
+   (src/stagepose.js: the stage pose — no entry, as every layout before it had none, = where it always stood).
+   The machines nobody pinned stand round the belt wherever it goes (the room solve runs in its frame); a
+   pinned one stays exactly where the user put it, in the room.
+
    Persisted per song (localStorage) and carried in share links as
    song.stage = { key: [x, z, yaw?, lift?] } (compact, sanitized on the way
    in — share links are untrusted input; old 2- / 3-element entries read as
@@ -25,6 +30,7 @@ export const YAW_SNAP = Math.PI / 12;         // 15°
 export const BOUND = 90;                      // |x|, |z| sanity bound (the largest room is far smaller)
 const KEY_RE = /^[a-z][a-z0-9_-]{0,31}$/i;
 
+export const BELT = 'belt';                   // the belt's layout key (its stage pose — src/stagepose.js)
 export const snap = (v, s = SNAP) => Math.round(v / s) * s + 0;
 /** wrap to (−π, π], then snap */
 export function snapYaw(y, s = YAW_SNAP){
@@ -86,7 +92,9 @@ export const REHANG_R = 1;                    // a HANGING machine nudged less t
     tower behind the belt, where its loft hung). */
 export function rehangs(at, wall, home = null, { pad = .5, r = REHANG_R } = {}){
   if (!at) return false;
-  if (wall && at.x >= wall[0] - pad && at.x <= wall[1] + pad && at.z >= wall[2] - pad && at.z <= wall[3] + pad) return true;
+  // (wall: the belt's box [x0, x1, z0, z1] — or its TURNED footprint, 4 corners: a belt stage edit turned)
+  if (wall && (Array.isArray(wall[0]) ? inRectPoly([at.x, at.z], wall, pad)
+    : at.x >= wall[0] - pad && at.x <= wall[1] + pad && at.z >= wall[2] - pad && at.z <= wall[3] + pad)) return true;
   return !!home && Math.hypot(at.x - home.x, at.z - home.z) <= r;
 }
 
@@ -139,6 +147,13 @@ export function inPoly([px, pz], poly){
   }
   return true;
 }
+/** is the point inside a footprint rectangle (4 corners, boxCorners / footprint order) grown by `pad` */
+export function inRectPoly([px, pz], poly, pad = 0){
+  const [a, b, , d] = poly, ux = b[0] - a[0], uz = b[1] - a[1], vx = d[0] - a[0], vz = d[1] - a[1];
+  const lu = Math.hypot(ux, uz) || 1e-9, lv = Math.hypot(vx, vz) || 1e-9;
+  const u = ((px - a[0]) * ux + (pz - a[1]) * uz) / lu, v = ((px - a[0]) * vx + (pz - a[1]) * vz) / lv;
+  return u >= -pad && u <= lu + pad && v >= -pad && v <= lv + pad;
+}
 const asPoly = f => Array.isArray(f?.[0]) ? f : boxCorners(f);
 
 /** What's wrong with putting footprint `fp` here: [{ key, kind: 'overlap' | 'belt' | 'room' }].
@@ -169,6 +184,8 @@ export function describeConflicts(cs, label = k => k){
 export function placeEntry(L0, key, entry, all = [], { cx = 0, liftOf = () => undefined } = {}){
   const L = { ...L0 };
   const held = (k, e) => { const u = liftOf(k) ?? L[k]?.lift; return Number.isFinite(u) ? { ...e, lift: u } : e; };
+  // (moving the BELT pins nobody: the band re-seats round it where it now stands — a belt has no height)
+  if (key === BELT){ const { x, z, yaw = 0 } = entry; L[key] = { x, z, yaw }; return L; }
   if (!Object.keys(L).length)
     for (const p of all) L[p.key] = held(p.key, { x: p.x - cx, z: p.z, yaw: p.yaw });
   let e;

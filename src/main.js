@@ -80,6 +80,9 @@ let kitLoc = null;                                      // the kit's solid box o
    page (a layout entry's own lift wins) */
 const devLift = Object.fromEntries((new URLSearchParams(location.search).get('lift') || '').split(',')
   .map(e => e.split(':')).filter(([k, v]) => k && v !== undefined && Number.isFinite(+v)).map(([k, v]) => [k, clampLift(+v)]));
+/* dev: ?belt=x,z,yaw — the belt's stage pose for every song of this page that has no belt entry of its own (audits) */
+const devBelt = (() => { const v = (new URLSearchParams(location.search).get('belt') || '').split(',').map(Number);
+  return v.length >= 2 && v.slice(0, 3).every(Number.isFinite) ? { x: v[0], z: v[1], yaw: v[2] || 0 } : null; })();
 let lastAnchors = [];                                   // what the room was last told stands where (placeRoom; __dev.anchors)
 const kitLift = () => clampLift(Number.isFinite(kitSlot.lift) ? kitSlot.lift : kitSlot.rise);   // the kit's height: the user's lift, else the room solve's DRUM RISER (stations.js)
 const kitDeck = () => groundOf(KIT_STAND, ROOM.FLOOR) + kitLift();   // the kit's deck: its slab on the floor's plinth, or lifted
@@ -667,7 +670,8 @@ function buildWorld(keyName){
   // THE STAGE POSE (stage edit moved / turned the belt: src/stagepose.js) — kept inside the room. The room the
   // solve below sees is the room in the STAGE frame (stageRoom: exact for a move, conservative for a turn)
   const ROOM_RECT = stageRoomRect(), wall4 = wallBox.isEmpty() ? null : [wallBox.min.x, wallBox.max.x, wallBox.min.z, wallBox.max.z];
-  const T = wall4 ? clampPose(editor.beltPose?.() ?? IDENTITY, wall4, ROOM_RECT) : IDENTITY;
+  const want = editor.beltPose?.() ?? IDENTITY;
+  const T = wall4 ? clampPose(isIdentity(want) && devBelt ? devBelt : want, wall4, ROOM_RECT) : IDENTITY;
   const roomS = stageRoom(ROOM_RECT, T, wall4 || undefined);
   // (turned: the room is a turned rect in the stage frame — the solve tests footprints against it whole)
   const roomPoly = T.yaw ? [[ROOM_RECT.x0, ROOM_RECT.z0], [ROOM_RECT.x1, ROOM_RECT.z0], [ROOM_RECT.x1, ROOM_RECT.z1], [ROOM_RECT.x0, ROOM_RECT.z1]]

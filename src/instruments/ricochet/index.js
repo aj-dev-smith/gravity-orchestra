@@ -88,7 +88,7 @@ export default {
   make({ envMap, glowTex }){
     let S = null;
 
-    function build(part, { rollT, beat, P, start = -Infinity, floorY = -20, ceilY: roomCeil }){
+    function build(part, { rollT, beat, P, start = -Infinity, floorY = -20, ceilY: roomCeil, standing = false }){
       const group = new THREE.Group();
       S = null;
       const events = eventTimes(part, { rollT, beat });
@@ -144,14 +144,16 @@ export default {
         bar(V(1.1 * Math.cos(a), yC + .02, 1.1 * Math.sin(a)), V(footR * Math.cos(a), yC + .02, footR * Math.sin(a)), .035, dark, 6);
       }
       const top = roomCeil ?? (floorY + ROOM_H);
-      if (top > yC + 1) for (let k = 0; k < 3; k++){
+      if (!standing && top > yC + 1) for (let k = 0; k < 3; k++){
         const a = k / 3 * Math.PI * 2 + Math.PI / 6;
         bar(V(footR * Math.cos(a), yC + .05, footR * Math.sin(a)), V(footR * .55 * Math.cos(a), top, footR * .55 * Math.sin(a)), .05, dark, 6);
       }
-      // the floor: nothing stands on it (the whole sculpture HANGS) — a slim glowing ring on the
-      // room floor marks the footprint, a smaller one marks the plumb line under the hub
-      ring(footR, floorY + .03, .02, glowM);
-      ring(1.1, floorY + .03, .03, glowM);
+      if (!standing){
+        // the floor: nothing stands on it (the whole sculpture HANGS) — a slim glowing ring on the
+        // room floor marks the footprint, a smaller one marks the plumb line under the hub
+        ring(footR, floorY + .03, .02, glowM);
+        ring(1.1, floorY + .03, .03, glowM);
+      }
 
       // ---- the canopy eyes: where each rigid stem is clamped (static, merged) ----
       const eyeGeo = mergeGeometries(orb.rim.map(K => new THREE.CylinderGeometry(.07, .09, .1, 10).translate(K.x, yC - .03, K.z)));
@@ -313,6 +315,28 @@ export default {
         gate = { hingeG, hv, sign, gateM, latchM, halo: sprite(ICE), body: gateBody, base: gateBase, n: en.n.clone(),
                  ...pathOf([gBus, gTop, hinge.clone(), hinge.clone().add(armTip), gBack]), beads: beadsFor(), pw: pwOf(en.kick.w) };
         gate.halo.position.copy(en.E);
+      }
+
+      // STANDING (stage edit took it down from the belt — main passes `standing`): no ceiling rods, no floor
+      // marks — the canopy stands on a TRIPOD of its own: three chrome legs from under its rim (where the rods
+      // held it) down past the lowest plate, each on a foot pad — the room's footing plants its plinth / tower
+      // under them like any machine's. The legs stand just inside the rim, outside every plate (the rim is
+      // CANOPY_PAD past the furthest plate edge) and every flight (a flight's horizontal path is the chord
+      // between two plates); the lowest plate is the one the sculpture is measured to (its ground).
+      if (standing){
+        const lo = new THREE.Box3(), _b = new THREE.Box3();
+        group.updateMatrixWorld(true);
+        group.traverse(o => { if (o.isMesh && o.geometry){ if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+          lo.union(_b.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld)); } });
+        const LEG_R = .11, yB = (lo.isEmpty() ? 0 : lo.min.y) - .12, rL = footR - .22;
+        for (let k = 0; k < 3; k++){
+          const a = k / 3 * Math.PI * 2 + Math.PI / 6, x = rL * Math.cos(a), z = rL * Math.sin(a);
+          bar(V(x, yC - .02, z), V(x, yB + .08, z), LEG_R, chrome, 12);                       // the leg
+          const pad = new THREE.Mesh(new THREE.CylinderGeometry(.34, .4, .08, 20), dark);     // its foot
+          pad.position.set(x, yB + .04, z); group.add(fz(pad));
+          const col = new THREE.Mesh(new THREE.CylinderGeometry(.17, .17, .16, 14), chrome);  // the clamp under the rim
+          col.position.set(x, yC - .1, z); group.add(fz(col));
+        }
       }
 
       freeze(group);

@@ -64,6 +64,30 @@ export function placeSlot(base, placed){
   return { ...base, x: placed.x, z: placed.z, yaw: Number.isFinite(placed.yaw) ? placed.yaw : base.yaw, pin: true, ...lift };
 }
 
+/* ---- HUNG machines (stations.js `hang`: the organ loft, the ricochet chandelier, the volley court) ----
+   With no layout entry a hung station hangs exactly where the stage hangs it (off the belt's top housing
+   — an old layout / share link has no entry for it: it loads as it always did). With one, the user has
+   taken it DOWN: it STANDS in the room like any floor machine — pinned at x/z/yaw, at its lift (u above
+   its ground; the room builds its support by height band, rooms/footing.js). `unhung` tells main to build
+   it as a standing machine (no columns / ceiling rods / floor marks: the room's footing holds it). */
+export function standSlot(base, placed){
+  if (!base?.hang || !placed) return placeSlot(base, placed);
+  return { ...placeSlot(base, placed), hang: false, unhung: true };
+}
+/** the layout without `key`'s entry (a hung machine dropped back on the belt: it re-hangs as built). Pure */
+export function dropEntry(L0, key){
+  const L = { ...L0 }; delete L[key]; return L;
+}
+export const REHANG_R = 3.5;                  // a hung machine dropped within this of the spot it hangs at re-hangs there
+/** Does a hung machine dropped with its footprint centred at `at` ({ x, z }) RE-HANG? — over the belt's top
+    (`wall` [x0, x1, z0, z1], grown by `pad`), or within REHANG_R of `home` (where the stage hangs it: the organ
+    loft hangs BEHIND the belt, the court over the left wing). The magnet; else it stands where it is dropped. */
+export function rehangs(at, wall, home = null, { pad = .5, r = REHANG_R } = {}){
+  if (!at) return false;
+  if (wall && at.x >= wall[0] - pad && at.x <= wall[1] + pad && at.z >= wall[2] - pad && at.z <= wall[3] + pad) return true;
+  return !!home && Math.hypot(at.x - home.x, at.z - home.z) <= r;
+}
+
 /* ---- footprints ----
    A machine's footprint is its LOCAL box [x0, x1, z0, z1] (measured once, unrotated, about
    its pivot) turned by its yaw and moved to its pivot: an ORIENTED rectangle, given as its 4

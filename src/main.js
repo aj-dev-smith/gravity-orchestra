@@ -23,7 +23,7 @@ import { makeRoomHost, ROOMS } from './rooms/index.js';
 import { groundOf, clampLift, FOOT } from './rooms/footing.js';
 import { footingDraws } from './rooms/footing3d.js';
 import { INSTRUMENTS, instrumentByKey } from './instruments/index.js';
-import { stationFor, layoutStations, soloStar, loneTurn, kitRiseAt, HANG_CLEAR, hangPlace } from './instruments/stations.js';
+import { STATIONS, stationFor, layoutStations, soloStar, loneTurn, kitRiseAt, HANG_CLEAR, hangPlace } from './instruments/stations.js';
 import { eventTimes, wrapP } from './instruments/clock.js';
 import { splitBucket } from './instruments/sustain.js';
 import { nextVoiceEpoch, voiceEpoch, sweepVoiceCaches } from './instruments/voicecache.js';
@@ -247,6 +247,7 @@ const drumKit = makeMarbleDrums({ envMap, glowTex });
    See src/instruments/README.md for the contract. ---- */
 const instRigs = INSTRUMENTS.map(I => ({ I, inst: I.make({ envMap, glowTex, THREE }), station: null }));
 let instLive = [];                                      // rigs with a part in the current song
+const hangHomes = new Map();                            // `${song id}|${key}` → where that hung station hung (world x/z): stage edit's re-hang magnet
 const STRIKE_LIGHTS = 4;                                // shared pool, CONSTANT size → no shader recompiles (each point light is
                                                         // shaded in EVERY lit fragment: 4 round-robin ~.2 s flashes are plenty)
 const strikeLights = Array.from({ length: STRIKE_LIGHTS }, () => {
@@ -637,6 +638,10 @@ function buildWorld(keyName){
     // its LOWEST part (plate, stem, the knot's wire) HANG_CLEAR above the belt's top housing —
     // never across the strike band, never reading as resting on the housing
     const hung = st.hang && !wallBox.isEmpty();
+    // …unless the user took it DOWN (stage edit: a layout entry — editor/placement.js standSlot): then it is a
+    // floor machine like any other — built standing (no columns to the floor, no ceiling rods or floor marks:
+    // `standing`, ceilY 0), set in the room at its ground + lift, the room's footing under it
+    const unhung = !!st.unhung;
     // a FLOOR machine is built at deck 0 with NO supports (floorY 0: every plugin's legs / riser /
     // pedestal is gated on it) and then SET IN THE ROOM below — on the floor's plinth at its ground,
     // or lifted (rooms/footing.js): a rigid move, so a height change never rebuilds it
@@ -645,7 +650,7 @@ function buildWorld(keyName){
     station.position.set(stageView.cx + st.x, y, z);
     station.rotation.y = st.yaw;
     const buildAt = () => rig.inst.build(part, { rollT: ROLL_T, beat: BEAT, P: P0, start: ARM_AT,
-      station: st, floorY: hung ? ROOM.FLOOR - y : 0, ceilY: ROOM.CEIL - y, loopBeats });
+      station: st, floorY: hung ? ROOM.FLOOR - y : 0, ceilY: unhung ? 0 : ROOM.CEIL - y, loopBeats, ...(unhung ? { standing: true } : {}) });
     let body = buildAt();
     station.add(body);
     world.add(station);
@@ -668,6 +673,7 @@ function buildWorld(keyName){
           { x0: -ROOM.HW + 2.5, x1: ROOM.HW - 2.5, z0: ROOM.BACK + 2.5, z1: 31 }, { cx: stageView.cx });
         station.position.x = at.x; station.position.z = at.z; station.updateMatrixWorld(true);
       }
+      hangHomes.set(`${editor.id}|${rig.I.key}`, { x: station.position.x, z: station.position.z });   // (stage edit's re-hang magnet)
     }
     rig.station = station; rig.slot = { ...st, y };
     // its HEIGHT (rooms/footing.js): ground = where it sits on the floor's plinth (its lowest solid
@@ -682,6 +688,9 @@ function buildWorld(keyName){
       rig.ground = groundOf(rig.low, ROOM.FLOOR);
       const set = Number.isFinite(st.lift) ? st.lift : devLift[rig.I.key];   // (a user's height: the gallery solve leaves it alone)
       if (set !== undefined) rig.slot.lift = clampLift(set);
+      // (a machine taken down from the belt keeps the height it hung at — under the ceiling: its standing
+      //  build's top may reach higher than the hung one's measure guessed)
+      if (unhung && rig.loc && Number.isFinite(rig.slot.lift)) rig.slot.lift = Math.max(0, Math.min(rig.slot.lift, ROOM.CEIL - 1 - rig.ground - rig.loc.max.y));
       rig.setLift(clampLift(rig.slot.lift));
     }
     rig.cue = eventTimes(part, { rollT: ROLL_T, beat: BEAT }).map(e => ({ t: e.t, w: e.vel, id: String(e.note) }));   // (id: what it played — the director reads a hook's variety)
@@ -1504,8 +1513,11 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
     /* leaving stage edit: the director catches up with every move / height made in it (once) */
     // (a frame after the editor has closed — the DONE tap answers at once; a rebuild in between re-solved it anyway)
     directorNow(){ const b = edStale; edStale = null; if (b) requestAnimationFrame(() => setTimeout(() => { if (b === curBuild && !editor.stage.on) syncDirector(b.S, b.view); else if (b === curBuild) edStale = b; }, 0)); },
+    // (a HUNG station is a piece too — it hangs: no height, no turn, overhead of everyone; dragged off the belt it
+    //  STANDS — rehang: it was born hung, so dropping it back on the belt hangs it again)
     pieces: () => [
-      ...instLive.filter(r => !r.slot.hang).map(r => ({ key: r.I.key, label: r.I.label, color: r.I.color, obj: r.station, kind: 'station', canRotate: true })),
+      ...instLive.map(r => ({ key: r.I.key, label: r.I.label, color: r.I.color, obj: r.station, kind: 'station', canRotate: !r.slot.hang,
+        ...(STATIONS[r.I.key]?.hang ? { rehang: true, hung: !!r.slot.hang } : {}) })),
       ...(drumGroup && curBuild?.S.drums ? [{ key: 'drums', label: 'Drum Machine', color: '#ff8a3d', obj: drumGroup, kind: 'kit', canRotate: false,
         deckY: kitSlot.y }] : []),
     ],
@@ -1568,12 +1580,24 @@ const editor = makeEditor({ THREE, scene, cam, dom: renderer.domElement, songs: 
     /* what can't be moved here — and why (stage edit says so when one is clicked) */
     fixed: () => [
       ...(stageWall.isEmpty() ? [] : [{ key: 'belt', label: 'Belt', color: '#ffaa55', box: stageWall, why: 'the belt stands on its own posts' }]),
-      ...instLive.filter(r => r.slot.hang).map(r => {          // (its meshes, else its solid box: a loft is mostly air)
-        const a = lastAnchors.find(q => q.key === r.I.key && q.kind === 'hung'), b = a?.box;
-        return { key: r.I.key, label: r.I.label, color: r.I.color, obj: r.station, why: 'hangs from the belt',
-                 box: b ? new THREE.Box3(new THREE.Vector3(b[0], b[2], b[4]), new THREE.Vector3(b[1], b[3], b[5])) : null };
-      }),
     ],
+    /* where a HUNG station hangs this song (world x/z): as built, else (it stands now) where it hung on this
+       page, else its slot over the belt (stations.js) — stage edit's re-hang magnet */
+    hangHome(key){
+      const h = hangHomes.get(`${editor.id}|${key}`), b = STATIONS[key];   // (as built — not where a drag has it now)
+      if (h) return h;
+      if (!b?.hang || stageWall.isEmpty()) return null;
+      return { x: (curBuild?.view.cx ?? 0) + b.x, z: (stageWall.min.z + stageWall.max.z) / 2 + b.z };
+    },
+    /* the lift that keeps a HUNG station's deck where it hangs once it STANDS (taken down: it keeps its height
+       — rooms/footing.js groundOf over its underside: the lowest part that isn't a floor mark or a column) */
+    unhangLift(key){
+      const r = instLive.find(q => q.I.key === key && q.slot.hang);
+      if (!r) return undefined;
+      const low = hangLow(r.station);
+      if (!Number.isFinite(low)) return 0;
+      return clampLift(r.station.position.y - groundOf(low - r.station.position.y, ROOM.FLOOR));
+    },
     kitPivot: kitPivotNow,
     /* where the build's SOLVED stage stands, in the layout's frame ({ key: { x (− cx), z, yaw } }) — only for a
        FREE build (nothing pinned, no user height: what the empty layout rebuilds to); else null. Stage edit's

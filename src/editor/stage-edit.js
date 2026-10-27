@@ -46,9 +46,18 @@
    + the band (FLOOR · RISER · PLATFORM · TOWER) + "LOFT · STRUM" when it
    shares a deck (the footing plan's own word).
 
-   Hung stations (the organ loft, the ricochet chandelier, the volley court)
-   are a crown over the belt, not floor machines, and the belt is the
-   protagonist: none of them moves here — click one and the dock says why.
+   HUNG stations (the organ loft, the ricochet chandelier, the volley court)
+   hang off the belt as built — and move like any machine: grab one and drag
+   it OFF the belt and it STANDS where it is dropped (rebuilt standing: no
+   columns or ceiling rods — the room builds its support by height band, and
+   it keeps the height it hung at; then height, turn, AUTO, FLOOR as usual).
+   Drag a hung machine (hanging or standing) back over the belt's top — or
+   onto the spot it hangs at — and it RE-HANGS as built: the MAGNET. A chip
+   over it says which, live, all the way ("HANGS FROM THE BELT" / "STANDS
+   HERE"), and its footprint turns the belt's blue over the magnet. While it
+   hangs it is overhead of everyone: nothing conflicts with it, it doesn't
+   turn, it has no height of its own (placement.js standSlot / rehangs).
+   The belt itself doesn't move here — click it and the dock says why.
    The drum kit moves but doesn't turn (it is built to face the audience).
 
    Input etiquette (CLAUDE.md §5 + the free camera):
@@ -61,11 +70,11 @@
    · Q / E, PgUp / PgDn, [ / ], Home are swallowed (capture) only while a
      machine is selected.
    ============================================================ */
-import { snap, snapYaw, conflicts, describeConflicts, footprint, boxCorners, bounds, inPoly } from './placement.js';
+import { snap, snapYaw, conflicts, describeConflicts, footprint, boxCorners, bounds, inPoly, rehangs } from './placement.js';
 import { GALLERY_DROP } from '../instruments/stations.js';
 import { readout, dragLift, stepLift, loftTargets, liftMax, rayPlaneY, makeSettle, bandName, TICK_U, fmtMeters } from './height.js';
 
-const C = { idle: 0x6c7aa0, hover: 0xcfd6e6, sel: 0xffb764, bad: 0xff4d5e, belt: 0x3d6dff };
+const C = { idle: 0x6c7aa0, hover: 0xcfd6e6, sel: 0xffb764, bad: 0xff4d5e, belt: 0x3d6dff, hang: 0x7fb2ff };
 const GIZMO_ORDER = 990;
 const HINT_KEY = 'cascade:hint:height';              // the first-selection hint, once used / dismissed (a convenience: storage may throw)
 const SETTLE_MS = 700;                               // a burst of height taps / key repeats settles this long after the last
@@ -203,7 +212,11 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   chipEl.innerHTML = '<b></b><i></i><em></em>';
   const tipEl = document.createElement('div'); tipEl.className = 'se-tip'; tipEl.hidden = true;
   tipEl.innerHTML = '<span></span><button aria-label="got it" title="got it">×</button>';
-  document.body.append(knobEl, chipEl, tipEl);
+  // the MAGNET chip: over a hung machine while it is dragged — does it re-hang from the belt, or stand here
+  const magEl = document.createElement('div'); magEl.className = 'se-chip se-mag'; magEl.hidden = true;
+  magEl.innerHTML = '<b></b><i></i>';
+  const mag = { val: magEl.querySelector('b'), sub: magEl.querySelector('i'), sig: '' };
+  document.body.append(knobEl, chipEl, tipEl, magEl);
   const chip = { val: chipEl.querySelector('b'), band: chipEl.querySelector('i'), loft: chipEl.querySelector('em') };
   let tipSeen = (() => { try { return store?.getItem(HINT_KEY) === '1'; } catch (e){ return false; } })();
   const learned = () => { tipEl.hidden = true; if (tipSeen) return; tipSeen = true; try { store?.setItem(HINT_KEY, '1'); } catch (e){} };
@@ -242,7 +255,10 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   /* its HEIGHT now (main's anchors — live while a lift runs): { lift, user, deck, bottom, top, floor, ceil, open } */
   const H = p => host.height?.(p.key, p.hNow || (p.hNow = {})) || null;   // (filled in place: no garbage per frame)
   const deckOf = p => H(p)?.deck ?? p.deckY ?? p.obj.position.y;
-  const baseOf = p => H(p)?.bottom ?? deckOf(p);        // the world y it STANDS on (its support's top)
+  // the world y it STANDS on (its support's top) — a HANGING machine's footprint lies on the floor under it, like
+  // the belt's (the plan view looks down from under the ceiling: up at its deck it would be over the lens)
+  const baseOf = p => p.hung ? FLOOR_Y - .02 : H(p)?.bottom ?? deckOf(p);
+  const tagY = p => p.hung ? baseOf(p) + 1.4 : topOf(p) + .8;   // (its name tag: over its floor footprint, for a hung one)
   const topOf = p => p.top + (deckOf(p) - (p.deck0 ?? deckOf(p)));   // (measured once; a lift moves it rigidly)
   const yawOf = p => p.canRotate ? p.obj.rotation.y : 0;
   const liftable = p => !!(p && host.height && host.liftLive && H(p));
@@ -259,14 +275,20 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   /** the piece's footprint where it stands now: 4 world XZ corners, turned with it */
   const fpOf = p => { const c = pivotOf(p); return footprint(p.rel, c.x, c.z, yawOf(p)); };
   const wallBox = () => { const wb = host.wall(); return wb && !wb.isEmpty() ? [wb.min.x, wb.max.x, wb.min.z, wb.max.z] : null; };
+  /* a HUNG machine (rehang: born hung) re-hangs where it is now: over the belt's top, or on the spot it hangs
+     at (placement.js rehangs — the magnet) */
+  const hangsAt = p => !!p?.rehang && rehangs(pivotOf(p), wallBox(), host.hangHome?.(p.key) || null);
+  const moving = p => !!drag && drag.piece === p && drag.mode === 'move';
+  /* overhead: a machine hanging now (and staying hung) — nothing conflicts with it, it conflicts with nothing */
+  const overhead = p => !!p.rehang && (p.hung ? !moving(p) || hangsAt(p) : moving(p) && hangsAt(p));
   function check(){
-    const wall = wallBox();
-    for (const p of pieces) p.bad = conflicts(fpOf(p), pieces.filter(o => o !== p).map(o => ({ key: o.key, box: fpOf(o) })), wall, host.room);
+    const wall = wallBox(), floor = pieces.filter(o => !o.hung);
+    for (const p of pieces) p.bad = overhead(p) ? [] : conflicts(fpOf(p), floor.filter(o => o !== p).map(o => ({ key: o.key, box: fpOf(o) })), wall, host.room);
   }
   function paint(){
     for (const p of pieces){
-      const bad = p.bad.length > 0, isSel = p === sel, isHov = p === hover && !isSel;
-      const col = bad ? C.bad : isSel ? C.sel : isHov ? C.hover : C.idle;
+      const bad = p.bad.length > 0, isSel = p === sel, isHov = p === hover && !isSel, magnet = moving(p) && hangsAt(p);
+      const col = bad ? C.bad : magnet ? C.hang : isSel ? C.sel : isHov ? C.hover : C.idle;
       p.line.material.color.setHex(col); p.line.material.opacity = isSel || bad ? 1 : isHov ? .9 : .6;
       // (the 3/4 view looks THROUGH the selection's footprint at the machine: a lighter fill there)
       p.fill.material.color.setHex(col); p.fill.material.opacity = isSel ? (view === '3d' ? .05 : .16) : bad ? .14 : isHov ? .1 : .05;
@@ -286,10 +308,43 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       [[0, 0], [fx * r * .62, fz * r * .62], [fx * r * .62, fz * r * .62], [fx * r * .62, fz * r * .62], [fx * r * .62, fz * r * .62]].forEach(([dx, dz], i) => kp.setXYZ(i, c.x + dx, y, c.z + dz));
       kp.needsUpdate = true; knobArrow.geometry.computeBoundingSphere();
     }
+    // (the belt's outline lights up while a hung machine is held over its magnet)
+    beltLine.material.opacity = drag?.piece?.rehang && moving(drag.piece) && hangsAt(drag.piece) ? 1 : .55;
+    beltFill.material.opacity = beltLine.material.opacity > .6 ? .16 : .07;
     paintHeight(true);
     paintDock();
+    paintMagnet();
     hint();
   }
+  /* the MAGNET chip, over a hung machine while it is dragged: HANGS FROM THE BELT (release: it hangs as built)
+     or STANDS HERE (release: the room builds its support under it) — redrawn per frame from update */
+  function paintMagnet(){
+    const p = drag?.piece;
+    if (!on || !p?.rehang || !moving(p)){ if (!magEl.hidden) magEl.hidden = true; return; }
+    const back = hangsAt(p), bad = p.bad.length > 0;
+    const up = p.hung ? host.unhangLift?.(p.key) : H(p)?.lift;
+    const sig = `${back}|${bad}|${p.hung}|${up}`;
+    if (sig !== mag.sig){
+      mag.sig = sig;
+      mag.val.textContent = back ? 'HANGS FROM THE BELT' : 'STANDS HERE';
+      mag.sub.textContent = back ? (p.hung ? 'RELEASE · IT STAYS HUNG' : 'RELEASE · IT HANGS AS BUILT')
+        : bad ? 'NOT HERE · ' + describeConflicts(p.bad, k => pieces.find(q => q.key === k)?.label || k).toUpperCase()
+        : p.hung ? `RELEASE · ON SUPPORTS${Number.isFinite(up) && up > .05 ? ` · ${fmtMeters(up)} UP` : ''}`
+        : 'DROP ON THE BELT TO HANG IT';
+      magEl.classList.toggle('hang', back); magEl.classList.toggle('bad', !back && bad);
+      mag.w = 0;                                            // (its width changes with the words: re-measured)
+    }
+    const c = pivotOf(p);
+    proj(c.x, p.hung ? tagY(p) + 1 : topOf(p) + 1.2, c.z, _m);
+    if (_m.behind){ magEl.hidden = true; return; }
+    magEl.hidden = false;
+    // (over the machine; never under the bar or off the screen's edge — under the footprint instead, then)
+    const W = innerWidth, mw = (mag.w ||= magEl.offsetWidth || 220) / 2 + 8, mh = (mag.h ||= magEl.offsetHeight || 40);
+    const br = bar.hidden ? null : bar.getBoundingClientRect(), top = (br && br.top < innerHeight / 2 ? br.bottom : 0) + 8 + mh;
+    const x = Math.max(mw, Math.min(W - mw, _m.x)), y = Math.min(innerHeight - 8, Math.max(top, _m.y - 30));
+    magEl.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`;
+  }
+  const _m = {};
   /* a machine standing on the floor right behind the belt (FLOOR on a gallery machine leaves it there): the
      belt's wall hides it from every seat — the hint says so (the user's word stands; nothing moves it) */
   function hidden(p){
@@ -302,8 +357,10 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     if (!sel){ hintEl.textContent = pieces.length ? 'click a machine to pick it up · drag empty space to orbit' : 'nothing to move — this song has only the belt'; hintEl.className = 'se-hint'; return; }
     const bad = describeConflicts(sel.bad, k => pieces.find(p => p.key === k)?.label || k);
     const turnHint = coarse() ? ' · the ring turns it' : ' · Q / E or the ring to turn';   // (no keys on a phone)
-    hintEl.textContent = bad ? `${sel.label}: ${bad}` : hidden(sel) ? `${sel.label} · hidden behind the belt — drag it forward or ▲ raise it`
-      : `${sel.label} · drag to move${sel.canRotate ? turnHint : ''}${liftable(sel) ? ' · ▲▼ height' : ''}`;
+    hintEl.textContent = bad ? `${sel.label}: ${bad}` : moving(sel) && sel.rehang ? (hangsAt(sel) ? `${sel.label} · release to hang it from the belt` : `${sel.label} · release to stand it here`)
+      : sel.hung ? `${sel.label} · hangs from the belt — drag it off to stand it in the room`
+      : hidden(sel) ? `${sel.label} · hidden behind the belt — drag it forward or ▲ raise it`
+      : `${sel.label} · drag to move${sel.canRotate ? turnHint : ''}${liftable(sel) ? ' · ▲▼ height' : ''}${sel.rehang ? ' · onto the belt: re-hang' : ''}`;
     hintEl.className = 'se-hint' + (bad ? ' bad' : '');
   }
 
@@ -495,10 +552,11 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       dock.classList.add('fixed'); D.name.textContent = info.label; dock.style.setProperty('--c', info.color || '#cfd6e6');
       D.why.textContent = info.why; return;
     }
-    dock.classList.remove('fixed'); D.why.textContent = '';
+    dock.classList.remove('fixed'); D.why.textContent = p.hung ? 'hangs from the belt · drag it off to stand it' : '';
+    dock.classList.toggle('hungsel', !!p.hung);
     D.name.textContent = p.label; dock.style.setProperty('--c', p.color || '#cfd6e6');
     D.ccw.disabled = D.cw.disabled = !p.canRotate;
-    D.ccw.title = p.canRotate ? 'turn left 15° (Q · Shift: 5°)' : `${p.label} faces the audience — it moves, it doesn't turn`;
+    D.ccw.title = p.canRotate ? 'turn left 15° (Q · Shift: 5°)' : p.hung ? `${p.label} hangs as built — drag it off the belt to turn it` : `${p.label} faces the audience — it moves, it doesn't turn`;
     D.cw.title = p.canRotate ? 'turn right 15° (E · Shift: 5°)' : D.ccw.title;
     const lift = liftable(p);
     dock.classList.toggle('nolift', !lift);
@@ -575,7 +633,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     ease = null;
     select(hit.piece);
     const p = hit.piece, c = pivotOf(p);
-    const y = hit.knob ? deckOf(p) + .1 : THREE.MathUtils.clamp(hit.point.y, deckOf(p) - 2, deckOf(p) + 12);
+    const y = hit.knob ? deckOf(p) + .1 : p.hung ? baseOf(p) + .06 : THREE.MathUtils.clamp(hit.point.y, deckOf(p) - 2, deckOf(p) + 12);   // (a hung one: dragged by its floor footprint)
     plane.set(_v.set(0, 1, 0), -y);
     const at = ray.ray.intersectPlane(plane, new THREE.Vector3());
     if (!at) return;
@@ -619,7 +677,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
       const d = drag; drag = null;
       try { dom.releasePointerCapture(d.id); } catch (_){}
       dom.style.cursor = '';
-      if (d.moved) commit(d.piece);
+      if (d.moved) commit(d.piece, d);
       if (d.moved || downAt?.fresh) keepInView();        // (the 3/4 view: the knob back out from under the UI)
     } else if (downAt && !downAt.hit && e.target === dom && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) < 5){   // a click on empty space…
       rayAt(e);
@@ -647,7 +705,8 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     drag = null;
     try { dom.releasePointerCapture(d.id); } catch (_){}
     dom.style.cursor = '';
-    if (write && d.moved) commit(d.piece);
+    if (write && d.moved) commit(d.piece, d);
+    else if (d.moved && d.piece?.rehang) paintMagnet();
   }
 
   function setPivot(p, x, z){
@@ -661,7 +720,7 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
   }
   function turn(dir, free){
     if (!sel) return;
-    if (!sel.canRotate){ hintEl.textContent = `${sel.label} faces the audience — it moves, it doesn't turn`; return; }
+    if (!sel.canRotate){ hintEl.textContent = sel.hung ? `${sel.label} hangs as built — drag it off the belt to turn it` : `${sel.label} faces the audience — it moves, it doesn't turn`; return; }
     settle.flush();
     setYaw(sel, free || !snapOn ? sel.obj.rotation.y + dir * Math.PI / 36 : snapYaw(sel.obj.rotation.y + dir * Math.PI / 12));
     check(); paint();
@@ -669,10 +728,22 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     clearTimeout(turn._t); turn._p = p; turn._t = setTimeout(turnDone, 350);   // a burst of Q/E taps commits once
   }
   function turnDone(){ const p = turn._p; clearTimeout(turn._t); turn._t = turn._p = null; if (p){ commit(p); keepInView(); } }
-  const entryOf = p => { const c = pivotOf(p); return { x: c.x - host.cx(), z: c.z, yaw: p.canRotate ? p.obj.rotation.y : 0 }; };
-  const allNow = () => pieces.map(q => ({ key: q.key, ...pivotOf(q), yaw: q.canRotate ? q.obj.rotation.y : 0 }));
-  function commit(p){
+  // (a hung machine taken down keeps the yaw it hung at — the court is turned to the audience)
+  const entryOf = p => { const c = pivotOf(p); return { x: c.x - host.cx(), z: c.z, yaw: p.canRotate || p.rehang ? p.obj.rotation.y : 0 }; };
+  // (the first edit pins the room as it stands — every machine on the floor; a hung one keeps hanging: no entry)
+  const allNow = () => pieces.filter(q => !q.hung).map(q => ({ key: q.key, ...pivotOf(q), yaw: q.canRotate ? q.obj.rotation.y : 0 }));
+  /* a gesture's end (d: the drag, for a move): saved, the room re-anchored. A HUNG machine changes how it is
+     BUILT when it crosses the magnet (main rebuilds it, holding songTime): dragged off the belt it stands —
+     keeping the height it hung at; dropped back over it (a standing one) its entry goes and it hangs as built;
+     a hanging one dropped where it hangs goes back exactly (nothing to save) */
+  function commit(p, d = null){
     if (!p) return;
+    if (p.rehang && d){
+      const back = hangsAt(p);
+      if (p.hung && back){ setPivot(p, d.c0.x, d.c0.z); check(); paint(); return; }
+      if (p.hung){ host.place(p.key, { ...entryOf(p), lift: host.unhangLift?.(p.key) ?? null }, allNow(), { rebuild: true }); onChange(); return; }
+      if (back){ host.rehang(p.key); onChange(); return; }
+    }
     host.place(p.key, entryOf(p), allNow());
     onChange();
   }
@@ -970,9 +1041,11 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     const polys = pieces.map(fpOf), wall = wallBox();
     if (wall) polys.push(boxCorners(wall));
     if (!polys.length) return;
-    const deck = pieces.length ? pieces.reduce((a, p) => a + baseOf(p), 0) / pieces.length : 0;
+    // (a HUNG machine is framed by its footprint alone, at the floor machines' height: its crown up under the
+    //  ceiling would push the plan view out over the ceiling for a tag)
+    const floorP = pieces.filter(p => !p.hung), deck = floorP.length ? floorP.reduce((a, p) => a + baseOf(p), 0) / floorP.length : 0;
     const pts = polys.flat().map(([x, z]) => new THREE.Vector3(x, deck, z));
-    for (const p of pieces){ const c = pivotOf(p); pts.push(new THREE.Vector3(c.x, topOf(p) + 2, c.z)); }   // the tags float above
+    for (const p of floorP){ const c = pivotOf(p); pts.push(new THREE.Vector3(c.x, topOf(p) + 2, c.z)); }   // the tags float above
     const [x0, x1, z0, z1] = bounds(polys.flat());
     const W = dom.clientWidth, H0 = Math.max(1, dom.clientHeight), aspect = W / H0;
     const side = aspect < 1 && x1 - x0 > z1 - z0;        // portrait + a wide room: x runs up the screen
@@ -1193,13 +1266,14 @@ export function makeStageEdit({ THREE, scene, cam, dom, host, onChange = () => {
     if (sel) tagAt(sel, W, H0);
     for (const p of pieces) if (p !== sel) tagAt(p, W, H0);
     if (sel) paintHeight();
+    if (drag?.piece?.rehang) paintMagnet();
     bandPx = null;
   }
   /* a machine's name tag over its top — on the screen, out of the handle's way (and, for a neighbour, out of
      the selection's tag's) */
   function tagAt(p, W, H0){
     const c = pivotOf(p);
-    _v.set(c.x, topOf(p) + .8, c.z).project(cam.camera);
+    _v.set(c.x, tagY(p), c.z).project(cam.camera);
     const vis = _v.z < 1 && Math.abs(_v.x) < 1.1 && Math.abs(_v.y) < 1.1;
     p.el.style.display = vis ? '' : 'none';
     if (!vis) return;

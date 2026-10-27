@@ -23,7 +23,7 @@ import { makeStageEdit } from './stage-edit.js';
 import { midiSources, midiSourcesIn, defaultMidiMapping, applyMidiMapping, songSources, defaultSongMapping, applySongMapping,
          setTarget, sameMapping, loadMapping, saveMapping, sanitizeMapping, targetsFor, machineOf } from './mapping.js';
 import { convertToSong } from '../midi/convert.js';
-import { placeSlot, placeEntry, sanitizeLayout, encodeLayout, loadLayout, saveLayout, makeHistory, liftOnlyUndo } from './placement.js';
+import { placeSlot, standSlot, dropEntry, placeEntry, sanitizeLayout, encodeLayout, loadLayout, saveLayout, makeHistory, liftOnlyUndo } from './placement.js';
 
 /** "bars 33–48 (0:41 of 3:27) — the chorus" — a phrase window in words */
 export function loopText(p, short = false){
@@ -57,6 +57,8 @@ const store = (() => { try { return window.localStorage; } catch (e){ return nul
  *   liftLive(key, u, {fresh}) set it live, mid-gesture (u undefined: forget the user's — fresh: back to the
  *                    SOLVED stage, an undo to the empty layout) · liftSettle() the gesture is over
  *   footing()        the live footing plan (rooms/footing.js) · fixed() what can't move here, and why
+ *   hangHome(key)    where a hung station hangs this song ({ x, z } world) · unhangLift(key) the lift that keeps
+ *                    a hung station's deck where it hangs, once it stands (u)
  */
 export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
   let midi = null;                                   // { parsed, label, id } — the last MIDI import
@@ -145,7 +147,8 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
     if (ignoreSongStage.has(curId)) return {};
     return sanitizeLayout(songs[curKey]?.stage);
   }
-  const slot = (key, base) => base.hang ? base : placeSlot(base, layout()[key]);
+  // (a HUNG station hangs as built — unless the layout has an entry for it: the user took it down, it STANDS)
+  const slot = (key, base) => base.hang ? standSlot(base, layout()[key]) : placeSlot(base, layout()[key]);
   const kitSlot = base => placeSlot(base, layout().drums);   // (the kit faces the audience: main ignores its yaw)
 
   /* ---- the map panel ---- */
@@ -215,9 +218,13 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
   const stage = makeStageEdit({ THREE, scene, cam, dom, onChange: syncButtons, host: {
     pieces: host.pieces, wall: host.wall, cx: host.cx, kitPivot: host.kitPivot, visBox: host.visBox, room: host.room, roomBox: host.roomBox, roomGroup: host.roomGroup,
     floorY: host.floorY, height: host.height, liftLive: host.liftLive, footing: host.footing, fixed: host.fixed,
-    place(key, entry, all){
+    hangHome: host.hangHome, unhangLift: host.unhangLift,
+    place(key, entry, all, { rebuild = false } = {}){
       history.push(curId, layout());                 // (undo: the layout as it was before this move)
       saveLayout(store, curId, placed(key, entry, all));
+      // a HUNG station taken down off the belt is BUILT standing (no columns / rods: the room's footing holds
+      // it) — a rebuild holding songTime, like an undo
+      if (rebuild){ host.rebuild(true); syncButtons(); return; }
       // a machine whose height the LAYOUT decides (no user lift) takes the height the room solve gives its new
       // spot — what a reload would (stations.js: one the user parks behind the belt goes up on the gallery;
       // one brought out from there comes down) — live, before the room re-anchors
@@ -245,6 +252,14 @@ export function makeEditor({ THREE, scene, cam, dom, songs, machines, host }){
       // pins them — the height a reload would give (main's autoLiftOf); none to give: the world is rebuilt
       if (host.liftLive(key, undefined)){ host.liftSettle(); stage.refresh(); } else host.rebuild(true);
       syncButtons();
+    },
+    /* a hung station dropped back on the belt: its entry goes — it re-hangs exactly as built (a rebuild) */
+    rehang(key){
+      history.push(curId, layout());
+      const L = dropEntry(layout(), key);
+      saveLayout(store, curId, L);
+      if (!Object.keys(L).length) ignoreSongStage.add(curId);   // (the empty layout = the solved stage, not the song's own)
+      host.rebuild(true); syncButtons();
     },
     resetLayout(){ stage.cancel(); history.push(curId, layout()); saveLayout(store, curId, {}); ignoreSongStage.add(curId); host.rebuild(true); },
     undo, redo,
@@ -477,6 +492,14 @@ function injectStyles(){
   .se-dock.fixed .sd-why{display:block}
   .se-dock.fixed .sd-h,.se-dock.fixed .sd-more,.se-dock.fixed .sd-turn{display:none}
   .se-dock.nolift .sd-h,.se-dock.nolift .sd-more{display:none}
+  .se-dock.hungsel .sd-why{display:block}
+  /* the MAGNET chip over a hung machine being dragged: HANGS FROM THE BELT (the belt's blue) / STANDS HERE */
+  .se-chip.se-mag{z-index:9;align-items:center;border-color:rgba(255,183,100,.55)}
+  .se-chip.se-mag i{letter-spacing:.2em}
+  .se-chip.se-mag.hang{border-color:rgba(127,178,255,.75);box-shadow:0 0 18px rgba(80,140,255,.35),0 6px 22px rgba(0,0,0,.4)}
+  .se-chip.se-mag.hang b,.se-chip.se-mag.hang i{color:#9cc4ff}
+  .se-chip.se-mag.bad{border-color:rgba(255,77,94,.7)}
+  .se-chip.se-mag.bad i{color:#ff8a96}
   /* the HEIGHT handle on the screen: the pole + its metre scale, the knob, its readout, the first-time hint */
   .se-pole{position:fixed;left:0;top:0;width:100vw;height:100vh;pointer-events:none;z-index:6;overflow:visible}
   .se-pole .sp-rail{stroke:rgba(255,183,100,.42);stroke-width:2;fill:none}

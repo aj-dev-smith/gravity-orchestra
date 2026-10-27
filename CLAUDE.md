@@ -56,7 +56,7 @@ Still not pushed to GitHub.
 deployed.** The floor came up (-22 to -5.5), machines are set IN the rooms with a per-machine lift,
 supports are styled by each room by height band, rooms react to strikes, the layout is floor-first, and
 EDIT STAGE edits height. Its changelog and guide: [`docs/STAGING-WORLD.md`](docs/STAGING-WORLD.md). Rollback
-target when it ships = 6db6c8c. Waves 1–4 are merged on it (d172126).
+target when it ships = 6db6c8c. Waves 1–5 are merged on it (wave 5, c5c2e81: the belt and the hung machines move in EDIT STAGE).
 
 `npm run deploy` builds + ships to production. It does not care which branch you're
 on. Treat it as live, and confirm with the human before running it.
@@ -141,13 +141,15 @@ on. Treat it as live, and confirm with the human before running it.
                      U_PER_M = −G/9.81, earFrame) — test/xrplan.test.js. How to test: docs/XR.md
                      src/xrmenu.js (the in-world menu, Y) · src/xrdetail.js + src/xrbatch.js (the VR
                      DETAIL PROFILE, headset render only, undone after it) — test/xrperf.test.js
+    src/stagepose.js pure: the belt's STAGE POSE T = {x, z, yaw} — toWorld / toStage, stageRoom, clampPose,
+                     poseOf; every staging solve runs in the belt's frame, placed by T. test/stagepose.test.js
     src/share.js     song ⇄ deflate→base64url share links
     src/record.js    canvas captureStream + MediaRecorder → "one perfect loop" video
     src/songs/*.js   one module per song (the comments are sacred), aggregated by index.js
     src/main.js      scene, rigs, buildWorld, ballPos, animate(), controls — the orchestrator
     test/            Vitest: engine ballistics, song lock-rule, drum validation, MIDI, the
                      juggler's plan audit + bake, share round-trip, every plugin's honesty suite,
-                     staging audit + footing, director, XR (63 files / 2891 tests, 2026-10-26; ~1.5 min)
+                     staging audit + footing, director, XR (64 files / 2913 tests, 2026-10-26; ~1.5 min)
     docs/OVERNIGHT-2026-10-07.md   the night's changelog: what each new machine / room / song
                      is and the URL to try it
     docs/STAGING-WORLD.md   2026-10-25 staging world (branch staging-world): floor, lift, footing, rooms
@@ -755,6 +757,12 @@ parallel song branches, so merge the key lists and regenerate the fixture ONCE o
   with events are placed. Shared-file scar: STATIONS is the one edit a new floor plugin can't avoid — run
   the slot search against test/stations.test.js (1–3 bays ± turntable) or every other station's solved
   position moves.
+- **The BELT and the HUNG machines move** (wave 5; docs/STAGING-WORLD.md): drag the organ / ricochet / volley off
+  the belt and it stands on the room's footing (a layout entry for a hung key = standing; none = hung as built);
+  drop it over the belt's top and it re-hangs. The belt drags + turns (Q / E, the ring): `src/stagepose.js` T —
+  all staging solves run in the belt's frame and are placed by T (identity = bit-for-bit the old stage);
+  `belt: [x, z, yaw]` in layouts / share links; unplaced machines re-seat, placed ones stay unless WHOLE STAGE
+  (Alt) carries them; refused drops go back. Physics never changes — the plan is in the belt's own frame.
 - **STAGE EDIT height** (`src/editor/height.js` pure, `stage-edit.js`; RCT-style): select a floor machine and
   a HEIGHT HANDLE stands at its footprint corner nearest the eye — a pole with a tick per metre, a ▲▼ knob,
   a readout chip (`+12.8 m · TOWER · LOFT · RIFF FORGE`). Heights are SAID in metres (`M_PER_U` ≈ .677 u→m)

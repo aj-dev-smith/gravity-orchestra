@@ -41,8 +41,7 @@ or a git-ignored `.env.deploy` (template: `.env.deploy.example`).
 `launch-prep` (the rename/MIT commit + the juggler) and deployed — the live site says Gravity
 Orchestra now. The melody belt is ONE multiball juggling machine for every belt voice (§3b); the
 classic belt (a paternoster bay + one marble per voice) and its crane planner are deleted
-(`d6e8758` and earlier have them). Rollback target = `d6e8758` (the 2026-10-08 build). Not pushed
-to GitHub yet (origin/main = `d6e8758`) — pushing publishes the MIT / README launch commit too.
+(`d6e8758` and earlier have them). Rollback target = `d6e8758` (the 2026-10-08 build). (Pushed to GitHub 2026-10-30 with the staging world; the repo itself is still private.)
 
 **PLANNER-FIRST + the transport SHIPPED 2026-10-24** (AJ: "under no circumstances does a song start
 before the planner is done … a start stop and restart button"; `main` fast-forwarded to the
@@ -50,13 +49,13 @@ before the planner is done … a start stop and restart button"; `main` fast-for
 its belt's plan is in — the count-in runs while it is solved, then waits (§3b, `src/transport.js`); the
 machines sit the count-in out (ARM_AT, §7 Transport); the search runs as parallel worker jobs and a
 page remembers its plans (same plans, bit for bit); the HUD has ■ STOP / ▶ START and ↺ RESTART.
-Still not pushed to GitHub.
 
-**STAGING WORLD (2026-10-25, branch `staging-world`, off `main` 6db6c8c) is NOT merged to `main` and NOT
-deployed.** The floor came up (-22 to -5.5), machines are set IN the rooms with a per-machine lift,
-supports are styled by each room by height band, rooms react to strikes, the layout is floor-first, and
-EDIT STAGE edits height. Its changelog and guide: [`docs/STAGING-WORLD.md`](docs/STAGING-WORLD.md). Rollback
-target when it ships = 6db6c8c. Waves 1–5 are merged on it (wave 5, c5c2e81: the belt and the hung machines move in EDIT STAGE).
+
+**STAGING WORLD SHIPPED 2026-10-30** (`main` fast-forwarded to `staging-world`, deployed, and `main` pushed to
+GitHub; rollback target = 6db6c8c). The floor came up (-22 to -5.5), machines are set IN the rooms with a
+per-machine lift, supports are styled by each room by height band, rooms react to strikes, the layout is
+floor-first, EDIT STAGE edits height, and the belt + the hung machines (organ, ricochet, volley) move (wave 5).
+Its changelog and guide: [`docs/STAGING-WORLD.md`](docs/STAGING-WORLD.md).
 
 `npm run deploy` builds + ships to production. It does not care which branch you're
 on. Treat it as live, and confirm with the human before running it.
@@ -1024,7 +1023,7 @@ Near-term, in rough priority:
 
 1. **Hear it / wear it**: a real-iPhone listen (buckets, cymbals, velocity) and the Quest 2 pass
    (docs/XR.md §0). Everything after this depends on what those say.
-2. **Staging world**: merge `staging-world` (wave 4 polish first), then hear/wear it. The star is front
+2. **Staging world** (shipped 2026-10-30): hear/wear it. The star is front
    and centre and the gallery is a rare loft now; what's left is real-hardware checks and the open issues in §8.
 3. **Timbre seams**: a reed voice for horns, a belt timbre (a guitar line on a belt), a loop-sustain
    seam for voices (drones past 4 s), per-event timbre instead of id suffixes if it keeps growing.

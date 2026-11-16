@@ -1,3 +1,7 @@
+> **Contributing, or an agent working for a contributor?** Read [`AGENTS.md`](AGENTS.md) and
+> [`CONTRIBUTING.md`](CONTRIBUTING.md) first. This file is the maintainer's deep architecture
+> reference: long, and mostly about the core you shouldn't need to touch.
+
 # GRAVITY ORCHESTRA (née CASCADE) — marble melody machine
 ## Handoff brief for Claude Code
 
@@ -41,7 +45,7 @@ or a git-ignored `.env.deploy` (template: `.env.deploy.example`).
 `launch-prep` (the rename/MIT commit + the juggler) and deployed — the live site says Gravity
 Orchestra now. The melody belt is ONE multiball juggling machine for every belt voice (§3b); the
 classic belt (a paternoster bay + one marble per voice) and its crane planner are deleted
-(`d6e8758` and earlier have them). Rollback target = `d6e8758` (the 2026-10-08 build). (Pushed to GitHub 2026-10-30 with the staging world; the repo itself is still private.)
+(`d6e8758` and earlier have them). Rollback target = `d6e8758` (the 2026-10-08 build).
 
 **PLANNER-FIRST + the transport SHIPPED 2026-10-24** (AJ: "under no circumstances does a song start
 before the planner is done … a start stop and restart button"; `main` fast-forwarded to the
@@ -51,11 +55,14 @@ machines sit the count-in out (ARM_AT, §7 Transport); the search runs as parall
 page remembers its plans (same plans, bit for bit); the HUD has ■ STOP / ▶ START and ↺ RESTART.
 
 
-**STAGING WORLD SHIPPED 2026-10-30** (`main` fast-forwarded to `staging-world`, deployed, and `main` pushed to
-GitHub; rollback target = 6db6c8c). The floor came up (-22 to -5.5), machines are set IN the rooms with a
+**STAGING WORLD SHIPPED 2026-10-30** (`main` fast-forwarded to `staging-world` and deployed;
+rollback target = 6db6c8c). The floor came up (-22 to -5.5), machines are set IN the rooms with a
 per-machine lift, supports are styled by each room by height band, rooms react to strikes, the layout is
 floor-first, EDIT STAGE edits height, and the belt + the hung machines (organ, ricochet, volley) move (wave 5).
 Its changelog and guide: [`docs/STAGING-WORLD.md`](docs/STAGING-WORLD.md).
+
+**The repo went PUBLIC on GitHub 2026-11-16.** Contribution lanes and the agent contract:
+[`CONTRIBUTING.md`](CONTRIBUTING.md), [`AGENTS.md`](AGENTS.md).
 
 `npm run deploy` builds + ships to production. It does not care which branch you're
 on. Treat it as live, and confirm with the human before running it.
@@ -178,8 +185,8 @@ on. Treat it as live, and confirm with the human before running it.
     npm run build:single   # → marble-cascade.html  (self-contained viral artifact)
     npm run deploy         # build + ./deploy.sh → S3 sync + CloudFront invalidation
 
-Deploy infra: private S3 bucket `cascade.ajsmithhq.com` (CloudFront OAC) → CloudFront
-`E1U4B3EV2WPMZS` → ACM cert + Route53 alias. three.js is **r184** (`^0.184.0`),
+Deploy infra: a static S3 + CloudFront site; `deploy.sh` reads the bucket, distribution ID and
+live URL from the environment or a git-ignored `.env.deploy` (template: `.env.deploy.example`). three.js is **r184** (`^0.184.0`),
 postprocessing on (EffectComposer → UnrealBloom → ACES OutputPass). The module seams
 are deliberately thin and dependency-injected: audio takes `setBeat` + `rebuildBank`;
 juice takes `initJuice(scene)` then `spawn*`/`updateJuice`; conveyor/camera/drums are
@@ -1028,8 +1035,7 @@ Near-term, in rough priority:
 3. **Timbre seams**: a reed voice for horns, a belt timbre (a guitar line on a belt), a loop-sustain
    seam for voices (drones past 4 s), per-event timbre instead of id suffixes if it keeps growing.
 4. **Melody/drum editor** — piano-roll + drum-grid, exports the same song format (mode 2).
-5. Personal/private only: Zelda transcriptions (Nintendo IP — keep out of the public
-   repo/demo), more Peer Gynt.
+5. More public-domain songs (more Peer Gynt).
 
 ---
 

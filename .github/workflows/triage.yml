@@ -1,5 +1,6 @@
 name: triage
-# Labels a PR `machine` (only one NEW src/instruments/<key>/ folder + its test/inst-<key>.test.js) or
+# Labels a PR `machine` (only one NEW src/instruments/<key>/ folder + its test/inst-<key>.test.js),
+# `room` (only one NEW src/rooms/<key>.js + its <key>-*.js helpers + its test/room-<key>.test.js) or
 # `core` (touches files that need a maintainer OK first), and on a `core` PR from outside with no
 # linked issue, comments ONCE pointing at CONTRIBUTING.md.
 #
@@ -63,8 +64,29 @@ jobs:
               }
             }
 
-            const want = { machine: isMachine, core: isCore };
-            const COLORS = { machine: '1f883d', core: 'd1242f' };
+            // a room: every path a NEW src/rooms/<key>.js, its own src/rooms/<key>-*.js helpers or its
+            // test/room-<key>.test.js (src/rooms/README.md), with the room file itself in the PR
+            let isRoom = false;
+            const rkeys = new Set();
+            let rother = false, rmain = false;
+            for (const p of paths) {
+              let m;
+              if ((m = /^src\/rooms\/([a-z][a-z0-9]*)\.js$/.exec(p))) { rkeys.add(m[1]); rmain = true; }
+              else if ((m = /^src\/rooms\/([a-z][a-z0-9]*)-[^/]+\.js$/.exec(p))) rkeys.add(m[1]);
+              else if ((m = /^test\/room-([a-z][a-z0-9]*)\.test\.js$/.exec(p))) rkeys.add(m[1]);
+              else rother = true;
+            }
+            if (!rother && !isCore && rmain && rkeys.size === 1) {
+              const [key] = rkeys;
+              try {
+                await github.rest.repos.getContent({ owner, repo, path: `src/rooms/${key}.js`, ref: pr.base.sha });
+              } catch (e) {
+                if (e.status === 404) isRoom = true; else throw e;
+              }
+            }
+
+            const want = { machine: isMachine, room: isRoom, core: isCore };
+            const COLORS = { machine: '1f883d', room: '0969da', core: 'd1242f' };
             const have = new Set(pr.labels.map(l => l.name));
             for (const [name, on] of Object.entries(want)) {
               if (on && !have.has(name)) {
@@ -98,4 +120,4 @@ jobs:
                 ].join('\n') });
               }
             }
-            core.info(`machine=${isMachine} core=${isCore} linked=${linked} insider=${insider}`);
+            core.info(`machine=${isMachine} room=${isRoom} core=${isCore} linked=${linked} insider=${insider}`);

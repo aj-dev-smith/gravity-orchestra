@@ -9,6 +9,7 @@ is your contract. Follow it exactly. The human-facing version is [`CONTRIBUTING.
 - Marbles and mechanisms play music. The melody is authored first; every motion is solved
   backward from it in closed form. Nothing is simulated.
 - An instrument ("machine") is a plugin: one folder in `src/instruments/<key>/`, auto-registered.
+  A room is one file `src/rooms/<key>.js` (plus `<key>-*.js` helpers), auto-registered too.
 - Maintained by one person. Review time is the scarcest resource here. Spend it well.
 
 ## Invariants (break one and the PR is closed)
@@ -75,8 +76,12 @@ the machine gets a default seat, so do not touch `stations.js` or `src/midi/`.
   `EXPECTED_KEYS` in `test/songs.test.js`. Public domain or original only. Obey the LOCK RULE
   (`CLAUDE.md` §6). Do not regenerate the staging fixture; the staging test failing with "missing
   from the fixture" is expected and the maintainer fixes it on merge.
-- **A room**: new `src/rooms/<key>*.js` + `test/room-<key>.test.js`, and only the two registration
-  lines in `src/rooms/index.js`. Same fixture rule as songs.
+- **A room**: read [`src/rooms/README.md`](src/rooms/README.md), run `npm run new:room <key>`, and edit
+  only `src/rooms/<key>.js`, your own `src/rooms/<key>-*.js` helpers and `test/room-<key>.test.js`. The
+  room is registered automatically (do not edit `src/rooms/index.js`), and the staging fixture pins the
+  shipped rooms only (do not regenerate it; nothing fails). Never import `src/rooms/index.js` from the
+  room. Verify with `npx vitest run test/room-<key>.test.js test/room-contract.test.js`, then `npm test`
+  and `npm run build`; your human looks at `?room=<key>&song=finale` and a sparse song.
 - **A bug fix**: only with a reproducing URL or file, smallest possible diff, no core files unless
   the maintainer agreed on the issue.
 
@@ -84,6 +89,7 @@ the machine gets a default seat, so do not touch `stations.js` or `src/midi/`.
 
     npm install
     npm run new:machine <key>               # scaffold a machine
+    npm run new:room <key>                  # scaffold a room (then ?room=<key>)
     npm run dev                             # dev server; add ?solo=<key> to the printed URL
                                             #   ?solo=<key>&debug  -> scrub bar + window.__dev
                                             #   __dev.t = 3.2 scrubs, __dev.rate = .25 slows

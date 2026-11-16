@@ -81,8 +81,8 @@ cause (a piston kicks, a magnet holds, a latch releases), and contact is honest.
 [`src/instruments/README.md`](src/instruments/README.md) for the full contract, then try
 `npm run dev` with `?solo=marimba` to see one machine on its own.
 
-Songs (pure data in `src/songs/`) and rooms (pure set dressing in `src/rooms/`) are the other
-two easy ways in. See [CONTRIBUTING.md](CONTRIBUTING.md) for the lanes, and point your coding
+Songs (pure data in `src/songs/`) and rooms (pure set dressing in `src/rooms/`, scaffolded by
+`npm run new:room <key>`) are the other two easy ways in. See [CONTRIBUTING.md](CONTRIBUTING.md) for the lanes, and point your coding
 agent at [AGENTS.md](AGENTS.md).
 
 ## Docs

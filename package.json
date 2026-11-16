@@ -29,6 +29,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "new:machine": "node scripts/new-machine.mjs",
+    "new:room": "node scripts/new-room.mjs",
     "deploy": "npm run build && ./deploy.sh"
   },
   "dependencies": {

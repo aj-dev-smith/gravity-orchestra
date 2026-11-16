@@ -66,13 +66,39 @@ once on the merged tree.
 
 ### 3. A room
 
-Pure set dressing: new files `src/rooms/<key>.js` (plus `<key>-*.js` helpers) and
-`test/room-<key>.test.js`. The only edit to `src/rooms/index.js` we take is the two lines that
-register it (one import, one entry in `ROOMS`). No lights of its own, no per-frame allocation,
-stay inside the footing envelopes. The contract is the header of `src/rooms/index.js`,
-`src/rooms/footing3d.js` and [`docs/STAGING-WORLD.md`](docs/STAGING-WORLD.md). As with songs, the
-maintainer regenerates the staging fixture. Rooms are big, so a quick issue with a sketch first
-is a good idea.
+Pure set dressing, and new files only, like a machine:
+
+```
+src/rooms/<key>.js           the room (registered automatically: ?room=<key>, and R cycles to it)
+src/rooms/<key>-*.js         optional helpers of your own (the hyphen marks a helper)
+test/room-<key>.test.js      your room's own tests
+```
+
+Start from the scaffold. It gives you a small room that already obeys the contract:
+
+```bash
+npm run new:room <key>
+npm run dev            # then open ?room=<key>&song=daybreak-engine
+```
+
+Read [`src/rooms/README.md`](src/rooms/README.md) (the contract), then make the room yours.
+`test/room-contract.test.js` checks every room automatically: the floor stays put, no lights of its
+own, props clear of the machines and their supports, a pure per-frame update with no allocation, the
+prewarm rules, and a clean dispose.
+
+A room PR needs:
+
+- **Made with the scaffold**, and touching only `src/rooms/<key>*.js` and `test/room-<key>.test.js`.
+  No edit to `src/rooms/index.js`, and **don't regenerate the staging fixture**: it pins the shipped
+  rooms only, so a new room fails nothing.
+- **`npm test` and `npm run build` pass.**
+- **Screenshots of `?room=<key>`** with a dense song (`?song=finale`) and a sparse one.
+- **One room per PR**, at a sensible size (the scaffold is about 230 lines; the shipped rooms run
+  roughly 1,000 to 1,800 lines across their files).
+
+Whether a song opens in your room (`room:` in its data) is curated by the maintainer after merge, so
+please don't edit songs to point at it. Rooms are big, so a quick issue with a sketch first is a good
+idea.
 
 ### 4. Bug fixes, with a repro
 

@@ -28,6 +28,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "new:machine": "node scripts/new-machine.mjs",
     "deploy": "npm run build && ./deploy.sh"
   },
   "dependencies": {

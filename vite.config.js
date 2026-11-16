@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: single ? [viteSingleFile()] : xr ? [basicSsl()] : [],
     server: { ...(xr ? { host: true } : {}), watch: { ignored: ['**/.claude/**'] } },   // workflow worktrees live under .claude/
-    test: { exclude: ['**/node_modules/**', '.claude/**', 'dist/**'] },   // workflow worktrees live under .claude/
+    test: { exclude: ['**/node_modules/**', '.claude/**', 'dist/**', '.scaffold-tmp/**'] },   // workflow worktrees live under .claude/ (.scaffold-tmp: test/scaffold.test.js's scratch tree)
     build: {
       outDir: single ? 'dist-single' : 'dist',
       emptyOutDir: true,

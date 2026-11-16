@@ -17,7 +17,7 @@ is your contract. Follow it exactly. The human-facing version is [`CONTRIBUTING.
    Scrubbing (`?debug`) can jump anywhere, backwards too, and the frame must be identical.
 2. **Solve up front.** No integrators, no physics engine, no per-frame velocity accumulation, no
    timers, no audio schedulers. A hit is a target plus a launch solve (`solveLaunch`, `arcPos`,
-   `arcVel` from `src/engine.js`). Strikes fire when the timeline crosses them, never from a clock.
+   `arcVel` from `src/engine.js`, or the same closed form written out). Strikes fire when the timeline crosses them, never from a clock.
 3. **Honest motion.** The struck surface is at rest at contact, the strike lands exactly on the
    beat, nothing passes through anything, nothing teleports or pops in. Every change of motion has
    a visible cause (a piston, a magnet, a latch, a spring). Long gaps park at a physical feature.
@@ -28,7 +28,7 @@ is your contract. Follow it exactly. The human-facing version is [`CONTRIBUTING.
 1. Read [`src/instruments/README.md`](src/instruments/README.md) in full. It is the plugin contract.
 2. Run `npm install`, then `npm run new:machine <key>` (`<key>`: lowercase, a new folder name).
    It scaffolds a working minimal machine: `src/instruments/<key>/{solve.js,voice.js,index.js}`
-   and `test/inst-<key>.test.js`.
+   and `test/inst-<key>.test.js`. Options: `-- --label "Wind Chimes" --color "#7ad0a0"`.
 3. **Edit only those four files.** `solve.js` stays pure (no THREE scene, DOM or audio).
    `voice.js` stays pure DSP (deterministic; cache with `voiceCache()`, never a plain `Map`).
    `index.js` builds and updates the 3D machine. If you think a shared file must change, stop and
@@ -37,11 +37,14 @@ is your contract. Follow it exactly. The human-facing version is [`CONTRIBUTING.
    at rest at contact, no penetration, the demo part is valid, 500 random events plus garbage input
    never throw. `test/inst-contract.test.js` checks the generic contract for you.
 5. Verify: `npx vitest run test/inst-<key>.test.js test/inst-contract.test.js`, then `npm test`
-   (the whole suite, a few minutes) and `npm run build`. Both must pass.
+   (the whole suite, a few minutes) and `npm run build`. Both must pass. (`scripts/merge-audit.mjs`
+   is the maintainer's job, not yours.) Confirm your diff with `git diff --stat main...HEAD`
+   (three dots): it must list only your four files.
 6. Run `npm run dev` and open `?solo=<key>`. Your human must watch it and listen to it. Tests
    cannot tell whether the motion reads as honest or the sound is good.
 7. Give your human, for the PR: a clip or screenshot of `?solo=<key>`, and 2 or 3 sentences on the
-   MECHANISM (what physically causes each note, where the energy comes from).
+   MECHANISM (what physically causes each note, where the energy comes from). Leave the PR
+   template's "I ran it, watched it and listened to it" box for your human to tick.
 
 One machine per PR. Stage placement and MIDI routing are curated by the maintainer after merge;
 the machine gets a default seat, so do not touch `stations.js` or `src/midi/`.
@@ -87,7 +90,9 @@ the machine gets a default seat, so do not touch `stations.js` or `src/midi/`.
                                             #   __dev.strikes() lists strikes + any unbaked voice id
     npx vitest run test/inst-<key>.test.js  # your tests only (fast)
     npm test                                # the whole suite; must pass
-    npm run build                           # must pass
+    npm run build                           # must pass (the ">800 kB chunk" warning is expected)
+    node scripts/shot.mjs                   # headless stills of ?solo=<key> for the PR (flags in
+                                            #   its header; needs Chrome). __dev.cam('<key>') frames it
 
 Wall-clock budget tests can flake on a loaded machine. Re-run the failing file alone before
 believing it.

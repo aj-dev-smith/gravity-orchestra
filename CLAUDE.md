@@ -1,6 +1,8 @@
 > **Contributing, or an agent working for a contributor?** Read [`AGENTS.md`](AGENTS.md) and
 > [`CONTRIBUTING.md`](CONTRIBUTING.md) first. This file is the maintainer's deep architecture
-> reference: long, and mostly about the core you shouldn't need to touch.
+> reference: long, and mostly about the core you shouldn't need to touch. Where the two disagree,
+> **AGENTS.md wins for contributors**: §0 (branches, deploys) and §10 (working agreements) describe
+> the maintainer's own workflow, and nobody but the maintainer deploys.
 
 # GRAVITY ORCHESTRA (née CASCADE) — marble melody machine
 ## Handoff brief for Claude Code
@@ -155,7 +157,7 @@ on. Treat it as live, and confirm with the human before running it.
     src/main.js      scene, rigs, buildWorld, ballPos, animate(), controls — the orchestrator
     test/            Vitest: engine ballistics, song lock-rule, drum validation, MIDI, the
                      juggler's plan audit + bake, share round-trip, every plugin's honesty suite,
-                     staging audit + footing, director, XR (64 files / 2913 tests, 2026-10-26; ~1.5 min)
+                     staging audit + footing, director, XR (67 files / 3066 tests, 2026-11-16; ~1.5 min)
     docs/OVERNIGHT-2026-10-07.md   the night's changelog: what each new machine / room / song
                      is and the URL to try it
     docs/STAGING-WORLD.md   2026-10-25 staging world (branch staging-world): floor, lift, footing, rooms

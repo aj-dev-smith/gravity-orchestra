@@ -13,7 +13,10 @@ npx vitest run test/inst-chimes.test.js test/inst-contract.test.js
    tone bar, a piston under each bar, a magnet for the long gaps: the engine's closed-form dribble
    solve). Every "CHANGE THIS" comment is a place to make it yours. Options: `-- --label "Wind
    Chimes" --color "#7ad0a0"`, `--dry`.
-2. **Watch it.** `?solo=<key>` plays its `demo` on a minimal spine with the camera on it.
+2. **Watch it.** `?solo=<key>` plays its `demo` on a minimal spine; press your machine's camera
+   button (or `__dev.cam('<key>')` under `?debug`) to frame it. If the song picker doesn't read
+   "<Label> (solo)" you are on another checkout's dev server: `npm run dev -- --port <free> --strictPort`.
+   Stills for the PR: `node scripts/shot.mjs` (its header lists the flags; needs Chrome).
    `__dev.t = 3.2` scrubs, `__dev.strikes(true)` then `__dev.strikes()` counts what it played.
 3. **Prove it.** Your own test proves the mechanism is honest (lands on the beat, at rest at
    contact, no penetration, fits any input). `test/inst-contract.test.js` runs every plugin the
@@ -35,7 +38,7 @@ its own `STATIONS` slot in `stations.js` if it has one (every shipped machine �
 else a GUEST slot from its descriptor's `stage` hints (below). If MIDI should route to it, the
 routing owner's `orchestra.js` entries (see `PART_LIMITS`).
 Main runs a generic loop over every registered instrument that has a part in the
-current song. Read CLAUDE.md §2–§4 first (time is the only state; visuals drive
+current song. Read CLAUDE.md §2 and §4b first (time is the only state; visuals drive
 audio; a hit = a target + a launch solve) and study `src/marbledrums.js`, the
 reference instrument (it predates this seam, so it's wired by hand, but every
 idea here was extracted from it).
@@ -73,7 +76,7 @@ Import helpers from `../clock.js` (lane clock, strike edges, event parsing) and
 `../../engine.js` (`G`, `solveLaunch`, `arcPos`, `arcVel`, `noteHz`, `noteNum`,
 `dribbleLane`/`dribbleAt`/`dribblePiston`, `padOffset`…). Use `glowTex`/`envMap`
 handed to `make`. **Do not edit** main.js, audio.js, engine.js, camera.js, other
-instruments, or the songs — if the seam is missing something, say so in your report.
+instruments, or the songs — if the seam is missing something, tell your human: that is an issue for the maintainer, not part of your PR.
 
 ## The descriptor
 
@@ -182,7 +185,7 @@ bowwheel, dulcimer — the SUSTAIN family; CLAUDE.md §4). Their seam gaps becam
   in the id, so list chord notes low → high (`'E2+B2+E3'`) and you rarely need it.
 - **`light < .2` skips the shared strike-light pool** — a strum / chord fires one bright strike for
   the chord and faint ones (`light: .12`) for the inner strings; draw those flashes locally.
-- **`PART_LIMITS`** (export from solve.js, re-export on the descriptor): `{lo, hi, center, pitches,
+- **`PART_LIMITS`** (OPTIONAL — omit it until the maintainer routes MIDI to your machine; export from solve.js, re-export on the descriptor): `{lo, hi, center, pitches,
   poly, gap, ioi, voices, maxEvents, sustain, minDur, maxDur}` + anything your fitter needs. The
   ROUTING CONTRACT: orchestra.js builds `PART_SPEC.<key>` FROM it (imports it; a test asserts the
   match — never copy numbers), routes programs to you in `PREFER` (program + shape) / `LINE_HOME`
@@ -207,7 +210,7 @@ bowwheel, dulcimer — the SUSTAIN family; CLAUDE.md §4). Their seam gaps becam
 - **Metal shader gotcha**: `pow(0.0, y)` in a fragment shader returned NaN on Metal and bloom smeared
   it over the whole frame (black screen). Use `x*x`-style forms.
 
-### Duration buckets (src/instruments/sustain.js)
+### Duration buckets (src/instruments/sustain.js) — optional; only for notes the mechanism HOLDS
 
 The iOS `<audio>` path plays a WAV to its end (no `dur` release, `el.volume` ignored). So a sustained
 note fires `'<base>~<hold>'`: its render = the base render CUT at a rung of the ladder `[.5, 1, 2]` s
@@ -278,7 +281,7 @@ LOG time (≤ √2 off below 2.8 s) — or the bare base when the render's own h
     still costs a draw call). Don't drive `material.visible` yourself on those; opt
     out with `material.userData.noFadeGate = true` (or on the object).
 
-## Rest-pose personality (`idle.js`)
+## Rest-pose personality (`idle.js`) — optional for a new machine
 
 A resting machine should never look dead, and its next entrance should be felt coming
 (Animusic's Starship Groove robots). `idle.js` holds the shared pure curves: `restEnv(since,

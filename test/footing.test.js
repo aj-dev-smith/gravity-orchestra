@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { FOOT, bandOf, groundOf, clampLift } from '../src/rooms/footing.js';
 import { STAGE } from '../src/rooms/common.js';
 import { INSTRUMENTS } from '../src/instruments/index.js';
-import { STATIONS } from '../src/instruments/stations.js';
+import { STATIONS, stationFor } from '../src/instruments/stations.js';
 import { glowy } from '../src/shotrig.js';
 import { makeMarbleDrums, KIT_STAND } from '../src/marbledrums.js';
 import { DECK_UNDER } from '../src/drumlook.js';
@@ -70,7 +70,7 @@ describe('footing: every FLOOR machine rests on its own base when built supportl
     it(`${I.key}: lowest solid part within .6 u under its deck${I.stand !== undefined ? ` — or it declares stand (${I.stand})` : ''}`, () => {
       const beat = 60 / I.demo.bpm, P = ROLL_T + I.demo.beats * beat + 1.2;
       const M = I.make({ envMap: null, glowTex: null, THREE });
-      const group = M.build(I.demo.part, { rollT: ROLL_T, beat, P, start: -.6, station: STATIONS[I.key], floorY: 0, ceilY: STAGE.CEIL, loopBeats: I.demo.beats });
+      const group = M.build(I.demo.part, { rollT: ROLL_T, beat, P, start: -.6, station: STATIONS[I.key] || stationFor(I.key, 0, I), floorY: 0, ceilY: STAGE.CEIL, loopBeats: I.demo.beats });
       const low = solidLow(group, (t, started) => M.update(t, P, 0, { started, skipStrikes: true, onStrike(){} }), P);
       expect(Number.isFinite(low), `${I.key} has solid parts`).toBe(true);
       if (I.stand === undefined){

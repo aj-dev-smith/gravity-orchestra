@@ -4,7 +4,7 @@
 
 **▶ Live: [cascade.ajsmithhq.com](https://cascade.ajsmithhq.com)** · drop any `.mid` file on the page and the solver orchestrates it.
 
-![Gravity Orchestra](public/og.png)
+![Gravity Orchestra](public/og-gravity.png)
 
 An open-source love letter to [Animusic](https://en.wikipedia.org/wiki/Animusic): impossible
 machines that play real music in 3D. Wayne Lytle's films taught a generation that you could

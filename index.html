@@ -12,10 +12,13 @@
 <meta property="og:title" content="Gravity Orchestra — marble melody machine">
 <meta property="og:description" content="Melodies solved into ballistic marble physics. Drop any MIDI file — the solver does the rest.">
 <meta property="og:url" content="https://cascade.ajsmithhq.com/">
-<meta property="og:image" content="https://cascade.ajsmithhq.com/og.png">
+<meta property="og:image" content="https://cascade.ajsmithhq.com/og-gravity.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Gravity Orchestra — marble melody machine">
+<meta name="twitter:description" content="Melodies solved into ballistic marble physics. Drop any MIDI file — the solver does the rest.">
+<meta name="twitter:image" content="https://cascade.ajsmithhq.com/og-gravity.png">
 <style>
   :root{
     --ink:#cfd6e6; --dim:#5a6178; --amber:#ffb764;
@@ -38,6 +41,12 @@
   #share{pointer-events:auto;display:block;margin-top:8px;background:none;border:1px solid rgba(90,97,120,.45);
     color:var(--dim);font:inherit;font-size:10px;letter-spacing:.18em;padding:5px 12px;border-radius:999px;cursor:pointer}
   #share:hover{color:var(--amber);border-color:rgba(255,183,100,.5)}
+  #hudlinks{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;pointer-events:auto}
+  .hp{display:inline-block;background:rgba(7,6,14,.55);border:1px solid rgba(90,97,120,.45);color:var(--dim);font:inherit;font-size:10px;
+    letter-spacing:.18em;padding:5px 12px;border-radius:999px;cursor:pointer;text-decoration:none;white-space:nowrap}
+  .hp:hover,.hp:focus-visible{color:var(--amber);border-color:rgba(255,183,100,.5);outline:none}
+  body:has(#overlay:not(.gone)) #hudlinks{visibility:hidden}   /* under the veil they can't be tapped, and on a phone
+                                                                  on its side they'd run into TAP FOR SOUND (the veil has its own link) */
   #transport{display:flex;gap:8px;margin-top:8px;pointer-events:auto}
   .tp{background:rgba(7,6,14,.55);border:1px solid rgba(90,97,120,.45);color:var(--dim);font:inherit;font-size:10px;letter-spacing:.18em;
     padding:5px 12px;border-radius:999px;cursor:pointer;transition:all .2s ease}
@@ -55,7 +64,15 @@
   #play{pointer-events:auto;cursor:pointer;background:none;border:1px solid rgba(255,183,100,.5);
     color:var(--amber);font:inherit;font-size:12px;letter-spacing:.4em;text-transform:uppercase;
     padding:16px 34px 16px 38px;border-radius:999px;transition:all .25s ease}
-  #play:hover,#play:focus-visible{background:rgba(255,183,100,.12);border-color:var(--amber);box-shadow:0 0 40px rgba(255,183,100,.25);outline:none}
+  #play:not(:disabled):hover,#play:not(:disabled):focus-visible{background:rgba(255,183,100,.12);border-color:var(--amber);box-shadow:0 0 40px rgba(255,183,100,.25);outline:none}
+  #play:disabled{cursor:progress;opacity:.55;border-color:rgba(90,97,120,.6);color:var(--dim);
+    text-transform:none;letter-spacing:.2em;padding:16px 30px}   /* until main.js has booted and attached the veil's handler */
+  #overlay a{color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(255,183,100,.35)}
+  #overlay a:hover,#overlay a:focus-visible{border-bottom-color:var(--amber);outline:none}
+  #bootfail{display:none;max-width:420px}
+  #overlay.fail{cursor:default}
+  #overlay.fail #play,#overlay.fail .copy{display:none}
+  #overlay.fail #bootfail{display:block;font-size:12px;color:var(--amber);opacity:1}
   #mute{position:fixed;top:18px;right:20px;background:none;border:none;cursor:pointer;
     color:var(--dim);font:inherit;font-size:11px;letter-spacing:.2em;padding:6px}
   #mute:hover{color:var(--ink)}
@@ -102,6 +119,11 @@
   </div>
   <p id="songsub"></p>
   <button id="share" hidden>SHARE&nbsp;LINK</button>
+  <div id="hudlinks">
+    <button id="importmidi" class="hp" title="import a MIDI file (or drop one on the page)">IMPORT&nbsp;MIDI</button>
+    <a class="hp" href="https://github.com/aj-dev-smith/gravity-orchestra" target="_blank" rel="noopener">OPEN&nbsp;SOURCE&nbsp;·&nbsp;GITHUB</a>
+  </div>
+  <input type="file" id="midifile" accept=".mid,.midi,audio/midi,audio/x-midi" hidden>
 </div>
 <div id="note"></div>
 <div id="cams"></div>
@@ -109,9 +131,25 @@
 <button id="rec" aria-label="record one loop" hidden>●&nbsp;REC</button>
 <div id="astate"></div>
 <div id="overlay">
-  <button id="play">Tap for sound</button>
-  <p>drop any .mid on the page — the solver does the rest</p>
+  <button id="play" disabled>loading the machines…</button>
+  <p class="copy">drop or pick any .mid — the solver does the rest<br>
+    <a href="https://github.com/aj-dev-smith/gravity-orchestra" target="_blank" rel="noopener" onclick="event.stopPropagation()">open source · github</a></p>
+  <p id="bootfail" role="alert"></p>
 </div>
+<script>
+/* BOOT GUARD: an error while the module is still booting (#play still disabled — main.js enables it as it
+   attaches the veil's handler) would leave a dead page behind a live-looking button. Say so instead.
+   main.js clears .fail at boot, so a stray non-fatal error during boot can't leave the message up. */
+addEventListener('error', function (e){
+  var b = document.getElementById('play'), o = document.getElementById('overlay');
+  if (!b || !b.disabled || !o) return;
+  var gl = /webgl/i.test(String(e.message) + ' ' + String(e.error && e.error.message));
+  document.getElementById('bootfail').textContent = gl
+    ? 'Gravity Orchestra needs WebGL — try opening this page in Safari or Chrome.'
+    : 'Gravity Orchestra hit an error while loading — try reloading, or open this page in Safari or Chrome.';
+  o.classList.add('fail');
+});
+</script>
 
 <script type="module" src="/src/main.js"></script>
 </body>

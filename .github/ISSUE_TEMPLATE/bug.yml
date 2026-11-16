@@ -11,7 +11,9 @@ body:
   - type: input
     attributes:
       label: Link to reproduce
-      description: The URL with flags (?song= / ?room= / ?solo= / a share link #s=…), or attach the .mid file.
+      description: The URL with flags (?song= / ?room= / ?solo= / a share link #s=…), or say which .mid file and attach it to the text box above.
+    validations:
+      required: true
   - type: input
     attributes:
       label: Browser and device

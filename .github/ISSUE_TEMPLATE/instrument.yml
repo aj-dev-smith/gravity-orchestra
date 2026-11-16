@@ -2,16 +2,36 @@ name: Instrument idea
 description: Propose a new machine (or claim one to build)
 labels: [instrument]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        A machine is one folder in `src/instruments/<key>/`. Start with `npm run new:machine <key>`
+        and read `src/instruments/README.md`. The bar is honest motion: every note has a visible
+        physical cause, and every change of motion has a visible energy source.
   - type: textarea
     attributes:
       label: The instrument
-      description: What does it sound like, and what does the machine look like?
+      description: What does it sound like, and what does the machine look like? A sketch or reference image helps.
     validations:
       required: true
   - type: textarea
     attributes:
       label: The mechanism
-      description: "A hit = a target + a launch solve. What's the target, what throws the ball (or striker), and where does a long gap park? See src/instruments/README.md."
+      description: "What physically causes each note? A hit = a target + a launch solve: what's the target, and what throws or drives the ball (or striker) into it?"
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Energy source
+      description: "Real bounces lose energy. What visibly supplies it each hit (a piston, a solenoid, a spring, a wheel)? Where does a long gap park (a magnet, a latch, a cradle)?"
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: How pitch and duration are visible
+      description: "How can a viewer see WHICH note plays (position, size, a fret, a pipe) and HOW LONG it lasts (a held contact, a sinking lid, a distance travelled)?"
+    validations:
+      required: true
   - type: checkboxes
     attributes:
       label: Building it?

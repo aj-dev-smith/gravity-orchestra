@@ -21,7 +21,7 @@ is public domain or original. The ~/Downloads MIDIs stayed local.
 2. **`/?song=forge`**, *Forge of the Marble King*. The Riff Forge stars in the Metal Arena with pyro
    cued from the drums. Watch the **anvil** at the end of the loop: a B-major hit that rings through
    the breath, holds the riff shot, and resolves onto the E downbeat.
-3. **Drop `Metallica - Master Of Puppets.mid`** from ~/Downloads onto the page. Its guitars play on
+3. **Drop a rock MIDI of your own** onto the page (two guitars, bass, drums). Its guitars play on
    the Riff Forge, its bass on the Pogo Bass, and the director gives the riff the most screen time.
    Open **MAP** to see the routing.
 4. **`/?solo=<key>`** for each new machine (table below). Each one plays its own demo with the
@@ -181,9 +181,8 @@ machines:
 - Director: signature = **riff**. Shares: riff 0.32, belt 0.18, ride 0.15, stage 0.13, drums 0.12,
   pogo 0.11.
 
-Screenshot: `/Users/aj/.claude/jobs/86382a54/tmp/shots/docs-mop-import.png` (the MAP panel shows the
-routing). To try routing without ~/Downloads: `/?midi=/midi/room-tour.mid` (its strings now go to
-the Bow Wheel).
+The MAP panel shows the routing. To try routing without a file of your own:
+`/?midi=/midi/room-tour.mid` (its strings now go to the Bow Wheel).
 
 ---
 
@@ -223,9 +222,3 @@ The head is never moved by the director or the ride cam. TOUR teleports between 
 - **Ride share** in whole-song imports runs 0.28–0.39 against its 0.14 cap (pre-existing).
 - **About 1.5 s of near-silence at every loop seam** (by design: the roll-in plus the 1.2 s tail).
   It's audible on recorded rock loops.
-- `~/Desktop/cascade-video/capture.mjs` still presses `g`, which now turns the debug HUD **on**.
-  Delete that line before the next recording.
-
-Screenshots from this docs pass: `/Users/aj/.claude/jobs/86382a54/tmp/shots/docs-solo-riff.png`,
-`docs-finale.png`, `docs-forge.png`, `docs-mop-import.png`. Each feature's own screenshots are in the
-same folder (`<feature>-*.png`).

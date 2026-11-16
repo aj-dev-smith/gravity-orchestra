@@ -760,9 +760,13 @@ parallel song branches, so merge the key lists and regenerate the fixture ONCE o
   The solver returns `lift` for a riser; main applies it unless the user set a height (kit: `kitSlot.rise`).
   `stageFrame` keeps every front-row machine's full width + `FRONT_KEEP` .25 of its front half. main
   `bandOn()` keeps the gallery's low wide directions while a gallery-born machine is live. Only stations
-  with events are placed. Shared-file scar: STATIONS is the one edit a new floor plugin can't avoid — run
-  the slot search against test/stations.test.js (1–3 bays ± turntable) or every other station's solved
-  position moves.
+  with events are placed. A plugin with NO `STATIONS` entry is a GUEST
+  (2026-11-16, `stations.js guestSlot`): it takes the first free floor seat, last in priority, from its
+  descriptor's optional `stage: { w, d, yaw?, seats? }` hint, and never moves another machine's solved spot
+  (test/stations-guest.test.js) — so a contributed machine is one folder + one test (`npm run new:machine
+  <key>`, test/inst-contract.test.js covers every plugin). Curating a machine INTO `STATIONS` is the
+  maintainer's edit: run the slot search against test/stations.test.js (1–3 bays ± turntable) or every
+  other station's solved position moves. A hung machine still needs a `STATIONS` slot with `hang`.
 - **The BELT and the HUNG machines move** (wave 5; docs/STAGING-WORLD.md): drag the organ / ricochet / volley off
   the belt and it stands on the room's footing (a layout entry for a hung key = standing; none = hung as built);
   drop it over the belt's top and it re-hangs. The belt drags + turns (Q / E, the ring): `src/stagepose.js` T —

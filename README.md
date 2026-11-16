@@ -62,7 +62,12 @@ Handy URL flags: `?song=<key>` · `?room=<key>` · `?solo=<instrument>` (one mac
 ## Build an instrument
 
 This is the best part to contribute to. An instrument is **one folder** in
-`src/instruments/<key>/`, auto-registered with no shared-file edits:
+`src/instruments/<key>/`, auto-registered with no shared-file edits. The scaffold gives you a
+small working machine to start from:
+
+```bash
+npm run new:machine chimes     # then: npm run dev, and open ?solo=chimes
+```
 
 ```
 solve.js   pure timing/physics: where's the ball at songTime t? (no THREE, no DOM)
@@ -77,7 +82,8 @@ cause (a piston kicks, a magnet holds, a latch releases), and contact is honest.
 `npm run dev` with `?solo=marimba` to see one machine on its own.
 
 Songs (pure data in `src/songs/`) and rooms (pure set dressing in `src/rooms/`) are the other
-two easy ways in. See [CONTRIBUTING.md](CONTRIBUTING.md).
+two easy ways in. See [CONTRIBUTING.md](CONTRIBUTING.md) for the lanes, and point your coding
+agent at [AGENTS.md](AGENTS.md).
 
 ## Docs
 

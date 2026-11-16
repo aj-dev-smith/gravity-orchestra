@@ -233,7 +233,7 @@ export function sketchBand(){
 }
 
 /* ---------------------------------------------------------------------------
-   PIANO HANDS — ONE track, program 0, both hands (Tetris / Zelda-title shaped): a right-
+   PIANO HANDS — ONE track, program 0, both hands (Korobeiniki shaped): a right-
    hand melody over its own off-beat chords, a left hand walking under it. Split into the
    top line (belt lead) · the left hand (string bass) · the inner chords (marimba).
    --------------------------------------------------------------------------- */

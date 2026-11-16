@@ -1,0 +1,58 @@
+/* ============================================================
+   __LABEL__ voice — pure DSP, deterministic (seeded noise), no AudioContext.
+   ONE render feeds both the live Web Audio path (an AudioBuffer, gain = vel) and the iOS
+   <audio> fallback (a WAV) — so its LEVEL is what plays everywhere (keep the peak ~.8).
+   Every unique id in a song is rendered at song load on a bake budget: keep it short
+   (≤ ~2–3 s) and cheap (no per-sample trig — the 2cos(w) recurrence below).
+
+   CHANGE THIS: the sound of your machine's hit. The starter is a struck free bar (a
+   glockenspiel): its bending modes sit at 1 : 2.756 : 5.404 : 8.933 of the fundamental,
+   the higher ones dying faster, plus a short bright "tick" from the marble's impact.
+   ============================================================ */
+import { noteHz } from '../../engine.js';
+import { voiceCache } from '../voicecache.js';
+
+export const SR = 32000;                             // 22050–44100
+export const DUR = 1.8;                              // seconds
+const FADE = .4;                                     // raised-cosine tail (no click at the cut)
+const PEAK = .82;                                    // the render's peak (the iOS WAV keeps this level)
+
+/* [ratio to f, amplitude, decay τ (s)] — CHANGE THIS */
+const MODES = [[1, 1, 1.1], [2.756, .32, .4], [5.404, .14, .18], [8.933, .06, .09]];
+
+function rng(seed){ let s = seed >>> 0 || 1; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296) * 2 - 1; }
+
+// a BOUNDED cache (never a plain Map): main frees what the next song doesn't use (../voicecache.js)
+const cache = voiceCache();
+
+/** id = the note an event plays ('C5'). → { samples: Float32Array, sr } */
+export function barVoice(id){
+  if (cache.has(id)) return cache.get(id);
+  const f = noteHz(id), N = Math.round(SR * DUR), out = new Float32Array(N), nyq = SR / 2 - 400;
+  const lift = Math.pow(523 / Math.max(f, 100), .3);  // high bars ring a little shorter
+  for (const [ratio, amp, tau] of MODES){
+    const fm = f * ratio;
+    if (fm > nyq) continue;
+    const w = 2 * Math.PI * fm / SR, c = 2 * Math.cos(w), dec = Math.exp(-1 / (tau * lift * SR));
+    let a = -Math.sin(w), b = -Math.sin(2 * w), env = amp;   // sin(n·w) by recurrence, from sin(0)
+    for (let i = 0; i < N && env > 1e-5; i++){
+      const y = c * a - b; b = a; a = y;
+      out[i] += env * y;
+      env *= dec;
+    }
+  }
+  // the marble's TICK: a few ms of bright noise
+  const R = rng(Math.round(f * 1000));
+  let prev = 0;
+  for (let i = 0, n = Math.round(SR * .012); i < n; i++){ const x = R(), hp = x - prev; prev = x; out[i] += .25 * hp * Math.exp(-i / (SR * .002)); }
+  const a = Math.round(SR * .002), z = Math.round(SR * FADE);
+  for (let i = 0; i < a; i++) out[i] *= i / a;                                        // 2 ms attack ramp
+  for (let i = 0; i < z; i++) out[N - 1 - i] *= .5 - .5 * Math.cos(Math.PI * i / z);   // tail fade
+  out[N - 1] = 0;
+  let peak = 0;
+  for (let i = 0; i < N; i++) peak = Math.max(peak, Math.abs(out[i]));
+  for (let i = 0, k = PEAK / (peak || 1); i < N; i++) out[i] *= k;
+  const r = { samples: out, sr: SR };
+  cache.set(id, r);
+  return r;
+}

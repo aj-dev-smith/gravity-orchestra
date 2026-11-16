@@ -7,3 +7,4 @@ dist-single/
 .playwright-mcp/
 .claude/worktrees/
 .env.deploy
+.scaffold-tmp/

@@ -1,8 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { laneClock, at, firstAt, makeEdge, eventTimes, lanesByNote, wrapP } from '../src/instruments/clock.js';
-import * as THREE from 'three';
 import { INSTRUMENTS } from '../src/instruments/index.js';
-import { STATIONS } from '../src/instruments/stations.js';
 import { SONGS } from '../src/songs/index.js';
 
 const sumBeats = notes => notes.reduce((s, [, b]) => s + b, 0);
@@ -74,65 +72,10 @@ describe('instrument lane clock', () => {
 });
 
 // ---------------------------------------------------------------------------
-// every registered instrument honours the contract
+// every registered instrument honours the contract: test/inst-contract.test.js (moved there —
+// descriptor shape, demo, voices, the voice seam, strikes on the beat, a scrub-safe pose, the bake
+// budget — run over every plugin the registry's glob finds, a contributed one included)
 // ---------------------------------------------------------------------------
-describe.each(INSTRUMENTS.map(I => [I.key, I]))('instrument "%s" contract', (key, I) => {
-  it('has a key, label, make, voice and a demo', () => {
-    expect(typeof I.label).toBe('string');
-    expect(typeof I.make).toBe('function');
-    expect(typeof I.voice).toBe('function');
-    expect(I.demo && Array.isArray(I.demo.part)).toBe(true);
-    expect(I.demo.beats % 4).toBe(0);
-  });
-
-  it('has a station slot', () => { expect(STATIONS[key]).toBeTruthy(); });
-
-  it('demo events are inside the loop window', () => {
-    for (const [b] of I.demo.part){ expect(b).toBeGreaterThanOrEqual(0); expect(b).toBeLessThan(I.demo.beats); }
-  });
-
-  it('every demo voice renders finite, bounded, non-silent samples', () => {
-    const ids = I.voiceIds ? I.voiceIds(I.demo.part) : [...new Set(I.demo.part.map(e => e[1]))];
-    for (const id of ids){
-      const { samples, sr } = I.voice(id);
-      expect(sr).toBeGreaterThanOrEqual(8000);
-      expect(samples.length).toBeLessThan(sr * 6);
-      let peak = 0;
-      let finite = true;                         // plain loop — one expect per sample took minutes
-      for (let n = 0; n < samples.length; n++){ const x = samples[n]; if (!Number.isFinite(x)) finite = false; else if (Math.abs(x) > peak) peak = Math.abs(x); }
-      expect(finite, id).toBe(true);
-      expect(peak, id).toBeGreaterThan(.01);
-      expect(peak, id).toBeLessThanOrEqual(1);
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// the voice seam: voiceIds(part, ctx) bakes every id a strike fires; voiceHz reads a pitch
-// ---------------------------------------------------------------------------
-describe.each(INSTRUMENTS.map(I => [I.key, I]))('instrument "%s" voice seam', (key, I) => {
-  const ROLL_T = 2.6, LEAD_IN = 2.4;
-  const ctxAt = bpm => { const beat = 60 / bpm, loopBeats = I.demo.beats; return { beat, bpm, rollT: ROLL_T, P: ROLL_T + loopBeats * beat + 1.2, loopBeats }; };
-  it('voiceIds(part, {beat, bpm, rollT, P, loopBeats}) covers every id the machine fires (at its tempo and at a slow one)', () => {
-    for (const bpm of [I.demo.bpm, 50]){
-      const ctx = ctxAt(bpm), ids = new Set(I.voiceIds ? I.voiceIds(I.demo.part, ctx) : I.demo.part.map(e => e[1]));
-      const M = I.make({ envMap: null, glowTex: null, THREE });
-      M.build(I.demo.part, { rollT: ROLL_T, beat: ctx.beat, P: ctx.P, start: -LEAD_IN, station: STATIONS[key], floorY: -20, ceilY: 30, loopBeats: ctx.loopBeats });
-      const fired = new Set();
-      for (let t = -LEAD_IN; t < 2 * ctx.P; t += 1 / 60)
-        M.update(t, ctx.P, 1 / 60, { started: t >= 0, skipStrikes: false, onStrike: h => fired.add(h.note) });
-      expect(fired.size, `${key} fires`).toBeGreaterThan(0);
-      for (const id of fired) expect(ids.has(id), `${key} @${bpm} bpm fires "${id}" — not baked`).toBe(true);
-    }
-  });
-  it('voiceHz (when given) reads a positive pitch for every id', () => {
-    if (!I.voiceHz) return;
-    for (const id of (I.voiceIds ? I.voiceIds(I.demo.part, ctxAt(I.demo.bpm)) : I.demo.part.map(e => e[1]))){
-      const hz = I.voiceHz(id);
-      expect(Number.isFinite(hz) && hz > 20 && hz < 5000, `${key} ${id} → ${hz}`).toBe(true);
-    }
-  });
-});
 
 // ---------------------------------------------------------------------------
 // songs that carry instrument parts

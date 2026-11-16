@@ -198,10 +198,40 @@ export function hangPlace(slot, box, wall, room, { cx = (wall[0] + wall[1]) / 2,
   return { x, z };
 }
 
-/* Fallback for an instrument with no named slot: park it out front, in a row. */
-export function stationFor(key, i = 0){
-  return STATIONS[key] || { x: -10 + 10 * i, y: 0, z: 28, yaw: 0, w: 9, d: 7 };
+/* The slot a station stands in: its STATIONS entry — else a GUEST slot (below) built from the
+   descriptor's own `stage` hints, so a contributed machine needs no edit to this file.
+   (i: unused — the old fallback parked unknown keys in a row by registry index.) */
+export function stationFor(key, i = 0, I = null){
+  return STATIONS[key] || guestSlot(I);
 }
+
+/* THE GUEST SLOT — a FLOOR machine with no STATIONS entry (a new plugin: one folder, no shared
+   edit). It stands like the BAND does: in the first free one of its floor SEATS (seen from the
+   audience, out of the star's foreground; a solo guest is its own star, front and centre), and
+   climbs onto the rear gallery only when the floor is genuinely full. It picks LAST among its
+   priority (after the band), so the machines a song already had keep the spots the solve gives
+   them whenever the floor has room for one more. It never triggers the kit's DRUM RISER (bandPlays
+   reads STATIONS only). A song with no guest never sees any of this: every shipped layout is
+   unchanged. Descriptor hints (all optional — guestSlot clamps them):
+       stage: { w, d,            the footprint (u) build() is handed as station.w / .d (default 10 × 8;
+                                 main measures the BUILT geometry for the layout itself)
+                yaw,             its turn on the floor (rad, default 0: facing the audience)
+                seats: [ … ] }   the SEATS it prefers, in order (default GUEST_SEATS)
+   A HUNG machine (a chandelier, a loft) still needs its STATIONS slot (`hang`): hanging is not a guess. */
+export const GUEST_SEATS = ['left', 'right', 'wingL', 'wingR', 'cornerL', 'cornerR', 'centre', 'backL', 'backR'];
+export const GUEST_W = 10, GUEST_D = 8;
+const GUEST_GALLERY = { x: 0, z: -11 };              // (where its gallery search starts, if the floor is full)
+export function guestSlot(I){
+  const h = (I && typeof I.stage === 'object' && I.stage) || {};
+  const num = (v, lo, hi, def) => Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : def;
+  const seats = Array.isArray(h.seats) ? h.seats.filter(k => Object.hasOwn(SEATS, k)) : [];
+  return { x: GUEST_GALLERY.x, y: 0, z: GUEST_GALLERY.z, yaw: num(h.yaw, -Math.PI, Math.PI, 0),
+    w: num(h.w, 2, 24, GUEST_W), d: num(h.d, 2, 16, GUEST_D), gallery: true, guest: true,
+    floor: seats.length ? seats : GUEST_SEATS.slice() };
+}
+/* the slot the room solve reads for an item: STATIONS first (every shipped machine — unchanged),
+   else the guest slot main hands it (item.slot) */
+const slotOfItem = it => STATIONS[it.key] ?? it.slot;
 
 
 /* THE REAR GALLERY — the amphitheater's second, upper tier, behind the belt: a station standing
@@ -272,7 +302,7 @@ export function loneTurn(keys, star){
 /* a SOLO band machine (the song's only floor station, a gallery-born one) is its own STAR: a machine
    playing alone stands front and centre, not off on a wing of an empty floor. → its key, or null */
 export function soloStar(items){
-  return items.length === 1 && STATIONS[items[0].key]?.gallery && !items[0].pin ? items[0].key : null;
+  return items.length === 1 && slotOfItem(items[0])?.gallery && !items[0].pin ? items[0].key : null;
 }
 
 /** SOLVE the room for one song.
@@ -340,7 +370,7 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
   // each station's FLOOR origins — the star's front-and-centre spot; a gallery-born slot's SEATS
   // (ranked: the first free one wins); else its slot — and its GALLERY spot (gx, gz: where it was built)
   const S = items.map(it => {
-    const slot = STATIONS[it.key], born = !it.pin && !!slot?.gallery && !FLOOR_ONLY.has(it.key);
+    const slot = slotOfItem(it), born = !it.pin && !!slot?.gallery && !FLOOR_ONLY.has(it.key);
     // (the USER's height, a layout entry's lift — rooms/footing.js: 0 = "on the floor" — wins: a station
     //  the user stood on the floor never climbs, nor anchors a loft; main sets every user lift after this)
     const isStar = !it.pin && star != null && it.key === star;
@@ -454,7 +484,7 @@ function solveOnce(items, wall, room, margin, { ref, cx, bandY, eyeY, galleryY, 
     s.base = s.deck ?? (s.top === undefined ? undefined : s.top - 6);
     if (s.pin){                                         // (a machine the user parked behind the belt stands on the gallery there —
       const b = bx(s);                                  //  a gallery-born one, or one the belt would hide; a user's own height wins: main)
-      if (!FLOOR_ONLY.has(s.key) && !s.grounded && (b[2] + b[3]) / 2 < wall[2] && (STATIONS[s.key]?.gallery || !seen(b))){ s.y = galleryY; gal.push(b); galBy.set(b, s); }
+      if (!FLOOR_ONLY.has(s.key) && !s.grounded && (b[2] + b[3]) / 2 < wall[2] && (slotOfItem(s)?.gallery || !seen(b))){ s.y = galleryY; gal.push(b); galBy.set(b, s); }
       else {
         // (a kit the user pinned on the right wing — near its RISER — stands on it, unless the user set its height)
         if (s.key === 'drums' && !Number.isFinite(s.lift) && craft && kitRiseAt(s.x, s.z, items.map(it => it.key), wall, { cx, ref })){

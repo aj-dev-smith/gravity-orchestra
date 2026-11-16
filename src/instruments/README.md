@@ -1,9 +1,39 @@
 # Instrument plugins — the contract
 
+## Quick start: your first machine
+
+```bash
+npm run new:machine chimes            # key: lowercase letters/digits — the folder AND the song.parts key
+npm run dev                           # → http://localhost:5173/?solo=chimes&debug
+npx vitest run test/inst-chimes.test.js test/inst-contract.test.js
+```
+
+1. **Scaffold.** `new:machine` writes `src/instruments/chimes/{solve,voice,index}.js` and
+   `test/inst-chimes.test.js` — a real, working machine (one marble per pitch dribbling on its own
+   tone bar, a piston under each bar, a magnet for the long gaps: the engine's closed-form dribble
+   solve). Every "CHANGE THIS" comment is a place to make it yours. Options: `-- --label "Wind
+   Chimes" --color "#7ad0a0"`, `--dry`.
+2. **Watch it.** `?solo=<key>` plays its `demo` on a minimal spine with the camera on it.
+   `__dev.t = 3.2` scrubs, `__dev.strikes(true)` then `__dev.strikes()` counts what it played.
+3. **Prove it.** Your own test proves the mechanism is honest (lands on the beat, at rest at
+   contact, no penetration, fits any input). `test/inst-contract.test.js` runs every plugin the
+   registry finds through the shared contract below — descriptor shape, voices, strikes on their
+   beats and never before `start`, a pose that is a pure fn of songTime, the bake budget — yours
+   included, automatically. Then `npm test` + `npm run build`.
+4. **PR = one folder + one test.** No shared file: a machine with no `STATIONS` entry is placed as a
+   GUEST (`stations.js guestSlot`) — the first free floor seat, like the band, without moving any
+   machine a song already had; hint its footprint with `stage: { w, d, yaw?, seats? }`. A HUNG machine
+   (chandelier, loft) still needs a `STATIONS` slot with `hang`. MIDI auto-routing is opt-in
+   (`PART_LIMITS` + `src/midi/orchestra.js`); until then the MAP panel can send any MIDI voice to your
+   machine by hand.
+
+---
+
 An instrument is **one folder**: `src/instruments/<key>/`. The registry
-(`index.js`, a Vite glob) picks it up; **no shared file is edited to add one** — except ONE
-`STATIONS` slot in `stations.js` (where it stands; the floor is full — see "Gallery raise" below),
-and, if MIDI should route to it, the routing owner's `orchestra.js` entries (see `PART_LIMITS`).
+(`index.js`, a Vite glob) picks it up; **no shared file is edited to add one**. Where it stands:
+its own `STATIONS` slot in `stations.js` if it has one (every shipped machine — tuned by hand),
+else a GUEST slot from its descriptor's `stage` hints (below). If MIDI should route to it, the
+routing owner's `orchestra.js` entries (see `PART_LIMITS`).
 Main runs a generic loop over every registered instrument that has a part in the
 current song. Read CLAUDE.md §2–§4 first (time is the only state; visuals drive
 audio; a hit = a target + a launch solve) and study `src/marbledrums.js`, the
@@ -65,6 +95,9 @@ export default {
                                   // its lowest solid parts hang below that (the turntable's resonator
                                   // tubes under its plinth) — the room's footing then reaches up to
                                   // deck + stand, OPEN, so what hangs stays visible (rooms/footing.js)
+  stage: { w: 12, d: 4,           // optional, a machine with NO STATIONS slot (stations.js guestSlot):
+           yaw: 0,                // its footprint (handed to build() as station.w / .d — main measures the
+           seats: ['left'] },     // BUILT geometry for the layout), its turn, the floor SEATS it prefers
 
   // PURE DSP, deterministic, no AudioContext: one render feeds BOTH the live
   // Web Audio path (AudioBuffer, gain = vel) and the iOS <audio> fallback (WAV).
@@ -164,8 +197,10 @@ bowwheel, dulcimer — the SUSTAIN family; CLAUDE.md §4). Their seam gaps becam
   height (its ground on the floor's plinth + any lift — the gallery raise is a lift too), so nothing
   in it may depend on its world y (only ricochet / volley, both hung, read ceilY). Draw no supports
   below your base (the room's footing does — rooms/footing.js); declare `stand` if your lowest parts
-  hang below what you rest on. Measure your footprint honestly (`STATIONS` w/d; a slot's `y` is no
-  longer used for a floor station) — `test/stations.test.js` runs every key at once in 1–3 bays.
+  hang below what you rest on. Measure your footprint honestly (`STATIONS` w/d or your `stage`
+  hint; a slot's `y` is no longer used for a floor station) — `test/stations.test.js` runs every
+  STATIONS key at once in 1–3 bays, `test/stations-guest.test.js` the guest slot, and
+  `test/footing.test.js` checks every plugin rests on its own base.
 - **Count-in pose**: during the LEAD_IN every lane is ARMED (marble on its magnet / latch); a lane
   whose first reachable stroke is mid-loop must ENTER honestly (bowwheel `entryAt`: release from the
   magnet so the fall lands at rest before the first stroke) — or loop 1 is silent there.
@@ -261,4 +296,4 @@ strike. No new materials or lights.
     npm run dev -- --port <yours>
     http://localhost:<port>/?solo=<key>&debug     # your demo, camera on your station
     window.__dev.station('<key>', dist, up)       # re-frame; __dev.t = 3.2 scrubs; __dev.rate = .25
-    npx vitest run test/inst-<key>.test.js
+    npx vitest run test/inst-<key>.test.js test/inst-contract.test.js

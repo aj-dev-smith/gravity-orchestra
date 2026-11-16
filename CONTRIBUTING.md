@@ -3,8 +3,9 @@
 Thanks for wanting to build a machine. There are three easy ways in, roughly from most to
 least code:
 
-1. **An instrument**: one folder in `src/instruments/<key>/`. Start with
-   [`src/instruments/README.md`](src/instruments/README.md), the contract.
+1. **An instrument**: one folder in `src/instruments/<key>/`. `npm run new:machine <key>` stamps
+   out a working one to start from; [`src/instruments/README.md`](src/instruments/README.md) is the
+   contract.
 2. **A song**: pure data in `src/songs/`. Public domain or your own original work only (see below).
 3. **A room**: pure set dressing in `src/rooms/`. No lights of its own, no per-frame allocation.
 
@@ -33,8 +34,9 @@ npm run build
 - Adding a song? Add it to `SONGS` + a shelf in `src/songs/index.js`, add its key to
   `EXPECTED_KEYS` in `test/songs.test.js`, and regenerate the staging fixture (command in
   CLAUDE.md §1).
-- Adding an instrument? It must pass its own `test/inst-<key>.test.js` honesty suite, and the
-  existing `test/stations.test.js` layout tests.
+- Adding an instrument? Your PR should be that one folder plus `test/inst-<key>.test.js` (its own
+  honesty suite), with no edits to shared files. `test/inst-contract.test.js` checks every plugin
+  against the shared contract automatically, yours included.
 - Keep PRs focused: one instrument, one song or one fix per PR.
 
 ## Music and copyright

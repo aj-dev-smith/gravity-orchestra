@@ -723,7 +723,7 @@ function buildWorld(keyName){
   instRigs.forEach((rig, i) => {
     const part = S.parts?.[rig.I.key];
     if (!part || !part.length) return;
-    const st = inStage(editor.slot(rig.I.key, stationFor(rig.I.key, i)));   // a user-placed station (stage edit): pinned x/z/yaw
+    const st = inStage(editor.slot(rig.I.key, stationFor(rig.I.key, i, rig.I)));   // a user-placed station (stage edit): pinned x/z/yaw (no STATIONS entry: a GUEST slot from its descriptor — stations.js)
     const station = new THREE.Group(); station.name = rig.I.key;   // (names: perf/debug probes)
     // a HUNG station (the ricochet chandelier) is a crown over the belt: centred on the wall,
     // its LOWEST part (plate, stem, the knot's wire) HANG_CLEAR above the belt's top housing —
@@ -817,7 +817,7 @@ function buildWorld(keyName){
   instLive.forEach(r => { if (r.slot.hang) return;
     const p = r.station.position, box = relBox(r.station, p.x, p.z, r.I.key);
     if (box) items.push({ key: r.I.key, x: p.x, z: p.z, box, top: tops[r.I.key], deck: p.y, rig: r, pin: r.slot.pin,
-      ...(Number.isFinite(r.slot.lift) ? { lift: r.slot.lift } : {}) }); });   // (the USER's height: 0 = on the floor — it never climbs)
+      ...(Number.isFinite(r.slot.lift) ? { lift: r.slot.lift } : {}), ...guestOf(r) }); });   // (the USER's height: 0 = on the floor — it never climbs)
   // (the HUNG stations' world footprints: a gallery deck keeps clear of them — the organ loft's
   //  chassis and the chandelier's crown stand where a gallery machine would)
   const hungBoxes = instLive.filter(r => r.slot.hang).map(r => visBox(r.station)).filter(b => !b.isEmpty()).map(b => [b.min.x, b.max.x, b.min.z, b.max.z]);
@@ -933,6 +933,9 @@ function buildWorld(keyName){
   if (started) clock.start();
   editor.built();
 }
+/* a GUEST station (a plugin with no STATIONS entry — stations.js guestSlot) hands the room solve its slot;
+   every shipped machine's item is exactly as before (the solve reads STATIONS for those) */
+const guestOf = r => STATIONS[r.I.key] ? {} : { slot: r.slot };
 /* THE STAR of the stage (stations.js STAR — front and centre): the song's SIGNATURE machine, exactly
    as the director will name it (syncDirector: song.director.signature — a station or its shot key,
    false for none — else, for an import, directorplan signatureOf over every station's cue, a chord
@@ -1635,7 +1638,7 @@ function autoLiftOf(r, { fresh = false } = {}){
     const it = inStageFrame(q.station, () => { const at = q.station.position, m = rel(q.station, at.x, at.z); return m && { x: at.x, z: at.z, ...m, deck: at.y }; });
     if (!it) continue;
     const u = q === r ? undefined : q.slot.lift;
-    items.push({ key: q.I.key, ...it, pin: true, ...(Number.isFinite(u) ? { lift: u } : {}) }); }
+    items.push({ key: q.I.key, ...it, pin: true, ...(Number.isFinite(u) ? { lift: u } : {}), ...guestOf(q) }); }
   if (drumGroup && curBuild?.S.drums){ const kw = kitPivotNow(), k = toStage(stagePose, kw.x, kw.z), m = inStageFrame(drumGroup, () => rel(drumGroup, k.x, k.z));
     if (m) items.push({ key: 'drums', x: k.x, z: k.z, ...m, deck: kitSlot.y, pin: true }); }
   const s = layoutStations(items, ...L.args)[key];

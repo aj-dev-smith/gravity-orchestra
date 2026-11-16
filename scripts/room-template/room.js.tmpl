@@ -1,0 +1,248 @@
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { STAGE, rng, canvasTex, radialTex, glowPoints, instanced, trs } from './common.js';
+import { footingBoxes } from './footing.js';
+import { tintStyle } from './footing3d.js';
+import { makePulse } from './pulse.js';
+/* ============================================================
+   __LABEL__ — a ROOM (scaffolded by `npm run new:room __KEY__`; make it yours).
+
+   The starter: a flagstone court open to a dusk sky, framed by a colonnade that stands OUTSIDE the
+   stage walls (so no machine or support ever meets it), fireflies drifting over it, and a LANTERN
+   beside every machine that glows on that machine's strikes. Everything the room host promises
+   (src/rooms/README.md, the header of src/rooms/index.js) is shown once:
+
+     · FLOOR is STAGE.FLOOR (the floor contract: a room swap never moves a machine); the bounds may
+       WIDEN the stage (the colonnade sits past STAGE.HW / STAGE.BACK), never narrow it
+     · no lights of its own — the host's light set is constant; glow comes from emissive / unlit
+       materials (bloom picks up anything brighter than 1)
+     · a CONSTANT pool: MAX_LANTERNS instances made once at build, place() only sets how many show
+     · instanceColor exists from build() (setColorAt once): it is a program define, and the host's
+       idle PREWARM compiles this room before you ever visit it
+     · place(anchors, plan) puts the props where the machines are NOT — clear of every machine's
+       box and of every footing envelope (footingBoxes(plan): pads, lofts, stairs, ladders)
+     · the room answers its machines: makePulse(anchor.cue, …) (rooms/pulse.js) is a pure fn of
+       songTime — scrub-safe, silent in the count-in
+     · update() writes UNIFORMS only (no allocation, no accumulated state): the same songTime
+       always draws the same frame
+     · footing: a tintStyle — the kit's own supports (plinths, stairs, towers) in this room's
+       materials: stone, bronze, oak
+     · dispose() frees what is NOT in the group (the host disposeTree()s the group itself)
+   test/room-contract.test.js checks all of it for every room; test/room-__KEY__.test.js is yours.
+   ============================================================ */
+
+const ACCENT = new THREE.Color('__COLOR__');   // a lantern with no machine to answer, and the fireflies' tint — CHANGE THIS
+const FOG = 0x1a1226;                          // the dusk haze (also the background colour)
+export const MAX_LANTERNS = 24;                // the lantern pool (a constant: never grown after build)
+export const CLEAR = 1;                        // a lantern's least air to any machine or support (u ≈ .68 m)
+const POST_R = .35;                            // a lantern's footprint radius (its base plate)
+const MIN_GAP = 4;                             // the least distance between two lanterns
+const COL = { x: STAGE.HW + 5, back: STAGE.BACK - 5, step: 8, h: 17, r: .95 };   // the colonnade, outside the stage walls
+
+/* PURE: where the lanterns stand — up to two off the corners of each standing machine (its box pushed out
+   diagonally), each clear of every machine box and every footing envelope, MIN_GAP apart. → [{ x, z, slot }],
+   slot = the index of the machine it answers in `lit` (the machines with a strike cue, in anchor order), −1: none. */
+export function lanternSpots(anchors = [], plan = null, { max = MAX_LANTERNS, clear = CLEAR } = {}){
+  const boxes = anchors.filter(a => Array.isArray(a.box)).map(a => a.box);
+  if (plan) for (const e of footingBoxes(plan)) boxes.push(e.box);
+  const r = POST_R + clear, room = { x0: -STAGE.HW + 1, x1: STAGE.HW - 1, z0: STAGE.BACK + 1, z1: STAGE.FRONT - 4 };
+  const free = (x, z) => x - r >= room.x0 && x + r <= room.x1 && z - r >= room.z0 && z + r <= room.z1
+    && boxes.every(b => x + r <= b[0] || x - r >= b[1] || z + r <= b[4] || z - r >= b[5]);
+  const lit = litOf(anchors), out = [];
+  for (const a of anchors){
+    if (!(a.kind === 'station' || a.kind === 'kit') || !Array.isArray(a.box)) continue;
+    const [x0, x1, , , z0, z1] = a.box, slot = lit.indexOf(a);
+    let mine = 0;
+    for (const d of [r + .6, r + 1.6, r + 3])                  // (its own pad, stair or ladder may reach past its box)
+      for (const [x, z] of [[x0 - d, z1 + d], [x1 + d, z1 + d], [x0 - d, z0 - d], [x1 + d, z0 - d]]){   // front corners first
+        if (out.length >= max || mine >= 2) break;
+        if (free(x, z) && out.every(o => Math.hypot(o.x - x, o.z - z) >= MIN_GAP)){ out.push({ x, z, slot }); mine++; }
+      }
+  }
+  return out;
+}
+/** the machines a lantern can answer: those that strike (a cue), at most MAX_LANTERNS of them */
+export const litOf = anchors => anchors.filter(a => Array.isArray(a.cue) && a.cue.length && a.P > 0).slice(0, MAX_LANTERNS);
+
+/* the flagstones: drawn once, a soft irregular grid with mortar joints (rng: the same stones every load) */
+function flagstones(){
+  return canvasTex(512, 512, (x, w) => {
+    const R = rng(7), N = 4, s = w / N;
+    x.fillStyle = '#2a2420'; x.fillRect(0, 0, w, w);                         // the mortar
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++){
+      const v = 70 + R() * 34 | 0, g = 4 + R() * 3;
+      x.fillStyle = `rgb(${v + 14},${v + 6},${v - 6})`;
+      x.fillRect(i * s + g, j * s + g, s - 2 * g, s - 2 * g);
+      for (let k = 0; k < 60; k++){ const c = R() < .5 ? 0 : 255; x.fillStyle = `rgba(${c},${c},${c},${.03 + R() * .04})`;
+        x.fillRect(i * s + g + R() * (s - 2 * g), j * s + g + R() * (s - 2 * g), 2 + R() * 10, 2 + R() * 10); }
+    }
+  }, { repeat: [12, 12] });
+}
+
+/* the dusk sky: no texture, no per-frame work — a gradient by view direction, pinned to the far plane (it never clips) */
+function skyMat(){
+  return new THREE.ShaderMaterial({
+    uniforms: { uZenith: { value: new THREE.Color(0x05061a) }, uMid: { value: new THREE.Color(0x1e1236) }, uHorizon: { value: new THREE.Color(0x5a2c34) } },   // CHANGE THIS: the sky
+    vertexShader: /* glsl */`
+      varying vec3 vDir;
+      void main(){ vec4 w = modelMatrix * vec4(position, 1.); vDir = w.xyz - cameraPosition;
+        gl_Position = projectionMatrix * viewMatrix * w; gl_Position.z = gl_Position.w * .99999; }`,
+    fragmentShader: /* glsl */`
+      uniform vec3 uZenith, uMid, uHorizon; varying vec3 vDir;
+      float hash(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
+      void main(){
+        vec3 d = normalize(vDir); float h = d.y;
+        vec3 c = mix(uHorizon, uMid, smoothstep(-.04, .16, h));
+        c = mix(c, uZenith, smoothstep(.14, .6, h));
+        c += uHorizon * .8 * exp(-abs(h) * 28.);                        // a thin afterglow right on the horizon
+        vec3 q = floor(d * 260.);                                       // a few faint stars, high up
+        c += vec3(.9, .85, 1.) * step(.9975, hash(q)) * smoothstep(.25, .6, h) * .6;
+        gl_FragColor = vec4(c, 1.);
+      }`,
+    side: THREE.BackSide, depthWrite: false, fog: false,
+  });
+}
+
+/* a lantern's light: its colour (instanceColor: the machine's) × (a low glow + its machine's pulse), read from ONE
+   uniform array by the instance's slot (aSlot) — per frame the room writes that array and nothing else. pool: the
+   soft light it lays on the flagstones (additive, an analytic falloff, no texture). */
+function lanternMat(U, T, { pool = false } = {}){
+  return new THREE.ShaderMaterial({
+    uniforms: { uPulse: { value: U }, uTime: T },
+    vertexShader: /* glsl */`
+      attribute float aSlot; uniform float uPulse[${MAX_LANTERNS}]; uniform float uTime;
+      varying vec3 vC; varying float vG; varying vec2 vUv;
+      void main(){
+        vec3 c = vec3(1.);
+        #ifdef USE_INSTANCING_COLOR
+          c = instanceColor;
+        #endif
+        int s = int(aSlot + .5);
+        float p = aSlot < -.5 ? 0. : uPulse[s];
+        float flick = .93 + .07 * sin(uTime * 6.1 + instanceMatrix[3].x * 1.7 + instanceMatrix[3].z);   // a candle's waver (pure in songTime)
+        vC = c; vUv = uv; vG = (${pool ? '.16 + .9 * p' : '.45 + 2.2 * p'}) * flick;
+        gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.);
+      }`,
+    fragmentShader: /* glsl */`
+      varying vec3 vC; varying float vG; varying vec2 vUv;
+      void main(){
+        ${pool ? 'float r = length(vUv - .5) * 2.; float a = pow(max(0., 1. - r), 2.);' : 'float a = 1.;'}
+        gl_FragColor = vec4(vC * vG * a, ${pool ? 'a' : '1.'});
+      }`,
+    ...(pool ? { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, forceSinglePass: true } : {}),
+  });
+}
+
+export default {
+  key: '__KEY__', label: '__LABEL__',
+  build(scene, { envMap = null } = {}){
+    const group = new THREE.Group(); group.name = '__KEY__';
+    const F = STAGE.FLOOR;
+    const HW = COL.x + 4, BACK = COL.back - 4;                 // (wider than the stage: the colonnade stands outside it)
+
+    // ---- the court: one flagstone floor, wider than the stage (a mesh over 40 u wide is "the hall", never an obstacle) ----
+    const stone = flagstones();
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(2 * HW + 20, STAGE.FRONT - BACK + 30).rotateX(-Math.PI / 2),
+      new THREE.MeshStandardMaterial({ map: stone, color: 0xcfc4b4, roughness: .86, metalness: .02, envMap, envMapIntensity: .3 }));
+    floor.position.set(0, F, (STAGE.FRONT + BACK) / 2 + 10); floor.name = '__KEY__:floor';
+    group.add(floor);
+
+    // ---- the colonnade: plinth + shaft + capital, ONE instanced draw, on three sides of the court ----
+    const colGeo = mergeGeometries([
+      new THREE.BoxGeometry(2.6, .8, 2.6).translate(0, .4, 0),
+      new THREE.CylinderGeometry(COL.r * .86, COL.r, COL.h - 1.8, 18).translate(0, .8 + (COL.h - 1.8) / 2, 0),
+      new THREE.BoxGeometry(2.4, 1, 2.4).translate(0, COL.h - .5, 0),
+    ]);
+    const spots = [];
+    for (let z = COL.back; z <= STAGE.FRONT - 6; z += COL.step) for (const s of [-1, 1]) spots.push(trs(s * COL.x, F, z));
+    for (let x = -COL.x + COL.step; x < COL.x - 1; x += COL.step) spots.push(trs(x, F, COL.back));
+    const limestone = new THREE.MeshStandardMaterial({ color: 0xb9a78e, roughness: .82, metalness: 0, envMap, envMapIntensity: .25 });
+    const columns = instanced(colGeo, limestone, spots); columns.name = '__KEY__:columns';
+    // the lintels along each row (each over 40 u long: "the hall" to the shot solve, never an obstacle)
+    const lintels = new THREE.Mesh(mergeGeometries([
+      new THREE.BoxGeometry(2.6, 1.6, STAGE.FRONT - COL.back).translate(-COL.x, F + COL.h + .8, (STAGE.FRONT + COL.back) / 2 - 3),
+      new THREE.BoxGeometry(2.6, 1.6, STAGE.FRONT - COL.back).translate(COL.x, F + COL.h + .8, (STAGE.FRONT + COL.back) / 2 - 3),
+      new THREE.BoxGeometry(2 * COL.x + 2.6, 1.6, 2.6).translate(0, F + COL.h + .8, COL.back),
+    ]), limestone);
+    lintels.name = '__KEY__:lintels';
+    group.add(columns, lintels);
+
+    // ---- the sky (pinned to the far plane: a BackSide dome is never an obstacle) ----
+    const sky = new THREE.Mesh(new THREE.SphereGeometry(150, 32, 16), skyMat());
+    sky.frustumCulled = false; sky.renderOrder = -10; sky.name = '__KEY__:sky';
+    group.add(sky);
+
+    // ---- fireflies: one Points draw, every motion in its vertex shader off ONE time uniform (rooms/common.js) ----
+    const R = rng(11), fp = [], fc = [], fs = [], fph = [];
+    for (let i = 0; i < 180; i++){
+      const a = R() * Math.PI * 2, d = 30 + R() * 22;
+      fp.push(Math.cos(a) * d, F + 4 + R() * 16, Math.sin(a) * d * .8 + 4);
+      const k = .6 + R() * .5; fc.push(ACCENT.r * k + .3, ACCENT.g * k + .2, ACCENT.b * k * .6); fs.push(.12 + R() * .2); fph.push(R());
+    }
+    const flies = glowPoints(fp, { colors: fc, sizes: fs, phases: fph, map: radialTex(32), flicker: .7, rate: 2.3, drift: 1.4 });
+    flies.name = '__KEY__:fireflies';
+    group.add(flies);
+
+    // ---- the lanterns: a constant pool; place() decides how many show and where ----
+    const U = new Float32Array(MAX_LANTERNS), T = { value: 0 };
+    const postGeo = mergeGeometries([
+      new THREE.CylinderGeometry(POST_R, POST_R, .12, 12).translate(0, .06, 0),      // base plate
+      new THREE.CylinderGeometry(.07, .09, 2.5, 8).translate(0, 1.3, 0),             // post
+      new THREE.ConeGeometry(.42, .45, 4).rotateY(Math.PI / 4).translate(0, 3.33, 0),   // cap
+    ]);
+    const bronze = new THREE.MeshStandardMaterial({ color: 0x6a4a2a, metalness: .7, roughness: .38, envMap, envMapIntensity: .6 });
+    const posts = new THREE.InstancedMesh(postGeo, bronze, MAX_LANTERNS);
+    const glassGeo = new THREE.BoxGeometry(.5, .64, .5).translate(0, 2.88, 0);
+    const poolGeo = new THREE.PlaneGeometry(6, 6).rotateX(-Math.PI / 2).translate(0, .03, 0);
+    const slotAttr = new THREE.InstancedBufferAttribute(new Float32Array(MAX_LANTERNS).fill(-1), 1);
+    glassGeo.setAttribute('aSlot', slotAttr); poolGeo.setAttribute('aSlot', slotAttr);
+    const glass = new THREE.InstancedMesh(glassGeo, lanternMat(U, T), MAX_LANTERNS);
+    const pools = new THREE.InstancedMesh(poolGeo, lanternMat(U, T, { pool: true }), MAX_LANTERNS);
+    posts.name = '__KEY__:lanterns'; glass.name = '__KEY__:lantern-glass'; pools.name = '__KEY__:lantern-pools';
+    for (const im of [glass, pools]) for (let i = 0; i < MAX_LANTERNS; i++) im.setColorAt(i, ACCENT);   // instanceColor NOW: a program
+                                                                     // define — the prewarm compiles it before place() ever colours one
+    for (const im of [posts, glass, pools]){ im.count = 0; im.frustumCulled = false; group.add(im); }
+
+    // the footing: the kit's own forms (plinths, stairs, platforms, towers) in this room's stone, bronze and oak
+    const footing = tintStyle({ key: '__KEY__',
+      base: { color: 0xd2c2a8, roughness: .9, grain: true },
+      steel: { color: 0x7a5a32, metalness: .65, roughness: .4 },
+      deck: { color: 0x4a3324, roughness: .72 } });
+
+    let pulses = [];
+    const _c = new THREE.Color(), _m = new THREE.Matrix4();
+    return {
+      group, ...STAGE, HW, BACK,
+      fog: new THREE.FogExp2(FOG, .014), background: new THREE.Color(FOG),
+      mood: { ambient: [0x2c2238, 1.35], hemi: [0xb8a0ff, 0x3a2414, .6] },   // a cool sky over warm stone
+      footing,
+      /* where the machines stand → where the lanterns go (a pure fn of the anchors + the plan); each answers one machine */
+      place(anchors = [], plan = null){
+        const lit = litOf(anchors), spots = lanternSpots(anchors, plan);
+        pulses = lit.map(a => makePulse(a.cue, { P: a.P, start: a.start, decay: .5 }));
+        U.fill(0);
+        spots.forEach((s, i) => {
+          _m.makeTranslation(s.x, F, s.z);
+          for (const im of [posts, glass, pools]) im.setMatrixAt(i, _m);
+          _c.set(s.slot >= 0 ? lit[s.slot].color ?? ACCENT : ACCENT);
+          glass.setColorAt(i, _c); pools.setColorAt(i, _c);
+          slotAttr.setX(i, s.slot);
+        });
+        for (const im of [posts, glass, pools]){
+          im.count = spots.length; im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; im.computeBoundingSphere();
+        }
+        slotAttr.needsUpdate = true;
+      },
+      /* per frame: uniforms only — every value a pure fn of songTime (scrub anywhere, the frame is the same) */
+      update(dt, songTime, camera, energy = 0){
+        for (let i = 0; i < pulses.length; i++){ const v = pulses[i].at(songTime) + .35 * pulses[i].next(songTime); U[i] = v > 1 ? 1 : v; }
+        T.value = songTime;
+        flies.material.uniforms.uTime.value = songTime;
+        flies.material.uniforms.uBoost.value = 1 + .5 * energy;
+      },
+      /** (dev / tests) each machine's lantern light, 0..1, by its slot in litOf(anchors) */
+      get lanternLight(){ return U; },
+      dispose(){ footing.dispose(); },                        // (everything else is in the group: the host disposeTree()s it)
+    };
+  },
+};

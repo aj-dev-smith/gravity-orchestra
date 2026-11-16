@@ -71,7 +71,22 @@ import starship from './starship.js';
    never swallow the iOS priming tap — same rule as the free cam).
    ============================================================ */
 
-export const ROOMS = [grid, cathedral, studio, voidRoom, graveyard, arena, starship];
+/* GUEST ROOMS — a contributed room is NEW FILES ONLY (src/rooms/README.md; `npm run new:room <key>`):
+   src/rooms/<key>.js, whose default export is the Room module above with key === '<key>', plus any
+   <key>-*.js helpers of its own (a hyphen marks a helper: the glob never imports one directly). It is
+   picked up here — no line of this file to edit — and comes AFTER the shipped rooms (sorted by key),
+   so the shipped R order is unchanged; 'off' stays last. The glob names every shipped / shared file
+   so that, with no guest present, it imports nothing at all. A guest must never import this file
+   (a cycle: import ./common.js for STAGE). test/room-contract.test.js covers every room, guests too. */
+const SHIPPED = [grid, cathedral, studio, voidRoom, graveyard, arena, starship];
+const GUEST_MODS = import.meta.glob(['./*.js', '!./*-*.js', '!./index.js', '!./common.js', '!./footing.js', '!./footing3d.js',
+  '!./pulse.js', '!./grid.js', '!./cathedral.js', '!./studio.js', '!./void.js', '!./graveyard.js', '!./arena.js', '!./starship.js'], { eager: true });
+export const GUESTS = Object.entries(GUEST_MODS)
+  .map(([p, m]) => [p.slice(2, -3), m.default])                // ['<file>', descriptor]
+  .filter(([file, R]) => R && R.key === file && R.key !== 'off' && typeof R.build === 'function' && !SHIPPED.some(S => S.key === R.key))
+  .map(([, R]) => R)
+  .sort((a, b) => a.key.localeCompare(b.key));
+export const ROOMS = [...SHIPPED, ...GUESTS];
 export const ROOM_KEYS = [...ROOMS.map(r => r.key), 'off'];
 export { STAGE };
 

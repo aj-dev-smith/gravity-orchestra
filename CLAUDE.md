@@ -119,6 +119,10 @@ on. Treat it as live, and confirm with the human before running it.
                      void, graveyard + arena (Metal Arena — arena-cues.js solves pyro/CO2/
                      blinders from the drum lanes at load, pure, test/arena.test.js) + starship
                      (sky banks per phrase, deck never moves — test/room-starship.test.js).
+                     GUEST rooms (2026-11-16): src/rooms/<key>.js (+ <key>-*.js helpers) is picked up by
+                     index.js's glob AFTER the shipped seven (no index.js edit; not in the staging fixture) —
+                     `npm run new:room <key>`, src/rooms/README.md; test/room-contract.test.js runs EVERY room
+                     through the contract (fake DOM: test/helpers/fake-dom.js; KNOWN exceptions inside).
                      FOOTING — what every machine stands on (§7 Rooms): footing.js (pure planner:
                      pads by height band, lofts, stairs / ladders, envelopes — test/footing.test.js),
                      footing3d.js (the render kit + DEFAULT_STYLE + tintStyle, a room's own

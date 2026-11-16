@@ -9,7 +9,7 @@ doesn't apply.
 **Lane** (pick one):
 - [ ] A new machine (only `src/instruments/<key>/` + `test/inst-<key>.test.js`)
 - [ ] A song (public domain or original)
-- [ ] A room
+- [ ] A room (only `src/rooms/<key>*.js` + `test/room-<key>.test.js`)
 - [ ] A bug fix
 - [ ] A core change agreed on an issue
 

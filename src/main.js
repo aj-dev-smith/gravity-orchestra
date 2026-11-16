@@ -116,7 +116,10 @@ const hueOf = n => Math.max(0, SCALE.indexOf(n.replace(/\d/,''))) / Math.max(1, 
    (WebXRManager: samples = antialias ? 4 : 0) — chrome rails + chains shimmer without. Only on a
    headset browser (or ?xr / ?xremu): in 2D the canvas MSAA is pure cost (see the post chain). */
 const XR_LIKELY = /OculusBrowser|Quest/i.test(navigator.userAgent) || /[?&](xr|xremu)(=|&|$)/.test(location.search);
-const renderer = new THREE.WebGLRenderer({antialias: XR_LIKELY});
+const renderer = (() => {                               // no WebGL: index.html's boot guard shows the "needs WebGL" message
+  try { return new THREE.WebGLRenderer({antialias: XR_LIKELY}); }
+  catch (e){ throw new Error(`WebGL unavailable: ${e.message}`); }
+})();
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;     // applied by OutputPass at the end of the chain
@@ -1988,6 +1991,8 @@ function enterSound(){
   keepAwake();
 }
 overlay.addEventListener('click', enterSound);          // the whole veil is the button
+{ const b = document.getElementById('play');            // index.html ships it disabled ("loading the machines…") until now
+  b.disabled = false; b.textContent = 'Tap for sound'; overlay.classList.remove('fail'); }
 
 /* ---------------- record one perfect loop ---------------- */
 recEl.addEventListener('click', () => {
@@ -2096,6 +2101,18 @@ addEventListener('drop', async e => {
   } catch(err){
     subEl.textContent = `couldn't read ${file.name}: ${err.message}`;
   }
+});
+/* ... or pick one (IMPORT MIDI — phones can't drop): the same path, the same error handling */
+const midiFileEl = document.getElementById('midifile');
+document.getElementById('importmidi').addEventListener('click', () => midiFileEl.click());
+midiFileEl.addEventListener('change', async () => {
+  const file = midiFileEl.files?.[0];
+  if (!file) return;
+  try {
+    importMidi(new Uint8Array(await file.arrayBuffer()), file.name, true);
+  } catch(err){
+    subEl.textContent = `couldn't read ${file.name}: ${err.message}`;
+  } finally { midiFileEl.value = ''; }                  // (picking the same file again still fires change)
 });
 /* The one MIDI import path (drop + ?midi=). `gesture` = called from a user gesture
    (drop): only then may audio be built/unlocked (§5 — a context born outside a gesture

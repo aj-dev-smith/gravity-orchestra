@@ -13,7 +13,7 @@ It went mildly viral after the three.js account reposted it (~30k views).
 It is now a Vite + ES-module repo (`src/`). The single self-contained
 `marble-cascade.html` still exists as the shareable "viral unit" — but it is a
 BUILD ARTIFACT (`npm run build:single`), not the source of truth. Live at
-https://orchestrion.band (cascade.ajsmithhq.com is an alias).
+https://orchestrion.ajsmithhq.com (cascade.ajsmithhq.com is an alias).
 
 This document is the scar tissue: what the architecture means, what must never
 break, what we already learned the hard way. The *north star* — where this is
@@ -72,7 +72,7 @@ every brand string (title, meta / og, HUD, XR menu + wrist label, turntable labe
 arena amp logos, recording filename `orchestrion-<song>.<ext>`, docs, package.json, GitHub links →
 `aj-dev-smith/orchestrion`) says Orchestrion; internal names (`cascade:` localStorage keys,
 `marble-cascade.html`, console prefixes, the deploy bucket) are deliberately unchanged. Site:
-https://orchestrion.band, with cascade.ajsmithhq.com kept as an alias. Rollback target for the
+https://orchestrion.ajsmithhq.com, with cascade.ajsmithhq.com kept as an alias. Rollback target for the
 launch deploy = 9e70d10.
 
 `npm run deploy` builds + ships to production. It does not care which branch you're

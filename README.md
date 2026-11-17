@@ -2,7 +2,7 @@
 
 **Machines that play any song: marbles, magnets, pistons and robots, every motion solved backward from the melody.**
 
-**▶ Live: [orchestrion.band](https://orchestrion.band)** · drop any `.mid` file on the page and the solver orchestrates it.
+**▶ Live: [orchestrion.ajsmithhq.com](https://orchestrion.ajsmithhq.com)** · drop any `.mid` file on the page and the solver orchestrates it.
 
 ![Orchestrion: three marbles juggled plate to plate, playing Bach](docs/media/readme-hero.webp)
 

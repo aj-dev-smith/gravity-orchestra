@@ -48,7 +48,7 @@ import { U_PER_M } from './xrplan.js';
 import { makeXRDetail, collectGlow, XR_DETAIL } from './xrdetail.js';
 import { makeXRBatch } from './xrbatch.js';
 /* ============================================================
-   GRAVITY ORCHESTRA (née Cascade) — melody-driven marble run, now multi-track.
+   ORCHESTRION (née Gravity Orchestra, née Cascade) — melody-driven marble run, now multi-track.
    A song is one or more tracks of [note, beats-until-next-hit].
    Every track is a voice of ONE juggling machine (the belt: src/juggle.js
    plans every throw, src/jugglebelt.js draws it); they share the clock,
@@ -2020,7 +2020,7 @@ function resetRecUI(){
 }
 function showRecCard(blob){
   const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
-  const file = new File([blob], `gravity-orchestra-${sel.value}.${ext}`, {type: blob.type});
+  const file = new File([blob], `orchestrion-${sel.value}.${ext}`, {type: blob.type});
   const url = URL.createObjectURL(blob);
   const card = document.createElement('div'); card.id = 'reccard';
   const vid = document.createElement('video');

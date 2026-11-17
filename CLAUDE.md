@@ -4,7 +4,7 @@
 > **AGENTS.md wins for contributors**: §0 (branches, deploys) and §10 (working agreements) describe
 > the maintainer's own workflow, and nobody but the maintainer deploys.
 
-# GRAVITY ORCHESTRA (née CASCADE) — marble melody machine
+# ORCHESTRION (née GRAVITY ORCHESTRA, née CASCADE)
 ## Handoff brief for Claude Code
 
 This project began as "a shiny track, a glowing marble, surfaces to bounce off" in
@@ -37,9 +37,10 @@ fast-forwarded into `main` and deployed on 2026-10-08. What it is and how to try
 **`false`**. Keep it off in anything you ship.
 
 **Open-source launch (2026-10-08, branch `launch-prep`):** renamed **Gravity Orchestra**, MIT. The
-user-visible brand (title, HUD, XR menu, turntable label, studio neon, recording filename) says
-Gravity Orchestra; internal names (`cascade:` localStorage keys — renaming them would wipe saved
-layouts — console prefixes, `marble-cascade.html`, the domain) are deliberately unchanged.
+user-visible brand (title, HUD, XR menu, turntable label, studio neon, recording filename) said
+Gravity Orchestra until the 2026-11-16 rename to Orchestrion (below); internal names (`cascade:`
+localStorage keys — renaming them would wipe saved layouts — console prefixes, `marble-cascade.html`,
+the domain) are deliberately unchanged.
 `deploy.sh` reads `DEPLOY_BUCKET` / `CLOUDFRONT_DISTRIBUTION_ID` / `LIVE_URL` from the environment
 or a git-ignored `.env.deploy` (template: `.env.deploy.example`).
 
@@ -65,6 +66,14 @@ Its changelog and guide: [`docs/STAGING-WORLD.md`](docs/STAGING-WORLD.md).
 
 **The repo went PUBLIC on GitHub 2026-11-16.** Contribution lanes and the agent contract:
 [`CONTRIBUTING.md`](CONTRIBUTING.md), [`AGENTS.md`](AGENTS.md).
+
+**Renamed ORCHESTRION 2026-11-16** (the same day the repo went public; branch `launch/orchestrion`):
+every brand string (title, meta / og, HUD, XR menu + wrist label, turntable label, studio neon + atlas,
+arena amp logos, recording filename `orchestrion-<song>.<ext>`, docs, package.json, GitHub links →
+`aj-dev-smith/orchestrion`) says Orchestrion; internal names (`cascade:` localStorage keys,
+`marble-cascade.html`, console prefixes, the deploy bucket) are deliberately unchanged. Site:
+https://orchestrion.band, with cascade.ajsmithhq.com kept as an alias. Rollback target for the
+launch deploy = 9e70d10.
 
 `npm run deploy` builds + ships to production. It does not care which branch you're
 on. Treat it as live, and confirm with the human before running it.

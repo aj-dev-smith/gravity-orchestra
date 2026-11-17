@@ -1,5 +1,5 @@
 <!--
-Thanks for contributing. Gravity Orchestra has one maintainer, so PRs outside the lanes in
+Thanks for contributing. Orchestrion has one maintainer, so PRs outside the lanes in
 CONTRIBUTING.md may be closed without a long discussion. Please fill this in; delete what
 doesn't apply.
 -->

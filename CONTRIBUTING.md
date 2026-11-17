@@ -1,8 +1,8 @@
-# Contributing to Gravity Orchestra
+# Contributing to Orchestrion
 
 Thanks for wanting to build a machine.
 
-The honest part first: Gravity Orchestra is maintained by **one person**, in spare time. Review
+The honest part first: Orchestrion is maintained by **one person**, in spare time. Review
 is best-effort and can take a while. To keep that sustainable, contributions come in through the
 lanes below. A PR outside them may be closed without a long discussion. That's not a verdict on
 you or your idea, it's how one maintainer stays afloat.

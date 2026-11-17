@@ -1,4 +1,4 @@
-/* STARSHIP GROOVE: THE CASCADE FINALE. An original space-funk showpiece (AJ / Gravity Orchestra),
+/* STARSHIP GROOVE: THE CASCADE FINALE. An original space-funk showpiece (AJ / Orchestrion),
    written for the Starship deck. It is an Animusic homage in spirit only: no borrowed notes.
    Every machine the room owns gets a featured moment, and the order is a real
    arrangement: an intro, then the groove, then each machine's feature, then a tutti.

@@ -1,14 +1,14 @@
-# Gravity Orchestra
+# Orchestrion
 
-**Marbles play music, and every arc is solved from the melody.**
+**Machines that play any song: marbles, magnets, pistons and robots, every motion solved backward from the melody.**
 
-**▶ Live: [cascade.ajsmithhq.com](https://cascade.ajsmithhq.com)** · drop any `.mid` file on the page and the solver orchestrates it.
+**▶ Live: [orchestrion.band](https://orchestrion.band)** · drop any `.mid` file on the page and the solver orchestrates it.
 
-![Gravity Orchestra: three marbles juggled plate to plate, playing Bach](docs/media/readme-hero.webp)
+![Orchestrion: three marbles juggled plate to plate, playing Bach](docs/media/readme-hero.webp)
 
 An open-source love letter to [Animusic](https://en.wikipedia.org/wiki/Animusic): impossible
 machines that play real music in 3D. Wayne Lytle's films taught a generation that you could
-*watch* a song. Gravity Orchestra tries to make that interactive, live in the browser, for any song.
+*watch* a song. Orchestrion tries to make that interactive, live in the browser, for any song.
 
 ## The idea
 

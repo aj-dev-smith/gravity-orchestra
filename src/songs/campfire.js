@@ -1,4 +1,4 @@
-/* CAMPFIRE — an original folk-pop instrumental (AJ / Gravity Orchestra), written to prove the
+/* CAMPFIRE — an original folk-pop instrumental (AJ / Orchestrion), written to prove the
    STRUMMED family: a singer-songwriter's acoustic guitar song with nobody singing — the
    belt marble IS the voice. The MARBLE AUTOHARP plays the guitar part (fingerpicked
    intro, then real down/up strum patterns), the BOW WHEEL is the cello that walks the

@@ -92,12 +92,12 @@ function ampTex(glow = false){
     x.scale(2, 2);
     const R = rng(12);
     x.fillStyle = glow ? '#000' : '#141317'; x.fillRect(0, 0, 512, 256);
-    const script = (txt, cx, cy, px, sy = 1) => {
+    const script = (txt, cx, cy, px, sy = 1, maxW) => {
       x.save(); x.translate(cx, cy); x.scale(1, sy); x.rotate(-.06);
       x.font = `italic 700 ${px}px "Brush Script MT", "Snell Roundhand", "Segoe Script", cursive`;
       x.textAlign = 'center'; x.textBaseline = 'middle';
-      if (!glow){ x.lineWidth = px * .12; x.strokeStyle = '#0c0c0e'; x.strokeText(txt, 0, 0); }
-      x.fillStyle = glow ? '#fff2dc' : '#f2efe6'; x.fillText(txt, 0, 0);
+      if (!glow){ x.lineWidth = px * .12; x.strokeStyle = '#0c0c0e'; x.strokeText(txt, 0, 0, maxW); }
+      x.fillStyle = glow ? '#fff2dc' : '#f2efe6'; x.fillText(txt, 0, 0, maxW);
       x.restore();
     };
     if (!glow){
@@ -134,14 +134,14 @@ function ampTex(glow = false){
         x.fillStyle = ((i >> 1) + (j >> 1)) & 1 ? '#4a4d57' : '#2a2c33'; x.fillRect(i, j, 2, 1);
       }
     }
-    script('Gravity', 128 - 52, 58, 30);
+    script('Orchestrion', 128 - 46, 58, 26, 1, 104);
     if (glow){ x.fillStyle = '#5a4220'; x.fillRect(393, 154, 110, 80); }          // (the panel glows dim gold)
     for (let k = 0; k < 6; k++){
       x.fillStyle = glow ? '#a08048' : '#d8d0b8';
       x.beginPath(); x.ellipse(402 + k * 15, 194, 4.2, 4.2 * HEAD_SQ * .55, 0, 0, 6.3); x.fill();
     }
     x.fillStyle = glow ? '#ff2a10' : '#5a0c06'; x.beginPath(); x.ellipse(497, 194, 4.5, 4.5 * HEAD_SQ * .55, 0, 0, 6.3); x.fill();
-    script('Gravity', 448, 72, 26, HEAD_SQ * .62);
+    script('Orchestrion', 448, 72, 22, HEAD_SQ * .62, 112);
   });
 }
 /* a unit box whose FRONT (+z) face shows the atlas over u0..u1 and every other face the tolex */

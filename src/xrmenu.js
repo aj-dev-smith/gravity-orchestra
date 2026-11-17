@@ -78,7 +78,7 @@ export function makeXRMenu({ getState, onPress }){
     g.strokeStyle = 'rgba(255,183,100,.6)'; g.lineWidth = 4; g.stroke();
     g.textBaseline = 'middle';
     g.font = '600 40px ui-monospace, Menlo, monospace'; g.fillStyle = '#ffb764';
-    g.fillText('GRAVITY ORCHESTRA', 36, 62);
+    g.fillText('ORCHESTRION', 36, 62);
     g.font = '30px ui-monospace, Menlo, monospace'; g.fillStyle = '#7d859c';
     const cur = st.songs.find(s => s.key === st.song);
     g.textAlign = 'right'; g.fillText(`${(cur?.label || '').slice(0, 28)}  ·  ${st.time.toFixed(0)}s`, MENU_W - 36, 62); g.textAlign = 'left';

@@ -1,14 +1,14 @@
 {
-  "name": "gravity-orchestra",
+  "name": "orchestrion",
   "version": "1.0.0",
-  "description": "Gravity Orchestra — marbles play music. The melody is authored first; the physics is solved backward from it.",
+  "description": "Orchestrion — machines that play any song. The melody is authored first; every motion is solved backward from it.",
   "license": "MIT",
   "author": "AJ Smith",
   "repository": {
     "type": "git",
-    "url": "https://github.com/aj-dev-smith/gravity-orchestra.git"
+    "url": "https://github.com/aj-dev-smith/orchestrion.git"
   },
-  "homepage": "https://cascade.ajsmithhq.com",
+  "homepage": "https://orchestrion.band",
   "keywords": [
     "music",
     "visualization",

@@ -3,22 +3,22 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gravity Orchestra — marble melody machine</title>
-<meta name="description" content="The melody is authored first; the physics is solved backward from it. Watch marbles play Beethoven — or drop any MIDI file and the solver does the rest.">
+<title>Orchestrion — machines that play any song</title>
+<meta name="description" content="An orchestra of impossible machines, every motion solved backward from the melody. Drop any MIDI file and the solver does the rest.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="canonical" href="https://cascade.ajsmithhq.com/">
+<link rel="canonical" href="https://orchestrion.band/">
 <meta name="theme-color" content="#07060e">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Gravity Orchestra — marble melody machine">
-<meta property="og:description" content="Melodies solved into ballistic marble physics. Drop any MIDI file — the solver does the rest.">
-<meta property="og:url" content="https://cascade.ajsmithhq.com/">
-<meta property="og:image" content="https://cascade.ajsmithhq.com/og-gravity.png">
+<meta property="og:title" content="Orchestrion — machines that play any song">
+<meta property="og:description" content="An orchestra of impossible machines, every motion solved backward from the melody. Drop any MIDI file and the solver does the rest.">
+<meta property="og:url" content="https://orchestrion.band/">
+<meta property="og:image" content="https://orchestrion.band/og-orchestrion.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Gravity Orchestra — marble melody machine">
-<meta name="twitter:description" content="Melodies solved into ballistic marble physics. Drop any MIDI file — the solver does the rest.">
-<meta name="twitter:image" content="https://cascade.ajsmithhq.com/og-gravity.png">
+<meta name="twitter:title" content="Orchestrion — machines that play any song">
+<meta name="twitter:description" content="An orchestra of impossible machines, every motion solved backward from the melody. Drop any MIDI file and the solver does the rest.">
+<meta name="twitter:image" content="https://orchestrion.band/og-orchestrion.png">
 <style>
   :root{
     --ink:#cfd6e6; --dim:#5a6178; --amber:#ffb764;
@@ -111,7 +111,7 @@
 </head>
 <body>
 <div id="hud">
-  <h1>Gravity Orchestra</h1>
+  <h1>Orchestrion</h1>
   <select id="song" aria-label="choose melody"></select>
   <div id="transport">
     <button id="playstop" class="tp" title="stop (space)">■&nbsp;STOP</button>
@@ -121,7 +121,7 @@
   <button id="share" hidden>SHARE&nbsp;LINK</button>
   <div id="hudlinks">
     <button id="importmidi" class="hp" title="import a MIDI file (or drop one on the page)">IMPORT&nbsp;MIDI</button>
-    <a class="hp" href="https://github.com/aj-dev-smith/gravity-orchestra" target="_blank" rel="noopener">OPEN&nbsp;SOURCE&nbsp;·&nbsp;GITHUB</a>
+    <a class="hp" href="https://github.com/aj-dev-smith/orchestrion" target="_blank" rel="noopener">OPEN&nbsp;SOURCE&nbsp;·&nbsp;GITHUB</a>
   </div>
   <input type="file" id="midifile" accept=".mid,.midi,audio/midi,audio/x-midi" hidden>
 </div>
@@ -133,7 +133,7 @@
 <div id="overlay">
   <button id="play" disabled>loading the machines…</button>
   <p class="copy">drop or pick any .mid — the solver does the rest<br>
-    <a href="https://github.com/aj-dev-smith/gravity-orchestra" target="_blank" rel="noopener" onclick="event.stopPropagation()">open source · github</a></p>
+    <a href="https://github.com/aj-dev-smith/orchestrion" target="_blank" rel="noopener" onclick="event.stopPropagation()">open source · github</a></p>
   <p id="bootfail" role="alert"></p>
 </div>
 <script>
@@ -145,8 +145,8 @@ addEventListener('error', function (e){
   if (!b || !b.disabled || !o) return;
   var gl = /webgl/i.test(String(e.message) + ' ' + String(e.error && e.error.message));
   document.getElementById('bootfail').textContent = gl
-    ? 'Gravity Orchestra needs WebGL — try opening this page in Safari or Chrome.'
-    : 'Gravity Orchestra hit an error while loading — try reloading, or open this page in Safari or Chrome.';
+    ? 'Orchestrion needs WebGL — try opening this page in Safari or Chrome.'
+    : 'Orchestrion hit an error while loading — try reloading, or open this page in Safari or Chrome.';
   o.classList.add('fail');
 });
 </script>

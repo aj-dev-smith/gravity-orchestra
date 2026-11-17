@@ -305,7 +305,7 @@ export default {
 
     const NEON_Y = F + 15, NEON_Z = -12;                 // (on the left wall, over the aisle — clear of the HUD in the wide)
     const neon = new THREE.Mesh(new THREE.PlaneGeometry(24, 6),
-      new THREE.MeshBasicMaterial({ map: neonTex('Gravity Orchestra'), color: new THREE.Color(1.8, 1.8, 1.8), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+      new THREE.MeshBasicMaterial({ map: neonTex('Orchestrion'), color: new THREE.Color(1.8, 1.8, 1.8), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
     neon.position.set(-HW + 2.2, NEON_Y, NEON_Z); neon.rotation.y = Math.PI / 2; group.add(neon);
     // a dark backing plate on stand-offs, proud of the panels + diffusers, so the sign reads clean
     const plate = new THREE.Mesh(new THREE.BoxGeometry(.25, 7.4, 25.5), new THREE.MeshStandardMaterial({ color: 0x050508, roughness: .4, metalness: .6, envMap, envMapIntensity: .4 }));

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-You are a coding agent working for someone who wants to contribute to Gravity Orchestra. This file
+You are a coding agent working for someone who wants to contribute to Orchestrion. This file
 is your contract. Follow it exactly. The human-facing version is [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## What this project is

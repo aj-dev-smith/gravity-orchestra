@@ -32,12 +32,12 @@ export const LAYOUT = {
 export const ATLAS_SIZE = [SW, SH];
 const NAME_COLS = 2, STENCIL_COLS = 2;
 export const NAMES = {                                   // (pad key → its stencil; anything else: the house name)
-  belt: 'GRAVITY ORCHESTRA', drums: 'DRUM MACHINE', marimba: 'MARIMBA', bells: 'TUBULAR BELLS', bass: 'STRING BASS',
+  belt: 'ORCHESTRION', drums: 'DRUM MACHINE', marimba: 'MARIMBA', bells: 'TUBULAR BELLS', bass: 'STRING BASS',
   musicbox: 'MUSIC BOX', bowls: 'SINGING BOWLS', turntable: 'TURNTABLE', ricochet: 'RICOCHET', volley: 'VOLLEY',
   riff: 'RIFF FORGE', strum: 'AUTOHARP', pogo: 'POGO BASS', organ: 'LIGHT ORGAN', horns: 'BELLOWS HORNS',
-  bowwheel: 'BOW WHEEL', dulcimer: 'MARBLE GRAND', house: 'GRAVITY ORCHESTRA',
+  bowwheel: 'BOW WHEEL', dulcimer: 'MARBLE GRAND', house: 'ORCHESTRION',
 };
-export const STENCILS = ['GRAVITY ORCH.', 'STUDIO B', 'FRAGILE', 'BACKLINE', 'THIS SIDE UP', 'MIDNIGHT', 'CASE 07', 'HANDLE WITH CARE',
+export const STENCILS = ['ORCHESTRION', 'STUDIO B', 'FRAGILE', 'BACKLINE', 'THIS SIDE UP', 'MIDNIGHT', 'CASE 07', 'HANDLE WITH CARE',
   'STAGE LEFT', 'AMP 2', 'CABLES', 'No. 14', 'TOUR 26', 'KEEP DRY', 'FX RACK', 'SPARES'];
 
 /* a region → its uv rect { s0, s1, t0 (bottom), t1 (top) }, inset by `pad` px against mip bleed */

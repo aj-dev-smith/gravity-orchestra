@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Questions, ideas and show-and-tell
-    url: https://github.com/aj-dev-smith/gravity-orchestra/discussions
+    url: https://github.com/aj-dev-smith/orchestrion/discussions
     about: Ask how something works, float an idea, or share what you made. Issues are for bugs and agreed work.
   - name: Report a security problem
-    url: https://github.com/aj-dev-smith/gravity-orchestra/security/advisories/new
+    url: https://github.com/aj-dev-smith/orchestrion/security/advisories/new
     about: Please report vulnerabilities privately, not in an issue.

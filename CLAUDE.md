@@ -13,7 +13,7 @@ It went mildly viral after the three.js account reposted it (~30k views).
 It is now a Vite + ES-module repo (`src/`). The single self-contained
 `marble-cascade.html` still exists as the shareable "viral unit" — but it is a
 BUILD ARTIFACT (`npm run build:single`), not the source of truth. Live at
-https://cascade.ajsmithhq.com.
+https://orchestrion.band (cascade.ajsmithhq.com is an alias).
 
 This document is the scar tissue: what the architecture means, what must never
 break, what we already learned the hard way. The *north star* — where this is

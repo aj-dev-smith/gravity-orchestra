@@ -1,4 +1,4 @@
-# Cascade in VR: testing on the Quest 2
+# Orchestrion in VR: testing on the Quest 2
 
 The code lives in `src/xr.js` (the render subsystem), `src/xrplan.js` (pure: anchors, tour, scale, teleport arc, head-space audio; `test/xrplan.test.js`), `src/xrmenu.js` (the in-world menu) and `src/xrdetail.js` + `src/xrbatch.js` (the VR detail profile; `test/xrperf.test.js`).
 
@@ -77,7 +77,7 @@ adb reverse tcp:5173 tcp:5173
 1. In the Quest Browser, open `http://localhost:5173/?xr`. localhost counts as a secure context.
 2. On the Mac, Chrome's `chrome://inspect/#devices` shows the Quest tab. **Inspect** gives you the console, the `astate` audio line, and a performance trace.
 
-Production (cascade.ajsmithhq.com) is already HTTPS, so it works there after a deploy. **Only deploy with AJ's OK** (CLAUDE.md §0).
+Production (orchestrion.band) is already HTTPS, so it works there after a deploy. **Only deploy with AJ's OK** (CLAUDE.md §0).
 
 ---
 

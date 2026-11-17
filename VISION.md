@@ -1,4 +1,4 @@
-# CASCADE — the north star
+# ORCHESTRION (née Cascade) — the north star
 
 > Status: **vision, not a spec.** This is where we're headed, built incrementally.
 > Nothing here is a commitment to build it all at once. The day-to-day truth —
